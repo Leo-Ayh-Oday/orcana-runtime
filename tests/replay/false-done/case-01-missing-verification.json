@@ -1,0 +1,37 @@
+{
+  "caseId": "false-done-01",
+  "domain": "false_done",
+  "description": "Completion blocked when task had writes but no verification evidence",
+  "targetFunction": "evaluateCompletionGate",
+  "input": {
+    "finalText": "Implemented auth module with login and register endpoints.",
+    "taskTracker": {
+      "goal": "实现认证模块",
+      "intent": "long_task",
+      "phase": "building",
+      "requiredFiles": ["src/auth.ts"],
+      "requiredVerificationKinds": ["typecheck"],
+      "verificationEvidence": {},
+      "verification": [],
+      "steps": [{ "id": "1", "description": "create auth.ts", "done": true }]
+    },
+    "missingTaskRequirements": [],
+    "pendingRippleObligations": [],
+    "verificationResults": [],
+    "changedFiles": ["src/auth.ts"],
+    "taskHadWrite": true,
+    "toolErrors": 0
+  },
+  "expected": {
+    "domain": "false_done",
+    "targetFunction": "evaluateCompletionGate",
+    "description": "Completion blocked: writes without verification",
+    "allowed": false,
+    "expectedMissing": ["no external verification evidence after writes"],
+    "assertions": [
+      "allowed equals false",
+      "missing.length >= 1"
+    ]
+  },
+  "tags": ["smoke", "unit"]
+}

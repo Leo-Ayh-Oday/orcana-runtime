@@ -1,0 +1,46 @@
+{
+  "caseId": "false-done-02",
+  "domain": "false_done",
+  "description": "Completion blocked by unresolved ripple obligations — caller files not updated",
+  "targetFunction": "evaluateCompletionGate",
+  "input": {
+    "finalText": "Refactored UserService. All tests pass.",
+    "taskTracker": {
+      "goal": "重构 UserService",
+      "intent": "narrow_edit",
+      "phase": "building",
+      "requiredFiles": ["src/user-service.ts"],
+      "requiredVerificationKinds": ["typecheck", "test"],
+      "verificationEvidence": { "typecheck": "tsc passed", "test": "bun test passed" },
+      "verification": [],
+      "steps": [{ "id": "1", "description": "refactor UserService", "done": true }]
+    },
+    "missingTaskRequirements": [],
+    "pendingRippleObligations": [
+      {
+        "targetFile": "src/user-service.ts",
+        "symbol": "UserService",
+        "caller": { "file": "src/controller.ts", "line": 42, "symbol": "handleRequest", "text": "new UserService()" },
+        "reason": "UserService constructor signature changed"
+      }
+    ],
+    "verificationResults": [
+      { "kind": "typecheck", "command": "tsc --noEmit", "passed": true, "exitCode": 0, "issues": 0, "durationMs": 1200, "summary": "0 errors" }
+    ],
+    "changedFiles": ["src/user-service.ts"],
+    "taskHadWrite": true,
+    "toolErrors": 0
+  },
+  "expected": {
+    "domain": "false_done",
+    "targetFunction": "evaluateCompletionGate",
+    "description": "Completion blocked: unresolved ripple obligations",
+    "allowed": false,
+    "expectedMissing": ["涟漪"],
+    "assertions": [
+      "allowed equals false",
+      "missing.length >= 1"
+    ]
+  },
+  "tags": ["unit"]
+}

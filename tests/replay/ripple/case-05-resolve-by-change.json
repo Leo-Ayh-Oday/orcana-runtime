@@ -1,0 +1,34 @@
+{
+  "caseId": "ripple-05",
+  "domain": "ripple",
+  "description": "resolveObligations: obligations resolved when caller files are modified",
+  "targetFunction": "resolveObligations",
+  "input": {
+    "obligations": [
+      {
+        "targetFile": "src/core.ts",
+        "symbol": "initApp",
+        "caller": { "file": "src/index.ts", "line": 1, "symbol": "bootstrap", "text": "initApp(config)" },
+        "reason": "initApp now async"
+      },
+      {
+        "targetFile": "src/core.ts",
+        "symbol": "shutdown",
+        "caller": { "file": "src/cleanup.ts", "line": 8, "symbol": "clean", "text": "shutdown()" },
+        "reason": "shutdown signature changed"
+      }
+    ],
+    "changedFiles": ["src/index.ts"]
+  },
+  "expected": {
+    "domain": "ripple",
+    "targetFunction": "resolveObligations",
+    "description": "Obligations resolved when caller files are modified",
+    "obligationCount": 1,
+    "blockingCount": 1,
+    "assertions": [
+      "obligationCount equals 1"
+    ]
+  },
+  "tags": ["unit"]
+}

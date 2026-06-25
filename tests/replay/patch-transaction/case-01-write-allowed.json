@@ -1,0 +1,19 @@
+{
+  "caseId": "patch-transaction-01",
+  "domain": "patch_transaction",
+  "description": "preWriteCheck passes for allowed file with matching base hash",
+  "targetFunction": "checkForbiddenFile",
+  "input": {
+    "filePath": "src/new-module.ts"
+  },
+  "expected": {
+    "domain": "patch_transaction",
+    "targetFunction": "checkForbiddenFile",
+    "description": "Write allowed for normal source file",
+    "allowed": true,
+    "assertions": [
+      "allowed equals true"
+    ]
+  },
+  "tags": ["smoke", "unit"]
+}

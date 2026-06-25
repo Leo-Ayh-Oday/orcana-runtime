@@ -1,0 +1,24 @@
+{
+  "caseId": "master-plan-03",
+  "domain": "master_plan",
+  "description": "Plan completion detected when all nodes are done",
+  "targetFunction": "planComplete",
+  "input": {
+    "planText": "1. 认证模块\n2. 数据库迁移",
+    "goal": "用户认证系统",
+    "intent": "long_task"
+  },
+  "expected": {
+    "domain": "master_plan",
+    "targetFunction": "planComplete",
+    "description": "Plan completion detected when all nodes are done",
+    "success": true,
+    "progress": { "done": 2, "total": 2 },
+    "assertions": [
+      "planComplete equals true",
+      "done >= 2",
+      "total equals 2"
+    ]
+  },
+  "tags": ["unit"]
+}

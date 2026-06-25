@@ -1,0 +1,20 @@
+{
+  "caseId": "context-epoch-04",
+  "domain": "context_epoch",
+  "description": "At rollover threshold (300K chars) → action is 'rollover'",
+  "targetFunction": "classifyEpochAction",
+  "input": {
+    "totalChars": 300000,
+    "thresholds": { "compressChars": 120000, "forceCompressChars": 220000, "rolloverChars": 300000 }
+  },
+  "expected": {
+    "domain": "context_epoch",
+    "targetFunction": "classifyEpochAction",
+    "description": "At rollover threshold → 'rollover'",
+    "action": "rollover",
+    "assertions": [
+      "action equals rollover"
+    ]
+  },
+  "tags": ["unit"]
+}

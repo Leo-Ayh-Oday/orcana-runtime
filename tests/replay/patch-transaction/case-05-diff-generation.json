@@ -1,0 +1,22 @@
+{
+  "caseId": "patch-transaction-05",
+  "domain": "patch_transaction",
+  "description": "generateLineDiff produces correct stats for file modification — set-based diff counts unique line changes",
+  "targetFunction": "generateLineDiff",
+  "input": {
+    "oldContent": "line1\nline2\nline3\nline4\nline5",
+    "newContent": "line1\nline2-modified\nline3\nline4\nline5\nline6-new",
+    "path": "src/test.ts"
+  },
+  "expected": {
+    "domain": "patch_transaction",
+    "targetFunction": "generateLineDiff",
+    "description": "Diff captures line changes correctly (set-based: 2 new unique lines, 1 removed)",
+    "allowed": true,
+    "diffStats": { "added": 2, "removed": 1, "unchanged": 4 },
+    "assertions": [
+      "diffStats exists"
+    ]
+  },
+  "tags": ["unit"]
+}

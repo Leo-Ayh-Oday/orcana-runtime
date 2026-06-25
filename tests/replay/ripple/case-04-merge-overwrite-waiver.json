@@ -1,0 +1,39 @@
+{
+  "caseId": "ripple-04",
+  "domain": "ripple",
+  "description": "mergeObligations: new report overwrites stale waiver — fresh finding means context changed",
+  "targetFunction": "mergeObligations",
+  "input": {
+    "existing": [
+      {
+        "targetFile": "src/api.ts",
+        "symbol": "fetchUsers",
+        "caller": { "file": "src/ui.ts", "line": 30, "symbol": "loadPage", "text": "await fetchUsers()" },
+        "reason": "fetchUsers now returns paginated result",
+        "waiver": { "reason": "ui.ts uses first page only", "timestamp": 1719000000000 }
+      }
+    ],
+    "incoming": [
+      {
+        "targetFile": "src/api.ts",
+        "symbol": "fetchUsers",
+        "caller": { "file": "src/ui.ts", "line": 30, "symbol": "loadPage", "text": "await fetchUsers()" },
+        "reason": "fetchUsers now requires auth token param"
+      }
+    ]
+  },
+  "expected": {
+    "domain": "ripple",
+    "targetFunction": "mergeObligations",
+    "description": "New report overwrites stale waiver — fresh finding, changed context",
+    "obligationCount": 1,
+    "blockingCount": 1,
+    "hasWaiver": false,
+    "assertions": [
+      "obligationCount equals 1",
+      "blockingCount equals 1",
+      "hasWaiver equals false"
+    ]
+  },
+  "tags": ["unit"]
+}

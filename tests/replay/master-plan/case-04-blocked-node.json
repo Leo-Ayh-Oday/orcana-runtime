@@ -1,0 +1,23 @@
+{
+  "caseId": "master-plan-04",
+  "domain": "master_plan",
+  "description": "Marking node 1 done makes node 2 active (dependency cleared). Plan structure preserved.",
+  "targetFunction": "markNodeDone",
+  "input": {
+    "planText": "1. 认证模块\n2. 数据库迁移\n3. 单元测试",
+    "goal": "用户认证系统",
+    "intent": "long_task",
+    "nodeId": "1"
+  },
+  "expected": {
+    "domain": "master_plan",
+    "targetFunction": "markNodeDone",
+    "description": "Marking node 1 done transitions to node 2",
+    "success": true,
+    "assertions": [
+      "nodes.length >= 3",
+      "current exists"
+    ]
+  },
+  "tags": ["unit"]
+}

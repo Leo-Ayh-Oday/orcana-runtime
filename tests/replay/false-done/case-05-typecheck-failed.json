@@ -1,0 +1,38 @@
+{
+  "caseId": "false-done-05",
+  "domain": "false_done",
+  "description": "Completion blocked when last typecheck failed with issues",
+  "targetFunction": "evaluateCompletionGate",
+  "input": {
+    "finalText": "Added new feature. TypeScript has errors though.",
+    "taskTracker": {
+      "goal": "添加新功能",
+      "intent": "narrow_edit",
+      "phase": "building",
+      "requiredFiles": ["src/feature.ts"],
+      "requiredVerificationKinds": ["typecheck"],
+      "verificationEvidence": {},
+      "verification": [],
+      "steps": [{ "id": "1", "description": "add feature", "done": true }]
+    },
+    "missingTaskRequirements": [],
+    "pendingRippleObligations": [],
+    "verificationResults": [],
+    "changedFiles": ["src/feature.ts"],
+    "taskHadWrite": true,
+    "toolErrors": 0,
+    "lastTypecheck": { "passed": false, "issues": 3, "output": "error TS2339: Property 'foo' does not exist..." }
+  },
+  "expected": {
+    "domain": "false_done",
+    "targetFunction": "evaluateCompletionGate",
+    "description": "Completion blocked: typecheck failed",
+    "allowed": false,
+    "expectedMissing": ["typecheck failed"],
+    "assertions": [
+      "allowed equals false",
+      "missing.length >= 1"
+    ]
+  },
+  "tags": ["unit"]
+}

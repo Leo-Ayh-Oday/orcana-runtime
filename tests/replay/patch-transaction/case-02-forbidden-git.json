@@ -1,0 +1,20 @@
+{
+  "caseId": "patch-transaction-02",
+  "domain": "patch_transaction",
+  "description": "checkForbiddenFile blocks writes to .git directory",
+  "targetFunction": "checkForbiddenFile",
+  "input": {
+    "filePath": ".git/config"
+  },
+  "expected": {
+    "domain": "patch_transaction",
+    "targetFunction": "checkForbiddenFile",
+    "description": "Write blocked for .git directory",
+    "allowed": false,
+    "blockReason": ".git",
+    "assertions": [
+      "allowed equals false"
+    ]
+  },
+  "tags": ["unit"]
+}

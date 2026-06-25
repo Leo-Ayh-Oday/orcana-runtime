@@ -1,0 +1,23 @@
+{
+  "caseId": "master-plan-02",
+  "domain": "master_plan",
+  "description": "Node lifecycle: pending → active → done → next node activates automatically",
+  "targetFunction": "markNodeDone",
+  "input": {
+    "planText": "1. 认证模块\n2. 数据库迁移\n3. 单元测试",
+    "goal": "用户认证系统",
+    "intent": "long_task",
+    "nodeId": "1"
+  },
+  "expected": {
+    "domain": "master_plan",
+    "targetFunction": "markNodeDone",
+    "description": "Node lifecycle: pending → active → done → next node activates automatically",
+    "success": true,
+    "assertions": [
+      "nodes.length >= 3",
+      "current exists"
+    ]
+  },
+  "tags": ["unit"]
+}

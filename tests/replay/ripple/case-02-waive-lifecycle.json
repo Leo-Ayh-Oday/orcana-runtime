@@ -1,0 +1,28 @@
+{
+  "caseId": "ripple-02",
+  "domain": "ripple",
+  "description": "Waive an obligation → it becomes non-blocking. waiveObligation rejects empty reason.",
+  "targetFunction": "waiveObligation",
+  "input": {
+    "obligation": {
+      "targetFile": "src/db.ts",
+      "symbol": "connectDB",
+      "caller": { "file": "src/server.ts", "line": 10, "symbol": "start", "text": "connectDB(uri)" },
+      "reason": "connectDB signature changed: added timeout param"
+    },
+    "reason": "caller uses default timeout which is safe"
+  },
+  "expected": {
+    "domain": "ripple",
+    "targetFunction": "waiveObligation",
+    "description": "Waived obligation is no longer blocking",
+    "obligationCount": 1,
+    "blockingCount": 0,
+    "hasWaiver": true,
+    "assertions": [
+      "hasWaiver equals true",
+      "blockingCount equals 0"
+    ]
+  },
+  "tags": ["unit"]
+}

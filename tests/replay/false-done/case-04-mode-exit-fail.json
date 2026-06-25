@@ -1,0 +1,29 @@
+{
+  "caseId": "false-done-04",
+  "domain": "false_done",
+  "description": "Completion blocked when mode contract exit criteria not met — planner mode with empty output",
+  "targetFunction": "evaluateCompletionGate",
+  "input": {
+    "finalText": "",
+    "taskTracker": null,
+    "missingTaskRequirements": [],
+    "pendingRippleObligations": [],
+    "verificationResults": [],
+    "changedFiles": [],
+    "taskHadWrite": false,
+    "toolErrors": 0,
+    "activeMode": "planner"
+  },
+  "expected": {
+    "domain": "false_done",
+    "targetFunction": "evaluateCompletionGate",
+    "description": "Completion blocked: mode contract exit criteria not met (empty output in planner mode)",
+    "allowed": false,
+    "expectedMissing": ["非空"],
+    "assertions": [
+      "allowed equals false",
+      "missing.length >= 1"
+    ]
+  },
+  "tags": ["unit"]
+}

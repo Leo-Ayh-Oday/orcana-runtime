@@ -1,0 +1,23 @@
+{
+  "caseId": "master-plan-05",
+  "domain": "master_plan",
+  "description": "evaluatePlanForcePass creates minimum viable packet after max planning rejections",
+  "targetFunction": "evaluatePlanForcePass",
+  "input": {
+    "rejections": 3,
+    "maxRounds": 3,
+    "planText": "not structured enough to parse nodes properly but has mentioned src/auth.ts and needs typecheck",
+    "goal": "认证系统"
+  },
+  "expected": {
+    "domain": "master_plan",
+    "targetFunction": "evaluatePlanForcePass",
+    "description": "Force pass creates minimum viable packet after max planning rejections",
+    "success": true,
+    "assertions": [
+      "allow equals true",
+      "fallbackPacket exists"
+    ]
+  },
+  "tags": ["unit"]
+}

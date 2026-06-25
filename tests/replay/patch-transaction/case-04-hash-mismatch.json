@@ -1,0 +1,23 @@
+{
+  "caseId": "patch-transaction-04",
+  "domain": "patch_transaction",
+  "description": "checkBaseHash detects mismatch when expected hash does not match actual file content hash",
+  "targetFunction": "checkBaseHash",
+  "input": {
+    "filePath": "src/existing.ts",
+    "content": "export function hello() { return 'world' }",
+    "fixtureContent": "export function hello() { return 'old world' }",
+    "baseHash": "abc123def4567890"
+  },
+  "expected": {
+    "domain": "patch_transaction",
+    "targetFunction": "checkBaseHash",
+    "description": "Base hash mismatch detected",
+    "allowed": false,
+    "blockReason": "hash mismatch",
+    "assertions": [
+      "match equals false"
+    ]
+  },
+  "tags": ["unit"]
+}

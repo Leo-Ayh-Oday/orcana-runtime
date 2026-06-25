@@ -1,0 +1,30 @@
+{
+  "caseId": "context-epoch-06",
+  "domain": "context_epoch",
+  "description": "After epoch rollover, plan state (MasterPlan/TaskTracker/Ripple) is preserved in preamble",
+  "targetFunction": "epochRollover",
+  "input": {
+    "messages": [
+      { "role": "user", "content": "Implement auth system. Plan: 1. Login API 2. Register API 3. Tests" },
+      { "role": "assistant", "content": "I'll start with the login API implementation." },
+      { "role": "user", "content": "Continue with register API" },
+      { "role": "assistant", "content": "Register API done. Moving to tests." }
+    ],
+    "keepCount": 2,
+    "planStateText": "[MasterPlan: 3 nodes, current=3]\n[TaskTracker: goal=用户认证系统, intent=long_task]",
+    "thresholds": { "compressChars": 120000, "forceCompressChars": 220000, "rolloverChars": 300000 },
+    "round": 10
+  },
+  "expected": {
+    "domain": "context_epoch",
+    "targetFunction": "epochRollover",
+    "description": "Rollover preserves plan state in preamble",
+    "action": "rollover",
+    "planStatePreserved": true,
+    "assertions": [
+      "planStatePreserved equals true",
+      "messages.length >= 2"
+    ]
+  },
+  "tags": ["unit"]
+}

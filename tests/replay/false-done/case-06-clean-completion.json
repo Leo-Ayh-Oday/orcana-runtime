@@ -1,0 +1,48 @@
+{
+  "caseId": "false-done-06",
+  "domain": "false_done",
+  "description": "Clean completion: all gates pass — verification evidence present, no ripple, tracker complete",
+  "targetFunction": "evaluateCompletionGate",
+  "input": {
+    "finalText": "Implemented user auth module with login, register, and session management. All tests pass.",
+    "taskTracker": {
+      "goal": "实现用户认证模块",
+      "intent": "long_task",
+      "phase": "building",
+      "requiredFiles": ["src/auth.ts", "tests/auth.test.ts"],
+      "requiredVerificationKinds": ["typecheck", "test"],
+      "verificationEvidence": {
+        "typecheck": "tsc --noEmit: 0 errors",
+        "test": "bun test: 12/12 pass"
+      },
+      "verification": [],
+      "steps": [
+        { "id": "1", "description": "create auth.ts", "done": true },
+        { "id": "2", "description": "create auth.test.ts", "done": true },
+        { "id": "3", "description": "verify typecheck", "done": true }
+      ]
+    },
+    "missingTaskRequirements": [],
+    "pendingRippleObligations": [],
+    "verificationResults": [
+      { "kind": "typecheck", "command": "tsc --noEmit", "passed": true, "exitCode": 0, "issues": 0, "durationMs": 1500, "summary": "0 errors" },
+      { "kind": "test", "command": "bun test", "passed": true, "exitCode": 0, "issues": 0, "durationMs": 3200, "summary": "12/12 pass" }
+    ],
+    "changedFiles": ["src/auth.ts", "tests/auth.test.ts"],
+    "taskHadWrite": true,
+    "toolErrors": 0,
+    "lastTypecheck": { "passed": true, "issues": 0, "output": "0 errors" }
+  },
+  "expected": {
+    "domain": "false_done",
+    "targetFunction": "evaluateCompletionGate",
+    "description": "Clean completion: all gates pass",
+    "allowed": true,
+    "expectedMissing": [],
+    "assertions": [
+      "allowed equals true",
+      "missing.length equals 0"
+    ]
+  },
+  "tags": ["smoke", "unit"]
+}

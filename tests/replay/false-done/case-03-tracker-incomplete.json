@@ -1,0 +1,41 @@
+{
+  "caseId": "false-done-03",
+  "domain": "false_done",
+  "description": "Completion blocked when task tracker has incomplete steps",
+  "targetFunction": "evaluateCompletionGate",
+  "input": {
+    "finalText": "Halfway done with the implementation.",
+    "taskTracker": {
+      "goal": "实现支付模块",
+      "intent": "long_task",
+      "phase": "building",
+      "requiredFiles": ["src/payment.ts", "src/payment.test.ts"],
+      "requiredVerificationKinds": ["typecheck", "test"],
+      "verificationEvidence": {},
+      "verification": [],
+      "steps": [
+        { "id": "1", "description": "create payment.ts", "done": true },
+        { "id": "2", "description": "create payment.test.ts", "done": false },
+        { "id": "3", "description": "run tests", "done": false }
+      ]
+    },
+    "missingTaskRequirements": ["step 'create payment.test.ts' not completed", "step 'run tests' not completed"],
+    "pendingRippleObligations": [],
+    "verificationResults": [],
+    "changedFiles": ["src/payment.ts"],
+    "taskHadWrite": true,
+    "toolErrors": 0
+  },
+  "expected": {
+    "domain": "false_done",
+    "targetFunction": "evaluateCompletionGate",
+    "description": "Completion blocked: incomplete task tracker steps",
+    "allowed": false,
+    "expectedMissing": ["step 'create payment.test.ts' not completed"],
+    "assertions": [
+      "allowed equals false",
+      "missing.length >= 2"
+    ]
+  },
+  "tags": ["unit"]
+}

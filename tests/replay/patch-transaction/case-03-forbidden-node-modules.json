@@ -1,0 +1,20 @@
+{
+  "caseId": "patch-transaction-03",
+  "domain": "patch_transaction",
+  "description": "checkForbiddenFile blocks writes to node_modules",
+  "targetFunction": "checkForbiddenFile",
+  "input": {
+    "filePath": "node_modules/some-pkg/index.js"
+  },
+  "expected": {
+    "domain": "patch_transaction",
+    "targetFunction": "checkForbiddenFile",
+    "description": "Write blocked for node_modules",
+    "allowed": false,
+    "blockReason": "node_modules",
+    "assertions": [
+      "allowed equals false"
+    ]
+  },
+  "tags": ["unit"]
+}

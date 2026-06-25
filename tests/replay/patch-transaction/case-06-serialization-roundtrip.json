@@ -1,0 +1,26 @@
+{
+  "caseId": "patch-transaction-06",
+  "domain": "patch_transaction",
+  "description": "PatchTransaction creation produces valid transaction with correct diff stats",
+  "targetFunction": "createPatchTransaction",
+  "input": {
+    "txId": "tx_20240625_001",
+    "baseHash": "abcd1234efgh5678",
+    "filePath": "src/module.ts",
+    "oldContent": "export const version = 1",
+    "newContent": "export const version = 2",
+    "scope": ["src/module.ts"],
+    "verification": [{ "kind": "typecheck", "command": "tsc --noEmit" }]
+  },
+  "expected": {
+    "domain": "patch_transaction",
+    "targetFunction": "createPatchTransaction",
+    "description": "PatchTransaction creation produces valid transaction with correct diff stats",
+    "allowed": true,
+    "diffStats": { "added": 1, "removed": 1, "unchanged": 0 },
+    "assertions": [
+      "diffStats exists"
+    ]
+  },
+  "tags": ["unit"]
+}

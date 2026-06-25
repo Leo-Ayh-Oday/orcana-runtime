@@ -1,0 +1,33 @@
+{
+  "caseId": "ripple-01",
+  "domain": "ripple",
+  "description": "obligationsFromReport creates obligations from a ripple report with callers that need updating",
+  "targetFunction": "obligationsFromReport",
+  "input": {
+    "report": {
+      "targetFile": "src/utils.ts",
+      "changedSymbols": ["formatDate", "parseConfig"],
+      "callers": [
+        { "file": "src/app.ts", "line": 15, "symbol": "init", "text": "formatDate(new Date())" },
+        { "file": "src/dashboard.ts", "line": 42, "symbol": "render", "text": "parseConfig(cfg)" }
+      ],
+      "findings": [
+        { "file": "src/app.ts", "line": 15, "severity": "warning", "kind": "signature_change", "reason": "formatDate now requires 2 args" }
+      ],
+      "decision": "block",
+      "memoryHits": 0
+    }
+  },
+  "expected": {
+    "domain": "ripple",
+    "targetFunction": "obligationsFromReport",
+    "description": "Creates obligations from ripple report with 2 callers",
+    "obligationCount": 2,
+    "blockingCount": 2,
+    "assertions": [
+      "obligationCount >= 2",
+      "blockingCount >= 2"
+    ]
+  },
+  "tags": ["smoke", "unit"]
+}

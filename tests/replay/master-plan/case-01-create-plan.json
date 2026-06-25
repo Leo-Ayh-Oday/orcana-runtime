@@ -1,0 +1,24 @@
+{
+  "caseId": "master-plan-01",
+  "domain": "master_plan",
+  "description": "Create MasterPlan from structured long_task text produces 3 nodes with correct statuses",
+  "targetFunction": "createMasterPlan",
+  "input": {
+    "planText": "1. 实现认证模块 - 包含登录/注册 API\n2. 添加数据库迁移 - users 表和 sessions 表\n3. 编写单元测试 - 覆盖认证流程和边界条件",
+    "goal": "实现用户认证系统",
+    "intent": "long_task"
+  },
+  "expected": {
+    "domain": "master_plan",
+    "targetFunction": "createMasterPlan",
+    "description": "Create MasterPlan from structured long_task text produces 3 nodes with correct statuses",
+    "success": true,
+    "nodeCount": 3,
+    "progress": { "done": 0, "total": 3 },
+    "assertions": [
+      "nodes.length >= 3",
+      "goal exists"
+    ]
+  },
+  "tags": ["smoke", "unit"]
+}

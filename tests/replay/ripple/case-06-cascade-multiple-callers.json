@@ -1,0 +1,35 @@
+{
+  "caseId": "ripple-06",
+  "domain": "ripple",
+  "description": "Multiple callers cascade: 4 callers across different files all need updates when shared util changes",
+  "targetFunction": "obligationsFromReport",
+  "input": {
+    "report": {
+      "targetFile": "src/shared/validation.ts",
+      "changedSymbols": ["validateEmail"],
+      "callers": [
+        { "file": "src/auth/register.ts", "line": 22, "symbol": "handleRegister", "text": "validateEmail(email)" },
+        { "file": "src/auth/login.ts", "line": 15, "symbol": "handleLogin", "text": "validateEmail(email)" },
+        { "file": "src/profile/update.ts", "line": 33, "symbol": "updateEmail", "text": "validateEmail(newEmail)" },
+        { "file": "src/admin/users.ts", "line": 58, "symbol": "bulkImport", "text": "validateEmail(row.email)" }
+      ],
+      "findings": [
+        { "file": "src/auth/register.ts", "line": 22, "severity": "error", "kind": "signature_change", "reason": "validateEmail now returns Result<T> not boolean" }
+      ],
+      "decision": "block",
+      "memoryHits": 1
+    }
+  },
+  "expected": {
+    "domain": "ripple",
+    "targetFunction": "obligationsFromReport",
+    "description": "Cascade: 4 callers all become obligations when shared util changes",
+    "obligationCount": 4,
+    "blockingCount": 4,
+    "assertions": [
+      "obligationCount >= 4",
+      "blockingCount >= 4"
+    ]
+  },
+  "tags": ["unit"]
+}

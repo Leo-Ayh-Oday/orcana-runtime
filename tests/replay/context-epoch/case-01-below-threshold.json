@@ -1,0 +1,20 @@
+{
+  "caseId": "context-epoch-01",
+  "domain": "context_epoch",
+  "description": "Below compress threshold (100K chars) → action is 'none'",
+  "targetFunction": "classifyEpochAction",
+  "input": {
+    "totalChars": 100000,
+    "thresholds": { "compressChars": 120000, "forceCompressChars": 220000, "rolloverChars": 300000 }
+  },
+  "expected": {
+    "domain": "context_epoch",
+    "targetFunction": "classifyEpochAction",
+    "description": "Below compress threshold → 'none'",
+    "action": "none",
+    "assertions": [
+      "action equals none"
+    ]
+  },
+  "tags": ["smoke", "unit"]
+}

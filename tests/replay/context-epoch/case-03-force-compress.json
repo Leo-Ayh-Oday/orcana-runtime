@@ -1,0 +1,20 @@
+{
+  "caseId": "context-epoch-03",
+  "domain": "context_epoch",
+  "description": "At force-compress threshold (220K chars) → action is 'forceCompress'",
+  "targetFunction": "classifyEpochAction",
+  "input": {
+    "totalChars": 220000,
+    "thresholds": { "compressChars": 120000, "forceCompressChars": 220000, "rolloverChars": 300000 }
+  },
+  "expected": {
+    "domain": "context_epoch",
+    "targetFunction": "classifyEpochAction",
+    "description": "At force-compress threshold → 'forceCompress'",
+    "action": "forceCompress",
+    "assertions": [
+      "action equals forceCompress"
+    ]
+  },
+  "tags": ["unit"]
+}

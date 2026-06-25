@@ -1,0 +1,24 @@
+{
+  "caseId": "master-plan-06",
+  "domain": "master_plan",
+  "description": "Plan validation detects dependency cycle — node A depends on B, B depends on A",
+  "targetFunction": "validatePlan",
+  "input": {
+    "planText": "1. 认证模块\n2. 数据库迁移",
+    "goal": "用户认证系统",
+    "intent": "long_task",
+    "injectCycle": true
+  },
+  "expected": {
+    "domain": "master_plan",
+    "targetFunction": "validatePlan",
+    "description": "Plan validation detects dependency cycle",
+    "success": false,
+    "validation": { "errors": 1, "warnings": 0 },
+    "assertions": [
+      "errors >= 1",
+      "isClean equals false"
+    ]
+  },
+  "tags": ["unit"]
+}

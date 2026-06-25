@@ -1,0 +1,36 @@
+{
+  "caseId": "ripple-03",
+  "domain": "ripple",
+  "description": "getBlockingObligations filters out waived obligations, returns only active ones",
+  "targetFunction": "getBlockingObligations",
+  "input": {
+    "obligations": [
+      {
+        "targetFile": "src/lib.ts",
+        "symbol": "doWork",
+        "caller": { "file": "src/main.ts", "line": 5, "symbol": "main", "text": "doWork()" },
+        "reason": "doWork renamed to executeWork"
+      },
+      {
+        "targetFile": "src/lib.ts",
+        "symbol": "helperFn",
+        "caller": { "file": "src/worker.ts", "line": 20, "symbol": "process", "text": "helperFn(data)" },
+        "reason": "helperFn return type changed",
+        "waiver": { "reason": "worker.ts already updated in follow-up PR", "timestamp": 1719000000000 }
+      }
+    ]
+  },
+  "expected": {
+    "domain": "ripple",
+    "targetFunction": "getBlockingObligations",
+    "description": "Only non-waived obligations are blocking",
+    "obligationCount": 2,
+    "blockingCount": 1,
+    "hasWaiver": true,
+    "assertions": [
+      "obligationCount equals 2",
+      "blockingCount equals 1"
+    ]
+  },
+  "tags": ["unit"]
+}

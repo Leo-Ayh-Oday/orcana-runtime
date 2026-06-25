@@ -1,0 +1,23 @@
+{
+  "caseId": "context-epoch-05",
+  "domain": "context_epoch",
+  "description": "Unclosed tool-use chain prevents rollover — hasUnclosedToolChain returns true for assistant message with tool_use but no matching tool_result",
+  "targetFunction": "hasUnclosedToolChain",
+  "input": {
+    "messages": [
+      { "role": "user", "content": "write a function" },
+      { "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_001", "name": "write_file", "input": {} }] }
+    ]
+  },
+  "expected": {
+    "domain": "context_epoch",
+    "targetFunction": "hasUnclosedToolChain",
+    "description": "Unclosed tool-use chain detected",
+    "action": "rollover",
+    "rolloverBlocked": true,
+    "assertions": [
+      "hasUnclosedChain equals true"
+    ]
+  },
+  "tags": ["unit"]
+}

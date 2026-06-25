@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react"
+import React, { useMemo, useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
 
 const C = {
@@ -181,6 +181,10 @@ export function InputLine({
   const [commandIdx, setCommandIdx] = useState(0)
   const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>([])
   const [nextPasteId, setNextPasteId] = useState(1)
+  const pasteSessionRef = useRef<{ startValue: string; startCursor: number; accumulated: string } | null>(null)
+  const pasteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const nextPasteIdRef = useRef(1)
+  nextPasteIdRef.current = nextPasteId
 
   const visibleDraft = useMemo(() => displayDraft(value, pasteBlocks), [pasteBlocks, value])
   const expandedDraft = useMemo(() => expandDraft(value, pasteBlocks), [pasteBlocks, value])
@@ -214,6 +218,38 @@ export function InputLine({
       setCursor(next.cursor)
       return next.value
     })
+  }
+
+  const clearPasteBuffer = () => {
+    if (pasteTimerRef.current) {
+      clearTimeout(pasteTimerRef.current)
+      pasteTimerRef.current = null
+    }
+    pasteSessionRef.current = null
+  }
+
+  const flushPasteBuffer = () => {
+    const session = pasteSessionRef.current
+    pasteSessionRef.current = null
+    pasteTimerRef.current = null
+    if (!session) return
+    const normalized = normalizePastedText(session.accumulated)
+    if (!normalized || !shouldStagePaste(normalized)) return
+    const id = nextPasteIdRef.current
+    const token = pasteToken(id)
+    const block: PasteBlock = {
+      id,
+      token,
+      text: normalized,
+      lines: countLines(normalized),
+      chars: normalized.length,
+    }
+    setNextPasteId(n => n + 1)
+    setPasteBlocks(blocks => [...blocks, block])
+    setValue(session.startValue.slice(0, session.startCursor) + token + session.startValue.slice(session.startCursor))
+    setCursor(session.startCursor + token.length)
+    setHistoryIdx(-1)
+    setCommandIdx(0)
   }
 
   const setHistoryValue = (nextValue: string) => {
@@ -251,9 +287,18 @@ export function InputLine({
     if (canEdit && input) {
       const maybePaste = normalizePastedText(input)
       if (shouldStagePaste(maybePaste)) {
+        clearPasteBuffer()
         stagePaste(maybePaste)
         return
       }
+    }
+
+    // Any control key cancels pending paste accumulation
+    if (canEdit && (key.upArrow || key.downArrow || key.leftArrow || key.rightArrow ||
+        key.pageUp || key.pageDown || key.home || key.end ||
+        key.backspace || key.delete || key.tab || key.return || key.escape ||
+        (key.ctrl && input))) {
+      clearPasteBuffer()
     }
 
     if (key.upArrow) {
@@ -357,6 +402,17 @@ export function InputLine({
 
     const printableInput = sanitizeInlineInput(input)
     if (canEdit && printableInput) {
+      // Accumulate rapid input for time-window paste detection
+      // (handles terminals that chunk long pastes into small pieces)
+      const rawText = normalizePastedText(input)
+      if (!pasteSessionRef.current) {
+        pasteSessionRef.current = { startValue: value, startCursor: cursor, accumulated: rawText }
+      } else {
+        pasteSessionRef.current.accumulated += rawText
+      }
+      if (pasteTimerRef.current) clearTimeout(pasteTimerRef.current)
+      pasteTimerRef.current = setTimeout(flushPasteBuffer, 80)
+
       setHistoryIdx(-1)
       setCommandIdx(0)
       setValue(prev => {

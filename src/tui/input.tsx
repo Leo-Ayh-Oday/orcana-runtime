@@ -41,6 +41,13 @@ function insertText(value: string, cursor: number, text: string): { value: strin
   return { value: next, cursor: cursor + text.length }
 }
 
+function sanitizePrintableInput(input: string): string {
+  return input
+    .replace(/\r/g, "")
+    .replace(/\n/g, "")
+    .replace(/[\x00-\x1F\x7F]/g, "")
+}
+
 export function InputLine({ onSubmit, disabled, placeholder, status, commands = [], focused = true, onScrollUp, onScrollDown }: Props) {
   const [value, setValue] = useState("")
   const [cursor, setCursor] = useState(0)
@@ -58,7 +65,24 @@ export function InputLine({ onSubmit, disabled, placeholder, status, commands = 
   const displayCursor = cursorVisible ? Math.min(cursor, value.length) : -1
 
   useInput((input, key) => {
-    if (isIgnorableInput(input)) return
+    const isRecognizedControlKey = Boolean(
+      key.upArrow ||
+        key.downArrow ||
+        key.leftArrow ||
+        key.rightArrow ||
+        key.home ||
+        key.end ||
+        key.backspace ||
+        key.delete ||
+        key.tab ||
+        key.return ||
+        key.escape ||
+        key.pageUp ||
+        key.pageDown ||
+        key.ctrl ||
+        key.meta,
+    )
+    if (isIgnorableInput(input) && !isRecognizedControlKey) return
     const canEdit = focused && !disabled
     const setHistoryValue = (nextValue: string) => {
       setHistoryIdx(-1)
@@ -176,11 +200,12 @@ export function InputLine({ onSubmit, disabled, placeholder, status, commands = 
       return
     }
 
-    if (canEdit && input) {
+    const printableInput = sanitizePrintableInput(input)
+    if (canEdit && printableInput) {
       setHistoryIdx(-1)
       setCommandIdx(0)
       setValue(prev => {
-        const next = insertText(prev, cursor, input)
+        const next = insertText(prev, cursor, printableInput)
         setCursor(next.cursor)
         return next.value
       })
@@ -254,7 +279,7 @@ export function InputLine({ onSubmit, disabled, placeholder, status, commands = 
         </Box>
         <Box>
           <Text color={disabled ? C.yellow : C.dim}>
-            {disabled ? (status || "working...") : showCommands ? "Up/Down select  Enter send command" : "Enter send  / commands  Up/Down scroll"}
+            {disabled ? (status || "working...") : showCommands ? "Up/Down select  Enter send command" : "Enter send  / commands  Up/Down scroll · wheel supported"}
           </Text>
         </Box>
       </Box>

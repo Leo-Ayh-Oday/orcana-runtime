@@ -95,6 +95,9 @@ const SLASH_COMMANDS: SlashCommandHint[] = [
 ]
 
 const TUI_STARTUP_MS = 2400
+const TUI_STREAM_FLUSH_MS = Number(process.env.DEEPSEEK_TUI_STREAM_FLUSH_MS ?? "120")
+const TUI_FRAME_MS = Number(process.env.DEEPSEEK_TUI_FRAME_MS ?? "320")
+const TUI_SCROLL_STEP = Number(process.env.DEEPSEEK_TUI_SCROLL_STEP ?? "3")
 
 function TuiInputGuard() {
   useInput(() => {
@@ -109,18 +112,36 @@ function useMouseWheelScroll(active: boolean, onScrollUp: () => void, onScrollDo
   const { stdout } = useStdout()
 
   useEffect(() => {
-    if (!active || !stdin?.on || !stdout?.write) return
-    const enableMouse = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
-    const disableMouse = "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
+    if (!active || !stdin?.on || !stdout?.write || stdout.isTTY === false) return
+
+    // SGR mouse mode + normal tracking. Do not enable 1002/1003 here: they can
+    // flood the TUI with motion events and make Ink feel laggy.
+    const enableMouse = "\x1b[?1000h\x1b[?1006h"
+    const disableMouse = "\x1b[?1006l\x1b[?1000l"
+
     stdout.write(enableMouse)
+
+    const handleWheel = (code: number) => {
+      if (code === 64) onScrollUp()
+      if (code === 65) onScrollDown()
+    }
+
     const handleData = (data: Buffer | string) => {
       const text = data.toString("utf8")
-      for (const match of text.matchAll(/\x1b\[<(\d+);\d+;\d+([mM])/g)) {
-        const code = Number(match[1])
-        if (code === 64) onScrollUp()
-        if (code === 65) onScrollDown()
+
+      // Modern xterm / Windows Terminal / VS Code terminal: ESC [ < code ; x ; y M
+      for (const match of text.matchAll(/\x1b\[<(\d+);\d+;\d+[mM]/g)) {
+        handleWheel(Number(match[1]))
+      }
+
+      // Legacy X10 mouse sequence: ESC [ M Cb Cx Cy
+      for (let index = 0; index <= text.length - 6; index += 1) {
+        if (text.charCodeAt(index) === 0x1b && text[index + 1] === "[" && text[index + 2] === "M") {
+          handleWheel(text.charCodeAt(index + 3) - 32)
+        }
       }
     }
+
     stdin.on("data", handleData)
     return () => {
       stdin.off?.("data", handleData)
@@ -259,7 +280,7 @@ function useAgentStream(apiKey: string, prompt?: string) {
         text: prev.text + chunk,
         messages: prev.messages.map(message =>
           message.id === assistantId
-            ? { ...message, content: compactAssistantText(message.content + chunk), pending: true }
+            ? { ...message, content: appendAssistantText(message.content, chunk), pending: true }
             : message,
         ),
       }))
@@ -273,7 +294,7 @@ function useAgentStream(apiKey: string, prompt?: string) {
             if (typeof ev.data === "string") {
               assistantText += ev.data
               textBuf += ev.data
-              if (Date.now() - lastFlush > 80) flush()
+              if (Date.now() - lastFlush > TUI_STREAM_FLUSH_MS) flush()
             }
             break
           case "status":
@@ -563,6 +584,13 @@ function compactAssistantText(text: string): string {
     .replace(/^\s*[-*]\s+/gm, "- ")
 }
 
+function appendAssistantText(current: string, chunk: string): string {
+  const next = current + chunk
+  const maxLiveChars = Number(process.env.DEEPSEEK_TUI_LIVE_CHARS ?? "12000")
+  if (next.length <= maxLiveChars) return next
+  return `...[live output trimmed ${next.length - maxLiveChars} chars]\n${next.slice(-maxLiveChars)}`
+}
+
 function modelNameFromUsage(data: Record<string, unknown>): string {
   if (typeof data.actualModel === "string") return data.actualModel
   if (typeof data.requestedModel === "string") return data.requestedModel
@@ -796,17 +824,30 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
   const [tick, setTick] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<TranscriptScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
+  const [autoFollow, setAutoFollow] = useState(true)
   const [showStartup, setShowStartup] = useState(process.env.DEEPSEEK_TUI_SPLASH !== "off")
-  const mouseScrollEnabled = process.env.DEEPSEEK_TUI_MOUSE === "on"
+  const mouseScrollEnabled = process.env.DEEPSEEK_TUI_MOUSE !== "off"
   const footerHeight = clarification ? 12 : state.task ? 11 : 6
   const bodyHeight = Math.max(10, rows - footerHeight - 3)
   const isWorking = !state.done && !state.error
-  const scrollUp = useCallback((amount = 3) => {
+  const scrollUp = useCallback((amount = TUI_SCROLL_STEP) => {
+    setAutoFollow(false)
     setScrollOffset(offset => offset + amount)
   }, [])
-  const scrollDown = useCallback((amount = 3) => {
+
+  const scrollDown = useCallback((amount = TUI_SCROLL_STEP) => {
     setScrollOffset(offset => Math.max(0, offset - amount))
   }, [])
+
+  useEffect(() => {
+    if (scrollOffset === 0) setAutoFollow(true)
+  }, [scrollOffset])
+
+  const submitFromInput = useCallback((value: string) => {
+    setAutoFollow(true)
+    setScrollOffset(0)
+    submit(value)
+  }, [submit])
 
   useEffect(() => {
     stdout.write("\x1B[?25l")
@@ -818,7 +859,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
   useEffect(() => {
     const animated = showStartup || isWorking || Boolean(clarification) || state.task?.phase === "planning"
     if (!animated) return
-    const timer = setInterval(() => setTick(n => n + 1), isWorking ? 180 : 260)
+    const timer = setInterval(() => setTick(n => n + 1), isWorking ? TUI_FRAME_MS : Math.max(TUI_FRAME_MS, 500))
     return () => clearInterval(timer)
   }, [clarification, isWorking, showStartup, state.task?.phase])
 
@@ -828,7 +869,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
     return () => clearTimeout(timer)
   }, [showStartup])
 
-  useMouseWheelScroll(mouseScrollEnabled && !showStartup, () => scrollUp(3), () => scrollDown(3))
+  useMouseWheelScroll(mouseScrollEnabled && !showStartup, () => scrollUp(TUI_SCROLL_STEP), () => scrollDown(TUI_SCROLL_STEP))
 
   useInput((_input, key) => {
     if (showStartup) return
@@ -887,14 +928,15 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
   }, { isActive: !showStartup })
 
   useEffect(() => {
-    setScrollOffset(0)
-  }, [state.messages.length])
+        if (autoFollow) setScrollOffset(0)
+  }, [autoFollow, state.messages.length])
 
   useEffect(() => {
     setScrollOffset(offset => Math.min(offset, scrollState.maxOffset))
   }, [scrollState.maxOffset])
 
   const hasDash = state.dash.round > 0 || state.dash.toolHistory.length > 0
+  const showDash = hasDash && cols >= 110
   if (showStartup) {
     return (
       <Box height={rows} paddingX={1} flexDirection="column">
@@ -942,7 +984,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
             ) : (
               <ChatTranscript
                 messages={state.messages}
-                width={cols - (hasDash ? 44 : 2)}
+                width={cols - (showDash ? 44 : 2)}
                 height={Math.max(4, bodyHeight - 3)}
                 tick={tick}
                 status={state.status}
@@ -954,7 +996,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
           {state.error && <Text color={C.red}>{state.error}</Text>}
         </Box>
 
-        {hasDash && (
+        {showDash && (
           <Box width={42}>
             <Dashboard {...state.dash} />
           </Box>
@@ -968,7 +1010,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
           <TaskProgressStrip task={state.task} width={cols} tick={tick} />
         )}
         <InputLine
-          onSubmit={submit}
+          onSubmit={submitFromInput}
           disabled={!state.done || Boolean(clarification)}
           placeholder={clarification ? "Use the selector above..." : state.done ? "Ask a follow-up..." : "DeepSeek Code is working..."}
           status={state.status}
@@ -979,7 +1021,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
         />
         <Box paddingX={1}>
           <Text color={C.dim}>
-            {state.telemetry || `model ${state.modelName} / ctx 0% / cache 0% / round 0`}  scroll: {mouseScrollEnabled ? "wheel, " : ""}k/j, PgUp/PgDn
+            {state.telemetry || `model ${state.modelName} / ctx 0% / cache 0% / round 0`}  scroll: {mouseScrollEnabled ? "wheel, " : ""}k/j, PgUp/PgDn · {autoFollow ? "auto" : "manual"}
           </Text>
         </Box>
       </Box>

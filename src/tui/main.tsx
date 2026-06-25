@@ -265,7 +265,7 @@ function useAgentStream(apiKey: string, prompt?: string) {
       task: null,
       messages: [
         ...prev.messages,
-        { id: userId, role: "user", content: p },
+        { id: userId, role: "user", content: summarizeUserPromptForTranscript(p) },
         { id: assistantId, role: "assistant", content: "", pending: true },
       ],
     }))
@@ -646,6 +646,22 @@ function compactStatusText(status: string): string {
 
 function takeVisibleLines(text: string, maxLines: number): string {
   return text.split("\n").slice(0, maxLines).join("\n")
+}
+
+function summarizeUserPromptForTranscript(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const lines = normalized ? normalized.split("\n").length : 0
+  const chars = normalized.length
+  const maxInlineChars = Number(process.env.DEEPSEEK_TUI_USER_DISPLAY_CHARS ?? "1600")
+  const maxInlineLines = Number(process.env.DEEPSEEK_TUI_USER_DISPLAY_LINES ?? "12")
+  if (chars <= maxInlineChars && lines <= maxInlineLines) return text
+
+  const firstUsefulLine = normalized
+    .split("\n")
+    .map(line => line.trim())
+    .find(Boolean)
+  const preview = firstUsefulLine ? `\npreview: ${firstUsefulLine.slice(0, 180)}` : ""
+  return `[Pasted text loaded: +${lines} lines, ${chars} chars]${preview}`
 }
 
 function renderMessageLines(message: ChatMessage, width: number, tick: number, status: string): Array<{ marker: string; text: string; color: string }> {

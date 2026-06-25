@@ -56,6 +56,7 @@ interface AgentState {
   task: TaskProgressState | null
   done: boolean
   error: string
+  queueCount: number
 }
 
 interface ClarificationWizardState {
@@ -174,6 +175,7 @@ function initialState(): AgentState {
     task: null,
     done: false,
     error: "",
+    queueCount: 0,
   }
 }
 
@@ -181,12 +183,19 @@ function useAgentStream(apiKey: string, prompt?: string) {
   const historyRef = useRef<Array<{ role: ModelHistoryRole; content: string }>>([])
   const messageIdRef = useRef(0)
   const lastEventRef = useRef<{ key: string; at: number } | null>(null)
+  const runningRef = useRef(false)
+  const queuedPromptsRef = useRef<string[]>([])
+  const runAgentRef = useRef<(prompt: string) => void>(() => {})
   const [clarification, setClarification] = useState<ClarificationWizardState | null>(null)
   const [state, setState] = useState<AgentState>(() => ({
     ...initialState(),
     status: prompt?.trim() ? "starting..." : "ready",
     done: !prompt?.trim(),
   }))
+
+  const refreshQueueCount = useCallback(() => {
+    setState(s => ({ ...s, queueCount: queuedPromptsRef.current.length }))
+  }, [])
 
   const addSystemMessage = useCallback((content: string) => {
     const assistantId = ++messageIdRef.current
@@ -221,6 +230,8 @@ function useAgentStream(apiKey: string, prompt?: string) {
   }, [])
 
   const runAgent = useCallback((p: string) => {
+    runningRef.current = true
+    refreshQueueCount()
     const historySnapshot = historyRef.current.slice()
     const userId = ++messageIdRef.current
     const assistantId = ++messageIdRef.current
@@ -254,6 +265,14 @@ function useAgentStream(apiKey: string, prompt?: string) {
     let textBuf = ""
     let assistantText = ""
     let lastFlush = 0
+    const finishRun = () => {
+      runningRef.current = false
+      const nextPrompt = queuedPromptsRef.current.shift()
+      setState(s => ({ ...s, queueCount: queuedPromptsRef.current.length }))
+      if (nextPrompt) {
+        setTimeout(() => runAgentRef.current(nextPrompt), 0)
+      }
+    }
 
     setState(prev => ({
       ...prev,
@@ -397,10 +416,12 @@ function useAgentStream(apiKey: string, prompt?: string) {
               extraPrompt: d.extraPrompt,
               rawText: d.rawText,
             })
+            runningRef.current = false
             setState(s => ({
               ...s,
               status: "clarification needed",
               done: true,
+              queueCount: queuedPromptsRef.current.length,
               messages: s.messages.map(message =>
                 message.id === assistantId
                   ? { ...message, content: visibleText, pending: false }
@@ -432,6 +453,7 @@ function useAgentStream(apiKey: string, prompt?: string) {
           message.id === assistantId ? { ...message, pending: false } : message,
         ),
       }))
+      finishRun()
     })().catch(error => {
       const message = error instanceof Error ? error.message : String(error)
       setState(s => ({
@@ -444,6 +466,7 @@ function useAgentStream(apiKey: string, prompt?: string) {
             : item,
         ),
       }))
+      finishRun()
     })
 
     return () => { cancelled = true }
@@ -487,6 +510,10 @@ function useAgentStream(apiKey: string, prompt?: string) {
     addSystemMessage("Clarification cancelled. Add more detail in the input box when you are ready.")
   }, [addSystemMessage])
 
+  useEffect(() => {
+    runAgentRef.current = runAgent
+  }, [runAgent])
+
   const submit = useCallback((newPrompt: string) => {
     const command = newPrompt.trim()
     if (command.startsWith("/")) {
@@ -512,6 +539,26 @@ function useAgentStream(apiKey: string, prompt?: string) {
         addSystemMessage(`messages ${historyRef.current.length} / model ${process.env.DEEPSEEK_MODEL_OVERRIDE ?? "deepseek-v4-pro"}`)
         return
       }
+    }
+
+    if (runningRef.current) {
+      queuedPromptsRef.current.push(newPrompt)
+      const queuedPosition = queuedPromptsRef.current.length
+      const queuedId = ++messageIdRef.current
+      setState(s => ({
+        ...s,
+        queueCount: queuedPromptsRef.current.length,
+        messages: [
+          ...s.messages,
+          {
+            id: queuedId,
+            role: "event",
+            kind: "task",
+            content: `queued user message #${queuedPosition}\n${summarizeQueuedPromptForTranscript(newPrompt)}`,
+          },
+        ],
+      }))
+      return
     }
 
     runAgent(newPrompt)
@@ -662,6 +709,20 @@ function summarizeUserPromptForTranscript(text: string): string {
     .find(Boolean)
   const preview = firstUsefulLine ? `\npreview: ${firstUsefulLine.slice(0, 180)}` : ""
   return `[Pasted text loaded: +${lines} lines, ${chars} chars]${preview}`
+}
+
+function summarizeQueuedPromptForTranscript(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const lines = normalized ? normalized.split("\n").length : 0
+  const chars = normalized.length
+  const firstLine = normalized
+    .split("\n")
+    .map(line => line.trim())
+    .find(Boolean)
+  const preview = firstLine ? firstLine.slice(0, 180) : ""
+  if (chars <= 280 && lines <= 3) return preview || normalized
+  const label = `[queued while agent is working: +${lines} lines, ${chars} chars]`
+  return preview ? `${label}\npreview: ${preview}` : label
 }
 
 function renderMessageLines(message: ChatMessage, width: number, tick: number, status: string): Array<{ marker: string; text: string; color: string }> {
@@ -981,7 +1042,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
           <Text color={C.blue}>model {state.modelName}</Text>
           <Text color={C.dim}> / </Text>
           <StatusMark done={state.done} error={state.error} tick={tick} />
-          <Text color={C.dim}>{state.status ? ` / ${state.status}` : ""}</Text>
+          <Text color={C.dim}>{state.status ? ` / ${state.status}` : ""}{state.queueCount > 0 ? ` / queued ${state.queueCount}` : ""}</Text>
         </Box>
         <SonarLine tick={tick} width={cols} active={isWorking} />
       </Box>
@@ -1027,17 +1088,17 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
         )}
         <InputLine
           onSubmit={submitFromInput}
-          disabled={!state.done || Boolean(clarification)}
-          placeholder={clarification ? "Use the selector above..." : state.done ? "Ask a follow-up..." : "DeepSeek Code is working..."}
-          status={state.status}
+          disabled={showStartup ? true : false}
+          placeholder={clarification ? "Use the selector above..." : isWorking ? "Type a follow-up; Enter queues it for the next turn..." : "Ask a follow-up..."}
+          status={isWorking ? `agent running · Enter queues next message${state.queueCount > 0 ? ` · queued ${state.queueCount}` : ""}` : state.status}
           commands={SLASH_COMMANDS}
-          focused={state.done && !clarification}
+          focused={!showStartup}
           onScrollUp={() => scrollUp(3)}
           onScrollDown={() => scrollDown(3)}
         />
         <Box paddingX={1}>
           <Text color={C.dim}>
-            {state.telemetry || `model ${state.modelName} / ctx 0% / cache 0% / round 0`}  scroll: {mouseScrollEnabled ? "wheel, " : ""}k/j, PgUp/PgDn · {autoFollow ? "auto" : "manual"}
+            {state.telemetry || `model ${state.modelName} / ctx 0% / cache 0% / round 0`}{state.queueCount > 0 ? ` / queued ${state.queueCount}` : ""}  scroll: {mouseScrollEnabled ? "wheel, " : ""}k/j, PgUp/PgDn · {autoFollow ? "auto" : "manual"}
           </Text>
         </Box>
       </Box>

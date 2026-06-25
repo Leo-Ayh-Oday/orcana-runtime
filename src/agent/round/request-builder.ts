@@ -9,6 +9,7 @@ import type { ToolDescriptor } from "../../tools/registry"
 export interface ContextMessageInput {
   langInstruction: string
   stablePrefixContext: ProviderMessage | null
+  planStateContext: ProviderMessage | null
   researchContext: ProviderMessage | null
   volatileContext: ProviderMessage | null
   planningContext: ProviderMessage | null
@@ -22,6 +23,7 @@ export function buildContextMessages(input: ContextMessageInput): ProviderMessag
   return [
     langContextMsg,
     ...(input.stablePrefixContext ? [input.stablePrefixContext] : []),
+    ...(input.planStateContext ? [input.planStateContext] : []),
     ...(input.researchContext ? [input.researchContext] : []),
     ...(input.volatileContext ? [input.volatileContext] : []),
     ...(input.planningContext ? [input.planningContext] : []),

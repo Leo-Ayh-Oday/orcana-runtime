@@ -20,6 +20,7 @@
 
 import type { TaskTracker } from "./task-tracker"
 import { createTaskTracker as _createTracker, taskTrackerComplete, formatTaskTrackerStatus, formatTaskTrackerPrompt, updateTaskTrackerAfterTools, missingTaskRequirements, markPlanAccepted, type TaskIntent } from "./task-tracker"
+import type { TaskPacket } from "./task-packet"
 
 // ── Plan status (MiMo-compatible icons) ──
 
@@ -44,6 +45,8 @@ export interface PlanNode {
   blockedBy: string[]      // node IDs that block this one (reverse edge)
   evidence?: string        // completion evidence
   reactCount: number       // how many times we've nudged this node back
+  /** PR 2: TaskPacket attached to this node (set by createMasterPlanFromPacket / addNode). */
+  _packet?: TaskPacket
 }
 
 // ── Master plan ──
@@ -55,6 +58,8 @@ export interface MasterPlan {
   current: string          // currently active node ID
   createdAt: number
   updatedAt: number
+  /** PR 8: last plan-validation result (set by plan-validator). */
+  _lastValidation?: import("./plan-validator").ValidationReport
 }
 
 const MAX_NODE_REACT = 3     // MiMo: MAX_TASK_GATE_MAIN_REACT = 3
@@ -83,6 +88,34 @@ export function createMasterPlan(goal: string, intent: TaskIntent, nodeTitles: s
     current: "1",
     createdAt: Date.now(),
     updatedAt: Date.now(),
+  }
+}
+
+/** Create a single-node MasterPlan from a TaskPacket (used by force-pass / long_task autoplan). */
+export function createMasterPlanFromPacket(packet: TaskPacket, intentLabel: string = "coding"): MasterPlan {
+  const intent: TaskIntent = intentLabel as TaskIntent
+  const tracker = _createTracker(packet.goal || packet.title, intent)
+  if (tracker && packet.doneCriteria.length > 0) {
+    tracker.goal = packet.doneCriteria.join("; ")
+  }
+  const node: PlanNode = {
+    id: packet.nodeId || "1",
+    title: packet.title,
+    status: "active" as PlanNodeStatus,
+    tracker: tracker ?? createDummyTracker(packet.title),
+    dependsOn: [],
+    blockedBy: [],
+    reactCount: 0,
+    _packet: packet,
+  }
+  return {
+    goal: packet.goal || packet.title,
+    intent,
+    nodes: [node],
+    current: node.id,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    _lastValidation: { isClean: true, highRisk: false, errors: [], warnings: [], issues: [] },
   }
 }
 

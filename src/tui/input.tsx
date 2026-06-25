@@ -284,7 +284,13 @@ export function InputLine({
     if (isMouseSequence(input)) return
     if (isUnhandledEscapeSequence(input) && !(key.upArrow || key.downArrow || key.leftArrow || key.rightArrow || key.pageUp || key.pageDown || key.home || key.end || key.backspace || key.delete || key.return || key.tab || key.escape)) return
 
-    if (canEdit && input) {
+    // Single-chunk paste staging (fast path) — skip when any control key is active,
+    // otherwise Enter (\r → \n → 2 lines) falsely triggers paste detection.
+    const isControlKey = key.return || key.tab || key.escape ||
+      key.upArrow || key.downArrow || key.leftArrow || key.rightArrow ||
+      key.backspace || key.delete || key.home || key.end ||
+      key.pageUp || key.pageDown || (key.ctrl && input)
+    if (canEdit && input && !isControlKey) {
       const maybePaste = normalizePastedText(input)
       if (shouldStagePaste(maybePaste)) {
         clearPasteBuffer()

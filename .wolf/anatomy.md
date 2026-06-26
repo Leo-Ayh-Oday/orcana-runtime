@@ -49,18 +49,21 @@
   - `extractScopeFromLine` — heuristic file path + verification hint extraction from plan text
   - `buildPacketFromLine` — plan line → TaskPacket (with command-populated verification)
   - `createTaskTrackerFromPacket` — TaskPacket → TaskTracker conversion (backward compatible)
+  - Runtime context fields: `contextMapId` + `requiredContextEvidence` can be attached when loop builds a ContextMap.
 
 ## loop.ts
 - History loading: replaced hardcoded slice(-24) with 150K token budget (~15% of 1M context), char-based token estimation, max 60 messages.
 - AgentOptions imported from loop-types (no local duplicate).
 - PR 1: MasterPlan lifecycle — `activateMasterPlan` + `tryNodeTransition` helpers, 3 plan-accept paths, 2 node-transition points.
 - PR 2: `updateTaskTrackerAfterTools` call passes `skipLegacyStepIds: !!masterPlan` — legacy step-ID matching gated when MasterPlan active.
+- ContextMap runtime: `contextMapPolicy` (`off|auto|always`) builds ContextMap for long/high-risk/explicit-file coding work, injects summary into stable prefix, attaches context evidence to MasterPlan/TaskPacket, and blocks write tools for high-risk readiness gaps.
 
 ## master-plan.ts
 - `PlanNode._packet` — PR 2: source TaskPacket stored for serialization/resume.
 - `createMasterPlan` — PR 2: per-node trackers created via `buildPacketFromLine` + `createTaskTrackerFromPacket`.
 - `addNode` — PR 2: same packet-driven path.
 - `serializePlan` — PR 2: includes packet-derived `scope` and `verification` per node.
+- ContextMap evidence propagates through initial plans, force-pass packets, dynamic `addNode()`, and `revisePlan()` replacement nodes; serialized plans include packet context evidence and validation.
 
 ## plan-validator.ts (PR 3)
 - `validatePlan` — pure function: 6 structural checks (cycles/DFS, uniqueness, tracker existence, doneCriteria, verification, scope)
@@ -147,15 +150,32 @@
 - `updateTaskTrackerAfterTools` accepts optional `evidenceLedger` param
 - When provided, `ingestVerificationResults` called at function end
 
-## ripple/obligations.ts (PR 7)
-- `RippleWaiver` — { reason, timestamp }, attached to obligations to dismiss them
-- `RippleObligation.waiver?` — PR 7: optional waiver field
-- `waiveObligation(obligation, reason)` — returns new obligation with waiver; rejects empty/whitespace reason
-- `isObligationBlocking(obligation)` — true if no waiver
-- `getBlockingObligations(obligations)` — filter to only non-waived
-- `formatWaivedObligations(obligations)` — audit trail formatting for waived obligations
-- **merge behavior**: new report overwrites existing waiver (stale waiver, fresh finding)
-- **resolve behavior**: waivers preserved on unresolved obligations
+## ripple/api-diff.ts (PR 2)
+- `SymbolShape` — lightweight serializable symbol snapshot (name/kind/exported/header/async/returnType/fields[]/line + precision positions)
+- `ApiChangeKind` — 8 change kinds: export_removed, export_added, signature_changed, async_boundary_changed, return_type_changed, interface_field_removed, interface_field_added, kind_changed
+- `ApiChange` — structured change entry: kind/symbol/oldShape?/newShape?/severity/detail. Severity pre-computed from kind + exported status.
+- `diffApiSurface(oldShapes, newShapes)` — structured diff engine replacing engine.ts's `changedSymbols(): string[]`. Detection order: removed→added→kind→async→signature→return_type→field_changes. Multiple changes per symbol possible.
+- `toSymbolShapes(Map<string, SymbolInfo>)` — converts engine.ts internal SymbolInfo to serializable SymbolShape[]
+- `changedSymbolNames(ApiChange[])` — extracts unique symbol names (backward compat with changedSymbols consumers)
+- `hasSeverity(changes, severity)` — checks if any change meets or exceeds given severity
+
+## ripple/engine.ts (PR 1+2 foundation)
+- `SymbolInfo` — now includes nameStart/nameEnd/declStart/declEnd for precise AST positions (was: line only)
+- `extractSymbols()` — populates nameStart/nameEnd from `node.name.getStart()/getEnd()`, declStart/declEnd from `node.getStart()/getEnd()`. All 6 symbol types covered.
+- `findCallers()` — parseCache now caches SourceFile+lines (was: mtime-only skip that missed unchanged caller files). Always walks AST regardless of cache hit.
+- `verifyCallersSemantically()` — uses `oldSym.nameStart` for precise position (was: `findLineStart(absTarget, oldSym.line)` which pointed to line-start, not identifier)
+- `findLineStart()` — removed. No longer needed.
+- `changedSymbols()` — replaced by `diffApiSurface` in api-diff.ts
+- `previewEdit()` — now uses `diffApiSurface` + `ApiChange[]` to drive finding generation. Finding switch on `change.kind` instead of re-deriving from SymbolInfo fields.
+- `formatRippleBlock()` — uses `apiChanges` for change summary (kind-annotated)
+- `tightenRippleDecision()` — uses `hasSeverity(report.apiChanges, "block")` instead of `report.changedSymbols.length`
+- `invalidateFileListCache()` — exported; forces refresh of project file list on next call
+- `resetRippleProgram()` — now calls invalidateFileListCache() + parseCache.clear()
+
+## ripple/types.ts (PR 2)
+- `RippleReport.apiChanges: ApiChange[]` — new field, structured API surface changes
+- `RippleReport.changedSymbols` — @deprecated, kept for backward compat, computed from apiChanges
+- Export re-exports `ApiChange`, `ApiChangeKind` from api-diff.ts
 - **Phase 1 limitation**: `waiveObligation` has no production caller — waivers created only via `resolveObligations` (caller file modified). Tool/prompt pathway deferred.
 
 ## gates/completion.ts (PR 7 wiring)

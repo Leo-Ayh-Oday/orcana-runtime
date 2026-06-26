@@ -53,9 +53,16 @@ export interface RippleCascadePlan {
   steps: string[]
 }
 
+// ── PR 2: ApiChange (from api-diff.ts) ──
+
+export type { ApiChange, ApiChangeKind } from "./api-diff"
+
 export interface RippleReport {
   targetFile: string
+  /** @deprecated Use apiChanges instead. Kept for backward compat. */
   changedSymbols: string[]
+  /** Structured API surface changes (PR 2). */
+  apiChanges: import("./api-diff").ApiChange[]
   callers: RippleCaller[]
   findings: RippleFinding[]
   decision: RippleDecision

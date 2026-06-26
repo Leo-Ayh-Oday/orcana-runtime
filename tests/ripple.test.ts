@@ -322,6 +322,7 @@ describe("Ripple Engine", () => {
     const decision = tightenRippleDecision({
       targetFile: "src/a.ts",
       changedSymbols: ["foo"],
+      apiChanges: [],
       callers: [],
       findings: [{ file: "src/a.ts", severity: "warn", kind: "memory-contract", reason: "test warning" }],
       decision: "warn",
@@ -335,6 +336,7 @@ describe("Ripple Engine", () => {
     const text = formatCascadeSuggestion({
       targetFile: "math.ts",
       changedSymbols: ["add"],
+      apiChanges: [],
       callers: [{ file: "cart.ts", line: 2, symbol: "add", text: "export const total = add(1, 2)" }],
       findings: [{
         file: "cart.ts",

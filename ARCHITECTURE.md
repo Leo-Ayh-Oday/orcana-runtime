@@ -129,25 +129,26 @@ Fallback: keyword classifiers (graceful degradation)
 
 Config: `DEEPSEEK_FLASH_TRIAGE=off|auto|always` (default: auto — short prompts <240 chars auto-skip)
 
-### 5. Ripple Engine — TypeScript-Aware Dependency Analysis
+### 5. Ripple Engine 2.0 — TypeScript-Aware Dependency Analysis
 
-`src/ripple/`
+`src/ripple/` · 7 layers · 8.5/10 · 212 tests · [Full docs →](docs/ripple-engine.md)
 
-When the agent edits a TypeScript file, Ripple diffs the old/new API surface, verifies which
-callers reference affected symbols, and produces **obligations** — files that must be updated or
-will break.
+When the agent edits a TypeScript file, Ripple traces how the change propagates through the entire codebase and blocks the write until every affected caller is handled.
 
 ```
-edit file.ts → ripple detects apiChanges →
-  find callers → produce obligations →
-    ripple block: write tools disabled until obligations resolved
-    ripple exit gate: pending obligations → agent cannot finish
+old + new content
+  → L1 API Diff (8 change kinds, pre-computed severity)
+  → L2 Semantic Reference (PRIMARY caller discovery via TypeChecker)
+  → L7 AstGrep Provider (ENRICH — 6 pattern types per symbol, graceful degrade)
+  → L3 Usage Classifier (14 usage kinds → 500+ concrete required actions)
+  → L4 Verification Map (auto-discovers test files, estimates coverage, rates strictness)
+  → L5 Obligation Gate (hard exit gate — non-waived obligations block completion)
+  → RippleReport → Gate decision (allow / warn / block)
 ```
 
-`apiChanges` is a structured `ApiChange[]` with kind, severity, old/new symbol shape, and detail.
-`changedSymbols` remains on `RippleReport` only as a backward-compatible summary field.
+**7 source files**: `api-diff.ts` · `program.ts` · `semantic-reference-provider.ts` · `usage-classifier.ts` · `obligations.ts` · `verification-map.ts` · `astgrep-provider.ts` · `engine.ts` · `types.ts`
 
-**Obligation resolution** (`ripple/obligations.ts`): merges, dedupes, and resolves obligations as the agent cascades edits through callers.
+**Key features**: semantic-first caller discovery · 8 structured change kinds · 14 usage pattern classifier · waiver-with-reason obligation system · convention-based test file discovery · ast-grep external enrichment · zero-cost graceful degradation
 
 ### 6. Sandbox — Defense-in-Depth
 

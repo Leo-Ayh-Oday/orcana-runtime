@@ -47,11 +47,11 @@ Orcana is a native coding agent that moves through the deep ocean of code like a
 | **Learning** | Error tracker: 2 repeated failures → web search prompt, 4 → admit defeat | `loop.ts:96-123` |
 | **Verification** | Flash Judge — independent model evaluates completion (SATISFIED/NOT_SATISFIED/IMPOSSIBLE) | `agent/flash-judge.ts` |
 | **Testimony** | Testimony Ledger — tracks promises vs delivery, detects circular promises | `flash-judge.ts:196-249` |
-| **Dependency** | Ripple Engine — TypeScript-aware cascade detection, blocks writes until resolved | `src/ripple/` |
+| **Dependency** | Ripple Engine 2.0 — 7-layer TS-aware cascade detection, 8.5/10 | [docs/ripple-engine.md](docs/ripple-engine.md) |
 | **Sandbox** | Job Object (kernel32) + PathGuard + env whitelist + timeout | `src/sandbox/` |
 | **Memory** | CJK bigram+trigram tokenizer, thinking compaction, knowledge reconciliation | `src/memory/` |
 
-→ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full 26-gate loop anatomy, DeepSeek V4 mechanism deep-dives, and anti-loop engineering.
+→ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full 26-gate loop anatomy, DeepSeek V4 mechanism deep-dives, and anti-loop engineering. See [docs/ripple-engine.md](docs/ripple-engine.md) for the 7-layer Ripple Engine 2.0 architecture.
 
 ## Quick Start
 
@@ -120,10 +120,56 @@ Loop Controller
     ├─ Permission Gate ── blocks unsafe calls pre-execution
     ├─ Flash Judge ────── completeness evaluation per step
     ├─ State Machine ──── enforces phase transitions
-    ├─ Ripple Engine ──── TypeScript code intelligence
+    ├─ Ripple Engine ──── TypeScript-aware cascade detection (7-layer, 8.5/10)
     ├─ Sandbox ────────── path-guard + job-object isolation
     └─ Memory ─────────── SQLite hybrid + compaction cycles
 ```
+
+### Ripple Engine 2.0 — Change Impact Analysis
+
+**Prevents broken writes.** Before any file write, the Ripple Engine traces how the change propagates through the codebase and blocks the write until every affected caller is handled.
+
+```
+ old + new
+  content
+     │
+     ▼
+┌─────────────────────┐
+│ L1  API Diff        │  8 change kinds, pre-computed severity
+│     diffApiSurface  │  export_removed · signature · async · kind · return · fields
+└────────┬────────────┘
+     │
+     ▼
+┌─────────────────────┐
+│ L2  Semantic Ref    │  PRIMARY path: TypeChecker.findReferences
+│     findCallers     │  resolves imports, follows alias chains
+│ L7  AstGrep (enrich)│  SUPPLEMENT: 6 patterns/symbol, dedup by file:line
+│     (text fallback)  │  FALLBACK: AST walk + semantic verify
+└────────┬────────────┘
+     │  RippleCaller[]
+     ▼
+┌─────────────────────┐
+│ L3  Usage Classify  │  14 usage kinds → 500+ concrete actions
+│     classifyCallers │  call_expr · method_call · extends · destructure · JSX · re-export …
+└────────┬────────────┘
+     │
+     ▼
+┌─────────────────────┐
+│ L4  Verification    │  Test discovery (4 conventions), coverage, strictness
+│     buildVerifyMap  │  Auto-generates: typecheck + test commands per file
+└────────┬────────────┘
+     │
+     ▼
+┌─────────────────────┐
+│ L5  Obligation Gate │  Hard exit gate: non-waived obligations block completion
+│     waive (w/reason)│  Waiver requires explicit reason — no silent dismissal
+└────────┬────────────┘
+     │
+     ▼
+  RippleReport → Gate decision (allow / warn / block)
+```
+
+→ See [docs/ripple-engine.md](docs/ripple-engine.md) for full architecture, 7-layer deep-dive, and 212-test coverage map.
 
 Read [ARCHITECTURE.md](./ARCHITECTURE.md) for design decisions, constraints philosophy, and the "Do-Not-Repeat" knowledge base.
 

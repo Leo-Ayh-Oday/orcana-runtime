@@ -57,12 +57,24 @@ export interface RippleCascadePlan {
 
 export type { ApiChange, ApiChangeKind } from "./api-diff"
 
+// ── PR 4: UsageImpact (from usage-classifier.ts) ──
+
+export type { UsageImpact, UsageKind } from "./usage-classifier"
+
+// ── PR 6: VerificationMap (from verification-map.ts) ──
+
+export type { VerificationMap, VerificationStep } from "./verification-map"
+
 export interface RippleReport {
   targetFile: string
   /** @deprecated Use apiChanges instead. Kept for backward compat. */
   changedSymbols: string[]
   /** Structured API surface changes (PR 2). */
   apiChanges: import("./api-diff").ApiChange[]
+  /** Per-caller usage classification (PR 4). */
+  usageImpacts: import("./usage-classifier").UsageImpact[]
+  /** Verification commands for this change (PR 6). */
+  verificationMap?: import("./verification-map").VerificationMap
   callers: RippleCaller[]
   findings: RippleFinding[]
   decision: RippleDecision

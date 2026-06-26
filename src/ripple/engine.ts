@@ -6,6 +6,10 @@ import { buildContextKernel } from "../context/kernel"
 import { HybridMemory } from "../memory/hybrid"
 import { diffApiSurface, toSymbolShapes, changedSymbolNames, hasSeverity, type ApiChange } from "./api-diff"
 import { ProjectProgram } from "./program"
+import { getSemanticReferenceProvider, resetSemanticReferenceProvider } from "./semantic-reference-provider"
+import { classifyCallers, formatUsageSummary } from "./usage-classifier"
+import { buildVerificationMap, formatVerificationMap, verificationStrictness } from "./verification-map"
+import { getAstGrepProvider, resetAstGrepProvider } from "./astgrep-provider"
 import type {
   RippleCaller,
   RippleCascadePlan,
@@ -28,6 +32,8 @@ export function getRippleProgram(): ProjectProgram {
 export function resetRippleProgram(): void {
   _program?.invalidate()
   _program = null
+  resetSemanticReferenceProvider()
+  resetAstGrepProvider()
   invalidateFileListCache()
   parseCache.clear()
 }
@@ -368,7 +374,11 @@ export function tightenRippleDecision(report: RippleReport, mode: RuntimeContext
 export function cascadeAwareDecision(report: RippleReport, modifiedFiles: Set<string>, mode: RuntimeContextBudgetMode): RippleDecision {
   const uncoveredCallers = report.callers.filter(caller => !modifiedFiles.has(caller.file))
   const cascadeKinds = new Set(["signature-change", "async-return-change"])
-  const onlyCascadeFindings = report.findings.length > 0 && report.findings.every(f => cascadeKinds.has(f.kind))
+  // Info-severity findings (e.g. strictness gap advisories) are not blocking —
+  // they must not prevent cascade-aware leniency when every REAL finding is a
+  // cascade kind and all callers are covered by the current transaction.
+  const actionableFindings = report.findings.filter(f => f.severity !== "info")
+  const onlyCascadeFindings = actionableFindings.length > 0 && actionableFindings.every(f => cascadeKinds.has(f.kind))
   if (uncoveredCallers.length === 0 && onlyCascadeFindings) return "allow"
   return tightenRippleDecision(report, mode)
 }
@@ -488,6 +498,7 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
       targetFile,
       changedSymbols: [],
       apiChanges: [],
+      usageImpacts: [],
       callers: [],
       findings: [],
       memoryHits: [],
@@ -501,19 +512,87 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
   const newShapes = toSymbolShapes(newSymbols)
   const apiChanges = diffApiSurface(oldShapes, newShapes)
 
-  // Collect symbol names for text-based caller search (high recall)
+  // Collect symbol names for caller search
   const relevantChanges = apiChanges.filter(c => {
     const os = oldSymbols.get(c.symbol)
     const ns = newSymbols.get(c.symbol)
     return os?.exported || ns?.exported || os?.kind === "function" || ns?.kind === "function"
   })
   const relevantSymbols = changedSymbolNames(relevantChanges)
-  const fastCallers = findCallers(projectRoot, targetFile, relevantSymbols)
-  // ── Semantic verification pass: cross-check text-based callers ──
-  const callers = verifyCallersSemantically(fastCallers, targetFile, relevantSymbols, oldSymbols, newContent, projectRoot)
+
+  // ── PR 3: Semantic reference as PRIMARY caller discovery path ──
+  // Try the type-checker-based semantic path first. Falls back to
+  // text-based AST scan when the program is still building.
+  const semanticProvider = getSemanticReferenceProvider(projectRoot)
+  const semanticResult = semanticProvider.findCallers(targetFile, relevantSymbols, oldSymbols)
+
+  let callers: RippleCaller[]
+  if (semanticResult.semanticPathUsed) {
+    callers = semanticResult.references
+    // Supplement same-file callers from text scan — semantic path filters
+    // out same-file references as self-references, but we need them for
+    // non-exported functions that the text scan catches.
+    if (relevantSymbols.length > 0) {
+      const textCallers = findCallers(projectRoot, targetFile, relevantSymbols)
+      const sameFile = textCallers.filter(c => c.file === targetFile)
+      const seen = new Set(callers.map(c => `${c.file}:${c.line}`))
+      for (const c of sameFile) {
+        if (!seen.has(`${c.file}:${c.line}`)) {
+          callers.push(c)
+        }
+      }
+    }
+  } else {
+    // FALLBACK: semantic program not ready — use text-based scan
+    // with secondary semantic verification (existing path).
+    const fastCallers = findCallers(projectRoot, targetFile, relevantSymbols)
+    callers = verifyCallersSemantically(fastCallers, targetFile, relevantSymbols, oldSymbols, newContent, projectRoot)
+  }
+
+  // ── PR 7: Ast-grep enrichment ──
+  // Run ast-grep as a supplementary path. In semantic-primary mode it
+  // catches cross-language references (e.g. .js files importing from .ts).
+  // In fallback mode it adds precision to text-based results.
+  if (relevantSymbols.length > 0) {
+    const astGrep = getAstGrepProvider(projectRoot)
+    if (astGrep.isAvailable()) {
+      const agCallers = astGrep.discoverCallers(targetFile, relevantSymbols)
+      if (agCallers.length > 0) {
+        const seen = new Set(callers.map(c => `${c.file}:${c.line}`))
+        for (const c of agCallers) {
+          if (!seen.has(`${c.file}:${c.line}`)) {
+            callers.push(c)
+          }
+        }
+      }
+    }
+  }
+
+  // ── PR 4: Classify each caller's usage pattern ──
+  const usageImpacts = classifyCallers(callers, apiChanges)
+
+  // ── PR 6: Build verification map ──
+  const callerFiles = [...new Set(callers.map(c => c.file))]
+  const verificationMap = buildVerificationMap(targetFile, callerFiles, apiChanges, usageImpacts, projectRoot)
 
   // ── Generate findings from structured ApiChange[] ──
   const findings: RippleFinding[] = []
+
+  // ── Wire verificationStrictness into findings ──
+  // Deep changes (async/signature/removal) with uncovered symbols surface
+  // an advisory note — the model sees the verification gap but the decision
+  // is unchanged (info severity). Escalation to warn/block still comes from
+  // the specific change findings (async_boundary_changed, signature_changed, etc.).
+  const strictness = verificationStrictness(apiChanges)
+  if (strictness === "strict" && verificationMap.uncoveredSymbols.length > 0) {
+    findings.push({
+      file: targetFile,
+      severity: "info",
+      kind: "depth-warning",
+      reason: `Strict verification gap: ${verificationMap.uncoveredSymbols.length} changed symbol(s) have no test coverage (${verificationMap.uncoveredSymbols.slice(0, 3).join(", ")}).`,
+      suggestedFix: `Run \`${verificationMap.steps.find(s => s.priority === "required")?.command ?? "bun run typecheck"}\` and manually verify callers before proceeding.`,
+    })
+  }
 
   for (const change of apiChanges) {
     const symbolCallers = callers.filter(c => c.symbol === change.symbol)
@@ -525,12 +604,20 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
         const replacementHint = replacement
           ? ` Suggested replacement: '${replacement}'. Consider adding a deprecated re-export or cascade-migrating callers.`
           : ""
+        // PR 4: enrich with usage-specific removal actions
+        const usageActions = usageImpacts
+          .filter(i => i.caller.symbol === change.symbol)
+          .map(i => `  - ${i.caller.file}:${i.caller.line} (${i.usage}): ${i.requiredAction}`)
+          .slice(0, 6)
+        const usageBlock = usageActions.length > 0
+          ? `\nPer-caller actions:\n${usageActions.join("\n")}`
+          : ""
         findings.push({
           file: targetFile,
           line: change.oldShape?.line,
           severity: "block",
           kind: replacement ? "deprecated-replacement" : "exported-symbol-removal",
-          reason: `Exported ${change.oldShape?.kind ?? "symbol"} '${change.symbol}' was removed.${replacementHint}`,
+          reason: `Exported ${change.oldShape?.kind ?? "symbol"} '${change.symbol}' was removed.${replacementHint}${usageBlock}`,
           suggestedFix: replacement
             ? `Deprecation-replacement: '${change.symbol}' → '${replacement}'. Add a re-export alias or update all callers in one transaction.`
             : "Keep a compatibility export or update every caller in the same transaction.",
@@ -540,12 +627,18 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
 
       case "async_boundary_changed": {
         if (symbolCallers.length > 0) {
+          // PR 4: count callers that specifically need await
+          const awaitCount = usageImpacts.filter(i =>
+            i.caller.symbol === change.symbol && i.requiredAction.includes("await")
+          ).length
+          const detailParts = [`'${change.symbol}' now returns a Promise/async result and has ${symbolCallers.length} external caller(s).`]
+          if (awaitCount > 0) detailParts.push(`${awaitCount} call site(s) need await.`)
           findings.push({
             file: symbolCallers[0]?.file ?? targetFile,
             line: symbolCallers[0]?.line,
             severity: "block",
             kind: "async-return-change",
-            reason: `'${change.symbol}' now returns a Promise/async result and has ${symbolCallers.length} external caller(s).`,
+            reason: detailParts.join(" "),
             suggestedFix: "Update callers to await or preserve a synchronous wrapper.",
           })
         }
@@ -554,12 +647,18 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
 
       case "signature_changed": {
         if (symbolCallers.length > 0) {
+          // PR 4: count callers that need argument updates
+          const updateCount = usageImpacts.filter(i =>
+            i.caller.symbol === change.symbol && i.requiredAction.includes("arguments")
+          ).length
+          const detailParts = [`'${change.symbol}' signature changed and ${symbolCallers.length} external caller(s) reference it.`]
+          if (updateCount > 0) detailParts.push(`${updateCount} call site(s) need argument update.`)
           findings.push({
             file: symbolCallers[0]?.file ?? targetFile,
             line: symbolCallers[0]?.line,
             severity: change.severity,
             kind: "signature-change",
-            reason: `'${change.symbol}' signature changed and ${symbolCallers.length} external caller(s) reference it.`,
+            reason: detailParts.join(" "),
             suggestedFix: "Generate a cascade patch for affected callers before writing.",
           })
         }
@@ -630,6 +729,8 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
     targetFile,
     changedSymbols: changedNames,
     apiChanges,
+    usageImpacts,
+    verificationMap,
     callers,
     findings,
     memoryHits,
@@ -757,9 +858,14 @@ function verifyCallersSemantically(
 
 /** Minimal ripple block message — model needs only actionable items. */
 export function formatRippleBlock(report: RippleReport): string {
-  const callerLines = report.callers.slice(0, 6).map(c =>
-    `- ${c.file}:${c.line} — uses ${c.symbol}`
-  )
+  // PR 4: annotate callers with usage kind + required action
+  const callerLines = report.callers.slice(0, 6).map(c => {
+    const impact = report.usageImpacts?.find(i => i.caller.file === c.file && i.caller.line === c.line)
+    const actionTag = impact && impact.usage !== "plain_ref"
+      ? ` [${impact.usage}: ${impact.requiredAction}]`
+      : ""
+    return `- ${c.file}:${c.line} — uses ${c.symbol}${actionTag}`
+  })
   const findingReasons = report.findings
     .filter(f => f.severity === "block")
     .map(f => f.reason)
@@ -768,11 +874,27 @@ export function formatRippleBlock(report: RippleReport): string {
     .map(c => `${c.symbol}(${c.kind})`)
     .join(", ") || report.changedSymbols.join(", ")
 
+  // PR 4: add usage summary when available
+  const usageLines = report.usageImpacts && report.usageImpacts.length > 0
+    ? formatUsageSummary(report.usageImpacts)
+    : ""
+
+  // PR 6: add verification commands when available
+  const verifyLines = report.verificationMap && report.verificationMap.steps.length > 0
+    ? formatVerificationMap(report.verificationMap)
+    : ""
+
   const parts = [
     "<system-reminder>",
     `[Ripple blocked] ${changeSummary} 变更影响 ${report.callers.length} 个调用方:`,
     ...callerLines,
   ]
+  if (usageLines) {
+    parts.push("Required actions:", usageLines)
+  }
+  if (verifyLines) {
+    parts.push(verifyLines)
+  }
   if (findingReasons.length) {
     parts.push("原因:", ...findingReasons.map(r => `  - ${r}`))
   }

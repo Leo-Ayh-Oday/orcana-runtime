@@ -40,6 +40,7 @@ function makeReport(overrides: Partial<RippleReport> = {}): RippleReport {
   return {
     targetFile: "src/lib.ts",
     changedSymbols: ["oldFunc"],
+    apiChanges: [],
     callers: [makeCaller()],
     findings: [],
     decision: "block",
@@ -158,7 +159,7 @@ describe("formatWaivedObligations", () => {
 
 describe("obligationsFromReport", () => {
   it("returns empty array for empty report", () => {
-    const report = makeReport({ changedSymbols: [], callers: [] })
+    const report = makeReport({ changedSymbols: [], apiChanges: [], callers: [] })
     expect(obligationsFromReport(report, new Set())).toEqual([])
   })
 

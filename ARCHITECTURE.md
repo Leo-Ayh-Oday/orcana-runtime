@@ -133,14 +133,19 @@ Config: `DEEPSEEK_FLASH_TRIAGE=off|auto|always` (default: auto — short prompts
 
 `src/ripple/`
 
-When the agent edits a TypeScript file, Ripple detects which callers reference changed symbols and produces **obligations** — files that must be updated or will break.
+When the agent edits a TypeScript file, Ripple diffs the old/new API surface, verifies which
+callers reference affected symbols, and produces **obligations** — files that must be updated or
+will break.
 
 ```
-edit file.ts → ripple detects changedSymbols →
+edit file.ts → ripple detects apiChanges →
   find callers → produce obligations →
     ripple block: write tools disabled until obligations resolved
     ripple exit gate: pending obligations → agent cannot finish
 ```
+
+`apiChanges` is a structured `ApiChange[]` with kind, severity, old/new symbol shape, and detail.
+`changedSymbols` remains on `RippleReport` only as a backward-compatible summary field.
 
 **Obligation resolution** (`ripple/obligations.ts`): merges, dedupes, and resolves obligations as the agent cascades edits through callers.
 

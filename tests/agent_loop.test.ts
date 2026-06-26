@@ -1123,6 +1123,7 @@ describe("Agent loop greedy tool execution", () => {
     const report: RippleReport = {
       targetFile: "api.ts",
       changedSymbols: ["loadUser"],
+      apiChanges: [],
       callers: [{ file: "cart.ts", line: 3, symbol: "loadUser", text: "const user = loadUser()" }],
       findings: [],
       decision: "allow",
@@ -1139,7 +1140,7 @@ describe("Agent loop greedy tool execution", () => {
           path,
           rippleReport: path === "api.ts"
             ? report
-            : { ...report, targetFile: path, changedSymbols: [], callers: [] },
+            : { ...report, targetFile: path, changedSymbols: [], apiChanges: [], callers: [] },
         })
       },
     })

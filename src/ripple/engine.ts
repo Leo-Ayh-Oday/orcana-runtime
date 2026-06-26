@@ -4,6 +4,7 @@ import ts from "typescript"
 import type { RuntimeContextBudgetMode } from "../agent/runtime-context"
 import { buildContextKernel } from "../context/kernel"
 import { HybridMemory } from "../memory/hybrid"
+import { diffApiSurface, toSymbolShapes, changedSymbolNames, hasSeverity, type ApiChange } from "./api-diff"
 import { ProjectProgram } from "./program"
 import type {
   RippleCaller,
@@ -27,6 +28,13 @@ export function getRippleProgram(): ProjectProgram {
 export function resetRippleProgram(): void {
   _program?.invalidate()
   _program = null
+  invalidateFileListCache()
+  parseCache.clear()
+}
+
+/** Invalidate the file list cache so the next call to cachedProjectFiles re-walks the project. */
+export function invalidateFileListCache(): void {
+  _fileListCache = null
 }
 
 /** Set files currently being cascaded (set by loop.ts when ripple obligations exist). */
@@ -43,12 +51,18 @@ interface SymbolInfo {
   returnType: string
   fields: Set<string>
   line: number
+  nameStart: number
+  nameEnd: number
+  declStart: number
+  declEnd: number
 }
 
 const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".deepseek-code", "blog"])
 
-// Parse cache: avoid re-parsing unchanged files every round
-const parseCache = new Map<string, { mtimeMs: number; symbols: Map<string, SymbolInfo> }>()
+// Parse cache: cache SourceFile+lines keyed by mtime.
+// Even when mtime matches we still walk the AST — the *target* symbol
+// changed, not this file. Caching avoids re-reading and re-parsing.
+const parseCache = new Map<string, { mtimeMs: number; source: ts.SourceFile; lines: string[] }>()
 
 // File list cache: avoid full recursive walk every call
 let _fileListCache: { files: string[]; projectRoot: string; at: number } | null = null
@@ -89,8 +103,10 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
     const flags = ts.getCombinedModifierFlags(node as ts.Declaration)
     return Boolean(flags & ts.ModifierFlags.Export) || Boolean(flags & ts.ModifierFlags.Default)
   }
-  const line = (node: ts.Node) => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
-  const header = (node: ts.Node) => node.getText(source).split("\n")[0]?.trim() ?? ""
+  const lineNum = (node: ts.Node) => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
+  const headerOf = (node: ts.Node) => node.getText(source).split("\n")[0]?.trim() ?? ""
+  const declStart = (node: ts.Node) => node.getStart(source)
+  const declEnd = (node: ts.Node) => node.getEnd()
 
   for (const node of source.statements) {
     if (ts.isFunctionDeclaration(node) && node.name) {
@@ -99,11 +115,15 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
         name,
         kind: "function",
         exported: exported(node),
-        header: header(node),
+        header: headerOf(node),
         async: Boolean(ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Async),
         returnType: node.type?.getText(source) ?? "",
         fields: new Set(),
-        line: line(node),
+        line: lineNum(node),
+        nameStart: node.name.getStart(source),
+        nameEnd: node.name.getEnd(),
+        declStart: declStart(node),
+        declEnd: declEnd(node),
       })
     } else if (ts.isInterfaceDeclaration(node)) {
       const name = node.name.text
@@ -116,11 +136,15 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
         name,
         kind: "interface",
         exported: exported(node),
-        header: header(node),
+        header: headerOf(node),
         async: false,
         returnType: "",
         fields,
-        line: line(node),
+        line: lineNum(node),
+        nameStart: node.name.getStart(source),
+        nameEnd: node.name.getEnd(),
+        declStart: declStart(node),
+        declEnd: declEnd(node),
       })
     } else if (ts.isTypeAliasDeclaration(node)) {
       const name = node.name.text
@@ -128,11 +152,15 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
         name,
         kind: "type",
         exported: exported(node),
-        header: header(node),
+        header: headerOf(node),
         async: false,
         returnType: node.type.getText(source),
         fields: new Set(),
-        line: line(node),
+        line: lineNum(node),
+        nameStart: node.name.getStart(source),
+        nameEnd: node.name.getEnd(),
+        declStart: declStart(node),
+        declEnd: declEnd(node),
       })
     } else if (ts.isClassDeclaration(node) && node.name) {
       const name = node.name.text
@@ -140,11 +168,15 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
         name,
         kind: "class",
         exported: exported(node),
-        header: header(node),
+        header: headerOf(node),
         async: false,
         returnType: "",
         fields: new Set(),
-        line: line(node),
+        line: lineNum(node),
+        nameStart: node.name.getStart(source),
+        nameEnd: node.name.getEnd(),
+        declStart: declStart(node),
+        declEnd: declEnd(node),
       }
       for (const member of node.members) {
         if (ts.isConstructorDeclaration(member)) {
@@ -159,6 +191,10 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
             returnType: name,
             fields: new Set(),
             line: source.getLineAndCharacterOfPosition(member.getStart(source)).line + 1,
+            nameStart: member.getStart(source),
+            nameEnd: member.getStart(source),
+            declStart: declStart(member),
+            declEnd: declEnd(member),
           })
         } else if (ts.isMethodDeclaration(member) && member.name) {
           const methodName = ts.isIdentifier(member.name) ? member.name.text : `[${member.name.getText(source)}]`
@@ -172,6 +208,10 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
             returnType: member.type?.getText(source) ?? "",
             fields: new Set(),
             line: source.getLineAndCharacterOfPosition(member.getStart(source)).line + 1,
+            nameStart: ts.isIdentifier(member.name) ? member.name.getStart(source) : member.getStart(source),
+            nameEnd: ts.isIdentifier(member.name) ? member.name.getEnd() : member.getEnd(),
+            declStart: declStart(member),
+            declEnd: declEnd(member),
           })
         } else if (ts.isPropertyDeclaration(member) && member.name && ts.isIdentifier(member.name)) {
           classSymbol.fields.add(member.name.text)
@@ -190,11 +230,15 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
           name,
           kind: "const",
           exported: exported(node),
-          header: header(node),
+          header: headerOf(node),
           async: false,
           returnType: decl.type?.getText(source) ?? "",
           fields: new Set(),
-          line: line(node),
+          line: lineNum(node),
+          nameStart: decl.name.getStart(source),
+          nameEnd: decl.name.getEnd(),
+          declStart: declStart(node),
+          declEnd: declEnd(node),
         })
       }
     } else if (ts.isExportDeclaration(node)) {
@@ -209,7 +253,11 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
             async: false,
             returnType: "",
             fields: new Set(),
-            line: line(node),
+            line: lineNum(node),
+            nameStart: element.name.getStart(source),
+            nameEnd: element.name.getEnd(),
+            declStart: declStart(node),
+            declEnd: declEnd(node),
           })
         }
       }
@@ -219,24 +267,10 @@ function extractSymbols(content: string): Map<string, SymbolInfo> {
   return symbols
 }
 
-function changedSymbols(oldSymbols: Map<string, SymbolInfo>, newSymbols: Map<string, SymbolInfo>): string[] {
-  const names = new Set([...oldSymbols.keys(), ...newSymbols.keys()])
-  const changed: string[] = []
-  for (const name of names) {
-    const oldSym = oldSymbols.get(name)
-    const newSym = newSymbols.get(name)
-    if (!oldSym || !newSym) {
-      changed.push(name)
-      continue
-    }
-    if (oldSym.header !== newSym.header) changed.push(name)
-    if (oldSym.fields.size !== newSym.fields.size) changed.push(name)
-    for (const field of oldSym.fields) {
-      if (!newSym.fields.has(field)) changed.push(name)
-    }
-  }
-  return [...new Set(changed)]
-}
+// ── PR 2: replaced by diffApiSurface in api-diff.ts ──
+// The old changedSymbols() returned a flat string[] and required downstream
+// code to re-derive severity + kind by re-checking oldSym/newSym fields.
+// Now diffApiSurface produces structured ApiChange[] with pre-computed severity.
 
 function findCallers(projectRoot: string, targetFile: string, symbols: string[]): RippleCaller[] {
   if (!symbols.length || !existsSync(projectRoot)) return []
@@ -249,14 +283,20 @@ function findCallers(projectRoot: string, targetFile: string, symbols: string[])
 
     let fileMtime = 0
     try { fileMtime = statSync(file).mtimeMs } catch { continue }
-    const cached = parseCache.get(file)
-    if (cached && cached.mtimeMs === fileMtime) continue
-    parseCache.set(file, { mtimeMs: fileMtime, symbols: new Map() })
 
-    let content = ""
-    try { content = readFileSync(file, "utf-8") } catch { continue }
-    const lines = content.split("\n")
-    const source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+    let source: ts.SourceFile
+    let lines: string[]
+    const cached = parseCache.get(file)
+    if (cached && cached.mtimeMs === fileMtime) {
+      source = cached.source
+      lines = cached.lines
+    } else {
+      let content = ""
+      try { content = readFileSync(file, "utf-8") } catch { continue }
+      lines = content.split("\n")
+      source = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+      parseCache.set(file, { mtimeMs: fileMtime, source, lines })
+    }
 
     const aliases = new Map<string, string>()
     for (const stmt of source.statements) {
@@ -321,7 +361,7 @@ export function tightenRippleDecision(report: RippleReport, mode: RuntimeContext
   if (report.decision === "block") return "block"
   if (report.findings.some(f => f.severity === "warn")) return "block"
   if (report.callers.length > 2) return "block"
-  if (report.changedSymbols.length > 2) return "warn"
+  if (hasSeverity(report.apiChanges, "block") && report.callers.length > 2) return "warn"
   return report.decision
 }
 
@@ -447,6 +487,7 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
     return {
       targetFile,
       changedSymbols: [],
+      apiChanges: [],
       callers: [],
       findings: [],
       memoryHits: [],
@@ -456,82 +497,124 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
 
   const oldSymbols = extractSymbols(oldContent)
   const newSymbols = extractSymbols(newContent)
-  const changed = changedSymbols(oldSymbols, newSymbols)
-  const relevantSymbols = changed.filter(name => oldSymbols.get(name)?.exported || newSymbols.get(name)?.exported || oldSymbols.get(name)?.kind === "function" || newSymbols.get(name)?.kind === "function")
+  const oldShapes = toSymbolShapes(oldSymbols)
+  const newShapes = toSymbolShapes(newSymbols)
+  const apiChanges = diffApiSurface(oldShapes, newShapes)
+
+  // Collect symbol names for text-based caller search (high recall)
+  const relevantChanges = apiChanges.filter(c => {
+    const os = oldSymbols.get(c.symbol)
+    const ns = newSymbols.get(c.symbol)
+    return os?.exported || ns?.exported || os?.kind === "function" || ns?.kind === "function"
+  })
+  const relevantSymbols = changedSymbolNames(relevantChanges)
   const fastCallers = findCallers(projectRoot, targetFile, relevantSymbols)
   // ── Semantic verification pass: cross-check text-based callers ──
-  // When fastCallers found cross-file references, use the type checker to
-  // confirm they're real (same type-level symbol, not just same-name text).
-  const callers = verifyCallersSemantically(fastCallers, targetFile, changed, oldSymbols, newContent, projectRoot)
+  const callers = verifyCallersSemantically(fastCallers, targetFile, relevantSymbols, oldSymbols, newContent, projectRoot)
+
+  // ── Generate findings from structured ApiChange[] ──
   const findings: RippleFinding[] = []
 
-  for (const name of changed) {
-    const oldSym = oldSymbols.get(name)
-    const newSym = newSymbols.get(name)
-    const symbolCallers = callers.filter(c => c.symbol === name)
+  for (const change of apiChanges) {
+    const symbolCallers = callers.filter(c => c.symbol === change.symbol)
 
-    if (oldSym?.exported && !newSym) {
-      // ── Deprecation-replacement detection ──
-      // When a symbol is removed, check if a similarly-named replacement exists.
-      const replacement = detectReplacement(name, oldSym, newSymbols)
-      const replacementHint = replacement
-        ? ` Suggested replacement: '${replacement}'. Consider adding a deprecated re-export or cascade-migrating callers.`
-        : ""
-      findings.push({
-        file: targetFile,
-        line: oldSym.line,
-        severity: "block",
-        kind: replacement ? "deprecated-replacement" : "exported-symbol-removal",
-        reason: `Exported ${oldSym.kind} '${name}' was removed.${replacementHint}`,
-        suggestedFix: replacement
-          ? `Deprecation-replacement: '${name}' → '${replacement}'. Add a re-export alias or update all callers in one transaction.`
-          : "Keep a compatibility export or update every caller in the same transaction.",
-      })
-      continue
-    }
-
-    if (!oldSym || !newSym) continue
-
-    const becamePromise = !/Promise\s*</.test(oldSym.returnType) && (/Promise\s*</.test(newSym.returnType) || (!oldSym.async && newSym.async))
-    if (becamePromise && symbolCallers.length > 0) {
-      findings.push({
-        file: symbolCallers[0]?.file ?? targetFile,
-        line: symbolCallers[0]?.line,
-        severity: "block",
-        kind: "async-return-change",
-        reason: `'${name}' now returns a Promise/async result and has ${symbolCallers.length} external caller(s).`,
-        suggestedFix: "Update callers to await or preserve a synchronous wrapper.",
-      })
-      continue
-    }
-
-    if ((oldSym.kind === "function" || oldSym.kind === "const") && oldSym.header !== newSym.header && symbolCallers.length > 0) {
-      findings.push({
-        file: symbolCallers[0]?.file ?? targetFile,
-        line: symbolCallers[0]?.line,
-        severity: oldSym.exported ? "block" : "warn",
-        kind: "signature-change",
-        reason: `'${name}' signature changed and ${symbolCallers.length} external caller(s) reference it.`,
-        suggestedFix: "Generate a cascade patch for affected callers before writing.",
-      })
-    }
-
-    if (oldSym.exported && oldSym.kind === "interface") {
-      const removedFields = [...oldSym.fields].filter(field => !newSym.fields.has(field))
-      if (removedFields.length > 0) {
+    switch (change.kind) {
+      case "export_removed": {
+        const oldSym = oldSymbols.get(change.symbol)
+        const replacement = oldSym ? detectReplacement(change.symbol, oldSym, newSymbols) : null
+        const replacementHint = replacement
+          ? ` Suggested replacement: '${replacement}'. Consider adding a deprecated re-export or cascade-migrating callers.`
+          : ""
         findings.push({
           file: targetFile,
-          line: oldSym.line,
+          line: change.oldShape?.line,
+          severity: "block",
+          kind: replacement ? "deprecated-replacement" : "exported-symbol-removal",
+          reason: `Exported ${change.oldShape?.kind ?? "symbol"} '${change.symbol}' was removed.${replacementHint}`,
+          suggestedFix: replacement
+            ? `Deprecation-replacement: '${change.symbol}' → '${replacement}'. Add a re-export alias or update all callers in one transaction.`
+            : "Keep a compatibility export or update every caller in the same transaction.",
+        })
+        break
+      }
+
+      case "async_boundary_changed": {
+        if (symbolCallers.length > 0) {
+          findings.push({
+            file: symbolCallers[0]?.file ?? targetFile,
+            line: symbolCallers[0]?.line,
+            severity: "block",
+            kind: "async-return-change",
+            reason: `'${change.symbol}' now returns a Promise/async result and has ${symbolCallers.length} external caller(s).`,
+            suggestedFix: "Update callers to await or preserve a synchronous wrapper.",
+          })
+        }
+        break
+      }
+
+      case "signature_changed": {
+        if (symbolCallers.length > 0) {
+          findings.push({
+            file: symbolCallers[0]?.file ?? targetFile,
+            line: symbolCallers[0]?.line,
+            severity: change.severity,
+            kind: "signature-change",
+            reason: `'${change.symbol}' signature changed and ${symbolCallers.length} external caller(s) reference it.`,
+            suggestedFix: "Generate a cascade patch for affected callers before writing.",
+          })
+        }
+        break
+      }
+
+      case "return_type_changed": {
+        if (change.severity === "warn" && symbolCallers.length > 0) {
+          findings.push({
+            file: symbolCallers[0]?.file ?? targetFile,
+            line: symbolCallers[0]?.line,
+            severity: "warn",
+            kind: "signature-change",
+            reason: change.detail,
+            suggestedFix: "Verify callers handle the new return type.",
+          })
+        }
+        break
+      }
+
+      case "interface_field_removed": {
+        // symbol is "InterfaceName.fieldName" — extract interface name
+        const ifaceName = change.symbol.split(".")[0] ?? change.symbol
+        const oldSym = oldSymbols.get(ifaceName)
+        findings.push({
+          file: targetFile,
+          line: oldSym?.line,
           severity: "block",
           kind: "exported-type-change",
-          reason: `Exported interface '${name}' removed field(s): ${removedFields.join(", ")}.`,
+          reason: change.detail,
           suggestedFix: "Keep deprecated fields or update all object construction and property reads in one transaction.",
         })
+        break
       }
+
+      case "kind_changed": {
+        if (change.severity === "block" || change.severity === "warn") {
+          findings.push({
+            file: targetFile,
+            line: change.oldShape?.line,
+            severity: change.severity,
+            kind: "exported-type-change",
+            reason: change.detail,
+            suggestedFix: "Verify all consumers handle the kind change.",
+          })
+        }
+        break
+      }
+
+      // export_added, interface_field_added → no finding (informational only)
     }
   }
 
-  const memoryHits = new HybridMemory(projectRoot).findRelevant(`${targetFile} ${changed.join(" ")}`)
+  const changedNames = changedSymbolNames(apiChanges)
+  const memoryHits = new HybridMemory(projectRoot).findRelevant(`${targetFile} ${changedNames.join(" ")}`)
   for (const hit of memoryHits) {
     findings.push({
       file: targetFile,
@@ -545,7 +628,8 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
   const kernel = buildContextKernel(projectRoot)
   const report: RippleReport = {
     targetFile,
-    changedSymbols: changed,
+    changedSymbols: changedNames,
+    apiChanges,
     callers,
     findings,
     memoryHits,
@@ -566,12 +650,12 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
       reason: `Ripple blocked: ${callers.length} callers > limit ${MAX_AFFECTED_CALLERS}.`,
       suggestedFix: "Reduce scope or manually verify all callers before proceeding.",
     })
-  } else if (changed.length > 2 && callers.length > 3) {
+  } else if (changedNames.length > 2 && callers.length > 3) {
     findings.push({
       file: targetFile,
       severity: "warn",
       kind: "depth-warning",
-      reason: `Ripple depth ${changed.length} symbols with ${callers.length} callers.`,
+      reason: `Ripple depth ${changedNames.length} symbols with ${callers.length} callers.`,
       suggestedFix: "Verify each caller handles the changed symbols correctly.",
     })
   }
@@ -597,8 +681,8 @@ function verifyCallersSemantically(
   fastCallers: RippleCaller[],
   targetFile: string,
   changed: string[],
-  oldSymbols: Map<string, { kind: string; exported: boolean; line: number; async: boolean; returnType: string }>,
-  newContent: string,
+  oldSymbols: Map<string, { kind: string; exported: boolean; line: number; async: boolean; returnType: string; nameStart: number }>,
+  _newContent: string,
   projectRoot: string,
 ): RippleCaller[] {
   if (fastCallers.length === 0) return fastCallers
@@ -621,7 +705,8 @@ function verifyCallersSemantically(
       if (!oldSym?.exported) continue
 
       const absTarget = resolve(projectRoot, targetFile)
-      const position = oldSym.line > 0 ? findLineStart(absTarget, oldSym.line) : 0
+      // PR 1+2: use precise nameStart byte offset, not fragile lineStart
+      const position = oldSym.nameStart
       if (position < 0) continue
 
       const semRefs = program.findReferences(absTarget, position)
@@ -668,19 +753,6 @@ function verifyCallersSemantically(
   }
 }
 
-/** Find byte offset of the start of a given line number (1-based). */
-function findLineStart(filePath: string, line: number): number {
-  try {
-    const content = readFileSync(filePath, "utf-8")
-    let currentLine = 1
-    for (let i = 0; i < content.length; i++) {
-      if (currentLine === line) return i
-      if (content[i] === "\n") currentLine++
-    }
-    return content.length
-  } catch { return -1 }
-}
-
 // ── Concise ripple message formatters (for model context) ──
 
 /** Minimal ripple block message — model needs only actionable items. */
@@ -691,10 +763,14 @@ export function formatRippleBlock(report: RippleReport): string {
   const findingReasons = report.findings
     .filter(f => f.severity === "block")
     .map(f => f.reason)
+  const changeSummary = report.apiChanges
+    .filter(c => c.severity === "block" || c.severity === "warn")
+    .map(c => `${c.symbol}(${c.kind})`)
+    .join(", ") || report.changedSymbols.join(", ")
 
   const parts = [
     "<system-reminder>",
-    `[Ripple blocked] ${report.changedSymbols.join(", ")} 变更影响 ${report.callers.length} 个调用方:`,
+    `[Ripple blocked] ${changeSummary} 变更影响 ${report.callers.length} 个调用方:`,
     ...callerLines,
   ]
   if (findingReasons.length) {

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useInput } from "ink"
 
 const C = {
@@ -21,10 +21,12 @@ interface Props {
   disabled?: boolean
   placeholder?: string
   status?: string
+  rightStatus?: string
   commands?: SlashCommandHint[]
   focused?: boolean
   onScrollUp?: () => void
   onScrollDown?: () => void
+  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number }) => void
 }
 
 interface PasteBlock {
@@ -169,10 +171,12 @@ export function InputLine({
   disabled,
   placeholder,
   status,
+  rightStatus,
   commands = [],
   focused = true,
   onScrollUp,
   onScrollDown,
+  onChromeChange,
 }: Props) {
   const [value, setValue] = useState("")
   const [cursor, setCursor] = useState(0)
@@ -193,7 +197,7 @@ export function InputLine({
   const showCommands = !disabled && commandDraft.trimStart().startsWith("/")
   const commandMatches = commands
     .filter(command => command.name.startsWith(slashQuery))
-    .slice(0, 5)
+    .slice(0, 3)
   const selectedCommand = commandMatches[Math.min(commandIdx, Math.max(0, commandMatches.length - 1))]
   const cursorVisible = focused && !disabled
 
@@ -440,29 +444,33 @@ export function InputLine({
   }, [cursorVisible, cursor, pasteBlocks, value, visibleDraft])
 
   const pasteCount = pasteBlocks.filter(block => value.includes(block.token)).length
-  const inputStatus = disabled
-    ? (status || "working...")
+  useEffect(() => {
+    onChromeChange?.({ commandOpen: showCommands, pasteCount })
+  }, [onChromeChange, pasteCount, showCommands])
+  const compactInputStatus = disabled
+    ? "运行中"
     : showCommands
-      ? "Up/Down select Enter send command"
+      ? "↑/↓ 选择 · Enter 发送"
       : pasteCount > 0
-        ? `Enter send · ${pasteCount} pasted block${pasteCount === 1 ? "" : "s"} loaded · Backspace removes block`
-        : "Enter send / commands Up/Down scroll · long paste auto-compacts"
+        ? `已载入 ${pasteCount} 段粘贴内容 · Backspace 移除`
+        : ""
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor={C.border} paddingX={1}>
+    <Box flexDirection="column" paddingX={1}>
       {showCommands && (
-        <Box flexDirection="column" marginBottom={1}>
+        <Box flexDirection="column" marginBottom={1} marginLeft={2}>
           {commandMatches.length === 0 ? (
-            <Text color={C.dim}>No slash command matches.</Text>
+            <Text color={C.dim}>无匹配命令</Text>
           ) : commandMatches.map((command, index) => (
             <Text key={command.name} color={index === commandIdx ? C.cyan : C.dim}>
-              {index === commandIdx ? ">" : " "} /{command.name} {command.description}{command.usage ? ` ${command.usage}` : ""}
+              {index === commandIdx ? ">" : " "} /{command.name} <Text color={C.dim}>{command.description}</Text>
             </Text>
           ))}
         </Box>
       )}
-      <Box>
-        <Text color={C.cyan}>{"> "}</Text>
+      <Box flexDirection="row" alignItems="center">
+        <Text color={showCommands || pasteCount > 0 ? C.cyan : C.border}>|</Text>
+        <Text color={C.cyan}> › </Text>
         {disabled ? (
           <Text color={C.dim}>{placeholder || "DeepSeek Code is working..."}</Text>
         ) : typeof renderedInput === "string" ? (
@@ -474,8 +482,17 @@ export function InputLine({
             <Text color={C.fg}>{renderedInput.after}</Text>
           </Text>
         )}
+        {rightStatus && !showCommands && (
+          <Box flexGrow={1} justifyContent="flex-end">
+            <Text color={C.dim}>{rightStatus}</Text>
+          </Box>
+        )}
       </Box>
-      <Text color={pasteCount > 0 ? C.yellow : C.dim}>{inputStatus}</Text>
+      {compactInputStatus && (
+        <Box marginLeft={2}>
+          <Text color={pasteCount > 0 ? C.yellow : C.dim}>{compactInputStatus}</Text>
+        </Box>
+      )}
     </Box>
   )
 }

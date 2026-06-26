@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { GateTelemetry } from "../src/agent/gates/telemetry"
 import { GateChain } from "../src/agent/gates/chain"
 import type { Gate, GateResult } from "../src/agent/gates/types"
@@ -208,6 +211,21 @@ describe("GateTelemetry", () => {
     tel.record("g", "block")
     tel.reset()
     expect(tel.gateNames().length).toBe(0)
+  })
+
+  test("saveToFile creates parent directories", async () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-telemetry-"))
+    try {
+      const tel = new GateTelemetry()
+      tel.record("context_readiness", "block")
+      const target = join(root, "nested", "telemetry.json")
+
+      await tel.saveToFile(target)
+
+      expect(existsSync(target)).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

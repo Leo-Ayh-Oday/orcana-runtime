@@ -155,6 +155,8 @@ export class GateTelemetry {
   /** Save telemetry to a JSON file. Returns the path written. */
   async saveToFile(filePath: string): Promise<string> {
     const fs = await import("node:fs/promises")
+    const path = await import("node:path")
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
     await fs.writeFile(filePath, JSON.stringify(this.toJSON(), null, 2), "utf-8")
     return filePath
   }

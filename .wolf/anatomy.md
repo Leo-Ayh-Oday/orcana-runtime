@@ -178,6 +178,98 @@
 - Export re-exports `ApiChange`, `ApiChangeKind` from api-diff.ts
 - **Phase 1 limitation**: `waiveObligation` has no production caller — waivers created only via `resolveObligations` (caller file modified). Tool/prompt pathway deferred.
 
+## ripple/semantic-reference-provider.ts (PR 3)
+- `SemanticReferenceProvider` — wraps ProjectProgram as the PRIMARY caller discovery path
+- `findCallers(targetFile, changedSymbols, oldSymbols)` → `SemanticFindResult { references, semanticPathUsed }`
+  - Semantic path: uses `program.findReferences(absTarget, position)` with TypeChecker resolution
+  - Skips non-exported symbols (semantic path only tracks exported)
+  - Deduplicates references by `file:line` key across symbols
+  - Returns `semanticPathUsed: false` when program not yet ready (callers fall back to text scan)
+  - **Known limitation**: first call always returns empty — `ensureProgram()` builds the TS program asynchronously. On the next call, semantic path activates.
+- `resolveSymbol(fileName, position)` → canonical name via alias resolution
+- `ready` / `invalidate()` — lifecycle matching ProjectProgram
+- `getSemanticReferenceProvider()` / `resetSemanticReferenceProvider()` — global singleton (lazy, cached)
+- `SemanticReference` / `SemanticFindResult` types exported
+
+## ripple/engine.ts (PR 3 wiring)
+- previewEdit: semantic path becomes PRIMARY (was: text scan → semantic verify)
+  - New flow: `semanticProvider.findCallers()` → if ready, use semantic results + supplement same-file text callers
+  - Fallback: when program not ready, preserve existing text-scan + verifyCallersSemantically path
+  - Import: `getSemanticReferenceProvider`, `resetSemanticReferenceProvider`
+- resetRippleProgram: now also calls `resetSemanticReferenceProvider()`
+
+## ripple/usage-classifier.ts (PR 4)
+- `UsageKind` — 14 usage patterns: call_expr, method_call, new_instance, type_ref, extends_clause, implements_clause, generic_arg, typeof_query, destructure, jsx_element, jsx_attr, re_export, spread_expr, plain_ref
+- `UsageImpact` — { caller, usage, requiredAction, confidence }
+- `classifyOneCaller(caller, symbol)` — regex-based heuristic classification ordered by specificity (extends/implements/typeof/re-export/new/generic_arg/jsx_element/spread/destructure/jsx_attr/method_call/call_expr/type_ref/plain_ref). Purely text-based; ApiChange context applied later by resolveAction.
+- `classifyCallers(callers, apiChanges)` — batch classification + action resolution via `resolveAction(usage, changes)`
+- `resolveAction` — combines UsageKind + ApiChangeKind → human-readable requiredAction (e.g. async_boundary_changed + call_expr → "add await to this call")
+- **Audit fix**: removed unused `_change?` param from `classifyOneCaller` and dead `findPrimaryChange` function
+- `formatUsageSummary(impacts)` — groups by action, lists files, truncates at 3 + "+N more"
+- `urgencyLevel(impacts)` — "urgent" (await/remove/migrate) > "actionable" > "info"
+
+## ripple/types.ts (PR 4)
+- `RippleReport.usageImpacts: UsageImpact[]` — per-caller usage classification
+- Re-exports `UsageImpact`, `UsageKind` from usage-classifier.ts
+
+## ripple/engine.ts (PR 4 wiring)
+- previewEdit: after caller discovery, runs `classifyCallers(callers, apiChanges)` → usageImpacts
+- RippleReport includes `usageImpacts`
+- Finding generation enriched: async_boundary_changed counts await-needing callers, signature_changed counts argument-update callers, export_removed appends per-caller action list
+- `formatRippleBlock` annotates callers with usage kind + required action, appends `formatUsageSummary` block
+- Import: `classifyCallers`, `formatUsageSummary`
+- Test fixtures: 4 files updated (agent_loop, ripple (2 locations), obligations makeReport) with `usageImpacts: []`
+
+## ripple/verification-map.ts (PR 6 — NEW)
+- `VerificationStep` — type (typecheck/test/lint/custom), command, label, coverage (direct/indirect/none), priority (required/recommended/optional)
+- `VerificationMap` — targetFile, steps[], affectedTestFiles[], uncoveredSymbols[], coverage (0-1)
+- `buildVerificationMap(targetFile, callerFiles, apiChanges, usageImpacts, projectRoot)` — test file discovery + step generation
+- `findTestFiles` — convention-based: tests/<name>.test.ts, tests/<subdir>/<name>.test.ts, __tests__/<name>.test.ts, index→parent
+- `buildSteps` — always typecheck, individual test commands (≤3) or aggregate (>3), async/signature custom verify steps
+- `formatVerificationMap(map)` — priority-grouped (Required→Recommended→Optional), coverage warning with uncovered symbols (truncated at 5)
+- `primaryVerificationCommand(map)` — first required step command (fallback to first available, default "bun run typecheck")
+- `mergeVerificationMaps(maps)` — union test files + uncovered symbols, deduplicate steps, average coverage
+- `isShallowChange(changes)` — true for export_added/interface_field_added only
+- `verificationStrictness(changes)` — strict (async/export_removed/signature) > normal (kind_changed/return_type) > relaxed (export_added only). Wired into engine.ts previewEdit — strict changes with uncovered symbols produce an info-severity advisory finding.
+- **Known limitation**: `buildSteps` hardcodes `bun run typecheck` — does not detect project's actual typecheck tool.
+
+## ripple/types.ts (PR 6)
+- `RippleReport.verificationMap?: VerificationMap` — verification commands for the change (optional, backward compat)
+- Re-exports `VerificationMap`, `VerificationStep` from verification-map.ts
+
+## ripple/engine.ts (PR 6 wiring)
+- previewEdit: after classifyCallers, builds `verificationMap` via `buildVerificationMap(targetFile, callerFiles, apiChanges, usageImpacts, projectRoot)`
+- RippleReport includes `verificationMap`
+- `formatRippleBlock` appends `formatVerificationMap` block between usage actions and finding reasons
+- Import: `buildVerificationMap`, `formatVerificationMap`, `verificationStrictness`
+- **Audit fix**: `verificationStrictness` wired — strict changes + uncovered symbols → info advisory finding
+- **Audit fix**: `isShallowChange` import removed (was unused dead import)
+- **Audit fix**: `cascadeAwareDecision` now filters out info-severity findings before evaluating cascade leniency
+
+## ripple/astgrep-provider.ts (Ripple PR 7 — NEW)
+- `AstGrepMatch` — file/line/pattern/text for individual pattern match
+- `AstGrepStats` — available/version/lastMatchCount/matchedPatterns
+- `AstGrepProvider` — external pattern-based caller discovery using ast-grep CLI
+  - `isAvailable()` — cached availability check (sg --version)
+  - `discoverCallers(targetFile, symbols)` — pattern-based caller discovery, dedup by file:line, skip self-references
+  - `_execFn` — test-only dependency injection for execSync replacement
+  - `_exec(cmd)` — wraps execSync (or test mock) with unified error handling
+- `generatePatterns(symbol)` — 6 pattern types: import, re_export, new_instance, method_call, call_expr, identifier
+  - Regex-special chars escaped in pattern literals
+- `runQuery(pattern, excludeFile)` — sg scan --json --no-ignore, parses JSON output
+  - Exit code 1 = no matches (sg convention, returns [])
+  - Non-JSON output → returns []
+  - Status > 1 errors → thrown (skipped by caller's try/catch per pattern)
+- `getAstGrepProvider(projectRoot?)` / `resetAstGrepProvider()` — global singleton
+- Degrades gracefully: isAvailable → false → discoverCallers returns []
+
+## ripple/engine.ts (Ripple PR 7 wiring)
+- `resetRippleProgram` includes `resetAstGrepProvider()`
+- previewEdit: after caller discovery (semantic or text), runs ast-grep enrichment when relevantSymbols.length > 0
+  - Only when `astGrep.isAvailable()` — zero overhead if sg not installed
+  - Results merged with dedup (file:line) — supplements both semantic and text paths
+- Import: `getAstGrepProvider`, `resetAstGrepProvider`
+
 ## gates/completion.ts (PR 7 wiring)
 - `RippleExitGate.evaluate()` — now calls `getBlockingObligations(ctx.pendingRippleObligations)` instead of raw `.length`
 - Only non-waived obligations trigger the exit gate block
@@ -194,6 +286,11 @@
 - Import: `getBlockingObligations` added to ripple/obligations imports
 - `autoFinishOnVerifiedWrite` path (line 1334): now uses `getBlockingObligations(pendingRippleObligations).length === 0`
 - `processGateOverflow` input (line 1360): now passes `getBlockingObligations(pendingRippleObligations).length`
+
+## ripple/obligations.ts (audit fixes)
+- **H1 fix**: `obligationsFromReport` now checks both `apiChanges.length` and `changedSymbols.length` (dual guard). Previously used only deprecated `changedSymbols`.
+- **L4 fix**: Comment header changed from `PR 7` to `Ripple PR 5 (Orcana PR 7)` to disambiguate numbering schemes.
+- `waiveObligation` has no production caller — waivers created only via `resolveObligations` (Phase 1 limitation).
 
 ## .wolf/
 - `orcana-architecture.md` — T3R + Microagents 多 agent 架构最终方案。Planner/Coder/Reviewer 三常驻 + Locator/Verifier 按需微 agent。Event Bus + Context Epoch + Runtime Merger。14 PR 路线图。

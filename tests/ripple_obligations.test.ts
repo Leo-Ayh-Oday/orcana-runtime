@@ -41,6 +41,7 @@ function makeReport(overrides: Partial<RippleReport> = {}): RippleReport {
     targetFile: "src/lib.ts",
     changedSymbols: ["oldFunc"],
     apiChanges: [],
+    usageImpacts: [],
     callers: [makeCaller()],
     findings: [],
     decision: "block",

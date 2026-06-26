@@ -1,7 +1,7 @@
 import { relative, resolve } from "node:path"
 import type { RippleCaller, RippleReport } from "./types"
 
-/** PR 7: A waiver dismisses a ripple obligation with a required reason. */
+/** Ripple PR 5 (Orcana PR 7): Waiver mechanism — ripple obligations as hard obligations. */
 export interface RippleWaiver {
   reason: string
   timestamp: number
@@ -22,7 +22,9 @@ export function normalizeProjectPath(path: string, projectRoot = process.cwd()):
 }
 
 export function obligationsFromReport(report: RippleReport, modifiedFiles: Set<string>): RippleObligation[] {
-  if (!report.changedSymbols.length || !report.callers.length) return []
+  // PR 2: apiChanges is the canonical change source. changedSymbols is @deprecated.
+  if (report.apiChanges.length === 0 && report.changedSymbols.length === 0) return []
+  if (!report.callers.length) return []
   const obligations: RippleObligation[] = []
   for (const caller of report.callers) {
     const callerFile = normalizeProjectPath(caller.file)

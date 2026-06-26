@@ -23,6 +23,13 @@ DeepSeek Orcana is a single-agent terminal coding assistant. It reads, writes, a
 
 Built with Bun + TypeScript + Ink (React TUI). Uses DeepSeek's Anthropic-compatible API as the default provider.
 
+What is Orcana?
+Orcana = Orca + Arcana + NA.
+
+Orca symbolizes intelligence, strength, and deep-sea navigation. Arcana represents deep knowledge hidden beneath the surface. NA stands for Native Agent.
+
+Orcana is a native coding agent that moves through the deep ocean of code like an orca, understands the hidden currents of complex systems, and turns engineering complexity into executable results.
+
 ## Highlights
 
 **26 safety mechanisms per round.** Every agent loop iteration passes through a chain of independent gates. No single mechanism is trusted alone. Built on **DeepSeek V4's unique capabilities** — thinking tokens, Flash sub-processing, FIM, 1M context, prefix caching — that no other model provides in combination.

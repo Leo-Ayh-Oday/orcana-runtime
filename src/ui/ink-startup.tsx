@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react"
 import { Box, Text, render } from "ink"
 import BigText from "ink-big-text"
-import Spinner from "ink-spinner"
 
 export interface InkStartupOptions {
   version: string
@@ -22,13 +21,12 @@ const palette = {
 
 function SignalLine({ tick }: { tick: number }) {
   const width = 58
-  const head = tick % width
   const chars = Array.from({ length: width }, (_, i) => {
-    const distance = Math.abs(i - head)
-    if (distance === 0) return "*"
-    if (distance <= 2) return "="
-    if ((i + tick) % 13 === 0) return "."
-    return "-"
+    const phase = (i + tick) % 16
+    if (phase === 0) return "="
+    if (phase <= 2 || phase >= 14) return "~"
+    if (phase <= 5 || phase >= 11) return "-"
+    return "."
   }).join("")
 
   return <Text color={palette.blue}>{chars}</Text>
@@ -81,8 +79,8 @@ export function InkStartupScreen({ version, toolsCount, thinkingEffort, modelNam
       <SignalLine tick={tick} />
 
       <Box marginTop={1}>
-        <Text color={palette.cyan}><Spinner type="dots" /> </Text>
-        <Text color={palette.dim}>warming context, tools, memory</Text>
+        <Text color={palette.cyan}>{["calibrating", "indexing", "routing", "readying"][tick % 4]}</Text>
+        <Text color={palette.dim}> context, tools, memory</Text>
       </Box>
 
       <Box marginTop={1}>

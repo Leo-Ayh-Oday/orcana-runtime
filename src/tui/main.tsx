@@ -580,29 +580,27 @@ function StatusMark({ done, error, tick }: { done: boolean; error: string; tick:
 
 function SonarLine({ tick, width, active }: { tick: number; width: number; active: boolean }) {
   const usable = Math.max(24, Math.min(width, 120))
-  const head = tick % usable
   const line = Array.from({ length: usable }, (_, index) => {
-    if (!active) return "-"
-    const distance = Math.abs(index - head)
-    if (distance === 0) return "*"
-    if (distance <= 2) return "="
-    if ((index + tick) % 19 === 0) return "."
-    return "-"
+    if (!active) return index % 2 === 0 ? "-" : "."
+    const phase = (index + tick) % 16
+    if (phase === 0) return "="
+    if (phase <= 2 || phase >= 14) return "~"
+    if (phase <= 5 || phase >= 11) return "-"
+    return "."
   }).join("")
 
-  return <Text color={C.border}>{line}</Text>
+  return <Text color={active ? C.cyan : C.border}>{line}</Text>
 }
 
 function FlowLine({ tick, width, active }: { tick: number; width: number; active: boolean }) {
   const usable = Math.max(18, Math.min(width, 72))
-  const head = tick % usable
   const line = Array.from({ length: usable }, (_, index) => {
-    if (!active) return "-"
-    const distance = Math.abs(index - head)
-    if (distance === 0) return "*"
-    if (distance <= 2) return "="
-    if ((index + tick) % 13 === 0) return "."
-    return "-"
+    if (!active) return index % 2 === 0 ? "-" : "."
+    const phase = (index + tick) % 12
+    if (phase === 0) return "="
+    if (phase <= 2 || phase >= 10) return "~"
+    if (phase <= 4 || phase >= 8) return "-"
+    return "."
   }).join("")
 
   return <Text color={active ? C.cyan : C.border}>{line}</Text>
@@ -612,10 +610,10 @@ function EmptySurface() {
   return (
     <Box flexDirection="column">
       <Text color={C.cyan} bold>DeepSeek Code</Text>
-      <Text color={C.dim}>Hraness runtime is ready. Start with a request or type / for commands.</Text>
+      <Text color={C.dim}>Harness runtime ready. Type / for commands.</Text>
       <Box height={1} />
       <Text color={C.blue}>status <Text color={C.dim}>/</Text> ready</Text>
-      <Text color={C.dim}>model {process.env.DEEPSEEK_MODEL_OVERRIDE ?? "deepseek-v4-pro"} / evidence before done</Text>
+      <Text color={C.dim}>model {process.env.DEEPSEEK_MODEL_OVERRIDE ?? "deepseek-v4-pro"}</Text>
     </Box>
   )
 }
@@ -725,6 +723,21 @@ function summarizeQueuedPromptForTranscript(text: string): string {
   return preview ? `${label}\npreview: ${preview}` : label
 }
 
+function stripCompletionReportForTranscript(text: string): string {
+  const trimmed = text.trim()
+  if (!/^##\s+(Delivery Report|交付报告)\s*$/im.test(trimmed)) return text
+
+  const lines = trimmed.split(/\r?\n/)
+  const firstHeading = lines.findIndex(line => /^##\s+(Delivery Report|交付报告)\s*$/i.test(line.trim()))
+  if (firstHeading < 0) return text
+
+  const stop = lines.findIndex((line, index) =>
+    index > firstHeading && /^##\s+(Evidence|证据|Changed Files|已变更文件|Risk|风险)\s*$/i.test(line.trim()),
+  )
+  const body = lines.slice(firstHeading + 1, stop >= 0 ? stop : undefined).join("\n").trim()
+  return body || text
+}
+
 function renderMessageLines(message: ChatMessage, width: number, tick: number, status: string): Array<{ marker: string; text: string; color: string }> {
   const contentWidth = Math.max(12, width - 4)
   const marker = message.role === "user" ? ">" : message.role === "event" ? eventMarker(message.kind) : "|"
@@ -742,7 +755,8 @@ function renderMessageLines(message: ChatMessage, width: number, tick: number, s
   }
 
   if (message.content) {
-    const assistantText = `${cleanDisplayText(trimForViewport(message.content, Math.max(1200, Math.min(5000, width * 42))))}${message.pending ? tail : ""}`
+    const assistantContent = stripCompletionReportForTranscript(message.content)
+    const assistantText = `${cleanDisplayText(trimForViewport(assistantContent, Math.max(1200, Math.min(5000, width * 42))))}${message.pending ? tail : ""}`
     return formatDisplayText(assistantText, contentWidth).map((line, index) => ({ marker: index === 0 ? marker : " ", text: line, color }))
   }
 
@@ -750,12 +764,11 @@ function renderMessageLines(message: ChatMessage, width: number, tick: number, s
     const verb = ["thinking", "routing", "reading", "checking"][tick % 4]
     const statusText = `${verb}${status ? ` / ${status}` : ""}`
     const line = Array.from({ length: Math.max(18, Math.min(contentWidth, 72)) }, (_, index) => {
-      const head = tick % Math.max(18, Math.min(contentWidth, 72))
-      const distance = Math.abs(index - head)
-      if (distance === 0) return "*"
-      if (distance <= 2) return "="
-      if ((index + tick) % 13 === 0) return "."
-      return "-"
+      const phase = (index + tick) % 12
+      if (phase === 0) return "="
+      if (phase <= 2 || phase >= 10) return "~"
+      if (phase <= 4 || phase >= 8) return "-"
+      return "."
     }).join("")
     return [
       { marker, text: statusText, color },
@@ -902,11 +915,17 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<TranscriptScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
   const [autoFollow, setAutoFollow] = useState(true)
+  const [inputChrome, setInputChrome] = useState({ commandOpen: false, pasteCount: 0 })
   const [showStartup, setShowStartup] = useState(process.env.DEEPSEEK_TUI_SPLASH !== "off")
   const mouseScrollEnabled = process.env.DEEPSEEK_TUI_MOUSE !== "off"
-  const footerHeight = clarification ? 12 : state.task ? 11 : 6
-  const bodyHeight = Math.max(10, rows - footerHeight - 3)
   const isWorking = !state.done && !state.error
+  const question = clarification?.questions[clarification.index]
+  const clarificationRows = clarification ? Math.min(10, 4 + (question?.options.length ?? 0)) : 0
+  const taskRows = state.task ? (state.task.phase === "planning" ? 3 : Math.min(5, 1 + Math.min(3, state.task.steps.length))) : 0
+  const inputRows = inputChrome.commandOpen ? 5 : (isWorking || inputChrome.pasteCount > 0 ? 2 : 1)
+  const panelRows = clarificationRows || taskRows
+  const footerHeight = Math.max(1, Math.min(rows - 8, panelRows + inputRows))
+  const bodyHeight = Math.max(10, rows - footerHeight - 3)
   const scrollUp = useCallback((amount = TUI_SCROLL_STEP) => {
     setAutoFollow(false)
     setScrollOffset(offset => offset + amount)
@@ -1014,6 +1033,15 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
 
   const hasDash = state.dash.round > 0 || state.dash.toolHistory.length > 0
   const showDash = hasDash && cols >= 110
+  const footerTelemetry = fitText(
+    (state.telemetry || `ctx 0% / cache 0% / r0`)
+      .replace(`model ${state.modelName} / `, "")
+      .replace(`${state.modelName} / `, "")
+      .replace(/^model\s+/i, "")
+      .replace(/\s*\/\s*/g, "  ")
+      .replace(/\bround\b/gi, "r"),
+    Math.max(16, Math.min(34, Math.floor(cols * 0.3))),
+  )
   if (showStartup) {
     return (
       <Box height={rows} paddingX={1} flexDirection="column">
@@ -1054,7 +1082,6 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
               ? `history ${state.messages.length} messages / follow-up context on${scrollState.maxOffset > 0 ? ` / scroll ${scrollState.normalizedOffset}/${scrollState.maxOffset}` : ""}`
               : `Prompt: ${prompt?.slice(0, 100) ?? ""}`}
           </Text>
-          <Box height={1} />
           <Box flexDirection="column" flexGrow={1}>
             {empty ? (
               <EmptySurface />
@@ -1062,7 +1089,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
               <ChatTranscript
                 messages={state.messages}
                 width={cols - (showDash ? 44 : 2)}
-                height={Math.max(4, bodyHeight - 3)}
+                height={Math.max(4, bodyHeight - 1)}
                 tick={tick}
                 status={state.status}
                 scrollOffset={scrollOffset}
@@ -1080,7 +1107,7 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
         )}
       </Box>
 
-      <Box flexDirection="column" minHeight={footerHeight} marginTop={1}>
+      <Box flexDirection="column" height={footerHeight}>
         {clarification ? (
           <ClarificationPanel wizard={clarification} width={cols} tick={tick} />
         ) : (
@@ -1088,19 +1115,16 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
         )}
         <InputLine
           onSubmit={submitFromInput}
-          disabled={showStartup ? true : false}
-          placeholder={clarification ? "Use the selector above..." : isWorking ? "Type a follow-up; Enter queues it for the next turn..." : "Ask a follow-up..."}
+          disabled={showStartup}
+          placeholder={clarification ? "按上方选项确认..." : isWorking ? "输入后续消息，Enter 排队..." : "Message DeepSeek Code..."}
           status={isWorking ? `agent running · Enter queues next message${state.queueCount > 0 ? ` · queued ${state.queueCount}` : ""}` : state.status}
+          rightStatus={footerTelemetry}
           commands={SLASH_COMMANDS}
           focused={!showStartup}
           onScrollUp={() => scrollUp(3)}
           onScrollDown={() => scrollDown(3)}
+          onChromeChange={setInputChrome}
         />
-        <Box paddingX={1}>
-          <Text color={C.dim}>
-            {state.telemetry || `model ${state.modelName} / ctx 0% / cache 0% / round 0`}{state.queueCount > 0 ? ` / queued ${state.queueCount}` : ""}  scroll: {mouseScrollEnabled ? "wheel, " : ""}k/j, PgUp/PgDn · {autoFollow ? "auto" : "manual"}
-          </Text>
-        </Box>
       </Box>
     </Box>
   )

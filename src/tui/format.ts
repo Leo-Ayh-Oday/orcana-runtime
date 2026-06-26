@@ -25,7 +25,7 @@ export function fitTerminalText(text: string, width: number): string {
     if (stringWidth(out + char) > Math.max(1, safeWidth - 1)) break
     out += char
   }
-  return safeWidth > 1 ? `${out}…` : out
+  return safeWidth > 3 ? `${out}...` : out
 }
 
 export function wrapTerminalLine(line: string, width: number): string[] {

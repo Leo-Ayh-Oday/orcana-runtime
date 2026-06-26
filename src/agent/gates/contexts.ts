@@ -35,6 +35,8 @@ export interface PreRoundContext {
   intentReadonly: boolean
   /** Whether we're in a planning-only phase. */
   taskPlanning: boolean
+  /** Whether ContextReadiness requires more read/locate work before writes. */
+  contextReadinessBlocked?: boolean
   /** Whether cache-stable tools are enabled (bypasses disclosure/ripple filters). */
   cacheStableTools: boolean
   /** Context text for tool disclosure (provider messages + system prompt). */
@@ -46,6 +48,7 @@ export interface PreRoundContext {
   budgetMessage: ProviderMessage | null
   announcedDegraded: boolean
   rippleBlockActive: boolean
+  contextReadinessBlockActive?: boolean
   /** Tokens saved by tool disclosure (for status display). */
   tokensSaved: number
   /** Final active tools for this round (set by the last gate in chain). */

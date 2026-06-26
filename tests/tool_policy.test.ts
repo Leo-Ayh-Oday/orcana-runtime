@@ -110,6 +110,30 @@ describe("evaluateToolPolicy — Gate 1: Rate Limit", () => {
   })
 })
 
+describe("evaluateToolPolicy - Context Readiness", () => {
+  test("blocks write tools when context readiness is incomplete", () => {
+    const result = evaluateToolPolicy(baseInput({
+      toolCall: { id: "c1", name: "shell", input: {} },
+      tool: WRITE_TOOL,
+      contextReadinessBlocked: true,
+      contextReadinessBlockers: ["High-risk task confidence below 0.75."],
+    }))
+    expect(result.allowed).toBe(false)
+    expect(blocked(result).reason).toBe("context_readiness")
+    expect(blocked(result).blockMessage).toContain("High-risk task confidence below 0.75.")
+  })
+
+  test("allows readonly tools when context readiness is incomplete", () => {
+    const result = evaluateToolPolicy(baseInput({
+      toolCall: { id: "c1", name: "read_file", input: {} },
+      tool: READ_TOOL,
+      contextReadinessBlocked: true,
+      contextReadinessBlockers: ["LocateResult is required for medium and larger tasks."],
+    }))
+    expect(result.allowed).toBe(true)
+  })
+})
+
 describe("evaluateToolPolicy — Gate 2: Permission", () => {
   test("blocks tool with deny permission", () => {
     const pg = new PermissionGate()

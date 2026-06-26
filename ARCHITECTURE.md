@@ -18,9 +18,10 @@ ROUND START
   ├─ [1] Context Budget Gate          — WARN at 50% / BLOCK at 60% (env-configurable)
   ├─ [2] Dynamic Tool Disclosure      — selectTools() drops irrelevant tools to save tokens
   ├─ [3] Intent Gate                  — readonly mode disables write tools
-  ├─ [4] Ripple Block Gate            — structural issues → write tools disabled
-  ├─ [5] Permission Gate              — three-tier allow/deny rules, deny always hard-blocks
-  ├─ [6] Rate Limiter                 — shell ≤5, file ≤10, network ≤3 per round
+  ├─ [4] ContextReadiness Gate        — high-risk missing context → write tools disabled
+  ├─ [5] Ripple Block Gate            — structural issues → write tools disabled
+  ├─ [6] Permission Gate              — three-tier allow/deny rules, deny always hard-blocks
+  ├─ [7] Rate Limiter                 — shell ≤5, file ≤10, network ≤3 per round
   │
   ▼ PROVIDER STREAM
   │
@@ -620,9 +621,11 @@ These are hard-won lessons from development, recorded to prevent regression:
 
 ## Context Systems
 
-The current architecture now has a protocol layer for long-running context, project maps,
-and controlled self-evolution. These modules are intentionally pure TypeScript surfaces first:
-they can be replayed, validated, and wired into the loop without depending on live model calls.
+The current architecture has a protocol layer for long-running context, project maps, and
+controlled self-evolution. The core modules remain pure TypeScript surfaces so they can be
+replayed and validated without live model calls. `ContextMap` has now crossed into runtime:
+`agentLoop()` can build a map before coding rounds, inject it into the stable provider context,
+and attach its evidence to `TaskPacket`/`MasterPlan` nodes.
 
 | Module | Purpose |
 |--------|---------|
@@ -631,9 +634,11 @@ they can be replayed, validated, and wired into the loop without depending on li
 | `src/evolution/evolution-os.ts` | Capability-gap detection, knowledge capsule generation, upgrade proposal validation, policy checks, sandbox planning, and failure replay case creation |
 | `src/agent/replay-harness.ts` | Deterministic replay coverage for `context_memory` and `context_map` protocol cases |
 
-This is a protocol-level implementation, not a claim that every path is enforced inside
-`agentLoop()` yet. Runtime enforcement should be added as a separate integration PR after the
-contracts have stayed stable under replay.
+Runtime `ContextMap` enforcement is conservative: `DEEPSEEK_CONTEXT_MAP=off|auto|always`
+controls acquisition, `auto` targets long/high-risk/explicit-file coding work, and high-risk
+readiness blockers disable write tools until more locate/read/search evidence exists. Context
+Memory OS and Evolution OS are still protocol-level and should be wired in separate integration
+PRs after their contracts stay stable under replay.
 
 See [`docs/orcana-context-systems.md`](docs/orcana-context-systems.md) for the data flow,
 boundaries, and verification commands.

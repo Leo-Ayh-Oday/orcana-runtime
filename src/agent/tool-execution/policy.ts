@@ -21,6 +21,9 @@ export interface ToolPolicyInput {
   webSearchFailedThisTurn: boolean
   webSearchFailReason: string
   finalText: string
+  /** ContextReadiness gate: block writes until enough context has been acquired. */
+  contextReadinessBlocked?: boolean
+  contextReadinessBlockers?: string[]
   /** PR 8: active mode contract for tool enforcement. */
   modeContract?: ModeContract
 }
@@ -130,7 +133,21 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
     }
   }
 
-  // Gate 6: Web search failure
+  // Gate 6: ContextReadiness blocks writes before enough project context exists.
+  if (tool && input.contextReadinessBlocked && !tool.defn.isReadonly) {
+    const blockers = input.contextReadinessBlockers?.length
+      ? input.contextReadinessBlockers.join("; ")
+      : "ContextMap readiness is incomplete."
+    return {
+      allowed: false,
+      reason: "context_readiness",
+      blockMessage: `ContextReadiness gate blocked ${toolCall.name}: ${blockers} Continue with readonly locate/read/search work before editing.`,
+      category: cat,
+      incrementRateLimit: cat,
+    }
+  }
+
+  // Gate 7: Web search failure
   if (tool && toolCall.name === "web_search" && webSearchFailedThisTurn) {
     return {
       allowed: false,

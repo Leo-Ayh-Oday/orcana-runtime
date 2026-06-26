@@ -70,6 +70,7 @@ import { createEpochState, buildPlanStateContext, classifyEpochAction, formatEpo
 import { setActivePatchContext } from "./patch-transaction"
 import { createEvidenceLedger, type EvidenceLedger } from "./evidence-ledger"
 import { setActiveMode, getActiveMode, formatModePrompt } from "./mode-contract"
+import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMap, type ContextMapTaskLevel } from "../context/context-map"
 
 import type { UsageStats, AgentOptions } from "./loop-types"
 export type { UsageStats, AgentOptions }
@@ -314,6 +315,57 @@ export async function* agentLoop(
     })
   }
 
+  const envContextMapPolicy = process.env.DEEPSEEK_CONTEXT_MAP
+  const contextMapPolicy: "off" | "auto" | "always" = options.contextMapPolicy ?? (
+    envContextMapPolicy === "off" || envContextMapPolicy === "always"
+      ? envContextMapPolicy
+      : "auto"
+  )
+  const explicitFilesForContext = explicitRequiredFiles(effectivePrompt)
+  const contextMapLevel: ContextMapTaskLevel = selectContextMapTaskLevel({
+    userRequest: effectivePrompt,
+    risk: triageResult?.riskLevel === "high" ? "high" : undefined,
+    touchedFiles: explicitFilesForContext.length,
+  })
+  const shouldBuildContextMap = contextMapPolicy === "always" ||
+    (contextMapPolicy === "auto" && intentPolicy.mode !== "readonly" && (
+      contextMapLevel === "long" ||
+      contextMapLevel === "high_risk" ||
+      explicitFilesForContext.length > 0
+    ))
+  let runtimeContextMap: ContextMap | null = null
+  let contextMapContext = ""
+  let contextReadinessBlockers: string[] = []
+  let contextReadinessBlocked = false
+  if (shouldBuildContextMap) {
+    runtimeContextMap = buildContextMap(process.cwd(), {
+      taskId: "runtime-task",
+      userRequest: effectivePrompt,
+      keywords: explicitFilesForContext,
+    })
+    const readiness = evaluateContextReadiness(runtimeContextMap, contextMapLevel)
+    contextReadinessBlockers = readiness.blockers
+    contextReadinessBlocked = contextMapLevel === "high_risk" && contextReadinessBlockers.length > 0
+    contextMapContext = [
+      "## Context Map",
+      `level: ${contextMapLevel}`,
+      formatContextMapSummary(runtimeContextMap),
+      `readiness: ${contextReadinessBlockers.length ? contextReadinessBlockers.join(" | ") : "ready"}`,
+      contextReadinessBlocked ? "ContextReadiness blocked write tools until more context is acquired." : "",
+    ].filter(Boolean).join("\n")
+    yield { type: "status", data: `context-map: ${runtimeContextMap.id} ${contextMapLevel} ${contextReadinessBlockers.length ? "blocked" : "ready"}` }
+    options.runTrace?.record("gate_decision", {
+      gate: "context_readiness",
+      decision: contextReadinessBlocked ? "block_writes" : "pass",
+      level: contextMapLevel,
+      blockers: contextReadinessBlockers,
+      contextMapId: runtimeContextMap.id,
+    })
+  }
+  const planContextAttachment = runtimeContextMap
+    ? { contextMapId: runtimeContextMap.id, requiredContextEvidence: contextEvidenceForMap(runtimeContextMap) }
+    : undefined
+
   const usage: UsageStats = { apiCalls: 0, estimatedInputTokens: 0, cacheHits: 0, cacheMisses: 0, flashRounds: 0, proRounds: 0, flashUsed: false }
 
   // Cumulative context tracking (DeepSeek V4: 1M context window)
@@ -328,7 +380,16 @@ export async function* agentLoop(
   const activateMasterPlan = (planText: string, goal: string, forcePassPacket?: TaskPacket): boolean => {
     // PR 3: if force-passed with a minimal viable packet, use it directly
     if (forcePassPacket) {
-      const plan = createMasterPlanFromPacket(forcePassPacket, "long_task")
+      const packet = planContextAttachment
+        ? {
+            ...forcePassPacket,
+            contextMapId: forcePassPacket.contextMapId ?? planContextAttachment.contextMapId,
+            requiredContextEvidence: forcePassPacket.requiredContextEvidence?.length
+              ? forcePassPacket.requiredContextEvidence
+              : planContextAttachment.requiredContextEvidence,
+          }
+        : forcePassPacket
+      const plan = createMasterPlanFromPacket(packet, "long_task")
       planRef.current = plan; masterPlan = plan
       const cur = currentNode(plan)
       if (!cur) return false
@@ -348,7 +409,7 @@ export async function* agentLoop(
     const titles = nodes.length > 0
       ? nodes.map(n => n.title)
       : [goal.slice(0, 120) || "主要任务"]
-    const plan = createMasterPlan(goal, "long_task", titles)
+    const plan = createMasterPlan(goal, "long_task", titles, planContextAttachment)
     // Transfer parsed dependencies
     for (let i = 0; i < Math.min(nodes.length, plan.nodes.length); i++) {
       for (const depIdx of nodes[i]?.dependsOn ?? []) {
@@ -451,6 +512,7 @@ export async function* agentLoop(
       if (options.stableMemoryContext?.trim()) stablePrefixParts.push(`## Stable Cold Memory\n${options.stableMemoryContext.trim()}`)
       if (experienceContext) stablePrefixParts.push(experienceContext)
       if (contextKernel.text) stablePrefixParts.push(`## Project Context Kernel\n${contextKernel.text}`)
+      if (contextMapContext) stablePrefixParts.push(contextMapContext)
       if (triageSkillPrompts.length) stablePrefixParts.push(triageSkillPrompts.join("\n\n"))
       frozenStablePrefix = stablePrefixParts.length > 0
         ? { role: "user", content: ["## Stable Prefix Context\n[CACHE_ANCHOR:v3]", stablePrefixParts.join("\n\n")].join("\n\n") }
@@ -560,6 +622,7 @@ export async function* agentLoop(
       pendingRippleObligations,
       intentReadonly: intentPolicy.mode === "readonly",
       taskPlanning: Boolean(taskPlanning),
+      contextReadinessBlocked,
       cacheStableTools,
       disclosureContextText: contextText,
       contextBudgetMode: "normal" as const,
@@ -567,6 +630,7 @@ export async function* agentLoop(
       budgetMessage: null as ProviderMessage | null,
       announcedDegraded: announcedContextDegraded,
       rippleBlockActive: false,
+      contextReadinessBlockActive: false,
       tokensSaved: 0,
       activeTools: tools,
     }
@@ -612,7 +676,7 @@ export async function* agentLoop(
       for (const report of lastRippleReports) sandbox.blockFileWrite(report.targetFile)
     }
 
-    const activeTools = cacheStableTools
+    const activeTools = cacheStableTools && !preRoundCtx.contextReadinessBlockActive
       ? cacheStableProviderTools(tools)
       : preRoundCtx.activeTools
 
@@ -1073,11 +1137,13 @@ export async function* agentLoop(
         webSearchFailedThisTurn,
         webSearchFailReason,
         finalText,
+        contextReadinessBlocked,
+        contextReadinessBlockers,
         modeContract: getActiveMode(),
       })
 
       // ── Gate telemetry for tool policy gates ──
-      const toolGateNames = ["rate_limit", "permission", "readonly_intent", "ripple_block", "planning_phase", "web_search_failed", "mode_contract"]
+      const toolGateNames = ["rate_limit", "permission", "readonly_intent", "ripple_block", "planning_phase", "context_readiness", "web_search_failed", "mode_contract"]
       const blockedGate = policyResult.allowed ? null : policyResult.reason.startsWith("permission") ? "permission" : policyResult.reason
       for (const gn of toolGateNames) {
         if (gn === blockedGate) { gateTelemetry.record(gn, "block"); break }

@@ -217,6 +217,8 @@ export function buildPacketFromLine(opts: {
   goal: string
   nodeId: string
   taskId?: string
+  contextMapId?: string
+  requiredContextEvidence?: string[]
 }): TaskPacket {
   const { title, goal, nodeId } = opts
   const scope = extractScopeFromLine(title)
@@ -255,6 +257,8 @@ export function buildPacketFromLine(opts: {
     nodeId,
     title,
     goal,
+    contextMapId: opts.contextMapId,
+    requiredContextEvidence: opts.requiredContextEvidence,
     scope: scopeItems,
     doneCriteria,
     verification,

@@ -19,8 +19,9 @@
  */
 
 import type { TaskTracker } from "./task-tracker"
-import { createTaskTracker as _createTracker, taskTrackerComplete, formatTaskTrackerStatus, formatTaskTrackerPrompt, updateTaskTrackerAfterTools, missingTaskRequirements, markPlanAccepted, type TaskIntent } from "./task-tracker"
-import type { TaskPacket } from "./task-packet"
+import { taskTrackerComplete, formatTaskTrackerStatus, formatTaskTrackerPrompt, updateTaskTrackerAfterTools, missingTaskRequirements, markPlanAccepted, type TaskIntent } from "./task-tracker"
+import { buildPacketFromLine, createTaskTrackerFromPacket, type TaskPacket } from "./task-packet"
+import { validatePlan } from "./plan-validator"
 
 // ── Plan status (MiMo-compatible icons) ──
 
@@ -62,26 +63,67 @@ export interface MasterPlan {
   _lastValidation?: import("./plan-validator").ValidationReport
 }
 
+export interface PlanContextAttachment {
+  contextMapId?: string
+  requiredContextEvidence?: string[]
+}
+
 const MAX_NODE_REACT = 3     // MiMo: MAX_TASK_GATE_MAIN_REACT = 3
 const MAX_REVIEW_REACT = 5   // Master plan review nudges before forcing continuation
 
 // ── Factory ──
 
-export function createMasterPlan(goal: string, intent: TaskIntent, nodeTitles: string[]): MasterPlan {
-  const nodes: PlanNode[] = nodeTitles.map((title, i) => {
-    const tracker = _createTracker(goal, intent)
-    if (tracker) tracker.goal = `${goal} — ${title}`
-    return {
-      id: String(i + 1),
-      title,
-      status: i === 0 ? "active" as PlanNodeStatus : "pending" as PlanNodeStatus,
-      tracker: tracker ?? createDummyTracker(title),
-      dependsOn: [],
-      blockedBy: [],
-      reactCount: 0,
-    }
+function createPlanNodeFromTitle(opts: {
+  id: string
+  title: string
+  goal: string
+  intent: TaskIntent
+  status: PlanNodeStatus
+  dependsOn?: string[]
+  context?: PlanContextAttachment
+}): PlanNode {
+  const packet = buildPacketFromLine({
+    title: opts.title,
+    goal: opts.goal,
+    nodeId: opts.id,
+    contextMapId: opts.context?.contextMapId,
+    requiredContextEvidence: opts.context?.requiredContextEvidence,
   })
   return {
+    id: opts.id,
+    title: opts.title,
+    status: opts.status,
+    tracker: createTaskTrackerFromPacket(packet, opts.intent),
+    dependsOn: opts.dependsOn ?? [],
+    blockedBy: [],
+    reactCount: 0,
+    _packet: packet,
+  }
+}
+
+function refreshPlanValidation(plan: MasterPlan): void {
+  plan._lastValidation = validatePlan(plan)
+}
+
+function contextAttachmentFromPlan(plan: MasterPlan): PlanContextAttachment | undefined {
+  const packet = plan.nodes.find(n => n._packet?.contextMapId || n._packet?.requiredContextEvidence?.length)?._packet
+  if (!packet) return undefined
+  return {
+    contextMapId: packet.contextMapId,
+    requiredContextEvidence: packet.requiredContextEvidence,
+  }
+}
+
+export function createMasterPlan(goal: string, intent: TaskIntent, nodeTitles: string[], context?: PlanContextAttachment): MasterPlan {
+  const nodes: PlanNode[] = nodeTitles.map((title, i) => createPlanNodeFromTitle({
+    id: String(i + 1),
+    title,
+    goal,
+    intent,
+    status: i === 0 ? "active" : "pending",
+    context,
+  }))
+  const plan: MasterPlan = {
     goal,
     intent,
     nodes,
@@ -89,34 +131,34 @@ export function createMasterPlan(goal: string, intent: TaskIntent, nodeTitles: s
     createdAt: Date.now(),
     updatedAt: Date.now(),
   }
+  refreshPlanValidation(plan)
+  return plan
 }
 
 /** Create a single-node MasterPlan from a TaskPacket (used by force-pass / long_task autoplan). */
 export function createMasterPlanFromPacket(packet: TaskPacket, intentLabel: string = "coding"): MasterPlan {
   const intent: TaskIntent = intentLabel as TaskIntent
-  const tracker = _createTracker(packet.goal || packet.title, intent)
-  if (tracker && packet.doneCriteria.length > 0) {
-    tracker.goal = packet.doneCriteria.join("; ")
-  }
+  const tracker = createTaskTrackerFromPacket(packet, intent)
   const node: PlanNode = {
     id: packet.nodeId || "1",
     title: packet.title,
     status: "active" as PlanNodeStatus,
-    tracker: tracker ?? createDummyTracker(packet.title),
+    tracker,
     dependsOn: [],
     blockedBy: [],
     reactCount: 0,
     _packet: packet,
   }
-  return {
+  const plan: MasterPlan = {
     goal: packet.goal || packet.title,
     intent,
     nodes: [node],
     current: node.id,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    _lastValidation: { isClean: true, highRisk: false, errors: [], warnings: [], issues: [] },
   }
+  refreshPlanValidation(plan)
+  return plan
 }
 
 /** Extract nodes from a markdown plan. Returns empty array if parsing fails. */
@@ -209,17 +251,15 @@ function nextNodeId(plan: MasterPlan): string {
 /** Add a new node to the plan. Model triggers this when discovering new requirements. */
 export function addNode(plan: MasterPlan, title: string, dependsOn: string[] = [], afterId?: string): PlanNode {
   const id = nextNodeId(plan)
-  const tracker = _createTracker(plan.goal, plan.intent)
-  if (tracker) tracker.goal = `${plan.goal} — ${title}`
-  const node: PlanNode = {
+  const node = createPlanNodeFromTitle({
     id,
     title,
     status: "pending",
-    tracker: tracker ?? createDummyTracker(title),
+    goal: plan.goal,
+    intent: plan.intent,
     dependsOn,
-    blockedBy: [],
-    reactCount: 0,
-  }
+    context: contextAttachmentFromPlan(plan),
+  })
   // Insert after the specified node
   const idx = afterId ? plan.nodes.findIndex(n => n.id === afterId) : -1
   if (idx >= 0 && idx < plan.nodes.length - 1) {
@@ -228,6 +268,7 @@ export function addNode(plan: MasterPlan, title: string, dependsOn: string[] = [
     plan.nodes.push(node)
   }
   plan.updatedAt = Date.now()
+  refreshPlanValidation(plan)
   return node
 }
 
@@ -245,6 +286,7 @@ export function removeNode(plan: MasterPlan, nodeId: string, reason: string): bo
     else plan.current = ""
   }
   plan.updatedAt = Date.now()
+  refreshPlanValidation(plan)
   return true
 }
 
@@ -260,20 +302,8 @@ export function skipNode(plan: MasterPlan, nodeId: string, reason: string): bool
     else plan.current = ""
   }
   plan.updatedAt = Date.now()
+  refreshPlanValidation(plan)
   return true
-}
-
-function createDummyTracker(title: string): TaskTracker {
-  return {
-    goal: title,
-    intent: "long_task",
-    phase: "building",
-    requiredFiles: [],
-    requiredVerificationKinds: [],
-    verificationEvidence: {},
-    verification: [],
-    steps: [],
-  }
 }
 
 // ── Node lifecycle ──
@@ -445,6 +475,7 @@ export function blockTask(plan: MasterPlan, fromId: string, toId: string): void 
   if (!from.blockedBy.includes(toId)) from.blockedBy.push(toId)
   if (!to.dependsOn.includes(fromId)) to.dependsOn.push(fromId)
   plan.updatedAt = Date.now()
+  refreshPlanValidation(plan)
 }
 
 /** Find blocked nodes whose dependencies are now satisfied. Lazy evaluation at claim time. */
@@ -495,6 +526,7 @@ export interface RevisePlanResult {
  */
 export async function revisePlan(input: RevisePlanInput): Promise<RevisePlanResult> {
   const { plan, trigger, context, judgeCritique, newRequirements, streamChat } = input
+  const packetContext = contextAttachmentFromPlan(plan)
   const frozenNodes = plan.nodes.filter(n => n.status === "done" || n.status === "skipped")
   const remainingNodes = plan.nodes.filter(n => n.status !== "done" && n.status !== "skipped")
 
@@ -564,20 +596,21 @@ export async function revisePlan(input: RevisePlanInput): Promise<RevisePlanResu
           .filter(d => typeof d === "number" && d >= 1)
           .map(d => String(d))
           .slice(0, 5)
-        return {
+        return createPlanNodeFromTitle({
           id,
           title: n.title!.trim().slice(0, 120),
           status: "pending" as PlanNodeStatus,
-          tracker: createDummyTracker(n.title!.trim()),
+          goal: plan.goal,
+          intent: plan.intent,
           dependsOn,
-          blockedBy: [] as string[],
-          reactCount: 0,
-        }
+          context: packetContext,
+        })
       })
 
     newPlan.nodes.push(...newNodes)
     const firstPending = newPlan.nodes.find(n => n.status === "pending")
     if (firstPending) { firstPending.status = "active"; newPlan.current = firstPending.id }
+    refreshPlanValidation(newPlan)
 
     return {
       plan: newPlan,
@@ -631,6 +664,18 @@ export function serializePlan(plan: MasterPlan): Record<string, unknown> {
       dependsOn: n.dependsOn,
       evidence: n.evidence,
       reactCount: n.reactCount,
+      packet: n._packet ? {
+        taskId: n._packet.taskId,
+        nodeId: n._packet.nodeId,
+        contextMapId: n._packet.contextMapId,
+        requiredContextEvidence: n._packet.requiredContextEvidence,
+        scope: n._packet.scope,
+        doneCriteria: n._packet.doneCriteria,
+        verification: n._packet.verification,
+        ripplePolicy: n._packet.ripplePolicy,
+        contextBudget: n._packet.contextBudget,
+      } : null,
     })),
+    validation: plan._lastValidation,
   }
 }

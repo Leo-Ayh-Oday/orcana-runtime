@@ -9,7 +9,7 @@ import {
   type TaskPacket,
   type ScopeExtraction,
 } from "../src/agent/task-packet"
-import { createMasterPlan, currentNode, type PlanNode } from "../src/agent/master-plan"
+import { addNode, createMasterPlan, currentNode, revisePlan, serializePlan } from "../src/agent/master-plan"
 import { markPlanAccepted } from "../src/agent/task-tracker"
 
 // ── isFilePath ──
@@ -356,6 +356,26 @@ describe("MasterPlan + TaskPacket integration", () => {
     }
   })
 
+  test("createMasterPlan attaches ContextMap evidence to every TaskPacket", () => {
+    const plan = createMasterPlan(
+      "G",
+      "long_task",
+      ["1. Update src/context/context-map.ts", "2. Run bun run typecheck"],
+      {
+        contextMapId: "ctx-runtime-task",
+        requiredContextEvidence: [
+          "locateResult:src/context/context-map.ts",
+          "verification:bun run typecheck",
+        ],
+      },
+    )
+
+    for (const node of plan.nodes) {
+      expect(node._packet?.contextMapId).toBe("ctx-runtime-task")
+      expect(node._packet?.requiredContextEvidence).toContain("locateResult:src/context/context-map.ts")
+    }
+  })
+
   test("first node active, others pending", () => {
     const plan = createMasterPlan("G", "long_task", ["1. A", "2. B", "3. C"])
 
@@ -381,5 +401,63 @@ describe("MasterPlan + TaskPacket integration", () => {
     expect(p!.nodeId).toBe("1")
     expect(p!.scope).toContain("server/index.ts")
     expect(p!.ripplePolicy.autoPropagate).toBe(true)
+  })
+
+  test("addNode creates packet-backed tracker and refreshes validation", () => {
+    const plan = createMasterPlan("G", "long_task", ["1. Update src/agent/task-packet.ts"])
+    const node = addNode(plan, "2. Update src/context/context-map.ts and run typecheck", [], "1")
+
+    expect(node._packet).toBeDefined()
+    expect(node._packet!.nodeId).toBe("2")
+    expect(node._packet!.scope).toContain("src/context/context-map.ts")
+    expect(node.tracker.requiredFiles).toContain("src/context/context-map.ts")
+    expect(node.tracker.requiredVerificationKinds).toContain("typecheck")
+    expect(plan._lastValidation?.isClean).toBe(true)
+  })
+
+  test("revisePlan creates packet-backed replacement nodes", async () => {
+    const plan = createMasterPlan("G", "long_task", ["1. Done", "2. Old remaining"])
+    plan.nodes[0]!.status = "done"
+
+    const streamChat = async function* () {
+      yield {
+        type: "text",
+        data: JSON.stringify({
+          nodes: [
+            { title: "Update src/context/context-map.ts and run typecheck", dependsOn: [1] },
+          ],
+        }),
+      }
+    }
+
+    const result = await revisePlan({
+      plan,
+      trigger: "plan_stale",
+      streamChat,
+    })
+
+    expect(result.changed).toBe(true)
+    const replacement = result.plan.nodes.find(node => node.id === "2")
+    expect(replacement?._packet?.scope).toContain("src/context/context-map.ts")
+    expect(replacement?.tracker.requiredFiles).toContain("src/context/context-map.ts")
+    expect(result.plan._lastValidation?.isClean).toBe(true)
+  })
+
+  test("serializePlan includes packet scope, verification, context map evidence, and validation", () => {
+    const plan = createMasterPlan("G", "long_task", ["1. Update src/context/context-map.ts and run typecheck"])
+    const packet = plan.nodes[0]!._packet!
+    packet.contextMapId = "ctx-123456789abc"
+    packet.requiredContextEvidence = ["locateResult:src/context/context-map.ts"]
+
+    const serialized = serializePlan(plan) as {
+      nodes: Array<{ packet?: { contextMapId?: string; requiredContextEvidence?: string[]; scope?: string[]; verification?: unknown[] } }>
+      validation?: { isClean: boolean }
+    }
+
+    expect(serialized.nodes[0]!.packet?.contextMapId).toBe("ctx-123456789abc")
+    expect(serialized.nodes[0]!.packet?.requiredContextEvidence).toContain("locateResult:src/context/context-map.ts")
+    expect(serialized.nodes[0]!.packet?.scope).toContain("src/context/context-map.ts")
+    expect(serialized.nodes[0]!.packet?.verification?.length).toBeGreaterThan(0)
+    expect(serialized.validation?.isClean).toBe(true)
   })
 })

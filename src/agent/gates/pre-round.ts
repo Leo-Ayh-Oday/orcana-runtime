@@ -54,6 +54,23 @@ export class ReadonlyPlanGate implements Gate<PreRoundContext> {
   }
 }
 
+// ── Gate: Context readiness ──
+
+export class ContextReadinessToolFilterGate implements Gate<PreRoundContext> {
+  readonly name = "context_readiness_filter"
+
+  evaluate(ctx: PreRoundContext): GateResult {
+    if (ctx.contextReadinessBlocked) {
+      ctx.tools = ctx.tools.filter(t => t.defn.isReadonly)
+      ctx.activeTools = ctx.tools
+      ctx.contextReadinessBlockActive = true
+    } else {
+      ctx.contextReadinessBlockActive = false
+    }
+    return { pass: true }
+  }
+}
+
 // ── Gate: Ripple Tool Filter ──
 
 export class RippleToolFilterGate implements Gate<PreRoundContext> {
@@ -95,6 +112,7 @@ export function createPreRoundChain(): GateChain<PreRoundContext> {
     new ContextBudgetGate(),
     new ToolDisclosureGate(),
     new ReadonlyPlanGate(),
+    new ContextReadinessToolFilterGate(),
     new RippleToolFilterGate(),
   ])
 }

@@ -49,4 +49,6 @@ export interface AgentOptions {
   planText?: string
   /** PR 8: Active mode contract for role discipline. Defaults to "coder". */
   activeMode?: ModeName
+  /** ContextMap acquisition policy. "auto" builds maps for long/high-risk tasks. */
+  contextMapPolicy?: "off" | "auto" | "always"
 }

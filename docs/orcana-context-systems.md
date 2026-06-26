@@ -1,20 +1,21 @@
 # Orcana Context Systems
 
 This document covers the context memory, context map, and evolution protocol modules added
-after the replay harness baseline. The intent is to make long-running work reproducible before
-wiring every policy into the live agent loop.
+after the replay harness baseline. The intent is to make long-running work reproducible while
+incrementally wiring the contracts into the live agent loop.
 
 ## Scope
 
-The implementation is protocol-level:
+The implementation is split by maturity:
 
 - It defines typed contracts, validation, persistence shapes, and deterministic replay cases.
 - It avoids live network calls and provider calls in the core modules.
 - It exposes explicit evidence fields that can be attached to `TaskPacket`.
-- It does not yet claim that every protocol is enforced inside `agentLoop()`.
+- `ContextMap` is now wired into `agentLoop()` for automatic context acquisition.
+- `Context Memory OS` and `Evolution OS` remain protocol-level surfaces.
 
-Runtime enforcement belongs in a follow-up integration PR. Keeping these modules pure first
-makes failures easier to replay and keeps the loop change small.
+Keeping the core modules pure still matters: `agentLoop()` consumes their outputs, but the
+map/memory/evolution modules stay deterministic and replayable.
 
 ## Context Memory OS
 
@@ -46,9 +47,18 @@ The context map combines three inputs:
   entrypoints, package manager, and module hints.
 - Targeted locating through text search plus TypeScript AST symbol extraction.
 
-The output is a `ContextMap` with readiness status. A task packet can reference that map through
-`contextMapId` and `requiredContextEvidence`, which gives downstream gates a structured way to
-check that the agent read the right context before editing.
+The output is a `ContextMap` with readiness status. `agentLoop()` builds one automatically for
+long, high-risk, or explicit-file coding work (`DEEPSEEK_CONTEXT_MAP=off|auto|always`; default
+`auto`). The formatted map is injected into the stable provider context so the first coding round
+has repository, locate, and verification evidence before edits.
+
+Task packets reference that map through `contextMapId` and `requiredContextEvidence`. `MasterPlan`
+now creates packet-backed nodes for initial plans, dynamic `addNode()` calls, and `revisePlan()`
+replacement nodes, then serializes packet scope, verification, context evidence, and validation.
+
+For high-risk tasks, incomplete readiness activates the `ContextReadiness` gate. Pre-round tool
+disclosure hides write tools, and the tool execution policy also blocks non-readonly tools until
+more locate/read/search context has been acquired.
 
 ## Evolution OS
 
@@ -82,11 +92,17 @@ The current gate for this PR is:
 ```bash
 bun test tests/context_memory_os.test.ts
 bun test tests/context_map.test.ts
+bun test tests/context_map_runtime.test.ts
 bun test tests/evolution_os.test.ts
 bun test tests/replay_harness.test.ts
+bun test tests/tool_policy.test.ts
+bun test tests/pre_round_context_readiness.test.ts
+bun test tests/task_packet.test.ts
 bun run test
 bun run typecheck
 bun run build
 ```
 
-At the time this document was added, all of the above commands passed locally.
+At the time the protocol layer was added, the original command set passed locally. Runtime
+integration PRs should rerun the focused tests above plus `bun run typecheck`, `bun run test`,
+and `bun run build` before landing.

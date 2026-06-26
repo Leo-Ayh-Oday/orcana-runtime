@@ -1,0 +1,21 @@
+{
+  "caseId": "context-map-19-readiness-medium",
+  "domain": "context_map",
+  "description": "Medium readiness requires locator and source understanding",
+  "targetFunction": "evaluateContextReadiness",
+  "input": {
+    "level": "medium",
+    "context": {
+      "taskId": "task-medium",
+      "userRequest": "fix evaluateCompletionGate evidence"
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "medium readiness",
+    "targetFunction": "evaluateContextReadiness",
+    "success": true,
+    "blockerCount": 0,
+    "assertions": ["blockerCount equals 0"]
+  }
+}

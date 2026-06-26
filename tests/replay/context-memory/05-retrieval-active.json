@@ -1,0 +1,36 @@
+{
+  "caseId": "context-memory-05-retrieval-active",
+  "domain": "context_memory",
+  "description": "active high-confidence relevant capsule must-loads",
+  "targetFunction": "evaluateMemoryRetrieval",
+  "input": {
+    "query": {
+      "userRequest": "fix agent runtime completion evidence",
+      "taskKind": "agent_runtime",
+      "currentFiles": ["src/agent/loop.ts"],
+      "activeSymbols": ["evaluateCompletionGate"],
+      "risk": "high"
+    },
+    "capsules": [
+      {
+        "id": "cap-active",
+        "title": "Completion evidence rule",
+        "kind": "project_rule",
+        "scope": { "files": ["src/agent/loop.ts"], "appliesTo": ["agent_runtime"] },
+        "content": "Completion requires verification evidence.",
+        "retrieval": { "keywords": ["agent_runtime", "completion", "evidence"], "symbols": ["evaluateCompletionGate"] },
+        "validity": { "status": "active", "createdAt": "x", "updatedAt": "x", "confidence": 0.9 }
+      }
+    ]
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "must load active capsule",
+    "targetFunction": "evaluateMemoryRetrieval",
+    "success": true,
+    "mustLoadCount": 1,
+    "maybeLoadCount": 0,
+    "doNotLoadCount": 0,
+    "assertions": ["mustLoadCount equals 1"]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "caseId": "context-map-17-build-context-map-unmatched",
+  "domain": "context_map",
+  "description": "ContextMap records blockers when no files are located",
+  "targetFunction": "buildContextMap",
+  "input": {
+    "context": {
+      "taskId": "task-unmatched-map",
+      "userRequest": "zzzz-unmatched-symbol",
+      "keywords": ["zzzz-unmatched-symbol"]
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "context map blocked",
+    "targetFunction": "buildContextMap",
+    "success": true,
+    "primaryFileCount": 0,
+    "assertions": ["blockerCount > 0"]
+  }
+}

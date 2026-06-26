@@ -1,0 +1,19 @@
+{
+  "caseId": "context-map-07-save-load",
+  "domain": "context_map",
+  "description": "ContextMap store saves and loads by id",
+  "targetFunction": "saveLoadContextMap",
+  "input": {
+    "context": {
+      "taskId": "task-store",
+      "userRequest": "fix evaluateCompletionGate completion evidence"
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "store roundtrip",
+    "targetFunction": "saveLoadContextMap",
+    "success": true,
+    "assertions": ["saved equals true", "loaded equals true"]
+  }
+}

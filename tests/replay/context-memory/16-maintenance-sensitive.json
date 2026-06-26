@@ -1,0 +1,22 @@
+{
+  "caseId": "context-memory-16-maintenance-sensitive",
+  "domain": "context_memory",
+  "description": "sensitive strings are rejected from memory proposals",
+  "targetFunction": "proposeMemoryUpdate",
+  "input": {
+    "maintenance": {
+      "trigger": "task_completed",
+      "taskId": "task-5",
+      "summary": "Use api_key=abcdef1234567890 for the provider.",
+      "existingCapsules": []
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "rejects secret",
+    "targetFunction": "proposeMemoryUpdate",
+    "success": true,
+    "addCount": 0,
+    "assertions": ["addCount equals 0"]
+  }
+}

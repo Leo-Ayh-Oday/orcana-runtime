@@ -1,0 +1,22 @@
+{
+  "caseId": "context-memory-18-cache-summary",
+  "domain": "context_memory",
+  "description": "cache telemetry summary counts hits, misses, partials and average hit rate",
+  "targetFunction": "summarizeCacheTelemetry",
+  "input": {
+    "entries": [
+      { "id": "a", "timestamp": "x", "provider": "deepseek", "model": "m", "round": 1, "status": "hit", "hitRate": 0.9, "stablePrefixChars": 100 },
+      { "id": "b", "timestamp": "x", "provider": "deepseek", "model": "m", "round": 2, "status": "miss", "hitRate": 0.1, "stablePrefixChars": 100, "changedSection": "tools" },
+      { "id": "c", "timestamp": "x", "provider": "deepseek", "model": "m", "round": 3, "status": "partial", "hitRate": 0.5, "stablePrefixChars": 100, "changedSection": "messages" }
+    ]
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "cache summary",
+    "targetFunction": "summarizeCacheTelemetry",
+    "success": true,
+    "telemetryTotal": 3,
+    "averageHitRate": 0.5,
+    "assertions": ["telemetryTotal equals 3", "hits equals 1", "misses equals 1", "partials equals 1"]
+  }
+}

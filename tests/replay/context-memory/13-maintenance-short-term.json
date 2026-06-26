@@ -1,0 +1,22 @@
+{
+  "caseId": "context-memory-13-maintenance-short-term",
+  "domain": "context_memory",
+  "description": "short-term tool output is not proposed as memory",
+  "targetFunction": "proposeMemoryUpdate",
+  "input": {
+    "maintenance": {
+      "trigger": "context_epoch",
+      "taskId": "task-2",
+      "summary": "current round stdout contained normal temporary progress",
+      "existingCapsules": []
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "rejects short-term state",
+    "targetFunction": "proposeMemoryUpdate",
+    "success": true,
+    "addCount": 0,
+    "assertions": ["addCount equals 0"]
+  }
+}

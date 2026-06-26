@@ -1,0 +1,14 @@
+{
+  "caseId": "context-memory-02-default-index",
+  "domain": "context_memory",
+  "description": "default MEMORY.md index exposes only references",
+  "targetFunction": "loadMemoryIndex",
+  "input": {},
+  "expected": {
+    "domain": "context_memory",
+    "description": "default index counts",
+    "targetFunction": "loadMemoryIndex",
+    "success": true,
+    "assertions": ["alwaysLoadCount equals 3", "topicFilesCount equals 5"]
+  }
+}

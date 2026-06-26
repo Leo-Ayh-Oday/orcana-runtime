@@ -1,0 +1,17 @@
+{
+  "caseId": "context-map-11-level-long-files",
+  "domain": "context_map",
+  "description": "Task level selector returns long for many touched files",
+  "targetFunction": "selectContextMapTaskLevel",
+  "input": {
+    "levelInput": { "userRequest": "small edit", "touchedFiles": 4 }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "long level by files",
+    "targetFunction": "selectContextMapTaskLevel",
+    "success": true,
+    "taskLevel": "long",
+    "assertions": ["taskLevel equals long"]
+  }
+}

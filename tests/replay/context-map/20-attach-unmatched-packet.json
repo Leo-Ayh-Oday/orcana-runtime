@@ -1,0 +1,26 @@
+{
+  "caseId": "context-map-20-attach-unmatched-packet",
+  "domain": "context_map",
+  "description": "TaskPacket can still carry low-confidence ContextMap evidence for planner review",
+  "targetFunction": "attachContextMapToTaskPacket",
+  "input": {
+    "context": {
+      "taskId": "task-unmatched-attach",
+      "userRequest": "zzzz-unmatched-symbol",
+      "keywords": ["zzzz-unmatched-symbol"]
+    },
+    "packet": {
+      "title": "Investigate missing subsystem",
+      "goal": "planner review",
+      "nodeId": "node-1",
+      "taskId": "task-unmatched-attach"
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "attached low-confidence map",
+    "targetFunction": "attachContextMapToTaskPacket",
+    "success": true,
+    "assertions": ["evidenceCount > 0"]
+  }
+}

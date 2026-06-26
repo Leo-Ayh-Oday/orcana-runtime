@@ -22,6 +22,10 @@ export interface TaskPacket {
   nodeId: string
   title: string
   goal: string
+  /** ContextMap that justified this task packet, when available. */
+  contextMapId?: string
+  /** Evidence lines proving required context was acquired before coding. */
+  requiredContextEvidence?: string[]
   /** Concrete deliverables — file paths or action descriptions. */
   scope: string[]
   /** Checkable completion conditions. Auto-derived from scope if empty. */

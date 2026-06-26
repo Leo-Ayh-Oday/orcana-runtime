@@ -1,0 +1,16 @@
+{
+  "caseId": "context-map-04-source-understanding",
+  "domain": "context_map",
+  "description": "SourceUnderstanding reads located source and test files",
+  "targetFunction": "buildSourceUnderstanding",
+  "input": {
+    "files": ["src/agent/completion-gate.ts", "tests/completion-gate.test.ts"]
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "source understanding",
+    "targetFunction": "buildSourceUnderstanding",
+    "success": true,
+    "assertions": ["filesRead equals 2", "dataFlowNotes equals 2", "likelyEditTargets equals 2"]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "caseId": "context-map-03-hybrid-locator",
+  "domain": "context_map",
+  "description": "Hybrid locator finds completion evidence files",
+  "targetFunction": "hybridLocate",
+  "input": {
+    "locate": {
+      "userRequest": "fix evaluateCompletionGate completion evidence",
+      "maxFiles": 6
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "locator hits",
+    "targetFunction": "hybridLocate",
+    "success": true,
+    "assertions": ["primaryFileCount > 0"]
+  }
+}

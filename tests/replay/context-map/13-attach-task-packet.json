@@ -1,0 +1,25 @@
+{
+  "caseId": "context-map-13-attach-task-packet",
+  "domain": "context_map",
+  "description": "TaskPacket references ContextMap id and required evidence",
+  "targetFunction": "attachContextMapToTaskPacket",
+  "input": {
+    "context": {
+      "taskId": "task-attach",
+      "userRequest": "fix evaluateCompletionGate completion evidence"
+    },
+    "packet": {
+      "title": "Update src/agent/completion-gate.ts and run tests",
+      "goal": "fix completion evidence",
+      "nodeId": "node-1",
+      "taskId": "task-attach"
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "attached packet",
+    "targetFunction": "attachContextMapToTaskPacket",
+    "success": true,
+    "assertions": ["evidenceCount > 0"]
+  }
+}

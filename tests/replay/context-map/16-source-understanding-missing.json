@@ -1,0 +1,16 @@
+{
+  "caseId": "context-map-16-source-understanding-missing",
+  "domain": "context_map",
+  "description": "SourceUnderstanding records no files when targets are missing",
+  "targetFunction": "buildSourceUnderstanding",
+  "input": {
+    "files": ["src/missing.ts"]
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "missing source",
+    "targetFunction": "buildSourceUnderstanding",
+    "success": true,
+    "assertions": ["filesRead equals 0"]
+  }
+}

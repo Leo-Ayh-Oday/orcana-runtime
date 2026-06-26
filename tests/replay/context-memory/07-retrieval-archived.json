@@ -1,0 +1,34 @@
+{
+  "caseId": "context-memory-07-retrieval-archived",
+  "domain": "context_memory",
+  "description": "archived memory is not injected by default",
+  "targetFunction": "evaluateMemoryRetrieval",
+  "input": {
+    "query": {
+      "userRequest": "fix completion evidence",
+      "taskKind": "agent_runtime",
+      "risk": "high"
+    },
+    "capsules": [
+      {
+        "id": "cap-archived",
+        "title": "Archived completion note",
+        "kind": "project_rule",
+        "scope": { "appliesTo": ["agent_runtime"] },
+        "content": "Old completion evidence note.",
+        "retrieval": { "keywords": ["completion", "evidence"] },
+        "validity": { "status": "archived", "createdAt": "x", "updatedAt": "x", "confidence": 1 }
+      }
+    ]
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "archived rejected",
+    "targetFunction": "evaluateMemoryRetrieval",
+    "success": true,
+    "mustLoadCount": 0,
+    "maybeLoadCount": 0,
+    "doNotLoadCount": 1,
+    "assertions": ["doNotLoadCount equals 1"]
+  }
+}

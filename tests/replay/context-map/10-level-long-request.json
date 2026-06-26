@@ -1,0 +1,17 @@
+{
+  "caseId": "context-map-10-level-long-request",
+  "domain": "context_map",
+  "description": "Task level selector returns long for architecture/refactor requests",
+  "targetFunction": "selectContextMapTaskLevel",
+  "input": {
+    "levelInput": { "userRequest": "refactor runtime architecture" }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "long level by request",
+    "targetFunction": "selectContextMapTaskLevel",
+    "success": true,
+    "taskLevel": "long",
+    "assertions": ["taskLevel equals long"]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "caseId": "context-memory-09-retrieval-low-confidence",
+  "domain": "context_memory",
+  "description": "relevant low-confidence active capsule is maybe-load, not must-load",
+  "targetFunction": "evaluateMemoryRetrieval",
+  "input": {
+    "query": {
+      "userRequest": "fix agent runtime completion evidence",
+      "taskKind": "agent_runtime",
+      "currentFiles": ["src/agent/loop.ts"],
+      "risk": "high"
+    },
+    "capsules": [
+      {
+        "id": "cap-low",
+        "title": "Low confidence completion evidence note",
+        "kind": "project_rule",
+        "scope": { "files": ["src/agent/loop.ts"], "appliesTo": ["agent_runtime"] },
+        "content": "Completion requires evidence.",
+        "retrieval": { "keywords": ["agent_runtime", "completion", "evidence"] },
+        "validity": { "status": "active", "createdAt": "x", "updatedAt": "x", "confidence": 0.4 }
+      }
+    ]
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "low confidence maybe",
+    "targetFunction": "evaluateMemoryRetrieval",
+    "success": true,
+    "mustLoadCount": 0,
+    "maybeLoadCount": 1,
+    "assertions": ["maybeLoadCount equals 1"]
+  }
+}

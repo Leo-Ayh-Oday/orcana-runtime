@@ -1,0 +1,24 @@
+{
+  "caseId": "context-memory-17-cache-record",
+  "domain": "context_memory",
+  "description": "cache telemetry records and clamps hit rate",
+  "targetFunction": "recordCacheTelemetry",
+  "input": {
+    "entry": {
+      "provider": "deepseek",
+      "model": "deepseek-reasoner",
+      "round": 3,
+      "status": "hit",
+      "hitRate": 1.4,
+      "stablePrefixChars": 12000
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "cache record",
+    "targetFunction": "recordCacheTelemetry",
+    "success": true,
+    "telemetryTotal": 1,
+    "assertions": ["telemetryTotal equals 1", "fileExists equals true", "hitRate equals 1"]
+  }
+}

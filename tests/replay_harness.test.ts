@@ -36,6 +36,31 @@ import {
 } from "../src/agent/patch-transaction"
 import { setActiveMode, getActiveMode } from "../src/agent/mode-contract"
 import { createTaskTrackerFromPacket, buildPacketFromLine } from "../src/agent/task-packet"
+import {
+  buildContextMemoryPack,
+  ensureContextMemoryLayout,
+  evaluateMemoryRetrieval,
+  loadMemoryIndex,
+  proposeMemoryUpdate,
+  recordCacheTelemetry,
+  resolveMemoryIndexFiles,
+  summarizeCacheTelemetry,
+  type CacheTelemetryEntry,
+  type MemoryCapsule,
+} from "../src/memory/context-memory-os"
+import {
+  attachContextMapToTaskPacket,
+  buildContextMap,
+  buildSourceUnderstanding,
+  contextEvidenceForMap,
+  evaluateContextReadiness,
+  hybridLocate,
+  loadContextMap,
+  loadProjectConstitution,
+  saveContextMap,
+  scanRepoStructure,
+  selectContextMapTaskLevel,
+} from "../src/context/context-map"
 
 // ── Case loading ──
 
@@ -52,7 +77,7 @@ function loadJsonCases(domain: string): ReplayCase[] {
 }
 
 function loadAllCases(): ReplayCase[] {
-  const domains = ["master-plan", "context-epoch", "false-done", "ripple", "patch-transaction"]
+  const domains = ["master-plan", "context-epoch", "false-done", "ripple", "patch-transaction", "context-memory", "context-map"]
   return domains.flatMap(loadJsonCases)
 }
 
@@ -84,6 +109,37 @@ function writeFixtureFile(ctx: TestContext, relativePath: string, content: strin
   return fullPath
 }
 
+function ensureContextMapFixture(ctx: TestContext) {
+  writeFixtureFile(ctx, "package.json", JSON.stringify({
+    name: "fixture",
+    main: "dist/src/index.js",
+    bin: { fixture: "bin/fixture.cjs" },
+    scripts: {
+      typecheck: "tsc --noEmit",
+      test: "bun test",
+      build: "tsc -p tsconfig.build.json",
+    },
+  }))
+  writeFixtureFile(ctx, "bun.lock", "")
+  writeFixtureFile(ctx, "ARCHITECTURE.md", [
+    "# Runtime",
+    "- Agent runtime must keep TaskPacket and Evidence.",
+    "- Do not bypass completion evidence gates.",
+  ].join("\n"))
+  writeFixtureFile(ctx, "src/index.ts", "export { evaluateCompletionGate } from './agent/completion-gate'\n")
+  writeFixtureFile(ctx, "src/agent/completion-gate.ts", [
+    "export interface CompletionInput { evidence: string[] }",
+    "export function evaluateCompletionGate(input: CompletionInput): boolean {",
+    "  return input.evidence.length > 0",
+    "}",
+  ].join("\n"))
+  writeFixtureFile(ctx, "tests/completion-gate.test.ts", [
+    "import { expect, test } from 'bun:test'",
+    "import { evaluateCompletionGate } from '../src/agent/completion-gate'",
+    "test('requires evidence', () => expect(evaluateCompletionGate({ evidence: ['typecheck'] })).toBe(true))",
+  ].join("\n"))
+}
+
 // ── Function dispatcher ──
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -96,6 +152,7 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
       writeFixtureFile(ctx, relPath, content)
     }
   }
+  if (c.domain === "context_map") ensureContextMapFixture(ctx)
 
   switch (targetFunction) {
     // ── master-plan ──
@@ -338,6 +395,189 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
       return { tx, diffStats: diff.stats }
     }
 
+    // ── context-memory ──
+    case "ensureContextMemoryLayout": {
+      const layout = ensureContextMemoryLayout(ctx.tempDir)
+      return {
+        success: true,
+        memoryIndexExists: existsSync(layout.files.memoryIndex),
+        memoryDir: layout.memoryDir,
+      }
+    }
+
+    case "loadMemoryIndex": {
+      ensureContextMemoryLayout(ctx.tempDir)
+      const index = loadMemoryIndex(ctx.tempDir)
+      return {
+        success: true,
+        alwaysLoadCount: index.alwaysLoad.length,
+        topicFilesCount: index.topicFiles.length,
+        recentDecisionsCount: index.recentDecisions.length,
+      }
+    }
+
+    case "resolveMemoryIndexFiles": {
+      ensureContextMemoryLayout(ctx.tempDir)
+      const index = loadMemoryIndex(ctx.tempDir)
+      const files = resolveMemoryIndexFiles(index, ctx.tempDir)
+      return {
+        success: true,
+        files,
+        fileCount: files.length,
+        escapedCount: files.filter(file => !file.includes(".orcana")).length,
+      }
+    }
+
+    case "evaluateMemoryRetrieval": {
+      const result = evaluateMemoryRetrieval(
+        input.query as Parameters<typeof evaluateMemoryRetrieval>[0],
+        input.capsules as MemoryCapsule[],
+      )
+      return {
+        success: true,
+        mustLoadCount: result.mustLoad.length,
+        maybeLoadCount: result.maybeLoad.length,
+        doNotLoadCount: result.doNotLoad.length,
+        mustLoadIds: result.mustLoad.map(capsule => capsule.id),
+      }
+    }
+
+    case "buildContextMemoryPack": {
+      const result = buildContextMemoryPack(input.pack as Parameters<typeof buildContextMemoryPack>[0])
+      return {
+        success: true,
+        contextSections: result.sections.length,
+        totalChars: result.totalChars,
+        firstLayer: result.sections[0]?.layer,
+        truncatedCount: result.sections.filter(section => section.truncated).length,
+      }
+    }
+
+    case "proposeMemoryUpdate": {
+      const proposal = proposeMemoryUpdate(input.maintenance as Parameters<typeof proposeMemoryUpdate>[0])
+      return {
+        success: true,
+        addCount: proposal.add.length,
+        updateCount: proposal.update.length,
+        markStaleCount: proposal.markStale.length,
+        archiveCount: proposal.archive.length,
+      }
+    }
+
+    case "recordCacheTelemetry": {
+      const entry = recordCacheTelemetry(ctx.tempDir, input.entry as Parameters<typeof recordCacheTelemetry>[1])
+      return {
+        success: true,
+        telemetryTotal: 1,
+        status: entry.status,
+        hitRate: entry.hitRate,
+        fileExists: existsSync(join(ctx.tempDir, ".orcana", "state", "cache-telemetry.jsonl")),
+      }
+    }
+
+    case "summarizeCacheTelemetry": {
+      const summary = summarizeCacheTelemetry(input.entries as CacheTelemetryEntry[])
+      return {
+        success: true,
+        telemetryTotal: summary.total,
+        hits: summary.hits,
+        misses: summary.misses,
+        partials: summary.partials,
+        averageHitRate: summary.averageHitRate,
+      }
+    }
+
+    // ── context-map ──
+    case "loadProjectConstitution": {
+      const result = loadProjectConstitution(ctx.tempDir)
+      return {
+        success: true,
+        importantFiles: result.importantFiles.length,
+        buildCommands: result.buildCommands.length,
+        testCommands: result.testCommands.length,
+      }
+    }
+
+    case "scanRepoStructure": {
+      const result = scanRepoStructure(ctx.tempDir)
+      return {
+        success: true,
+        packageManager: result.packageManager,
+        sourceRoots: result.sourceRoots.length,
+        testRoots: result.testRoots.length,
+        entrypoints: result.entrypoints.length,
+      }
+    }
+
+    case "hybridLocate": {
+      const result = hybridLocate(ctx.tempDir, input.locate as Parameters<typeof hybridLocate>[1])
+      return {
+        success: true,
+        primaryFileCount: result.primaryFiles.length,
+        suspectedTests: result.suspectedTests.length,
+        relevantSymbols: result.relevantSymbols.length,
+        confidence: result.confidence,
+      }
+    }
+
+    case "buildSourceUnderstanding": {
+      const result = buildSourceUnderstanding(ctx.tempDir, input.files as string[])
+      return {
+        success: true,
+        filesRead: result.filesRead.length,
+        dataFlowNotes: result.dataFlowNotes.length,
+        likelyEditTargets: result.likelyEditTargets.length,
+      }
+    }
+
+    case "buildContextMap": {
+      const result = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      return {
+        success: true,
+        id: result.id,
+        primaryFileCount: result.locateResult.primaryFiles.length,
+        blockerCount: result.blockers.length,
+        evidenceCount: contextEvidenceForMap(result).length,
+      }
+    }
+
+    case "evaluateContextReadiness": {
+      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      const readiness = evaluateContextReadiness(map, input.level as Parameters<typeof evaluateContextReadiness>[1])
+      return {
+        success: true,
+        blockerCount: readiness.blockers.length,
+        confidence: readiness.confidence,
+      }
+    }
+
+    case "saveLoadContextMap": {
+      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      const saved = saveContextMap(ctx.tempDir, map)
+      const loaded = loadContextMap(ctx.tempDir, map.id)
+      return {
+        success: true,
+        saved: existsSync(saved),
+        loaded: loaded?.id === map.id,
+      }
+    }
+
+    case "selectContextMapTaskLevel": {
+      const taskLevel = selectContextMapTaskLevel(input.levelInput as Parameters<typeof selectContextMapTaskLevel>[0])
+      return { success: true, taskLevel }
+    }
+
+    case "attachContextMapToTaskPacket": {
+      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      const packet = buildPacketFromLine(input.packet as Parameters<typeof buildPacketFromLine>[0])
+      const attached = attachContextMapToTaskPacket(packet, map)
+      return {
+        success: true,
+        contextMapId: attached.contextMapId,
+        evidenceCount: attached.requiredContextEvidence?.length ?? 0,
+      }
+    }
+
     default:
       throw new Error(`Unknown targetFunction: ${targetFunction}`)
   }
@@ -485,6 +725,80 @@ function validateResult(actual: unknown, expected: ReplayExpected): { passed: bo
       }
       break
     }
+
+    case "context_memory": {
+      if (!actualObj) { failures.push("expected object result"); break }
+      const cm = actualObj as {
+        success?: boolean
+        mustLoadCount?: number
+        maybeLoadCount?: number
+        doNotLoadCount?: number
+        addCount?: number
+        updateCount?: number
+        markStaleCount?: number
+        archiveCount?: number
+        telemetryTotal?: number
+        averageHitRate?: number
+        contextSections?: number
+      }
+      if (cm.success !== expected.success) {
+        failures.push(`success: expected ${expected.success}, got ${cm.success}`)
+      }
+      if (expected.mustLoadCount !== undefined && cm.mustLoadCount !== expected.mustLoadCount) {
+        failures.push(`mustLoadCount: expected ${expected.mustLoadCount}, got ${cm.mustLoadCount}`)
+      }
+      if (expected.maybeLoadCount !== undefined && cm.maybeLoadCount !== expected.maybeLoadCount) {
+        failures.push(`maybeLoadCount: expected ${expected.maybeLoadCount}, got ${cm.maybeLoadCount}`)
+      }
+      if (expected.doNotLoadCount !== undefined && cm.doNotLoadCount !== expected.doNotLoadCount) {
+        failures.push(`doNotLoadCount: expected ${expected.doNotLoadCount}, got ${cm.doNotLoadCount}`)
+      }
+      if (expected.addCount !== undefined && cm.addCount !== expected.addCount) {
+        failures.push(`addCount: expected ${expected.addCount}, got ${cm.addCount}`)
+      }
+      if (expected.updateCount !== undefined && cm.updateCount !== expected.updateCount) {
+        failures.push(`updateCount: expected ${expected.updateCount}, got ${cm.updateCount}`)
+      }
+      if (expected.markStaleCount !== undefined && cm.markStaleCount !== expected.markStaleCount) {
+        failures.push(`markStaleCount: expected ${expected.markStaleCount}, got ${cm.markStaleCount}`)
+      }
+      if (expected.telemetryTotal !== undefined && cm.telemetryTotal !== expected.telemetryTotal) {
+        failures.push(`telemetryTotal: expected ${expected.telemetryTotal}, got ${cm.telemetryTotal}`)
+      }
+      if (expected.averageHitRate !== undefined && cm.averageHitRate !== expected.averageHitRate) {
+        failures.push(`averageHitRate: expected ${expected.averageHitRate}, got ${cm.averageHitRate}`)
+      }
+      if (expected.contextSections !== undefined && cm.contextSections !== expected.contextSections) {
+        failures.push(`contextSections: expected ${expected.contextSections}, got ${cm.contextSections}`)
+      }
+      break
+    }
+
+    case "context_map": {
+      if (!actualObj) { failures.push("expected object result"); break }
+      const cm = actualObj as {
+        success?: boolean
+        primaryFileCount?: number
+        evidenceCount?: number
+        blockerCount?: number
+        contextSections?: number
+        taskLevel?: string
+      }
+      if (cm.success !== expected.success) failures.push(`success: expected ${expected.success}, got ${cm.success}`)
+      if (expected.primaryFileCount !== undefined && cm.primaryFileCount !== expected.primaryFileCount) {
+        failures.push(`primaryFileCount: expected ${expected.primaryFileCount}, got ${cm.primaryFileCount}`)
+      }
+      if (expected.evidenceCount !== undefined && cm.evidenceCount !== expected.evidenceCount) {
+        failures.push(`evidenceCount: expected ${expected.evidenceCount}, got ${cm.evidenceCount}`)
+      }
+      if (expected.blockerCount !== undefined && cm.blockerCount !== expected.blockerCount) {
+        failures.push(`blockerCount: expected ${expected.blockerCount}, got ${cm.blockerCount}`)
+      }
+      if (expected.taskLevel !== undefined && cm.taskLevel !== expected.taskLevel) {
+        failures.push(`taskLevel: expected ${expected.taskLevel}, got ${cm.taskLevel}`)
+      }
+      break
+    }
   }
 
   // Run generic assertions
@@ -529,6 +843,36 @@ function validateResult(actual: unknown, expected: ReplayExpected): { passed: bo
       if (planNodes) assertionContext["nodes.length"] = planNodes.length
     }
     if (actualObj.messagesAfter !== undefined) assertionContext["messages.length"] = actualObj.messagesAfter
+    if (actualObj.success !== undefined) assertionContext["success"] = actualObj.success
+    if (actualObj.alwaysLoadCount !== undefined) assertionContext["alwaysLoadCount"] = actualObj.alwaysLoadCount
+    if (actualObj.topicFilesCount !== undefined) assertionContext["topicFilesCount"] = actualObj.topicFilesCount
+    if (actualObj.recentDecisionsCount !== undefined) assertionContext["recentDecisionsCount"] = actualObj.recentDecisionsCount
+    if (actualObj.fileCount !== undefined) assertionContext["fileCount"] = actualObj.fileCount
+    if (actualObj.escapedCount !== undefined) assertionContext["escapedCount"] = actualObj.escapedCount
+    if (actualObj.mustLoadCount !== undefined) assertionContext["mustLoadCount"] = actualObj.mustLoadCount
+    if (actualObj.maybeLoadCount !== undefined) assertionContext["maybeLoadCount"] = actualObj.maybeLoadCount
+    if (actualObj.doNotLoadCount !== undefined) assertionContext["doNotLoadCount"] = actualObj.doNotLoadCount
+    if (actualObj.addCount !== undefined) assertionContext["addCount"] = actualObj.addCount
+    if (actualObj.updateCount !== undefined) assertionContext["updateCount"] = actualObj.updateCount
+    if (actualObj.markStaleCount !== undefined) assertionContext["markStaleCount"] = actualObj.markStaleCount
+    if (actualObj.telemetryTotal !== undefined) assertionContext["telemetryTotal"] = actualObj.telemetryTotal
+    if (actualObj.contextSections !== undefined) assertionContext["contextSections"] = actualObj.contextSections
+    if (actualObj.truncatedCount !== undefined) assertionContext["truncatedCount"] = actualObj.truncatedCount
+    if (actualObj.importantFiles !== undefined) assertionContext["importantFiles"] = actualObj.importantFiles
+    if (actualObj.buildCommands !== undefined) assertionContext["buildCommands"] = actualObj.buildCommands
+    if (actualObj.testCommands !== undefined) assertionContext["testCommands"] = actualObj.testCommands
+    if (actualObj.sourceRoots !== undefined) assertionContext["sourceRoots"] = actualObj.sourceRoots
+    if (actualObj.testRoots !== undefined) assertionContext["testRoots"] = actualObj.testRoots
+    if (actualObj.entrypoints !== undefined) assertionContext["entrypoints"] = actualObj.entrypoints
+    if (actualObj.primaryFileCount !== undefined) assertionContext["primaryFileCount"] = actualObj.primaryFileCount
+    if (actualObj.evidenceCount !== undefined) assertionContext["evidenceCount"] = actualObj.evidenceCount
+    if (actualObj.blockerCount !== undefined) assertionContext["blockerCount"] = actualObj.blockerCount
+    if (actualObj.filesRead !== undefined) assertionContext["filesRead"] = actualObj.filesRead
+    if (actualObj.dataFlowNotes !== undefined) assertionContext["dataFlowNotes"] = actualObj.dataFlowNotes
+    if (actualObj.likelyEditTargets !== undefined) assertionContext["likelyEditTargets"] = actualObj.likelyEditTargets
+    if (actualObj.saved !== undefined) assertionContext["saved"] = actualObj.saved
+    if (actualObj.loaded !== undefined) assertionContext["loaded"] = actualObj.loaded
+    if (actualObj.taskLevel !== undefined) assertionContext["taskLevel"] = actualObj.taskLevel
   }
 
   const assertionFailures = checkAssertions(expected, assertionContext)
@@ -556,7 +900,7 @@ describe("Replay Harness", () => {
   })
 
   it(`loaded ${ALL_CASES.length} replay cases`, () => {
-    expect(ALL_CASES.length).toBe(30)
+    expect(ALL_CASES.length).toBe(70)
   })
 
   // ── Case count per domain ──
@@ -566,8 +910,9 @@ describe("Replay Harness", () => {
   }
 
   for (const [domain, count] of Object.entries(domainCounts)) {
-    it(`${domain} has ${count} cases (expected 6)`, () => {
-      expect(count).toBe(6)
+    const expectedCount = domain === "context_memory" || domain === "context_map" ? 20 : 6
+    it(`${domain} has ${count} cases (expected ${expectedCount})`, () => {
+      expect(count).toBe(expectedCount)
     })
   }
 
@@ -618,7 +963,7 @@ describe("Replay Harness", () => {
 
 // ── Summary test (runs last) ──
 describe("Replay Harness Summary", () => {
-  it("all 30 replay cases should be valid JSON with required fields", () => {
+  it("all 70 replay cases should be valid JSON with required fields", () => {
     const issues: string[] = []
     for (const c of ALL_CASES) {
       if (!c.caseId) issues.push(`missing caseId in ${c.domain}`)

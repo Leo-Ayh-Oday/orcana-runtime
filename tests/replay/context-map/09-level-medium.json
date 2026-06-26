@@ -1,0 +1,17 @@
+{
+  "caseId": "context-map-09-level-medium",
+  "domain": "context_map",
+  "description": "Task level selector returns medium for implementation prompts",
+  "targetFunction": "selectContextMapTaskLevel",
+  "input": {
+    "levelInput": { "userRequest": "fix completion evidence bug" }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "medium level",
+    "targetFunction": "selectContextMapTaskLevel",
+    "success": true,
+    "taskLevel": "medium",
+    "assertions": ["taskLevel equals medium"]
+  }
+}

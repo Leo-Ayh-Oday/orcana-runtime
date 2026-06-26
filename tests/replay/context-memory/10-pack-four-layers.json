@@ -1,0 +1,25 @@
+{
+  "caseId": "context-memory-10-pack-four-layers",
+  "domain": "context_memory",
+  "description": "ContextPacker emits stable prefix, plan state, task epoch, volatile tail",
+  "targetFunction": "buildContextMemoryPack",
+  "input": {
+    "pack": {
+      "stablePrefix": {
+        "systemRules": "runtime owns completion",
+        "memoryIndex": "MEMORY index only"
+      },
+      "planState": "MasterPlan node active",
+      "taskEpoch": "TaskPacket scope src/memory/context-memory-os.ts",
+      "volatileTail": "recent tool output"
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "four sections",
+    "targetFunction": "buildContextMemoryPack",
+    "success": true,
+    "contextSections": 4,
+    "assertions": ["contextSections equals 4", "firstLayer equals stable_prefix"]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "caseId": "context-memory-04-index-path-guard",
+  "domain": "context_memory",
+  "description": "resolveMemoryIndexFiles drops paths outside .orcana/memory",
+  "targetFunction": "resolveMemoryIndexFiles",
+  "fixture": {
+    ".orcana/memory/MEMORY.md": "# Orcana Memory Index\n\n## Always Load\n- project.md\n- ../secret.env\n\n## Topic Files\n- ../../package.json"
+  },
+  "input": {},
+  "expected": {
+    "domain": "context_memory",
+    "description": "path traversal rejected",
+    "targetFunction": "resolveMemoryIndexFiles",
+    "success": true,
+    "assertions": ["fileCount equals 1", "escapedCount equals 0"]
+  }
+}

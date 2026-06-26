@@ -1,0 +1,21 @@
+{
+  "caseId": "context-memory-11-pack-truncate",
+  "domain": "context_memory",
+  "description": "ContextPacker truncates oversized volatile sections",
+  "targetFunction": "buildContextMemoryPack",
+  "input": {
+    "pack": {
+      "stablePrefix": { "memoryIndex": "index" },
+      "volatileTail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "maxSectionChars": 30
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "truncation",
+    "targetFunction": "buildContextMemoryPack",
+    "success": true,
+    "contextSections": 2,
+    "assertions": ["truncatedCount equals 1"]
+  }
+}

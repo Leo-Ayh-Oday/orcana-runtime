@@ -1,0 +1,21 @@
+{
+  "caseId": "context-map-06-readiness-long",
+  "domain": "context_map",
+  "description": "Long task readiness passes when context evidence is present",
+  "targetFunction": "evaluateContextReadiness",
+  "input": {
+    "level": "long",
+    "context": {
+      "taskId": "task-long",
+      "userRequest": "fix evaluateCompletionGate completion evidence"
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "readiness clean",
+    "targetFunction": "evaluateContextReadiness",
+    "success": true,
+    "blockerCount": 0,
+    "assertions": ["blockerCount equals 0"]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "caseId": "context-map-15-locator-unmatched",
+  "domain": "context_map",
+  "description": "Hybrid locator reports zero primary files for unmatched query",
+  "targetFunction": "hybridLocate",
+  "input": {
+    "locate": {
+      "userRequest": "zzzz-unmatched-symbol",
+      "keywords": ["zzzz-unmatched-symbol"]
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "locator miss",
+    "targetFunction": "hybridLocate",
+    "success": true,
+    "primaryFileCount": 0,
+    "assertions": ["primaryFileCount equals 0"]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "caseId": "context-memory-19-pack-stable-only",
+  "domain": "context_memory",
+  "description": "ContextPacker can emit only stable prefix for small tasks",
+  "targetFunction": "buildContextMemoryPack",
+  "input": {
+    "pack": {
+      "stablePrefix": { "memoryIndex": "project.md commands.md" }
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "stable only",
+    "targetFunction": "buildContextMemoryPack",
+    "success": true,
+    "contextSections": 1,
+    "assertions": ["contextSections equals 1", "firstLayer equals stable_prefix"]
+  }
+}

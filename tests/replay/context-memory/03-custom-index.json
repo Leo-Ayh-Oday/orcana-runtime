@@ -1,0 +1,17 @@
+{
+  "caseId": "context-memory-03-custom-index",
+  "domain": "context_memory",
+  "description": "custom MEMORY.md index is parsed into sections",
+  "targetFunction": "loadMemoryIndex",
+  "fixture": {
+    ".orcana/memory/MEMORY.md": "# Orcana Memory Index\n\n## Always Load\n- project.md\n- commands.md\n\n## Topic Files\n- modules/tui.md\n\n## Recent Decisions\n- D-1: keep evidence"
+  },
+  "input": {},
+  "expected": {
+    "domain": "context_memory",
+    "description": "custom index counts",
+    "targetFunction": "loadMemoryIndex",
+    "success": true,
+    "assertions": ["alwaysLoadCount equals 2", "topicFilesCount equals 1", "recentDecisionsCount equals 1"]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "caseId": "context-memory-15-maintenance-user-correction",
+  "domain": "context_memory",
+  "description": "user correction marks related old memory stale",
+  "targetFunction": "proposeMemoryUpdate",
+  "input": {
+    "maintenance": {
+      "trigger": "user_correction",
+      "taskId": "task-4",
+      "summary": "User correction: completion evidence is mandatory before done.",
+      "existingCapsules": [
+        {
+          "id": "old-advisory",
+          "title": "Completion evidence advisory",
+          "kind": "project_rule",
+          "scope": { "appliesTo": ["agent_runtime"] },
+          "content": "Completion evidence can be advisory for final reports.",
+          "retrieval": { "keywords": ["completion", "evidence", "advisory"] },
+          "validity": { "status": "active", "createdAt": "x", "updatedAt": "x", "confidence": 0.8 }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "marks stale",
+    "targetFunction": "proposeMemoryUpdate",
+    "success": true,
+    "addCount": 1,
+    "markStaleCount": 1,
+    "assertions": ["markStaleCount equals 1"]
+  }
+}

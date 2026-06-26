@@ -1,0 +1,23 @@
+{
+  "caseId": "context-memory-12-maintenance-add",
+  "domain": "context_memory",
+  "description": "task completion with evidence proposes a new memory capsule",
+  "targetFunction": "proposeMemoryUpdate",
+  "input": {
+    "maintenance": {
+      "trigger": "task_completed",
+      "taskId": "task-1",
+      "summary": "Completion requires verification evidence before final done.",
+      "evidenceIds": ["tests/completion_gate.test.ts"],
+      "existingCapsules": []
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "adds capsule",
+    "targetFunction": "proposeMemoryUpdate",
+    "success": true,
+    "addCount": 1,
+    "assertions": ["addCount equals 1"]
+  }
+}

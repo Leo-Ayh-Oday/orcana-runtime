@@ -1,0 +1,42 @@
+{
+  "caseId": "context-memory-20-maintenance-duplicate-noop",
+  "domain": "context_memory",
+  "description": "equal-confidence duplicate does not add or update",
+  "targetFunction": "proposeMemoryUpdate",
+  "input": {
+    "maintenance": {
+      "trigger": "task_completed",
+      "taskId": "task-6",
+      "summary": "Completion requires verification evidence before final done.",
+      "candidate": {
+        "id": "same",
+        "title": "Completion evidence rule",
+        "kind": "project_rule",
+        "scope": { "appliesTo": ["agent_runtime"] },
+        "content": "Completion requires verification evidence before final done.",
+        "retrieval": { "keywords": ["completion", "verification", "evidence"] },
+        "validity": { "status": "active", "createdAt": "x", "updatedAt": "x", "confidence": 0.8 }
+      },
+      "existingCapsules": [
+        {
+          "id": "old-same",
+          "title": "Completion evidence rule",
+          "kind": "project_rule",
+          "scope": { "appliesTo": ["agent_runtime"] },
+          "content": "Completion requires verification evidence before final done.",
+          "retrieval": { "keywords": ["completion", "verification", "evidence"] },
+          "validity": { "status": "active", "createdAt": "x", "updatedAt": "x", "confidence": 0.8 }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "duplicate noop",
+    "targetFunction": "proposeMemoryUpdate",
+    "success": true,
+    "addCount": 0,
+    "updateCount": 0,
+    "assertions": ["addCount equals 0", "updateCount equals 0"]
+  }
+}

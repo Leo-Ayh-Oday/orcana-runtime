@@ -617,3 +617,23 @@ These are hard-won lessons from development, recorded to prevent regression:
 | Memory | SQLite (FTS5) + JSONL on disk |
 | Sandbox | Win32 Job Objects + PathGuard |
 | Config | JSON flat-files (settings.json, mcp.json, permissions.json) |
+
+## Context Systems
+
+The current architecture now has a protocol layer for long-running context, project maps,
+and controlled self-evolution. These modules are intentionally pure TypeScript surfaces first:
+they can be replayed, validated, and wired into the loop without depending on live model calls.
+
+| Module | Purpose |
+|--------|---------|
+| `src/memory/context-memory-os.ts` | Four-layer context memory pack, capsule validation, retrieval, update proposals, and cache telemetry |
+| `src/context/context-map.ts` | Project constitution loading, repository structure mapping, hybrid text/AST locating, context readiness checks, and TaskPacket evidence attachment |
+| `src/evolution/evolution-os.ts` | Capability-gap detection, knowledge capsule generation, upgrade proposal validation, policy checks, sandbox planning, and failure replay case creation |
+| `src/agent/replay-harness.ts` | Deterministic replay coverage for `context_memory` and `context_map` protocol cases |
+
+This is a protocol-level implementation, not a claim that every path is enforced inside
+`agentLoop()` yet. Runtime enforcement should be added as a separate integration PR after the
+contracts have stayed stable under replay.
+
+See [`docs/orcana-context-systems.md`](docs/orcana-context-systems.md) for the data flow,
+boundaries, and verification commands.

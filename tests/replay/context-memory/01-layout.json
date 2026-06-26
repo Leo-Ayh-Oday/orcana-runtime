@@ -1,0 +1,14 @@
+{
+  "caseId": "context-memory-01-layout",
+  "domain": "context_memory",
+  "description": "ensureContextMemoryLayout creates the memory index and directories",
+  "targetFunction": "ensureContextMemoryLayout",
+  "input": {},
+  "expected": {
+    "domain": "context_memory",
+    "description": "layout exists",
+    "targetFunction": "ensureContextMemoryLayout",
+    "success": true,
+    "assertions": ["success equals true", "memoryIndexExists equals true"]
+  }
+}

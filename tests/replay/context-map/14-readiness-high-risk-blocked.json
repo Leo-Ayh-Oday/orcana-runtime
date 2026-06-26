@@ -1,0 +1,21 @@
+{
+  "caseId": "context-map-14-readiness-high-risk-blocked",
+  "domain": "context_map",
+  "description": "High-risk readiness blocks when locator confidence is low",
+  "targetFunction": "evaluateContextReadiness",
+  "input": {
+    "level": "high_risk",
+    "context": {
+      "taskId": "task-unmatched",
+      "userRequest": "change zzzz-unmatched subsystem",
+      "keywords": ["zzzz-unmatched"]
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "high risk blocked",
+    "targetFunction": "evaluateContextReadiness",
+    "success": true,
+    "assertions": ["blockerCount > 0"]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "caseId": "context-memory-08-retrieval-invalid",
+  "domain": "context_memory",
+  "description": "invalid capsule is rejected by retrieval gate",
+  "targetFunction": "evaluateMemoryRetrieval",
+  "input": {
+    "query": {
+      "userRequest": "fix completion evidence",
+      "taskKind": "agent_runtime",
+      "risk": "high"
+    },
+    "capsules": [
+      {
+        "id": "bad",
+        "title": "",
+        "kind": "project_rule",
+        "scope": {},
+        "content": "",
+        "retrieval": { "keywords": [] },
+        "validity": { "status": "active", "createdAt": "x", "updatedAt": "x", "confidence": 2 }
+      }
+    ]
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "invalid rejected",
+    "targetFunction": "evaluateMemoryRetrieval",
+    "success": true,
+    "doNotLoadCount": 1,
+    "assertions": ["doNotLoadCount equals 1"]
+  }
+}

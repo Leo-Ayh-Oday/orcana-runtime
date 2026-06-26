@@ -23,7 +23,7 @@ import type { EvidenceKind } from "./evidence-ledger"
 
 // ── Domain ──
 
-export type ReplayDomain = "master_plan" | "context_epoch" | "false_done" | "ripple" | "patch_transaction"
+export type ReplayDomain = "master_plan" | "context_epoch" | "false_done" | "ripple" | "patch_transaction" | "context_memory" | "context_map"
 
 // ── ReplayExpected — discriminated union for expected outcomes ──
 
@@ -107,12 +107,45 @@ export interface PatchTransactionReplayExpected extends ReplayExpectedBase {
   assertions: string[]
 }
 
+/** Context Memory replay outcomes. */
+export interface ContextMemoryReplayExpected extends ReplayExpectedBase {
+  domain: "context_memory"
+  targetFunction: string
+  success: boolean
+  mustLoadCount?: number
+  maybeLoadCount?: number
+  doNotLoadCount?: number
+  addCount?: number
+  updateCount?: number
+  markStaleCount?: number
+  archiveCount?: number
+  telemetryTotal?: number
+  averageHitRate?: number
+  contextSections?: number
+  assertions: string[]
+}
+
+/** Context Map replay outcomes. */
+export interface ContextMapReplayExpected extends ReplayExpectedBase {
+  domain: "context_map"
+  targetFunction: string
+  success: boolean
+  primaryFileCount?: number
+  evidenceCount?: number
+  blockerCount?: number
+  contextSections?: number
+  taskLevel?: string
+  assertions: string[]
+}
+
 export type ReplayExpected =
   | MasterPlanReplayExpected
   | ContextEpochReplayExpected
   | FalseDoneReplayExpected
   | RippleReplayExpected
   | PatchTransactionReplayExpected
+  | ContextMemoryReplayExpected
+  | ContextMapReplayExpected
 
 // ── ReplayCase — full case definition ──
 
@@ -171,6 +204,8 @@ export const DOMAIN_LABELS: Record<ReplayDomain, string> = {
   false_done: "False Done",
   ripple: "Ripple",
   patch_transaction: "PatchTransaction",
+  context_memory: "Context Memory",
+  context_map: "Context Map",
 }
 
 /** Assertion helper: checks all string assertions in expected against actual data. */

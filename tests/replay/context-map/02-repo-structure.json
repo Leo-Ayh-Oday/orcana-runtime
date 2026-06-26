@@ -1,0 +1,14 @@
+{
+  "caseId": "context-map-02-repo-structure",
+  "domain": "context_map",
+  "description": "RepoStructureMap detects bun, source roots, tests, and entrypoints",
+  "targetFunction": "scanRepoStructure",
+  "input": {},
+  "expected": {
+    "domain": "context_map",
+    "description": "repo structure",
+    "targetFunction": "scanRepoStructure",
+    "success": true,
+    "assertions": ["sourceRoots > 0", "testRoots > 0", "entrypoints > 0"]
+  }
+}

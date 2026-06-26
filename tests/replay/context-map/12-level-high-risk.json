@@ -1,0 +1,17 @@
+{
+  "caseId": "context-map-12-level-high-risk",
+  "domain": "context_map",
+  "description": "Task level selector returns high_risk for high risk input",
+  "targetFunction": "selectContextMapTaskLevel",
+  "input": {
+    "levelInput": { "userRequest": "edit sandbox runtime", "risk": "high" }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "high risk level",
+    "targetFunction": "selectContextMapTaskLevel",
+    "success": true,
+    "taskLevel": "high_risk",
+    "assertions": ["taskLevel equals high_risk"]
+  }
+}

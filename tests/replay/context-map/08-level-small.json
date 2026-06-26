@@ -1,0 +1,17 @@
+{
+  "caseId": "context-map-08-level-small",
+  "domain": "context_map",
+  "description": "Task level selector returns small for ordinary chat",
+  "targetFunction": "selectContextMapTaskLevel",
+  "input": {
+    "levelInput": { "userRequest": "hello" }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "small level",
+    "targetFunction": "selectContextMapTaskLevel",
+    "success": true,
+    "taskLevel": "small",
+    "assertions": ["taskLevel equals small"]
+  }
+}

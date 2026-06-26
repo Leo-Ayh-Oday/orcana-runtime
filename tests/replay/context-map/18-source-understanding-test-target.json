@@ -1,0 +1,16 @@
+{
+  "caseId": "context-map-18-source-understanding-test-target",
+  "domain": "context_map",
+  "description": "SourceUnderstanding treats test files as likely edit targets with notes",
+  "targetFunction": "buildSourceUnderstanding",
+  "input": {
+    "files": ["tests/completion-gate.test.ts"]
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "test source understanding",
+    "targetFunction": "buildSourceUnderstanding",
+    "success": true,
+    "assertions": ["filesRead equals 1", "likelyEditTargets equals 1"]
+  }
+}

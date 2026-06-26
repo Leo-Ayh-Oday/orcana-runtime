@@ -1,0 +1,35 @@
+{
+  "caseId": "context-memory-06-retrieval-stale",
+  "domain": "context_memory",
+  "description": "stale relevant memory becomes maybe-load on non-low-risk task",
+  "targetFunction": "evaluateMemoryRetrieval",
+  "input": {
+    "query": {
+      "userRequest": "fix agent runtime completion evidence",
+      "taskKind": "agent_runtime",
+      "currentFiles": ["src/agent/loop.ts"],
+      "risk": "medium"
+    },
+    "capsules": [
+      {
+        "id": "cap-stale",
+        "title": "Older completion evidence rule",
+        "kind": "project_rule",
+        "scope": { "files": ["src/agent/loop.ts"], "appliesTo": ["agent_runtime"] },
+        "content": "Completion evidence handling changed before.",
+        "retrieval": { "keywords": ["agent_runtime", "completion", "evidence"] },
+        "validity": { "status": "stale", "createdAt": "x", "updatedAt": "x", "confidence": 0.95 }
+      }
+    ]
+  },
+  "expected": {
+    "domain": "context_memory",
+    "description": "stale goes to maybe",
+    "targetFunction": "evaluateMemoryRetrieval",
+    "success": true,
+    "mustLoadCount": 0,
+    "maybeLoadCount": 1,
+    "doNotLoadCount": 0,
+    "assertions": ["maybeLoadCount equals 1"]
+  }
+}

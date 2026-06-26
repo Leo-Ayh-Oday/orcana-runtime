@@ -1,0 +1,19 @@
+{
+  "caseId": "context-map-05-build-context-map",
+  "domain": "context_map",
+  "description": "ContextMap combines constitution, structure, locator, source understanding, and verification",
+  "targetFunction": "buildContextMap",
+  "input": {
+    "context": {
+      "taskId": "task-context-map",
+      "userRequest": "fix evaluateCompletionGate completion evidence"
+    }
+  },
+  "expected": {
+    "domain": "context_map",
+    "description": "context map ready",
+    "targetFunction": "buildContextMap",
+    "success": true,
+    "assertions": ["primaryFileCount > 0", "evidenceCount > 0", "blockerCount equals 0"]
+  }
+}

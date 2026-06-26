@@ -1,0 +1,22 @@
+{
+  "caseId": "context-map-01-constitution",
+  "domain": "context_map",
+  "description": "ProjectConstitution loader extracts docs and package verification commands",
+  "targetFunction": "loadProjectConstitution",
+  "fixture": {
+    "package.json": "{\"name\":\"fixture\",\"main\":\"dist/src/index.js\",\"bin\":{\"fixture\":\"bin/fixture.cjs\"},\"scripts\":{\"typecheck\":\"tsc --noEmit\",\"test\":\"bun test\",\"build\":\"tsc -p tsconfig.build.json\"}}",
+    "bun.lock": "",
+    "ARCHITECTURE.md": "# Runtime\n- Agent runtime must keep TaskPacket and Evidence.\n- Do not bypass completion evidence gates.",
+    "src/index.ts": "export { evaluateCompletionGate } from './agent/completion-gate'\n",
+    "src/agent/completion-gate.ts": "export interface CompletionInput { evidence: string[] }\nexport function evaluateCompletionGate(input: CompletionInput): boolean {\n  return input.evidence.length > 0\n}\n",
+    "tests/completion-gate.test.ts": "import { expect, test } from 'bun:test'\nimport { evaluateCompletionGate } from '../src/agent/completion-gate'\ntest('requires evidence', () => expect(evaluateCompletionGate({ evidence: ['typecheck'] })).toBe(true))\n"
+  },
+  "input": {},
+  "expected": {
+    "domain": "context_map",
+    "description": "constitution loaded",
+    "targetFunction": "loadProjectConstitution",
+    "success": true,
+    "assertions": ["importantFiles > 0", "buildCommands > 0", "testCommands > 0"]
+  }
+}

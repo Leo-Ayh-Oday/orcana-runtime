@@ -51,6 +51,11 @@ try {
 const arg = process.argv[2] ?? ""
 
 async function main() {
+  if (arg === "--version" || arg === "-v" || arg === "version") {
+    console.log("deepseek-orcana v0.2.1")
+    return
+  }
+
   if (arg === "tui" || arg === "--tui") {
     const prompt = process.argv.slice(3).join(" ") || undefined
     await startInkTUI(prompt)

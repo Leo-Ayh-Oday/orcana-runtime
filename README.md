@@ -53,6 +53,8 @@ Orcana is a native coding agent that moves through the deep ocean of code like a
 
 → See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full 26-gate loop anatomy, DeepSeek V4 mechanism deep-dives, and anti-loop engineering. See [docs/ripple-engine.md](docs/ripple-engine.md) for the 7-layer Ripple Engine 2.0 architecture.
 
+> 📖 **Design Philosophy**: [From Tool Loop to Evidence Ledger — why Orcana is built as a constraint-first coding agent runtime](./docs/design-philosophy.md)
+
 ## Quick Start
 
 ### Requirements

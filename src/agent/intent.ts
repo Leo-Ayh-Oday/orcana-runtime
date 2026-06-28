@@ -14,6 +14,7 @@ const NO_WRITE_PATTERNS = [
   /do\s+not\s+(?:edit|write|modify|change|execute)/i,
   /no\s+(?:edit|write|modify|changes?)/i,
   /read[-\s]?only/i,
+  /不(?:需要|必|用|打算)(?:实现|写|修改|执行|改|做|动)/i,
 ]
 
 const DISCUSSION_PATTERNS = [
@@ -48,6 +49,8 @@ const EXECUTE_PATTERNS = [
   /edit/i,
   /write/i,
   /change/i,
+  /跑(?:一下|一次|个)?/i,
+  /运行/i,
 ]
 
 const LONG_TASK_PATTERNS = [

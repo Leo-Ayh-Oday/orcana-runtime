@@ -11,6 +11,7 @@
 
 import type {
   LLMProvider,
+  ModelCapabilities,
   ModelID,
   ModelSpec,
   PricingTier,
@@ -36,6 +37,41 @@ function thinking(budget: number, defaultBudget?: number): ThinkingCapability {
   }
 }
 
+// ── Capability presets (PR-6.2) ──
+
+const DEEPSEEK_CAPABILITIES: ModelCapabilities = {
+  thinking: true,
+  fim: true,
+  contextCaching: true,
+  vision: false,
+  structuredOutput: false,
+  toolUse: true,
+  streaming: true,
+  maxContextWindow: 1_048_576,
+}
+
+const ANTHROPIC_CAPABILITIES: ModelCapabilities = {
+  thinking: true,
+  fim: false,
+  contextCaching: true,
+  vision: true,
+  structuredOutput: false,
+  toolUse: true,
+  streaming: true,
+  maxContextWindow: 200_000,
+}
+
+const OPENAI_CAPABILITIES: ModelCapabilities = {
+  thinking: false,
+  fim: false,
+  contextCaching: false,
+  vision: true,
+  structuredOutput: true,
+  toolUse: true,
+  streaming: true,
+  maxContextWindow: 128_000,
+}
+
 const BUILTIN_MODELS: ModelSpec[] = [
   // ── DeepSeek ──
   {
@@ -46,6 +82,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     maxOutputTokens: 32768,
     pricingTier: "standard",
     thinking: thinking(32768, 16384),
+    capabilities: DEEPSEEK_CAPABILITIES,
     tags: ["coding", "reasoning", "deep-thinking"],
     isDefault: true,
   },
@@ -57,6 +94,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     maxOutputTokens: 8192,
     pricingTier: "cheap",
     thinking: NO_THINKING,
+    capabilities: { ...DEEPSEEK_CAPABILITIES, thinking: false },
     tags: ["fast", "chat", "simple"],
     isDefault: true,
   },
@@ -69,6 +107,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     maxOutputTokens: 32768,
     pricingTier: "premium",
     thinking: thinking(32768, 16384),
+    capabilities: ANTHROPIC_CAPABILITIES,
     tags: ["coding", "reasoning", "deep-thinking", "safety"],
     isDefault: true,
   },
@@ -80,6 +119,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     maxOutputTokens: 16384,
     pricingTier: "standard",
     thinking: thinking(16384, 8192),
+    capabilities: ANTHROPIC_CAPABILITIES,
     tags: ["coding", "fast", "balanced"],
     isDefault: true,
   },
@@ -91,6 +131,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     maxOutputTokens: 8192,
     pricingTier: "cheap",
     thinking: NO_THINKING,
+    capabilities: { ...ANTHROPIC_CAPABILITIES, thinking: false },
     tags: ["fast", "chat", "simple"],
     isDefault: true,
   },
@@ -103,6 +144,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     maxOutputTokens: 16384,
     pricingTier: "premium",
     thinking: thinking(16384),
+    capabilities: OPENAI_CAPABILITIES,
     tags: ["coding", "reasoning", "vision"],
     isDefault: true,
   },
@@ -236,6 +278,47 @@ export class ProviderRegistry {
   /** Check if a model exists and is registered. */
   hasModel(id: ModelID): boolean {
     return this.models.has(this.aliases.get(id) ?? id)
+  }
+
+  // ── Capability queries (PR-6.2) ──
+
+  /** Get capabilities for a specific model. */
+  getCapabilities(modelId: ModelID): ModelCapabilities | undefined {
+    const spec = this.resolveModel(modelId)
+    return spec?.capabilities
+  }
+
+  /** Get provider-level capabilities (union of all registered models for that provider). */
+  getProviderCapabilities(providerId: ProviderID): ModelCapabilities | undefined {
+    return this.providers.get(providerId)?.capabilities
+  }
+
+  /** List models that satisfy ALL given capability requirements. */
+  listModelsByCapability(required: Partial<ModelCapabilities>): ModelID[] {
+    return [...this.models.values()]
+      .filter(spec => {
+        const cap = spec.capabilities
+        for (const [key, value] of Object.entries(required)) {
+          if (value !== undefined && (cap as unknown as Record<string, unknown>)[key] !== value) {
+            return false
+          }
+        }
+        return true
+      })
+      .map(spec => spec.id)
+      .sort()
+  }
+
+  /** Check if a model satisfies all given capability requirements. */
+  modelHasCapability(modelId: ModelID, required: Partial<ModelCapabilities>): boolean {
+    const cap = this.getCapabilities(modelId)
+    if (!cap) return false
+    for (const [key, value] of Object.entries(required)) {
+      if (value !== undefined && (cap as unknown as Record<string, unknown>)[key] !== value) {
+        return false
+      }
+    }
+    return true
   }
 
   get allModels(): ModelSpec[] {

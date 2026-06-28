@@ -2,7 +2,7 @@ import { getBlockingObligations, type RippleObligation } from "../ripple/obligat
 import type { VerificationResult } from "../verification/result"
 import type { TaskTracker } from "./task-tracker"
 import type { UILanguage } from "./language"
-import { hasEvidence, requiredEvidenceKinds, evidenceKindLabel, type EvidenceLedger } from "./evidence-ledger"
+import type { EvidenceLedger } from "./evidence-ledger"
 import { checkModeExitCriteria, getActiveMode } from "./mode-contract"
 
 export interface CompletionGateInput {
@@ -85,15 +85,9 @@ export function evaluateCompletionGate(input: CompletionGateInput): CompletionGa
       if (!input.taskTracker.verificationEvidence[kind]) missing.push(`missing required verification: ${kind}`)
     }
   }
-  // PR 6: Evidence Ledger — structured evidence check as reinforcement
-  if (input.evidenceLedger && input.taskTracker && input.taskTracker.requiredVerificationKinds.length > 0) {
-    const required = requiredEvidenceKinds(input.taskTracker)
-    for (const kind of required) {
-      if (!hasEvidence(input.evidenceLedger, kind)) {
-        missing.push(`缺少结构化验证证据: ${evidenceKindLabel(kind)}`)
-      }
-    }
-  }
+  // PR-3.2: Evidence check removed — canClaimDone() is the single evidence entry point.
+  // Evidence is now exclusively validated by CompletionOrchestrator.evaluateEvidenceGate()
+  // which calls canClaimDone() as the final hard gate before "done".
   // PR 8: ModeContract exit criteria check
   const activeMode = getActiveMode()
   const modeExitResult = checkModeExitCriteria(activeMode, {

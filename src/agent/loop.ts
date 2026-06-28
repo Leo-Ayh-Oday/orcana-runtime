@@ -26,7 +26,7 @@ import type { ModelRouter } from "../provider/router"
 import { ConfidenceEvaluator } from "../evaluator/confidence"
 import { AgentState, StateMachine } from "./state-machine"
 import { compactAssistantContext } from "./round/helpers"
-import { runPostEditDiagnostics, runRippleVerification, collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, extractPromises, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
+import { runPostEditDiagnostics, runRippleVerification, collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
 import { ErrorTracker, withToolTimeout, nextProviderEvent, providerIdleTimeoutMs, runToolBeforeHook, runToolAfterHook, appendHookWarnings, executeToolWithHooks, buildVolatileContextMessage, collectResearchEvidence, containsTypecheckFailure, countTypecheckIssues, isVerificationUnavailable, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles, missingExplicitRequiredFiles } from "./round/pre-loop"
 import type { HookSystem } from "../hooks"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../provider/cost-policy"
@@ -50,7 +50,8 @@ import { buildExperienceKernelContext } from "../experience/kernel"
 import { compactThinkingChain } from "../memory/compactor"
 import { evaluatePlanningArtifact, forcePlanningPassAfterLimit, formatPlanningBlockedToolResult, formatPlanningGatePrompt } from "./planning-gate"
 import { detectLanguage, languageInstruction, type UILanguage } from "./language"
-import { evaluateCompletionGate, formatBlockedCompletion, formatCompletionEvidenceReport, formatCompletionGatePrompt, needsExternalCompletionGate } from "./completion-gate"
+import { CompletionOrchestrator, checkNarrowEditCompletion } from "./completion-orchestrator"
+import { canClaimDone } from "./evidence-ledger"
 import { formatGenericProviderStreamBlockedReport, formatGenericProviderStreamRecoveryPrompt, formatProviderStreamBlockedReport, formatProviderStreamRecoveryPrompt } from "./runtime-failure"
 import { buildResearchEvidenceContext, buildResearchInsufficientEvidenceMessage, type ResearchEvidence } from "./research-answer"
 import { classifyResearchRoute, shouldRunResearch } from "./research-router"
@@ -60,16 +61,17 @@ import { loadUserConfig, loadProjectConfig } from "./permission-config"
 import { evaluateToolPolicy } from "./tool-execution/policy"
 import { GateTelemetry } from "./gates/telemetry"
 import { SandboxManager } from "../sandbox/sandbox"
+import { analyzeSideEffects, formatSideEffectReport } from "../sandbox/side-effect-guard"
 import { setShellSandbox } from "../tools/shell"
-import { saveCheckpoint, adaptiveCheckpointThreshold, shouldSkipCheckpointThisRound, recordCheckpointTaken, formatCheckpointSummary, type ComplexityMetrics } from "../session/checkpoint"
+import { saveCheckpoint, adaptiveCheckpointThreshold, shouldSkipCheckpointThisRound, recordCheckpointTaken, formatCheckpointSummary, generateCheckpointId, type ComplexityMetrics } from "../session/checkpoint"
 import { buildContextMessages, buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "./round/request-builder"
 import { createPreRoundChain } from "./gates/pre-round"
-import { createCompletionChain } from "./gates/completion"
 import { processGateOverflow } from "./gates/overflow"
 import { createEpochState, buildPlanStateContext, classifyEpochAction, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
 import { setActivePatchContext } from "./patch-transaction"
 import { createEvidenceLedger, type EvidenceLedger } from "./evidence-ledger"
-import { setActiveMode, getActiveMode, formatModePrompt } from "./mode-contract"
+import { setActiveMode, getActiveMode, formatModePrompt, shouldTransitionMode } from "./mode-contract"
+import type { ModeTransitionContext } from "./mode-contract"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMap, type ContextMapTaskLevel } from "../context/context-map"
 
 import type { UsageStats, AgentOptions } from "./loop-types"
@@ -134,7 +136,8 @@ export async function* agentLoop(
   // ── Flash Triage: semantic task classification (replaces 4 keyword classifiers) ──
   const flashTriagePolicy = options.flashTriagePolicy ?? resolveFlashTriagePolicy()
   const flashTriageEnabled = shouldUseFlashTriage(flashTriagePolicy, effectivePrompt, contextKernel.text)
-  const flashTriage = flashTriageEnabled ? new FlashTriage(provider) : null
+  const triageModel = options.modelRouter?.selectForPurpose("flash_triage") ?? "deepseek-v4-flash"
+  const flashTriage = flashTriageEnabled ? new FlashTriage(provider, triageModel) : null
   const triageResult = flashTriage ? await flashTriage.triage(effectivePrompt, contextKernel.text) : null
   let intentPolicy: ReturnType<typeof classifyIntent>
   let taskTracker: ReturnType<typeof createTaskTracker> = null
@@ -154,9 +157,15 @@ export async function* agentLoop(
     }
     triageSkillPrompts = activateSkillsByNames(triageResult.relevantSkillNames)
   } else {
-    // Flash unavailable — fallback to keyword classifiers (current behavior)
+    // Flash unavailable — fallback to classifiers
+    // PR-2.3: long_task now routes through TaskPacket path; narrow_edit still uses keyword-based
     intentPolicy = classifyIntent(effectivePrompt)
-    taskTracker = createTaskTracker(effectivePrompt, intentPolicy.mode)
+    if (intentPolicy.mode === "long_task") {
+      const { buildTaskTrackerFromPrompt } = await import("./task-packet")
+      taskTracker = buildTaskTrackerFromPrompt(effectivePrompt, intentPolicy.mode)
+    } else {
+      taskTracker = createTaskTracker(effectivePrompt, intentPolicy.mode)
+    }
     triageSkillPrompts = activateSkillsByNames(activateSkillNamesByKeywords(effectivePrompt))
   }
 
@@ -178,7 +187,8 @@ export async function* agentLoop(
   let pendingRippleObligations: RippleObligation[] = []
   const cacheStableTools = process.env.DEEPSEEK_CACHE_STABLE_TOOLS !== "0"
   const confidenceEvaluator = new ConfidenceEvaluator()
-  const flashJudge = new FlashJudge(provider)
+  const judgeModel = options.modelRouter?.selectForPurpose("completion_judge") ?? "deepseek-v4-flash"
+  const flashJudge = new FlashJudge(provider, judgeModel)
   const testimonyLedger = new TestimonyLedger()
   const permissionGate = new PermissionGate()
   // Load user + project permission configs (gracefully)
@@ -466,6 +476,20 @@ export async function* agentLoop(
           nodeId: next.id,
         })
       }
+    }
+    // PR-2.2: auto-transition mode based on new node status
+    const activeNode = currentNode(masterPlan)
+    const transitionCtx: ModeTransitionContext = {
+      activeNodeStatus: activeNode?.status,
+      hasTrackerSteps: (activeNode?.tracker?.steps?.length ?? 0) > 0,
+      rippleObligationCount: pendingRippleObligations?.length ?? 0,
+      hasEvidence: evidenceLedger ? evidenceLedger.entries.length > 0 : false,
+      toolErrors: errorTracker?.errorCount ?? 0,
+      planComplete: planComplete(masterPlan),
+    }
+    const newMode = shouldTransitionMode(getActiveMode().mode, transitionCtx)
+    if (newMode) {
+      setActiveMode(newMode)
     }
     return true
   }
@@ -862,181 +886,89 @@ export async function* agentLoop(
     }
 
     if (completedToolCalls.length === 0 && finalText) {
-      // ── Completion gate chain: ripple exit → planning → task tracker → quality ──
-      const completionCtx = {
+      // ── Completion Orchestrator: unified final gate evaluation (PR-3.1) ──
+      const orchestrator = new CompletionOrchestrator()
+      const orchResult = await orchestrator.evaluate({
         round,
         finalText,
         intentPolicy,
         taskTracker,
         pendingRippleObligations,
+        verificationResults: lastVerificationResults,
+        changedFiles: [...taskFiles],
         taskHadWrite,
         taskToolErrors,
         taskModifiedFiles,
         lastTypecheck,
         lastRippleReports,
-        lastVerificationResults,
         planApproved,
         planningRejections,
         maxRounds,
         priorTools: lastToolNames,
         priorFiles: taskFiles,
         confidenceEvaluator,
-        completionBlockMessage: null as string | null,
-        shouldBreak: false,
-        breakEvent: null as { type: string; data: unknown } | null,
-        statusMessage: "",
-        injectMessages: [] as Array<{ role: string; content: string }>,
-        traceEvent: null as { gate: string; decision: string; [key: string]: unknown } | null,
+        evidenceLedger,
+        testimonyLedger,
+        flashJudge,
+        masterPlan: masterPlan ?? null,
+        autoApprovePlan: options.autoApprovePlan ?? false,
+        language,
+        runTrace: options.runTrace,
+        gateTelemetry,
+        recentTurns: collectRecentTurns(rawMessages, 6),
+      })
+
+      // Apply orchestrator side effects
+      for (const msg of orchResult.injectMessages) {
+        rawMessages.push(msg as ProviderMessage)
       }
-      const completionChain = createCompletionChain()
-      const completionResult = completionChain.evaluateSync(completionCtx, gateTelemetry)
+      for (const s of orchResult.statusMessages) {
+        yield { type: "status", data: s }
+      }
+      for (const t of orchResult.yieldTexts) {
+        yield { type: "text", data: t }
+      }
+      for (const ev of orchResult.traceEvents) {
+        options.runTrace?.record("gate_decision", ev)
+      }
+      if (orchResult.planningRejections !== undefined) {
+        planningRejections = orchResult.planningRejections
+      }
 
-      if (!completionResult.pass) {
-        // Inject messages and yield status
-        for (const msg of completionCtx.injectMessages) {
-          rawMessages.push(msg as ProviderMessage)
+      // Handle plan auto-approve → activate master plan
+      if (orchResult.activateMasterPlan) {
+        const { planText, goal, forcePacket } = orchResult.activateMasterPlan
+        if (activateMasterPlan(planText, goal, forcePacket)) {
+          yield { type: "status", data: `master-plan: ${planProgress(masterPlan!)} nodes` }
         }
-        if (completionCtx.statusMessage) {
-          yield { type: "status", data: completionCtx.statusMessage }
-        }
-        if (completionCtx.traceEvent) {
-          options.runTrace?.record("gate_decision", completionCtx.traceEvent)
-        }
+      }
 
-        // Handle planning-specific state mutations
-        const ctxExtra = completionCtx as unknown as Record<string, unknown>
-        if (ctxExtra._planningRejected) {
-          planningRejections++
-          continue
-        }
-        if (ctxExtra._planningPassed) {
-          planningRejections = 0
-          lastPlanText = finalText
-          // Plan ready — yield plan_ready event and break for user approval
-          if (completionCtx.shouldBreak && completionCtx.breakEvent && !options.autoApprovePlan) {
-            yield completionCtx.breakEvent as { type: "plan_ready"; data: unknown }
-            break
+      switch (orchResult.decision) {
+        case "plan_ready":
+          if (orchResult.breakEvent) {
+            yield orchResult.breakEvent as { type: "plan_ready"; data: unknown }
           }
-          // Auto-approve: mark accepted and continue
-          if (completionCtx.breakEvent?.type === "plan_ready") {
-            markPlanAccepted(taskTracker!)
-            const forcePacket = ctxExtra._planningForcePass ? (ctxExtra._planningForcePassPacket as TaskPacket | undefined) : undefined
-            if (activateMasterPlan(finalText, taskTracker!.goal, forcePacket)) {
-              yield { type: "status", data: `master-plan: ${planProgress(masterPlan!)} nodes` }
-            }
-            rawMessages.push({ role: "user", content: formatTaskTrackerPrompt(taskTracker!) })
-            yield { type: "status", data: "任务追踪: 规划完成，进入执行阶段" }
-            options.runTrace?.record("gate_decision", {
-              gate: "planning",
-              decision: "accepted",
-              score: ctxExtra._planningScore as number,
-              signals: ctxExtra._planningSignals,
-            })
+          break
+        case "continue":
+          continue
+        case "break_blocked":
+          break
+        case "done": {
+          // Try master plan node transition before final delivery
+          if (orchResult.tryNodeTransition && masterPlan && tryNodeTransition()) {
+            yield { type: "status", data: `master-plan: ${planProgress(masterPlan)} → next node activated` }
+            options.runTrace?.record("gate_decision", { gate: "master_plan", decision: "next_node", progress: planProgress(masterPlan) })
             continue
           }
-        }
-        // Plan approved (user confirmed)
-        if (completionResult.reason === "planning_accepted") {
-          planApproved = false
-          planningRejections = 0
-          continue
-        }
-        // Ripple exit, task tracker, quality — all "continue"
-        if (completionResult.reason === "ripple_exit" || completionResult.reason === "task_tracker" || completionResult.reason === "quality") {
-          continue
-        }
-      }
-
-      const missingLongTask = missingTaskRequirements(taskTracker)
-
-      if (needsExternalCompletionGate({ taskTracker, taskHadWrite, toolErrors: taskToolErrors })) {
-        const completionReport = evaluateCompletionGate({
-          finalText,
-          taskTracker,
-          missingTaskRequirements: missingLongTask,
-          pendingRippleObligations,
-          verificationResults: lastVerificationResults,
-          changedFiles: [...taskFiles],
-          taskHadWrite,
-          toolErrors: taskToolErrors,
-          lastTypecheck,
-          evidenceLedger,
-        })
-        if (!completionReport.allowed && round + 1 < maxRounds) {
-          rawMessages.push({ role: "assistant", content: compactAssistantContext(finalText) })
-          rawMessages.push({ role: "user", content: formatCompletionGatePrompt(completionReport, language) })
-          yield { type: "status", data: `external-completion-gate: blocked (${completionReport.missing.length} missing)` }
-          options.runTrace?.record("gate_decision", { gate: "external_completion", decision: "continue", missing: completionReport.missing })
-          continue
-        }
-        if (!completionReport.allowed) {
-          yield { type: "status", data: `external-completion-gate: blocked (${completionReport.missing.length} missing)` }
-          yield { type: "text", data: formatBlockedCompletion(completionReport, language) }
-          options.runTrace?.record("gate_decision", { gate: "external_completion", decision: "blocked", missing: completionReport.missing })
+          if (masterPlan) {
+            yield { type: "status", data: "master-plan: all nodes complete" }
+            options.runTrace?.record("gate_decision", { gate: "master_plan", decision: "plan_complete" })
+          }
+          if (bufferReadonlyText && !bufferedTextEmitted) {
+            yield { type: "text", data: finalText }
+          }
           break
         }
-        yield { type: "status", data: "external-completion-gate: evidence accepted" }
-        yield { type: "text", data: formatCompletionEvidenceReport(finalText, completionReport, language) }
-        options.runTrace?.record("gate_decision", { gate: "external_completion", decision: "accepted", evidence: completionReport.evidenceLines })
-
-        // ── Flash Judge: independent model completion verification ──
-        if (flashJudge.shouldEvaluate({ taskTracker, taskHadWrite, toolErrors: taskToolErrors, round })) {
-          yield { type: "status", data: "flash-judge: evaluating completion..." }
-          const judgeResult = await flashJudge.evaluate({
-            finalText,
-            taskTracker,
-            missingTaskRequirements: missingLongTask,
-            pendingRippleObligations,
-            verificationResults: lastVerificationResults,
-            changedFiles: [...taskFiles],
-            taskHadWrite,
-            toolErrors: taskToolErrors,
-            round,
-            recentTurns: collectRecentTurns(rawMessages, 6),
-            testimonyLedger,
-          })
-          // Record testimony: what evidence the judge found vs what the agent promised
-          const promisedThisRound = extractPromises(finalText)
-          testimonyLedger.record(round, promisedThisRound, judgeResult.evidenceFound)
-          if (judgeResult.verdict === "SATISFIED") {
-            yield { type: "status", data: `flash-judge: ${judgeResult.evidenceFound.length} evidence items confirmed` }
-            // MasterPlan node transition: if more nodes remain, review plan and continue
-            if (masterPlan && tryNodeTransition()) {
-              yield { type: "status", data: `master-plan: ${planProgress(masterPlan)} → next node activated` }
-              options.runTrace?.record("gate_decision", { gate: "master_plan", decision: "next_node", progress: planProgress(masterPlan) })
-              continue
-            }
-            if (masterPlan) {
-              yield { type: "status", data: "master-plan: all nodes complete" }
-              options.runTrace?.record("gate_decision", { gate: "master_plan", decision: "plan_complete" })
-            }
-            break
-          }
-          if (judgeResult.verdict === "IMPOSSIBLE") {
-            yield { type: "text", data: FlashJudge.formatImpossiblePrompt(judgeResult.gaps) }
-            break
-          }
-          // NOT_SATISFIED — push gaps and continue
-          rawMessages.push({ role: "assistant", content: compactAssistantContext(finalText) })
-          rawMessages.push({ role: "user", content: FlashJudge.formatUnsatisfiedPrompt(judgeResult.gaps) })
-          yield { type: "status", data: `flash-judge: not satisfied (${judgeResult.gaps.length} gaps)` }
-          options.runTrace?.record("gate_decision", { gate: "flash_judge", decision: "continue", gaps: judgeResult.gaps })
-          continue
-        }
-        // MasterPlan node transition: external gate passed, FlashJudge skipped
-        if (masterPlan && tryNodeTransition()) {
-          yield { type: "status", data: `master-plan: ${planProgress(masterPlan)} → next node activated` }
-          options.runTrace?.record("gate_decision", { gate: "master_plan", decision: "next_node", progress: planProgress(masterPlan) })
-          continue
-        }
-        if (masterPlan) {
-          yield { type: "status", data: "master-plan: all nodes complete" }
-        }
-        break
-      }
-
-      if (bufferReadonlyText && !bufferedTextEmitted) {
-        yield { type: "text", data: finalText }
       }
       break
     }
@@ -1097,7 +1029,7 @@ export async function* agentLoop(
             hooks,
             tool,
             params: tc.input,
-            execute: () => withToolTimeout(tc.name, tool.execute(tc.input)),
+            execute: (_params) => withToolTimeout(tc.name, tool.execute(_params)),
           })
           return { id: tc.id, content: result.content, success: result.success, metadata: result.metadata, startedAt }
         } catch (e) {
@@ -1114,6 +1046,7 @@ export async function* agentLoop(
       const tool = tools.find(t => t.defn.name === tc.name)
       let resultContent = "Unknown tool"
       let resultObj: { success: boolean; content: string; metadata?: Record<string, unknown> } = { success: false, content: "" }
+      let sideEffectBlocked = false
       let toolStartedAt = Date.now()
 
       if (preRoundCtx.taskPlanning && round > 0) {
@@ -1143,8 +1076,11 @@ export async function* agentLoop(
       })
 
       // ── Gate telemetry for tool policy gates ──
-      const toolGateNames = ["rate_limit", "permission", "readonly_intent", "ripple_block", "planning_phase", "context_readiness", "web_search_failed", "mode_contract"]
-      const blockedGate = policyResult.allowed ? null : policyResult.reason.startsWith("permission") ? "permission" : policyResult.reason
+      const toolGateNames = ["rate_limit", "permission", "readonly_intent", "ripple_block", "planning_phase", "context_readiness", "web_search_failed", "mode_contract", "tool_risk"]
+      const blockedGate = policyResult.allowed ? null
+        : policyResult.reason.startsWith("permission") ? "permission"
+        : policyResult.reason.startsWith("tool_risk") ? "tool_risk"
+        : policyResult.reason
       for (const gn of toolGateNames) {
         if (gn === blockedGate) { gateTelemetry.record(gn, "block"); break }
         gateTelemetry.record(gn, "pass")
@@ -1180,18 +1116,31 @@ export async function* agentLoop(
               resultObj = appendHookWarnings(before.blocked, before.warnings)
               resultContent = resultObj.content
             } else {
-              for await (const ev of tool.executeStream(tc.input)) {
-                if (ev.type === "progress") {
-                  // Raw shell stdout/stderr is often noisy progress output.
-                  // Keep it out of the spinner/status line; the final result
-                  // still carries command output for diagnostics.
-                  continue
-                } else if (ev.type === "done") {
-                  const rawResult = ev.data
-                  const after = await runToolAfterHook(hooks, tc.name, tc.input, rawResult)
-                  const finalResult = appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
-                  resultContent = finalResult.content
-                  resultObj = { success: finalResult.success, content: finalResult.content, metadata: finalResult.metadata }
+              const effectiveParams = before.replaceParams ?? tc.input
+              // ShellSideEffectGuard: pre-execution danger check (PR-5.3 wiring)
+              if (tc.name === "shell") {
+                const cmd = String(effectiveParams.command ?? "")
+                const seReport = analyzeSideEffects(cmd, process.cwd())
+                if (seReport.severity === "danger") {
+                  resultContent = formatSideEffectReport(seReport)
+                  resultObj = { success: false, content: resultContent }
+                  sideEffectBlocked = true
+                }
+              }
+              if (!sideEffectBlocked) {
+                for await (const ev of tool.executeStream(effectiveParams)) {
+                  if (ev.type === "progress") {
+                    // Raw shell stdout/stderr is often noisy progress output.
+                    // Keep it out of the spinner/status line; the final result
+                    // still carries command output for diagnostics.
+                    continue
+                  } else if (ev.type === "done") {
+                    const rawResult = ev.data
+                    const after = await runToolAfterHook(hooks, tc.name, effectiveParams, rawResult)
+                    const finalResult = appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
+                    resultContent = finalResult.content
+                    resultObj = { success: finalResult.success, content: finalResult.content, metadata: finalResult.metadata }
+                  }
                 }
               }
             }
@@ -1201,18 +1150,40 @@ export async function* agentLoop(
           }
         } else {
           try {
-            const result = await executeToolWithHooks({
-              hooks,
-              tool,
-              params: tc.input,
-              execute: () => withToolTimeout(tc.name, tool.execute(tc.input)),
-            })
-            resultContent = result.content
-            resultObj = { success: result.success, content: result.content, metadata: result.metadata }
+            // ShellSideEffectGuard: pre-execution danger check (PR-5.3 wiring)
+            if (tc.name === "shell") {
+              const cmd = String(tc.input.command ?? "")
+              const seReport = analyzeSideEffects(cmd, process.cwd())
+              if (seReport.severity === "danger") {
+                resultContent = formatSideEffectReport(seReport)
+                resultObj = { success: false, content: resultContent }
+                sideEffectBlocked = true
+              }
+            }
+            if (!sideEffectBlocked) {
+              const result = await executeToolWithHooks({
+                hooks,
+                tool,
+                params: tc.input,
+                execute: (_params) => withToolTimeout(tc.name, tool.execute(_params)),
+              })
+              resultContent = result.content
+              resultObj = { success: result.success, content: result.content, metadata: result.metadata }
+            }
           } catch (e) {
             resultContent = e instanceof Error ? e.message : String(e)
             resultObj = { success: false, content: resultContent }
           }
+        }
+      }
+      // ShellSideEffectGuard: inject report for agent awareness (PR-5.3 wiring)
+      if (tc.name === "shell" && !sideEffectBlocked) {
+        const cmd = String(tc.input.command ?? "")
+        const seReport = analyzeSideEffects(cmd, process.cwd())
+        if (seReport.severity !== "none") {
+          const note = "\n\n" + formatSideEffectReport(seReport)
+          resultContent = resultContent + note
+          resultObj = { ...resultObj, content: resultContent }
         }
       }
         const changedFilesForLedger = new Set<string>()
@@ -1403,25 +1374,23 @@ export async function* agentLoop(
       const missingNarrowFiles = intentPolicy.mode === "narrow_edit"
         ? missingExplicitRequiredFiles(effectivePrompt, modifiedFilesThisRound)
         : []
-      if (
-        options.autoFinishOnVerifiedWrite &&
-        intentPolicy.mode === "narrow_edit" &&
-        hadTsWriteThisRound &&
-        getBlockingObligations(pendingRippleObligations).length === 0 &&
-        lastTypecheck?.passed &&
-        missingNarrowFiles.length === 0
-      ) {
-        const files = [...modifiedFilesThisRound].sort().join(", ")
-        completionGateText = `Done. Applied a verified TypeScript cascade edit. TypeScript verification passed. Changed files: ${files}.`
-      } else if (missingNarrowFiles.length > 0) {
-        postToolRequiredFilesPrompt = [
-          "## Required files still missing",
-          "The user explicitly requested these files, so do not finish yet:",
-          ...missingNarrowFiles.map(file => `- ${file}`),
-          "",
-          "Create the missing file(s), then run the requested verification.",
-        ].join("\n")
-        yield { type: "status", data: `completion-gate: missing requested file ${missingNarrowFiles[0]}` }
+      // PR-3.1: narrow edit auto-complete extracted to CompletionOrchestrator helper
+      const narrowResult = checkNarrowEditCompletion({
+        autoFinishOnVerifiedWrite: options.autoFinishOnVerifiedWrite,
+        intentMode: intentPolicy.mode,
+        hadTsWriteThisRound,
+        blockingObligations: getBlockingObligations(pendingRippleObligations).length,
+        lastTypecheckPassed: lastTypecheck?.passed,
+        missingNarrowFiles,
+        modifiedFilesThisRound,
+      })
+      if (narrowResult.completionText) {
+        completionGateText = narrowResult.completionText
+      } else if (narrowResult.missingFilesPrompt) {
+        postToolRequiredFilesPrompt = narrowResult.missingFilesPrompt
+        if (narrowResult.missingFilesStatus) {
+          yield { type: "status", data: narrowResult.missingFilesStatus }
+        }
         options.runTrace?.record("gate_decision", { gate: "explicit_required_files", decision: "continue", missing: missingNarrowFiles })
       }
     }
@@ -1778,6 +1747,23 @@ export async function* agentLoop(
       yield { type: "status", data: `任务追踪: 阻止结束，剩余 ${missingLongTask.length} 项` }
       options.runTrace?.record("gate_decision", { gate: "task_tracker", decision: "continue", missing: missingLongTask })
     } else if (completionGateText) {
+      // PR-3.1: narrow_edit auto-complete must pass evidence gate before breaking
+      if (evidenceLedger && taskTracker) {
+        const evidenceResult = canClaimDone({ tracker: taskTracker, evidence: evidenceLedger })
+        if (!evidenceResult.canClaim) {
+          rawMessages.push({ role: "user", content: [
+            "## 完成被阻止 — 验证证据不足",
+            ...evidenceResult.blocked.map(b => `- **${b}**`),
+            "",
+            "### 缺失项",
+            ...evidenceResult.missing.map(m => `- ${m}`),
+          ].join("\n") })
+          yield { type: "status", data: `evidence-gate: narrow_edit blocked (${evidenceResult.missing.length} missing)` }
+          options.runTrace?.record("gate_decision", { gate: "evidence", decision: "continue", missing: evidenceResult.missing })
+          completionGateText = ""
+          continue
+        }
+      }
       yield { type: "status", data: "completion-gate: verified write; stopping without extra provider round" }
       yield { type: "text", data: completionGateText }
       options.runTrace?.record("gate_decision", { gate: "completion", decision: "verified_write_stop" })
@@ -1800,6 +1786,7 @@ export async function* agentLoop(
       yield { type: "status", data: `checkpoint: ${cpDecision.label} (${cpDecision.urgency})` }
       saveCheckpoint({
         version: 1,
+        checkpointId: generateCheckpointId(),
         round,
         timestamp: Date.now(),
         sessionId: process.env.DEEPSEEK_SESSION_ID ?? "ds-default",
@@ -1818,7 +1805,7 @@ export async function* agentLoop(
         conversationTokens: preRoundCtx.contextBudgetPercent > 0 ? Math.round(preRoundCtx.contextBudgetPercent * 1000) : 0,
         prevRound: round,
         summary: formatCheckpointSummary({
-          version: 1, round, timestamp: Date.now(), sessionId: "",
+          version: 1, checkpointId: generateCheckpointId(), round, timestamp: Date.now(), sessionId: "",
           masterPlan: taskTracker ? { goal: taskTracker.goal, steps: taskTracker.steps } : {},
           taskSteps: taskTracker?.steps ?? [],
           changedFiles: [...taskFiles],

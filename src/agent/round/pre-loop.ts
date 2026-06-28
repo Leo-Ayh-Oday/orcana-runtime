@@ -18,6 +18,9 @@ export class ErrorTracker {
   private errors = new Map<string, ErrorRecord>()
   private triggered = new Set<string>()
 
+  /** Total number of distinct errors tracked (for mode transition gating). */
+  get errorCount(): number { return this.errors.size }
+
   record(name: string, content: string): string | null {
     if (!/[ef]ail|[ef]rr|blocked|not found|denied/i.test(content)) return null
     const key = name + ":" + content.slice(0, 80).replace(/[^a-zA-Z0-9一-鿿]/g, "")
@@ -100,12 +103,11 @@ export async function runToolBeforeHook(
   hooks: HookSystem | undefined,
   tool: string,
   params: Record<string, unknown>,
-): Promise<{ blocked?: ToolResult; warnings: string[] }> {
+): Promise<{ blocked?: ToolResult; warnings: string[]; replaceParams?: Record<string, unknown> }> {
   if (!hooks) return { warnings: [] }
   const output = await hooks.runBefore(tool, params)
-  const warnings = output.warn ? [output.warn] : []
-  if (output.blocked) return { blocked: blockedByHookResult(tool, output.warn), warnings: [] }
-  return { warnings }
+  if (output.blocked) return { blocked: blockedByHookResult(tool, output.warnings.join("; ")), warnings: output.warnings }
+  return { warnings: output.warnings, replaceParams: output.replaceParams }
 }
 
 export async function runToolAfterHook(
@@ -116,8 +118,7 @@ export async function runToolAfterHook(
 ): Promise<{ result: ToolResult; warnings: string[] }> {
   if (!hooks) return { result, warnings: [] }
   const output = await hooks.runAfter(tool, params, { success: result.success, content: result.content })
-  const warnings = output.warn ? [output.warn] : []
-  return { result: output.result ? normalizeHookResult(output.result, result) : result, warnings }
+  return { result: output.replaceResult ? normalizeHookResult(output.replaceResult, result) : result, warnings: output.warnings }
 }
 
 export function appendHookWarnings(result: ToolResult, warnings: string[]): ToolResult {
@@ -131,13 +132,15 @@ export async function executeToolWithHooks(input: {
   hooks?: HookSystem
   tool: ToolDescriptor
   params: Record<string, unknown>
-  execute: () => Promise<ToolResult>
+  execute: (params: Record<string, unknown>) => Promise<ToolResult>
 }): Promise<ToolResult> {
   const before = await runToolBeforeHook(input.hooks, input.tool.defn.name, input.params)
   if (before.blocked) return appendHookWarnings(before.blocked, before.warnings)
 
-  const rawResult = await input.execute()
-  const after = await runToolAfterHook(input.hooks, input.tool.defn.name, input.params, rawResult)
+  // Apply param replacement from hooks (e.g. writeGuard modifies scope restrictions)
+  const effectiveParams = before.replaceParams ?? input.params
+  const rawResult = await input.execute(effectiveParams)
+  const after = await runToolAfterHook(input.hooks, input.tool.defn.name, effectiveParams, rawResult)
   return appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
 }
 
@@ -185,7 +188,7 @@ export async function collectResearchEvidence(input: {
         hooks: input.hooks,
         tool: webSearch,
         params: { query },
-        execute: () => withToolTimeout("web_search", webSearch.execute({ query }), 12_000),
+        execute: (p) => withToolTimeout("web_search", webSearch.execute(p), 12_000),
       })
       evidence.push({ query, success: result.success, content: result.content })
     } catch (e) {

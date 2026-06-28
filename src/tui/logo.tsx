@@ -72,7 +72,7 @@ export function TailFin() {
       <Text color={White}>{`  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀`}</Text>
       <Text color={Dim}>{`  ░░░░░░░░░░░░░░░░░░░░░░  深海之下，声呐先行`}</Text>
       <Text> </Text>
-      <Text color={Cyan}>{`  🐋 DeepSeek Code v0.4.0`}</Text>
+      <Text color={Cyan}>{`  🐋 DeepSeek Code v0.3.0`}</Text>
       <Text color={Dim}>{`  Sonar Pulse · Swarm Concurrency · Cold Memory`}</Text>
     </Box>
   )
@@ -84,7 +84,7 @@ export function MinimalSonar() {
     <Box flexDirection="column">
       <Text color={Dim}>{`         ╭─ ◦ ◌ ○ ◎ ○ ◌ ◦ ─╮`}</Text>
       <Text color={Blue}>{`        ╭┤  🐋 DeepSeek Code  ├╮`}</Text>
-      <Text color={Cyan}>{`       ╭┤   v0.4.0 · hraness  ├╮`}</Text>
+      <Text color={Cyan}>{`       ╭┤   v0.3.0 · hraness  ├╮`}</Text>
       <Text color={Cyan}>{`      ╭┤    sonar · swarm      ├╮`}</Text>
       <Text color={Blue}>{`      ╰─────────────────────────╯`}</Text>
       <Text> </Text>

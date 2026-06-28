@@ -242,7 +242,7 @@ describe("createTaskTrackerFromPacket", () => {
       goal: "G",
       scope: ["a.ts", "b.ts", "c.ts"],
       doneCriteria: [],
-      verification: [],
+      verification: [{ kind: "typecheck", description: "运行 tsc" }],
       ripplePolicy: { ...DEFAULT_RIPPLE },
       contextBudget: { ...DEFAULT_BUDGET },
     }
@@ -253,22 +253,22 @@ describe("createTaskTrackerFromPacket", () => {
     expect(tracker.steps[2]!.status).toBe("pending")
   })
 
-  test("empty scope gets default step", () => {
+  test("minimal scope with verification", () => {
     const packet: TaskPacket = {
       taskId: "t1",
       nodeId: "1",
-      title: "T",
+      title: "实现核心功能",
       goal: "G",
-      scope: [],
-      doneCriteria: [],
-      verification: [],
+      scope: ["实现核心逻辑"],
+      doneCriteria: ["核心逻辑已实现"],
+      verification: [{ kind: "typecheck", description: "运行 tsc" }],
       ripplePolicy: { ...DEFAULT_RIPPLE },
       contextBudget: { ...DEFAULT_BUDGET },
     }
 
     const tracker = createTaskTrackerFromPacket(packet)
-    expect(tracker.steps.length).toBe(1)
-    expect(tracker.steps[0]!.id).toBe("implement")
+    expect(tracker.steps.length).toBe(2) // 1 scope + 1 verify
+    expect(tracker.steps[0]!.id).toBe("scope-1")
     expect(tracker.steps[0]!.status).toBe("running")
   })
 
@@ -280,7 +280,7 @@ describe("createTaskTrackerFromPacket", () => {
       goal: "G",
       scope: ["实现API", "server/index.ts", "添加错误处理"],
       doneCriteria: [],
-      verification: [],
+      verification: [{ kind: "typecheck", description: "运行 tsc" }],
       ripplePolicy: { ...DEFAULT_RIPPLE },
       contextBudget: { ...DEFAULT_BUDGET },
     }

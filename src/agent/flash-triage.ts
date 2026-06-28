@@ -50,13 +50,13 @@ export function shouldUseFlashTriage(policy: FlashTriagePolicy, prompt: string, 
   if (policy === "always") return true
   if (policy === "off") return false
 
-  const text = `${prompt}\n${projectContext}`.toLowerCase()
-  if (text.length < 240) return false
-  return [
-    "implement", "build", "full-stack", "fullstack", "refactor", "architecture",
-    "test", "deploy", "research", "latest", "design",
-    "实现", "搭建", "全栈", "重构", "架构", "测试", "部署", "设计", "联网",
-  ].some(marker => text.includes(marker))
+  // auto: semantic triage for every prompt with meaningful content.
+  // Skip only trivial single-word continuations to avoid wasted API calls.
+  const trimmed = prompt.trim()
+  if (/^(?:好|好的|嗯|行|可以|是|对|yes|ok|okay|继续|go\s+on|next|确认|明白了|知道了|请继续|继续吧)\s*$/i.test(trimmed)) return false
+  if (trimmed.length < 8 && !projectContext) return false
+
+  return true
 }
 
 // ── Prompt builder ──

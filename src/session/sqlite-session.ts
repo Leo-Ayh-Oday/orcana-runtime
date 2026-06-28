@@ -60,6 +60,8 @@ export interface CheckpointRecord {
   roundNum: number
   timestamp: number
   sessionId: string
+  /** PR-4.4: Unique checkpoint identifier. */
+  checkpointId?: string
   masterPlan: Record<string, unknown> | null
   taskSteps: Array<{ id: string; status: string; title: string }> | null
   changedFiles: string[]

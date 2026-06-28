@@ -277,9 +277,69 @@ export function formatModePrompt(mode: ModeContract): string {
   return lines.join("\n")
 }
 
-/** Lightweight check: whether a mode change is needed based on completion state.
- *  Phase 1: returns the mode name unchanged — mode transitions deferred to future PR. */
-export function shouldTransitionMode(_current: ModeName, _context: Record<string, unknown>): ModeName | null {
-  // Phase 1: no automatic mode transitions. Mode is set externally via AgentOptions.
+/** Phase 2: mode transition context — what the system knows at transition check time. */
+export interface ModeTransitionContext {
+  /** Current MasterPlan active node status. */
+  activeNodeStatus?: "pending" | "active" | "blocked" | "done" | "skipped"
+  /** Whether the active node has a tracker with concrete steps. */
+  hasTrackerSteps: boolean
+  /** Number of active ripple obligations (unresolved cascading changes). */
+  rippleObligationCount: number
+  /** Whether any verification evidence exists in the ledger. */
+  hasEvidence: boolean
+  /** Number of tool errors in the current node's execution. */
+  toolErrors: number
+  /** Whether all plan nodes are complete. */
+  planComplete: boolean
+}
+
+/** Node status → default mode mapping. Enforces role discipline per execution phase. */
+const NODE_STATUS_MODE_MAP: Record<string, ModeName> = {
+  pending: "planner",   // hasn't started yet — stay in planning
+  active: "coder",      // building — full tool access
+  blocked: "planner",   // blocked by dependencies — go back to planning
+  done: "review",       // just completed — review before next
+  skipped: "review",    // skipped but should be checked
+}
+
+/**
+ * Determine whether a mode transition should occur based on execution context.
+ *
+ * Rules (ordered — first match wins):
+ *  1. Plan complete → "report" mode (deliver final report)
+ *  2. Tool errors ≥ 3 → "repair" mode (focused fixing, no scope expansion)
+ *  3. Ripple obligations > 0 → stay in current mode (don't switch mid-cascade)
+ *  4. Active node status changed → consult NODE_STATUS_MODE_MAP
+ *  5. No change → return null (keep current mode)
+ *
+ * Returns the new mode name if a transition is recommended, null to stay put.
+ */
+export function shouldTransitionMode(current: ModeName, ctx: ModeTransitionContext): ModeName | null {
+  // Rule 1: Plan complete — switch to report
+  if (ctx.planComplete && current !== "report") {
+    return "report"
+  }
+
+  // Rule 2: Error cascade — switch to repair (focused scope, no new exploration)
+  if (ctx.toolErrors >= 3 && current !== "repair") {
+    return "repair"
+  }
+
+  // Rule 3: Ripple cascade in progress — don't change mode mid-cascade
+  if (ctx.rippleObligationCount > 0) {
+    return null
+  }
+
+  // Rule 4: Node status → mode mapping
+  // Only when not in an elevated mode — repair/report should not be
+  // downgraded to coder by node status alone.
+  if (ctx.activeNodeStatus && current !== "repair" && current !== "report") {
+    const targetMode = NODE_STATUS_MODE_MAP[ctx.activeNodeStatus]
+    if (targetMode && targetMode !== current) {
+      return targetMode
+    }
+  }
+
+  // Rule 5: No change needed
   return null
 }

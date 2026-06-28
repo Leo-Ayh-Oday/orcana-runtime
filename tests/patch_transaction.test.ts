@@ -18,6 +18,18 @@ import {
   getActivePatchContext,
   clearActivePatchContext,
   serializePatchTransaction,
+  // PR-4.1 state machine
+  initManagedTransaction,
+  applyToTemp,
+  verifyManagedTransaction,
+  commitManagedTransaction,
+  rollbackManagedTransaction,
+  applyAndCommit,
+  getManagedTransaction,
+  getAllManagedTransactions,
+  clearTransactionRegistry,
+  type ManagedPatchTransaction,
+  type PatchState,
 } from "../src/agent/patch-transaction"
 
 // ── Temp dir setup ──
@@ -141,9 +153,20 @@ describe("checkForbiddenFile", () => {
     expect(checkForbiddenFile(".Git/config", testDir).allowed).toBe(false)
   })
 
-  it("allows dotfiles like .env", () => {
+  it("rejects .env (secret file protection)", () => {
     const result = checkForbiddenFile(".env", testDir)
-    expect(result.allowed).toBe(true)
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toContain("敏感文件")
+  })
+
+  it("rejects .pem (credential file protection)", () => {
+    const result = checkForbiddenFile("server.pem", testDir)
+    expect(result.allowed).toBe(false)
+  })
+
+  it("rejects id_rsa (SSH key protection)", () => {
+    const result = checkForbiddenFile("id_rsa", testDir)
+    expect(result.allowed).toBe(false)
   })
 })
 
@@ -379,5 +402,471 @@ describe("serializePatchTransaction", () => {
     const json = JSON.stringify(s)
     const parsed = JSON.parse(json)
     expect(parsed.txId).toBe(pt.txId)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════
+// PR-4.1: PatchTransaction State Machine tests
+// ═══════════════════════════════════════════════════════════════
+
+describe("ManagedPatchTransaction state machine", () => {
+  let smTestDir: string
+
+  beforeAll(() => {
+    smTestDir = resolve(tmpdir(), `deepseek-ptxn-sm-${Date.now()}`)
+    mkdirSync(smTestDir, { recursive: true })
+  })
+
+  afterAll(() => {
+    try { rmSync(smTestDir, { recursive: true, force: true }) } catch {}
+    clearTransactionRegistry()
+    clearActivePatchContext()
+  })
+
+  beforeEach(() => {
+    clearTransactionRegistry()
+    clearActivePatchContext()
+  })
+
+  function makeFile(name: string, oldContent: string | null, newContent: string) {
+    return { relativePath: name, oldContent, newContent }
+  }
+
+  // ── initManagedTransaction ──
+
+  describe("initManagedTransaction", () => {
+    it("creates transaction in proposed state", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("src/new.ts", null, "export const x = 1\n")],
+        cwd: smTestDir,
+      })
+      expect(mpt.state).toBe("proposed")
+      expect(mpt.txId).toMatch(/^ptxn_/)
+      expect(mpt.files).toHaveLength(1)
+      expect(mpt.files[0]!.relativePath).toBe("src/new.ts")
+      expect(mpt.stateTimestamps.proposed).toBeGreaterThan(0)
+    })
+
+    it("registers transaction in registry", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("a.ts", "old", "new")],
+        cwd: smTestDir,
+      })
+      const found = getManagedTransaction(mpt.txId)
+      expect(found).toBeDefined()
+      expect(found!.state).toBe("proposed")
+    })
+
+    it("throws on empty files", () => {
+      expect(() =>
+        initManagedTransaction({
+          tool: "write_file",
+          files: [],
+          cwd: smTestDir,
+        }),
+      ).toThrow("至少需要一个文件")
+    })
+
+    it("supports multi-file transactions", () => {
+      const mpt = initManagedTransaction({
+        tool: "multi_edit",
+        files: [
+          makeFile("src/a.ts", "a", "a2"),
+          makeFile("src/b.ts", "b", "b2"),
+          makeFile("src/c.ts", null, "c"),
+        ],
+        cwd: smTestDir,
+      })
+      expect(mpt.files).toHaveLength(3)
+      expect(mpt.patch.scope.length).toBeGreaterThan(0)
+    })
+  })
+
+  // ── applyToTemp ──
+
+  describe("applyToTemp", () => {
+    it("transitions proposed → applied_to_temp", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("temp-test.ts", null, "hello world\n")],
+        cwd: smTestDir,
+      })
+      const result = applyToTemp(mpt)
+      expect(result.state).toBe("applied_to_temp")
+      expect(result.stateTimestamps.applied_to_temp).toBeGreaterThan(0)
+    })
+
+    it("writes files to temp directory", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("lib/util.ts", null, "export const VERSION = 1\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      expect(mpt.files[0]!.tempPath).toBeDefined()
+      expect(existsSync(mpt.files[0]!.tempPath!)).toBe(true)
+      const content = readFileSync(mpt.files[0]!.tempPath!, "utf-8")
+      expect(content).toBe("export const VERSION = 1\n")
+    })
+
+    it("does not modify target file", () => {
+      const targetPath = join(smTestDir, "real.ts")
+      writeFileSync(targetPath, "original\n", "utf-8")
+      const mpt = initManagedTransaction({
+        tool: "edit_file",
+        files: [makeFile("real.ts", "original\n", "modified\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      // Target file should still have original content
+      expect(readFileSync(targetPath, "utf-8")).toBe("original\n")
+    })
+
+    it("throws on invalid transition from verified", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("x.ts", null, "x\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      expect(() => applyToTemp(mpt)).toThrow("非法状态转换")
+    })
+
+    it("throws on invalid transition from committed", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("y.ts", null, "y\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      commitManagedTransaction(mpt)
+      expect(() => applyToTemp(mpt)).toThrow("非法状态转换")
+    })
+  })
+
+  // ── verifyManagedTransaction ──
+
+  describe("verifyManagedTransaction", () => {
+    it("transitions applied_to_temp → verified", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("v.ts", null, "v\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      const result = verifyManagedTransaction(mpt)
+      expect(result.state).toBe("verified")
+      expect(result.stateTimestamps.verified).toBeGreaterThan(0)
+    })
+
+    it("throws when verifying from proposed", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("bad.ts", null, "bad\n")],
+        cwd: smTestDir,
+      })
+      expect(() => verifyManagedTransaction(mpt)).toThrow("非法状态转换")
+    })
+  })
+
+  // ── commitManagedTransaction ──
+
+  describe("commitManagedTransaction", () => {
+    it("transitions verified → committed", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("commit-test.ts", null, "committed content\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      const result = commitManagedTransaction(mpt)
+      expect(result.state).toBe("committed")
+      expect(result.stateTimestamps.committed).toBeGreaterThan(0)
+    })
+
+    it("atomically moves temp file to target", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("atomic.ts", null, "atomic write\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      commitManagedTransaction(mpt)
+
+      const targetPath = join(smTestDir, "atomic.ts")
+      expect(existsSync(targetPath)).toBe(true)
+      expect(readFileSync(targetPath, "utf-8")).toBe("atomic write\n")
+    })
+
+    it("cleans up temp directory after commit", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("cleanup.ts", null, "data\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      const tempPath = mpt.files[0]!.tempPath!
+      expect(existsSync(tempPath)).toBe(true)
+      verifyManagedTransaction(mpt)
+      commitManagedTransaction(mpt)
+      // Temp file should be gone
+      expect(existsSync(tempPath)).toBe(false)
+    })
+
+    it("overwrites existing target file", () => {
+      const targetPath = join(smTestDir, "overwrite.ts")
+      writeFileSync(targetPath, "old content\n", "utf-8")
+
+      const mpt = initManagedTransaction({
+        tool: "edit_file",
+        files: [makeFile("overwrite.ts", "old content\n", "new content\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      commitManagedTransaction(mpt)
+
+      expect(readFileSync(targetPath, "utf-8")).toBe("new content\n")
+    })
+
+    it("throws when committing from proposed", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("skip.ts", null, "x\n")],
+        cwd: smTestDir,
+      })
+      expect(() => commitManagedTransaction(mpt)).toThrow("非法状态转换")
+    })
+
+    it("supports multi-file commit", () => {
+      const mpt = initManagedTransaction({
+        tool: "multi_edit",
+        files: [
+          makeFile("multi/a.ts", null, "a content\n"),
+          makeFile("multi/b.ts", null, "b content\n"),
+        ],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      commitManagedTransaction(mpt)
+
+      expect(readFileSync(join(smTestDir, "multi/a.ts"), "utf-8")).toBe("a content\n")
+      expect(readFileSync(join(smTestDir, "multi/b.ts"), "utf-8")).toBe("b content\n")
+    })
+  })
+
+  // ── rollbackManagedTransaction ──
+
+  describe("rollbackManagedTransaction", () => {
+    it("transitions proposed → rolled_back", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("rb-1.ts", null, "x\n")],
+        cwd: smTestDir,
+      })
+      const result = rollbackManagedTransaction(mpt, "test cancel")
+      expect(result.state).toBe("rolled_back")
+      expect(result.rollbackReason).toBe("test cancel")
+    })
+
+    it("transitions applied_to_temp → rolled_back and cleans temp", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("rb-2.ts", null, "temp content\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      const tempPath = mpt.files[0]!.tempPath!
+      expect(existsSync(tempPath)).toBe(true)
+
+      rollbackManagedTransaction(mpt, "cleanup")
+      expect(mpt.state).toBe("rolled_back")
+      expect(existsSync(tempPath)).toBe(false)
+    })
+
+    it("transitions verified → rolled_back and cleans temp", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("rb-3.ts", null, "verified then rolled\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      const tempPath = mpt.files[0]!.tempPath!
+      rollbackManagedTransaction(mpt, "failed verification")
+      expect(mpt.state).toBe("rolled_back")
+      expect(existsSync(tempPath)).toBe(false)
+    })
+
+    it("is idempotent (rolled_back → rolled_back)", () => {
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("rb-4.ts", null, "x\n")],
+        cwd: smTestDir,
+      })
+      rollbackManagedTransaction(mpt, "first")
+      expect(() => rollbackManagedTransaction(mpt, "second")).not.toThrow()
+      expect(mpt.state).toBe("rolled_back")
+    })
+
+    it("does not revert committed files on disk", () => {
+      const targetPath = join(smTestDir, "rb-committed.ts")
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("rb-committed.ts", null, "committed data\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      commitManagedTransaction(mpt)
+      expect(existsSync(targetPath)).toBe(true)
+
+      // Rollback after commit — files stay (revert uses FileTransaction snapshot)
+      rollbackManagedTransaction(mpt, "post-commit rollback")
+      expect(mpt.state).toBe("rolled_back")
+      expect(existsSync(targetPath)).toBe(true)
+      expect(readFileSync(targetPath, "utf-8")).toBe("committed data\n")
+    })
+  })
+
+  // ── applyAndCommit (full lifecycle) ──
+
+  describe("applyAndCommit", () => {
+    it("completes full lifecycle on successful verification", async () => {
+      const mpt = await applyAndCommit(
+        {
+          tool: "write_file",
+          files: [makeFile("full.ts", null, "full lifecycle\n")],
+          cwd: smTestDir,
+        },
+        async (_mpt) => true, // verification passes
+      )
+      expect(mpt.state).toBe("committed")
+      expect(existsSync(join(smTestDir, "full.ts"))).toBe(true)
+    })
+
+    it("rolls back on failed verification", async () => {
+      const targetPath = join(smTestDir, "fail-verify.ts")
+      const mpt = await applyAndCommit(
+        {
+          tool: "write_file",
+          files: [makeFile("fail-verify.ts", null, "should not land\n")],
+          cwd: smTestDir,
+        },
+        async (_mpt) => false, // verification fails
+      )
+      expect(mpt.state).toBe("rolled_back")
+      expect(mpt.rollbackReason).toBe("verification failed")
+      // Target file should NOT exist
+      expect(existsSync(targetPath)).toBe(false)
+    })
+
+    it("re-throws on verification exception (no silent success)", async () => {
+      const targetPath = join(smTestDir, "verify-crash.ts")
+      let error: Error | null = null
+      try {
+        await applyAndCommit(
+          {
+            tool: "write_file",
+            files: [makeFile("verify-crash.ts", null, "boom\n")],
+            cwd: smTestDir,
+          },
+          async (_mpt) => { throw new Error("typecheck crashed") },
+        )
+      } catch (err) {
+        error = err as Error
+      }
+      expect(error).not.toBeNull()
+      expect(error!.message).toContain("typecheck crashed")
+      // Target file should NOT exist (rolled back + re-thrown)
+      expect(existsSync(targetPath)).toBe(false)
+    })
+
+    it("re-throws on forbidden file", async () => {
+      let error: Error | null = null
+      try {
+        await applyAndCommit(
+          {
+            tool: "write_file",
+            files: [makeFile(".git/config", null, "bad")],
+            cwd: smTestDir,
+          },
+          async (_mpt) => true,
+        )
+      } catch (err) {
+        error = err as Error
+      }
+      expect(error).not.toBeNull()
+      expect(error!.message).toContain("禁止写入")
+    })
+  })
+
+  // ── getAllManagedTransactions ──
+
+  describe("getAllManagedTransactions", () => {
+    it("returns all registered transactions", () => {
+      initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("list-1.ts", null, "a\n")],
+        cwd: smTestDir,
+      })
+      initManagedTransaction({
+        tool: "edit_file",
+        files: [makeFile("list-2.ts", "old", "new")],
+        cwd: smTestDir,
+      })
+      const all = getAllManagedTransactions()
+      expect(all.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  // ── clearTransactionRegistry ──
+
+  describe("clearTransactionRegistry", () => {
+    it("clears all transactions", () => {
+      initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("clear-me.ts", null, "x\n")],
+        cwd: smTestDir,
+      })
+      expect(getAllManagedTransactions().length).toBeGreaterThan(0)
+      clearTransactionRegistry()
+      expect(getAllManagedTransactions()).toHaveLength(0)
+    })
+  })
+
+  // ── Integration: scope & verification from active context ──
+
+  describe("scope/verification from active context", () => {
+    it("uses scope from active patch context", () => {
+      setActivePatchContext({ scope: ["ctx/a.ts"], verification: ["test"], nodeId: "n1" })
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("ctx-file.ts", null, "ctx\n")],
+        cwd: smTestDir,
+      })
+      expect(mpt.patch.scope).toContain("ctx/a.ts")
+      expect(mpt.patch.verification).toContain("test")
+    })
+
+    it("override scope takes precedence over active context", () => {
+      setActivePatchContext({ scope: ["ctx/a.ts"], verification: ["test"], nodeId: "n2" })
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("override.ts", null, "ov\n")],
+        scope: ["explicit.ts"],
+        verification: ["typecheck"],
+        cwd: smTestDir,
+      })
+      expect(mpt.patch.scope).toEqual(["explicit.ts"])
+      expect(mpt.patch.verification).toEqual(["typecheck"])
+    })
   })
 })

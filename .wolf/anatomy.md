@@ -1,5 +1,16 @@
 # Anatomy
 
+> **Current version**: v0.3.0 (2026-06-28). Phase 0-6 complete. See .wolf/memory.md for full changelog.
+
+## runtime/ (NEW — PR-0.1)
+- `bootstrap.ts` — Shared runtime factory `createRuntime()`. Single assembly point for provider registry, ModelRouter, MultiProvider, MCP tools, HookSystem, StagedContextManager, SessionManager, ThinkingStore, KnowledgeBase, CompactionState, LSP client, run trace factory, version reader. Both CLI and TUI consume this — no more per-UI drift. Exports `Runtime` interface, `RuntimeBootstrapOptions`, `AgentOptions` builder, meta-tools (TASK_TOOL, REQUEST_DEEPER_THINKING).
+
+## hooks/ (Phase 1 PR-1.1/1.2 upgraded)
+- `index.ts` — HookSystem with priority-based semantics: blocked > replace > warn. return types: BeforeHookResult {blocked, replaceParams, warnings[], trace[]}, AfterHookResult {blocked, replaceResult, warnings[], trace[]}. Multiple handlers accumulate warnings, last replace wins. HookOutput: blocked/replace/result/warn/source fields. beforeCount/afterCount getters.
+- `builtin.ts` — writeGuardBefore (onToolBefore, checks read-set, strict mode blocks via DEEPSEEK_WRITE_GUARD_MODE=strict), writeGuardAfter (onToolAfter, tracks successful reads). JournalVeto with source:"journalGuard". Deprecated combined writeGuard kept for backward compat.
+- `safety-policy.ts` — All block outputs carry source:"safety-policy".
+- `pre-loop.ts` (round/) — runToolBeforeHook returns replaceParams. runToolAfterHook uses replaceResult. executeToolWithHooks: execute(params) receives effectiveParams (replaceParams applied). Streaming tool path also applies replaceParams (HIGH fix).
+
 ## gates/
 - `types.ts` — Gate, GateResult, GateTrace interfaces
 - `chain.ts` — GateChain.pipe([...]), evaluate/evaluateSync/evaluateWithTrace, optional GateTelemetry
@@ -99,7 +110,7 @@
 - `ContextMessageInput.planStateContext` — new field, placed after stablePrefixContext (cache-safe), before volatileContext
 - `msgCharLen` import from context-epoch (was duplicate, now shared)
 
-## patch-transaction.ts (PR 5)
+## patch-transaction.ts (PR 5 + PR-4.1)
 - `PatchTransaction` — txId/baseHash/diff/scope/verification/forbiddenCheck/fileTransaction
 - `computeBaseHash` / `readFileHash` / `checkBaseHash` — SHA256 (16-char hex) pre-image verification
 - `checkForbiddenFile` — blocks .git/.deepseek-code/node_modules/.codegraph/.wolf + path escape
@@ -108,12 +119,52 @@
 - `preWriteCheck` — single entry point: forbidden check → base hash check → create PatchTransaction
 - `createPatchTransaction` — full transaction with scope/verification from active context or override
 - `serializePatchTransaction` — compact JSON for tool result metadata
+- **PR-4.1 State Machine:**
+  - `PatchState` — "proposed" | "applied_to_temp" | "verified" | "committed" | "rolled_back"
+  - `ManagedPatchTransaction` — wraps PatchTransaction with state + per-file entries + temp paths
+  - `ManagedFileEntry` — relativePath/absolutePath/oldContent/newContent/expectedBaseHash/tempPath
+  - `initManagedTransaction` — creates in "proposed" state; forbidden-file gate rejects before any disk write
+  - `applyToTemp` — writes all files to .deepseek-code/patches/<txId>/; transitions → applied_to_temp
+  - `verifyManagedTransaction` — marks verified; transitions → verified
+  - `commitManagedTransaction` — atomic renameSync temp→target per file; base-hash TOCTOU guard before each rename; auto-purges from registry; transitions → committed
+  - `rollbackManagedTransaction` — cleans temp dir from any state; idempotent; auto-purges registry; transitions → rolled_back
+  - `applyAndCommit` — full lifecycle with verify callback (must be read-only)
+  - `getManagedTransaction` / `getAllManagedTransactions` / `clearTransactionRegistry` — registry ops
+  - `serializeManagedTransaction` — compact JSON for session persistence
+  - VALID_TRANSITIONS enforced at each step; illegal transitions throw
+  - Temp dir: .deepseek-code/patches/<txId>/<relativePath> (same filesystem → atomic rename)
 
-## tools/file.ts (PR 5 wiring)
-- write_file / edit_file / multi_edit / edit_fim — all call preWriteCheck before disk mutation
-- `checkpointMetadata` now uses computeBaseHash (no duplicate hash logic)
-- Removed unused `createHash` import from node:crypto
-- multi_edit creates per-file PatchTransactions in batch
+## rewind.ts (PR-4.3)
+- `saveRewindPoint` — per-user-prompt auto-save: computes fileSHAs from actual content, stores snapshot + checkpoint
+- `listRewindPoints` — returns checkpoints newest-first with file count, token count, summary
+- `executeRewind` — restores files from snapshots + FileTransaction rollback; 3 modes: code/conversation/both
+- `formatRewindList` / `formatRewindResult` — CLI display helpers
+- Integrity check after code rewind: verifies restored files match stored SHAs (skips sentinel "deleted"/"error" hashes)
+- Rewind dir: .deepseek-code/rewind/<sessionId>/round-<n>.json
+- **Wired into CLI**: `/rewind list | /rewind <round> [code|conv|both]` command in definitions.ts
+- Auto-save on each user prompt in cli.ts (non-critical; failure doesn't block the turn)
+
+## checkpoint.ts (PR-4.4)
+- `SessionCheckpoint.checkpointId` — unique 12-char hex ID (generated via `generateCheckpointId()`)
+- `generateCheckpointId()` — `timestamp36_random6` format
+- `CheckpointRecord.checkpointId` — optional field in SQLite schema (backward compatible)
+- `recordToCheckpoint` — generates fallback checkpointId from sessionId + roundNum if missing
+
+## rewind-stubs.ts (PR-4.4 TUI preparation)
+- `TuiRewindEntry` / `TuiRewindListState` / `TuiRewindConfirmState` / `TuiRewindProgressState` — type stubs
+- `createRewindListState` / `createRewindConfirmState` / `createRewindProgressState` — factory functions
+- `formatTuiRewindEntry` — single-line TUI display formatter
+- `TuiRewindAction` — discriminated union for TUI keybinding dispatch
+- Actual rendering in Phase 9 (PR-9.4)
+
+## tools/file.ts (PR-4.2 wiring)
+- write_file / edit_file / multi_edit — use `applyAndCommit` (state machine) instead of direct writeFile
+- Atomic write: temp→verify→commit (renameSync on same filesystem)
+- Forbidden file guard: enforced in `initManagedTransaction` → rejects before any disk write
+- Transaction ID: returns `mpt.patch.fileTransaction.id` (txn_* format, compatible with rollback_transaction)
+- Partial multi_edit commits reverted via FileTransaction snapshots before rollback
+- edit_fim still uses legacy createTransaction/writeFile (not yet migrated)
+- rollback_transaction still functional with returned txn_* IDs
 
 ## master-plan.ts (PR 5)
 - `revisePlan` new nodes include `_packet` (buildPacketFromLine) — prevents stale patch context after plan revision
@@ -121,6 +172,7 @@
 ## loop.ts (PR 5 wiring)
 - setActivePatchContext called at 3 node activation points (activateMasterPlan x2, tryNodeTransition)
 - Scope/verification from node._packet → active patch context → PatchTransaction metadata
+- **ShellSideEffectGuard wired (2026-06-28)**: import analyzeSideEffects/formatSideEffectReport, pre-execution danger check in streaming + non-streaming exec paths, post-execution report injection for warning severity
 
 ## evidence-ledger.ts (PR 6)
 - `EvidenceKind` — "typecheck" | "test" | "build" | "manual" (4 types, narrower than VerificationKind)
@@ -296,6 +348,9 @@
 - `orcana-architecture.md` — T3R + Microagents 多 agent 架构最终方案。Planner/Coder/Reviewer 三常驻 + Locator/Verifier 按需微 agent。Event Bus + Context Epoch + Runtime Merger。14 PR 路线图。
 - `orcana-next-phase.md` — 2026-06-24 决策：当前不做多 agent，先硬化单 agent 长程运行时。9 个 PR：MasterPlan接入→TaskPacket→Plan Validator→Context Epoch→PatchTransaction→Evidence→Ripple→ModeContract→Replay Harness。
 
+## docs/
+- `v1.0-roadmap.md` — 2026-06-27: v1.0 完整路线图，基于 Deep Research 绝对性审查报告 × Strong Single v1.0 实行计划。v0.2.2 基线，10 Phase/32+ PR/8-10 周。含模块逐项审查表、P0/P1/P2 优先级矩阵、PR 模板、TUI 专项、Orcana 风格保留、里程碑时间表、验收标准、排除项与接口依赖。
+
 ## mode-contract.ts (PR 8)
 - `ModeName` — "planner" | "coder" | "review" | "repair" | "report"
 - `ModeContract` — mode/description/allowedTools/forbiddenTools/inputRequired/outputSchema/exitCriteria
@@ -350,3 +405,183 @@
 - Fixture system: creates temp dirs with specified file content for filesystem-dependent tests (checkBaseHash, createPatchTransaction)
 - Module-level state reset before each case (setActiveMode("coder"), planRef.current = null)
 - 37 tests total: 30 case tests + 1 load-count + 5 domain-count + 1 summary-structural
+
+## completion-orchestrator.ts (PR-3.1 — NEW)
+- `CompletionOrchestrator` — unified final gate evaluation. Single `evaluate()` method replaces ~180 lines of scattered completion logic in loop.ts.
+- Gate evaluation order: 1) Sync chain (RippleExit→Planning→TaskTracker→Quality), 2) External completion gate, 3) FlashJudge, 4) Evidence hard gate (canClaimDone), 5) Truthfulness gate (finalText vs Evidence).
+- Returns `CompletionOrchestratorResult` with decision ("done"|"continue"|"break_blocked"|"plan_ready") + all side effects collected (injectMessages, statusMessages, yieldTexts, traceEvents).
+- `CompletionOrchestratorInput` — all completion-relevant state. loop.ts builds this from its local variables and applies results via switch statement.
+- `checkNarrowEditCompletion()` — extracted from loop.ts post-round, now in orchestrator file as standalone helper. Still called from loop.ts for now (full integration deferred).
+- `evaluateSyncChain()` — wraps `createCompletionChain().evaluateSync()`, collects side effects from CompletionContext mutations.
+- `evaluateExternalGate()` — calls `needsExternalCompletionGate()` + `evaluateCompletionGate()`. Blocked with rounds left → continue; blocked at final round → break_blocked.
+- `evaluateFlashJudge()` — async FlashJudge call. SATISFIED → tryNodeTransition flag; IMPOSSIBLE → break_blocked; NOT_SATISFIED → continue with gap injection.
+- `evaluateEvidenceGate()` — calls `canClaimDone()`. Blocked with rounds left → continue; final round → break_blocked with `formatCanClaimDoneBlocked`.
+- `evaluateTruthfulnessGate()` — extracts truth claims from finalText (typecheck/test/build/lint/no-errors), cross-references with EvidenceLedger. Contradictions at non-final round → continue; final round → noted but allowed.
+- Design invariants: single done decision path, fail-closed (any unhandled state → continue), side effects collected not executed.
+
+## loop.ts (PR-3.1 integration)
+- Completion block (~180 lines) replaced with single `orchestrator.evaluate()` call (~50 lines).
+- `checkNarrowEditCompletion` in post-round (line ~1335) replaces inline narrow_edit auto-complete logic.
+- Narrow_edit completion now runs `canClaimDone` evidence check before breaking (PR-3.1 review fix HIGH-3).
+- `collectRecentTurns` passed to orchestrator for FlashJudge context (PR-3.1 review fix HIGH-2).
+- Removed imports: `createCompletionChain`, `evaluateCompletionGate`, `formatBlockedCompletion`, `formatCompletionEvidenceReport`, `formatCompletionGatePrompt`, `needsExternalCompletionGate`, `extractPromises`.
+- Added imports: `CompletionOrchestrator`, `checkNarrowEditCompletion`, `canClaimDone`.
+
+## mode-contract.ts (PR-3.1 fix)
+- `shouldTransitionMode` Rule 4: node status mapping now skips when current mode is "repair" or "report" — prevents downgrading elevated modes back to "coder". Fixes 2 pre-existing test failures.
+
+## tool-risk.ts (PR-5.1 ToolRiskTaxonomy)
+- `RiskLevel` — 0-5 type: 0=SafeReadonly, 1=ReadWithContext, 2=FileWrite, 3=Network, 4=ShellExec/GitMutation, 5=Destructive
+- `RiskProfile` — level/category/requiresConfirmation/sessionAllowable/description
+- `TOOL_RISK_MAP` — explicit risk profiles for ~30 tools (read_file→0, write_file→2, shell→4, git_commit→4, etc.)
+- `RISK_5_PARAM_PATTERNS` — destructive regex patterns (rm -rf /, fork bomb, mkfs, curl|sh, write .env/.pem) elevate tool to Risk 5
+- `CATEGORY_DEFAULT_RISK` — safe→0, file→2, network→3, shell→4, git→1
+- `getToolRisk(toolName, params, tool?)` → RiskProfile — priority: Risk-5 patterns → explicit map → category default → readonly fallback
+- `isHighRisk(level)` — true for Risk 4-5
+- `canAutoAllow(risk)` — false when sessionAllowable=false
+- `formatRiskBlockMessage(toolName, risk, params)` — system-reminder block message with risk level
+- **Wired into PermissionGate.check()**: `opts.riskLevel` param — session allow override (step 5) ignored for Risk 4-5 tools
+- **Wired into policy.ts**: Gate 8 (last gate, after mode_contract) — Risk 4-5 tools blocked in full mode even when other gates pass. Gate ordering ensures more specific gates (readonly/ripple/planning/context/mode) take priority in block reasons.
+
+## permission.ts (PR-5.1 change)
+- `PermissionGate.check()` accepts optional `opts?: { riskLevel?: number }` param
+- Step 5 (Session Allow Override): when `opts.riskLevel >= 4`, session allow is rejected → returns ask level instead
+
+## tool-execution/policy.ts (PR-5.2 change)
+- `ToolPolicyBlocked` now includes `source: string` (gate name) and `priority: number` (1-8)
+- All 9 block returns set source and priority: rate_limit(1), permission(2), readonly_intent(3), ripple_block(4), planning_phase(5), context_readiness(6), web_search_failed(7), mode_contract(7), tool_risk(8)
+- Policy trace is always available: every block has category + source + priority
+
+## tui/confirm-stubs.ts (PR-5.2)
+- `ConfirmRequest` — high-risk tool invocation awaiting confirmation (requestId, toolName, riskLevel, params, source, priority, timestamp)
+- `formatCliConfirmPrompt(req)` → system-reminder block with "批准/拒绝" prompt
+- `TuiConfirmDialogState` — visible + requests[] + focusedIndex
+- `TuiConfirmAction` — SHOW_CONFIRM/APPROVE_CONFIRM/DENY_CONFIRM/DENY_ALL_CONFIRM/DISMISS_CONFIRM
+- `ConfirmResult` — approved/denied/dismissed with formatConfirmResult
+- Actual TUI rendering deferred to Phase 9 (PR-9.4)
+
+## sandbox/side-effect-guard.ts (PR-5.3)
+- `SideEffectCategory` — destructive_delete/destructive_move/git_destructive/permission_change/external_write/none
+- `SideEffectFinding` — category/pattern/description/affectedPaths[]
+- `SideEffectReport` — command/findings[]/outOfScopeFiles[]/severity
+- `SIDE_EFFECT_PATTERNS` — 18 regex patterns: rm/del/rmdir/Remove-Item/git clean (delete), mv/Move-Item/rename (move), git reset --hard/stash drop/stash clear/checkout --/restore (git), chmod/chown/icacls/takeown (permission)
+- `analyzeSideEffects(command, projectRoot)` → SideEffectReport — pure function, classifies command
+- `hasSideEffects(command)` → boolean — quick pre-check
+- `checkScopeViolations(changedFiles, expectedScope, projectRoot)` → string[] — post-exec scope check
+- `formatSideEffectReport(report)` → CLI-formatted warning/danger message
+- **Wired into loop.ts (2026-06-28)**: 2 injection points — pre-execution danger block (`analyzeSideEffects` called before `executeStream`/`execute`, danger severity → block) + post-execution report injection (warning severity → `formatSideEffectReport` appended to tool result)
+
+## agent/secret-redactor.ts (PR-5.4)
+- `redact(value, opts?)` → unknown — unified recursive redaction for all channels
+- 16 SECRET_KEY_PATTERNS: api_key/token/secret/password/authorization/credentials/private_key/signing_key etc.
+- 20 SECRET_CONTENT_PATTERNS: OpenAI/Anthropic/DeepSeek/AWS keys, GitHub PAT/OAuth, Slack tokens, JWTs, MongoDB/PostgreSQL/MySQL/Redis connection strings, private key blocks (RSA/EC/DSA/OpenSSH/PGP)
+- Structural limits: maxDepth(4), maxStringLength(2000), maxArrayLength(50), maxObjectKeys(80)
+- Channel-specific: `redactForTrace`, `redactForCheckpoint`, `redactForEvidence`, `redactForToolOutput`
+- `containsSecret(value)` → boolean — pre-flight check
+- **Wired into run-trace.ts**: replaced inline `sanitize()` with `redactForTrace()`
+- Extra patterns support: `extraKeyPatterns` and `extraContentPatterns` in `RedactorOptions`
+
+## sandbox/capability.ts (PR-5.5)
+- `OSCapabilityMatrix` — platform/arch/osName/features[]/overallRating (0-10)
+- `SandboxFeature` — name/tier(full|partial|none)/description/note
+- `detectCapabilities()` — detects 6 features: process isolation (Job Object/cgroups/none), file guard (PathGuard), network isolation, env filtering, timeout guard, path guard
+- `formatCapabilityBanner(cap)` → multi-line ANSI-colored startup banner with tier icons (●/◐/○)
+- `formatCapabilitySummary(cap)` → compact one-line `[sandbox: +proc +file -net +env +timeout +path | 8/10]`
+- `getCapabilityBanner()` → direct banner for current OS
+- Overall rating: full=2pts, partial=1pt, none=0pt, normalized to 0-10
+- Network isolation is "none" on all platforms without admin (honest degradation)
+
+## provider/types.ts (PR-6.2)
+- `ModelCapabilities` — thinking/fim/contextCaching/vision/structuredOutput/toolUse/streaming/maxContextWindow
+- `StructuredOutputRequest` (PR-6.4) — type(json_schema|json_object)/schema/name/strict
+- `ProviderCallOptions.responseFormat` (PR-6.4) — optional API-level structured output
+- `ProviderRegistration.capabilities` — optional provider-level capability union
+
+## provider/registry.ts (PR-6.2)
+- BUILTIN_MODELS now include `capabilities: ModelCapabilities` per model
+- Capability presets: DEEPSEEK_CAPABILITIES (thinking+fim+caching), ANTHROPIC_CAPABILITIES (thinking+vision+caching), OPENAI_CAPABILITIES (vision+structuredOutput)
+- `getCapabilities(modelId)` → ModelCapabilities | undefined
+- `getProviderCapabilities(providerId)` → ModelCapabilities | undefined
+- `listModelsByCapability(required)` → ModelID[] — models satisfying ALL requirements (AND logic)
+- `modelHasCapability(modelId, required)` → boolean — single model check
+
+## provider/router.ts (PR-6.1)
+- `selectForPurpose(purpose)` — now actually routes cheap purposes (flash_triage/completion_judge/plan_judge/ambiguity_detector/thinking_compaction/semantic_recall_score/knowledge_distill/cold_memory_audit) to cheapest fast model; agent_main stays session-pinned
+- `getSessionModel()` / `getCheapModel()` — explicit accessors
+- `getCheapModel()` prefers same-provider cheap model (e.g. session=deepseek-v4-pro → cheap=deepseek-v4-flash)
+- `resolveModel(modelId)` → ModelSpec | undefined — delegated to registry
+- `isCheapPurpose(purpose)` — static helper
+- `purposeRoutingEnabled` option in constructor (default true)
+- **Wired into loop.ts**: FlashTriage receives `modelRouter.selectForPurpose("flash_triage")`, FlashJudge receives `modelRouter.selectForPurpose("completion_judge")`
+
+## provider/transcript-manager.ts (PR-6.3)
+- `DeepSeekTranscriptManager` — centralized transcript validation
+  - `canEpochRollover(messages)` → boolean — blocks rollover if unclosed tool chains
+  - `validateTranscript(messages)` → TranscriptValidation — checks unclosed chains, adjacency, tool limit
+  - `computeStats(messages)` → TranscriptStats — message/block counts, tools in last turn
+  - `checkToolLimit(messages)` → {ok, count, limit} — enforces DeepSeek 128 tools/turn
+  - `formatStats(messages)` → compact one-line summary
+- `hasUnclosedToolChain(messages)` → boolean — preserved from context-epoch.ts (canonical source now here)
+- `hasAdjacencyViolation(messages)` → boolean — tool_use must be immediately followed by tool_result
+- `countToolsInLastAssistantTurn(messages)` → number
+- TranscriptValidation type: valid/reason/toolUseCount/toolResultCount/unclosedChain/adjacencyViolation
+- TranscriptStats type: messageCount/assistantMessages/userMessages/toolUseBlocks/toolResultBlocks/thinkingBlocks/textBlocks/totalChars/toolsInLastTurn
+
+## agent/structured-output.ts (PR-6.4)
+- `callWithStructuredOutput<T>(options)` → StructuredOutputResult<T> — unified fail-closed structured output
+  - Fallback chain: API format → prompt JSON → regex extraction → text fallback
+  - Retry on parse failure (configurable maxRetries)
+  - Optional Zod validator callback
+  - Optional text fallback parser
+- `zodToJsonSchema(schema)` → Record<string, unknown> — duck-typed Zod→JSON Schema converter
+  - Covers: ZodString, ZodNumber, ZodBoolean, ZodEnum, ZodArray, ZodObject, ZodOptional, ZodNullable, ZodEffects, ZodDefault
+  - Complex types (union/discriminated/intersection/tuple/record/literal) return minimal {type:"object"}
+- `objectSchema(fields)` → Record<string, unknown> — convenience factory without Zod
+- `StructuredOutputResult<T>` — data/rawText/parsed/retries/error/source
+- `StructuredCallOptions<T>` — provider/model/purpose/system/prompt/schema/schemaName/maxTokens/maxRetries/abortSignal/validator/textFallback/useApiFormat
+- tryParseStructuredResponse — strips markdown fences, JSON.parse, regex extraction
+
+## sandbox/fim-guard.ts (PR-6.5)
+- `FimSafetyContext` — scope/requiresVerification/verificationKinds
+- `FimGuardResult` — allowed/reason/txId/preEditHash/requiredVerification
+- `checkFimSafety(filePath, ctx)` → FimGuardResult — full safety check: forbidden files, scope validation, file existence, pre-edit hash, tx ID generation
+- `verifyFimPreEditHash(filePath, expectedHash)` → {valid, currentHash?} — TOCTOU guard for post-edit verification
+- `quickFimCheck(filePath, ctx)` → {allowed, reason?} — fast pre-check without hash computation
+- `formatFimGuardResult(result)` → string — ✅/❌ user-visible message
+- Forbidden patterns: .git, .env, .pem, id_rsa/id_ecdsa/id_ed25519, credentials.json, node_modules, .deepseek-code, .codegraph, .wolf
+- Transaction ID format: txn_fim_<12-char-hex>
+- Pre-edit hash: SHA256 first 16 chars for rollback
+
+## loop.ts (PR-6.1 wiring)
+- FlashTriage: receives routed model from `options.modelRouter?.selectForPurpose("flash_triage")`
+- FlashJudge: receives routed model from `options.modelRouter?.selectForPurpose("completion_judge")`
+- Gate telemetry: `tool_risk` added to toolGateNames (9 gates now), blockedGate normalization for tool_risk prefix
+
+## tool-risk.ts (PR-5.1 post-review fix)
+- Risk-5 param pattern for write_file: narrowed from `\.key$` to `id_rsa$|id_ecdsa$|id_ed25519$` — avoids false positives on i18n `.key` files
+
+## sandbox/forbidden-patterns.ts (PR-6.5 post-review — NEW)
+- `FORBIDDEN_SECRET_FILES` — 7 patterns: .env(.*), .pem, id_rsa, id_ecdsa, id_ed25519, credentials.json, .htpasswd, secret.yml/yaml
+- `FORBIDDEN_RUNTIME_DIRS` — 4 patterns: .deepseek-code, .codegraph, .wolf, node_modules
+- `FORBIDDEN_VCS_DIRS` — 1 pattern: .git
+- `ALL_FORBIDDEN_PATTERNS` — aggregate: secret + runtime + vcs
+- `isForbiddenPath(filePath)` → string | null — returns matching pattern source or null
+- `isOutsideProjectRoot(filePath, projectRoot?)` → boolean — path escape detection
+- Single source of truth — fim-guard, patch-transaction, tool-risk all reference these patterns
+
+## sandbox/fim-guard.ts (PR-6.5 post-review fix)
+- `isInScope` rewritten: path-suffix matching with "/" boundary anchors instead of substring `includes()`
+  - File scopes (no trailing "/"): exact `endsWith` match
+  - Directory scopes (trailing "/"): `includes` with "/" boundary → prevents overscope-by-substring
+  - All paths prefixed with "/" to normalize absolute/relative path variants
+- `isForbiddenFile` now delegates to `isForbiddenPath` from forbidden-patterns.ts
+- Removed duplicate FORBIDDEN_PATTERNS list
+
+## agent/patch-transaction.ts (PR-6.5 post-review fix)
+- `checkForbiddenFile` now also checks `FORBIDDEN_SECRET_FILES` — blocks .env/.pem/SSH key writes at the transaction layer (was: only tool-risk gate, which could be bypassed)
+- Import: `FORBIDDEN_SECRET_FILES` from `../sandbox/forbidden-patterns`
+
+## agent/context-epoch.ts (PR-6.3 post-review wiring)
+- `hasUnclosedToolChain` now imported from `../provider/transcript-manager` (canonical source)
+- Re-exported for backward compatibility — all existing callers unchanged
+- Removed inline implementation and zombie `isRecord` helper (was only used by removed inline)

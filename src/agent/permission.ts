@@ -137,13 +137,16 @@ export class PermissionGate {
    *    2. User Deny                   (~/.deepseek-code/permissions.json)
    *    3. Project Deny                (<root>/.deepseek-code/permissions.json)
    *    4. Session Deny Override       (gate.deny())
-   *    5. Session Allow Override      (gate.allow())
+   *    5. Session Allow Override      (gate.allow()) — blocked for Risk 4-5
    *    6. Project Allow               (<root>/.deepseek-code/permissions.json)
    *    7. User Allow                  (~/.deepseek-code/permissions.json)
    *    8. Tool declared permission    (tool.defn.permission)
    *    9. Category default            (safe/git→allow, file/network/shell→ask)
+   *
+   *  @param opts.riskLevel — If provided and >= 4, session allow overrides
+   *    (step 5) are ignored. Risk 4-5 tools require per-invocation confirmation.
    */
-  check(toolName: string, params: Record<string, unknown>, tool?: ToolDescriptor): PermissionResult {
+  check(toolName: string, params: Record<string, unknown>, tool?: ToolDescriptor, opts?: { riskLevel?: number }): PermissionResult {
     // 1. Global deny rules (highest priority — physics)
     for (const rule of GLOBAL_DENY_RULES) {
       if (rule.toolName !== toolName) continue
@@ -169,8 +172,15 @@ export class PermissionGate {
       return { allowed: false, level: "deny", reason: `用户已明确禁止 ${toolName}` }
     }
 
-    // 5. Session Allow Override
+    // 5. Session Allow Override — Risk 4-5 tools cannot be session-allowed
     if (override === "allow") {
+      if (opts?.riskLevel !== undefined && opts.riskLevel >= 4) {
+        return {
+          allowed: false,
+          level: "ask",
+          reason: `高风险工具 ${toolName} (Risk-${opts.riskLevel}) 不允许会话级自动批准，每次调用均需用户确认`,
+        }
+      }
       return { allowed: true, level: "allow", reason: "用户已授权" }
     }
 

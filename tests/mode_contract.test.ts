@@ -1,4 +1,4 @@
-/** Tests for ModeContract — 5-mode role discipline (PR 8). */
+/** Tests for ModeContract — 5-mode role discipline (PR 8) + auto-transition (PR-2.2). */
 
 import { describe, it, expect } from "bun:test"
 import {
@@ -8,9 +8,10 @@ import {
   formatModePrompt,
   setActiveMode,
   getActiveMode,
-  type ModeContract,
-  type ModeName,
+  shouldTransitionMode,
 } from "../src/agent/mode-contract"
+import type { ModeTransitionContext } from "../src/agent/mode-contract"
+import type { ModeContract, ModeName } from "../src/agent/mode-contract"
 import { createEvidenceLedger, addEvidence } from "../src/agent/evidence-ledger"
 
 // ── Helpers ──
@@ -421,5 +422,75 @@ describe("mode enforcement integration", () => {
     expect(enforceModeTools(MODES.report, "web_search").allowed).toBe(false)
     expect(enforceModeTools(MODES.report, "write_file").allowed).toBe(false)
     expect(enforceModeTools(MODES.report, "typecheck").allowed).toBe(false)
+  })
+})
+
+// ── PR-2.2: Mode auto-transition tests ──
+
+function makeTransitionCtx(overrides: Partial<ModeTransitionContext> = {}): ModeTransitionContext {
+  return {
+    activeNodeStatus: "active",
+    hasTrackerSteps: true,
+    rippleObligationCount: 0,
+    hasEvidence: false,
+    toolErrors: 0,
+    planComplete: false,
+    ...overrides,
+  }
+}
+
+describe("shouldTransitionMode", () => {
+  it("returns null when no change is needed", () => {
+    expect(shouldTransitionMode("coder", makeTransitionCtx())).toBeNull()
+  })
+
+  it("planComplete triggers report mode", () => {
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ planComplete: true }))).toBe("report")
+  })
+
+  it("planComplete returns null if already in report mode", () => {
+    expect(shouldTransitionMode("report", makeTransitionCtx({ planComplete: true }))).toBeNull()
+  })
+
+  it("toolErrors >= 3 triggers repair mode", () => {
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ toolErrors: 3 }))).toBe("repair")
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ toolErrors: 5 }))).toBe("repair")
+  })
+
+  it("toolErrors >= 3 returns null if already in repair mode", () => {
+    expect(shouldTransitionMode("repair", makeTransitionCtx({ toolErrors: 3 }))).toBeNull()
+  })
+
+  it("ripple obligations > 0 blocks node-status mode transitions but planComplete still wins", () => {
+    // planComplete (rule 1) is checked before ripple block (rule 3), so it wins
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ rippleObligationCount: 2, planComplete: true }))).toBe("report")
+    // When planComplete is false, ripple blocks node status transitions
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ rippleObligationCount: 2, activeNodeStatus: "done" }))).toBeNull()
+  })
+
+  it("active node status 'pending' transitions to planner", () => {
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ activeNodeStatus: "pending" }))).toBe("planner")
+  })
+
+  it("active node status 'done' transitions to review", () => {
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ activeNodeStatus: "done" }))).toBe("review")
+  })
+
+  it("active node status 'blocked' transitions to planner", () => {
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ activeNodeStatus: "blocked" }))).toBe("planner")
+  })
+
+  it("active node status 'skipped' transitions to review", () => {
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ activeNodeStatus: "skipped" }))).toBe("review")
+  })
+
+  it("planComplete takes priority over ripple obligations", () => {
+    // planComplete is checked first, so it wins even with ripple > 0
+    // (ripple blocks are checked AFTER planComplete in shouldTransitionMode)
+  })
+
+  it("toolErrors takes priority over node status mapping", () => {
+    // toolErrors >= 3 (rule 2) is checked before node status mapping (rule 4)
+    expect(shouldTransitionMode("coder", makeTransitionCtx({ activeNodeStatus: "done", toolErrors: 4 }))).toBe("repair")
   })
 })

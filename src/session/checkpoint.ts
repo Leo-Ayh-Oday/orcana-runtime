@@ -24,6 +24,8 @@ export interface SessionCheckpoint {
   round: number
   timestamp: number
   sessionId: string
+  /** PR-4.4: Unique checkpoint identifier (UUID-like, 12-char hex). */
+  checkpointId: string
   masterPlan: Record<string, unknown>
   taskSteps: Array<{ id: string; status: string; title: string }>
   changedFiles: string[]
@@ -34,6 +36,11 @@ export interface SessionCheckpoint {
   conversationTokens: number
   prevRound: number
   summary: string
+}
+
+/** Generate a unique checkpoint ID (12-char hex from timestamp + random). */
+export function generateCheckpointId(): string {
+  return `${Date.now().toString(36)}_${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 6)}`
 }
 
 // ── Structured checkpoint template (6-section, inspired by MiMo §1-§11) ──
@@ -183,6 +190,7 @@ export function saveCheckpoint(cp: SessionCheckpoint): void {
     conversationTokens: cp.conversationTokens,
     prevRound: cp.prevRound,
     summary: cp.summary,
+    checkpointId: cp.checkpointId,
   })
   // Close fallback store (not the active one)
   if (!activeStores.has(cp.sessionId)) store.close()
@@ -206,6 +214,7 @@ function recordToCheckpoint(rec: CheckpointRecord): SessionCheckpoint {
     round: rec.roundNum,
     timestamp: rec.timestamp,
     sessionId: rec.sessionId,
+    checkpointId: rec.checkpointId ?? `${rec.sessionId}_r${rec.roundNum}`,
     masterPlan: rec.masterPlan ?? {},
     taskSteps: rec.taskSteps ?? [],
     changedFiles: rec.changedFiles,

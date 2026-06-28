@@ -119,12 +119,12 @@ function SplashScreen({ frame }: { frame: number }) {
           <Box height={1} />
           {/* 状态栏 E: 抽象声呐波 */}
           <Text color="#616E88">{`  ╭─ ◦ ◌ ○ ◎ ○ ◌ ◦ ────────────────────────────────╮`}</Text>
-          <Text color="#88C0D0">{`  │  🐋 DeepSeek Code v0.4.0 · hraness               │`}</Text>
+          <Text color="#88C0D0">{`  │  🐋 DeepSeek Code v0.3.0 · hraness               │`}</Text>
           <Text color="#D8DEE9">{`  ╰──────────────────────────────────────────────────╯`}</Text>
           <Box height={1} />
           <GeometricFin />
           <Box height={1} />
-          <Text bold color="#88C0D0">  🐋 DeepSeek Code v0.4.0 — Hraness</Text>
+          <Text bold color="#88C0D0">  🐋 DeepSeek Code v0.3.0 — Hraness</Text>
           <Box height={1} />
           <Text color="#81A1C1">  深海之下，声呐先行。Sonar first, strike once.</Text>
           <Box height={1} />

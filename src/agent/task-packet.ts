@@ -14,6 +14,7 @@
 
 import type { VerificationKind } from "../verification/result"
 import { type TaskIntent, type TaskStep, type TaskTracker } from "./task-tracker"
+import { validateTaskPacket } from "./plan-validator"
 
 // ── TaskPacket types ──
 
@@ -162,6 +163,13 @@ const VERIFICATION_DEFAULTS: Record<VerificationKind, VerificationDefault> = {
  *  requirements. The first scope item is marked "running".
  */
 export function createTaskTrackerFromPacket(packet: TaskPacket, intent: TaskIntent = "long_task"): TaskTracker {
+  // PR-2.1: TaskPacket validation — fail closed on structurally invalid packets
+  const validation = validateTaskPacket(packet)
+  if (!validation.isClean) {
+    const detail = validation.errors.map(e => e.message).join("; ")
+    throw new Error(`TaskPacket validation failed (${validation.errors.length} errors): ${detail}`)
+  }
+
   const steps: TaskStep[] = []
   let stepIdx = 0
 
@@ -265,4 +273,29 @@ export function buildPacketFromLine(opts: {
     ripplePolicy: { ...DEFAULT_RIPPLE },
     contextBudget: { ...DEFAULT_BUDGET },
   }
+}
+
+// ── PR-2.3: TaskPacket takeover — primary path for long tasks ──
+
+/** Build a TaskTracker from a user prompt, routing through the TaskPacket path.
+ *  Replaces keyword-based createTaskTracker for long tasks.
+ *  Flash Triage is still preferred — this is the fallback when Flash is unavailable.
+ */
+export function buildTaskTrackerFromPrompt(
+  prompt: string,
+  intent: TaskIntent,
+): TaskTracker | null {
+  if (intent !== "long_task") return null
+
+  // Extract a title from the first sentence of the prompt
+  const firstLine = prompt.split("\n")[0]?.trim() ?? prompt.slice(0, 80)
+  const title = firstLine.length > 120 ? firstLine.slice(0, 117) + "..." : firstLine
+
+  const packet = buildPacketFromLine({
+    title,
+    goal: prompt.slice(0, 200),
+    nodeId: "1",
+  })
+
+  return createTaskTrackerFromPacket(packet, intent)
 }

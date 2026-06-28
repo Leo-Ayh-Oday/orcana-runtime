@@ -1,4 +1,9 @@
-/** Provider-agnostic LLM interface — single-provider + multi-provider registry. */
+/** Provider-agnostic LLM interface — single-provider + multi-provider registry.
+ *
+ *  PR-6.2: ProviderCapabilities added to ModelSpec and ProviderRegistration
+ *  so the system can query what a model/provider supports without hardcoding
+ *  provider-specific checks.
+ */
 
 export interface ProviderMessage {
   role: "user" | "assistant"
@@ -51,6 +56,17 @@ export interface ThinkingConfig {
   effort?: "high" | "max"
 }
 
+/** PR-6.4: Structured output request — JSON Schema or JSON object mode. */
+export interface StructuredOutputRequest {
+  type: "json_schema" | "json_object"
+  /** JSON Schema for json_schema mode. */
+  schema?: Record<string, unknown>
+  /** Name for the schema (required by some providers). */
+  name: string
+  /** Whether to enforce strict mode (fail closed). */
+  strict?: boolean
+}
+
 export interface ProviderCallOptions {
   model: string
   purpose?: ProviderCallPurpose
@@ -60,6 +76,8 @@ export interface ProviderCallOptions {
   thinking?: ThinkingConfig
   maxTokens: number
   abortSignal?: AbortSignal
+  /** PR-6.4: API-level structured output (response_format). */
+  responseFormat?: StructuredOutputRequest
 }
 
 export interface LLMProvider {
@@ -87,6 +105,31 @@ export interface ThinkingCapability {
   effortLevels: Array<"high" | "max">
 }
 
+/** What a model can and cannot do — declared statically, checked at runtime.
+ *
+ *  PR-6.2: Every model declares its capabilities so the system can
+ *  query "does this model support FIM?" or "can this provider do
+ *  structured output?" without hardcoding provider-specific checks.
+ */
+export interface ModelCapabilities {
+  /** Thinking/reasoning tokens (extended thinking). */
+  thinking: boolean
+  /** Fill-in-the-middle completions (code infill). */
+  fim: boolean
+  /** Prompt caching / cache_control breakpoints. */
+  contextCaching: boolean
+  /** Image/vision input support. */
+  vision: boolean
+  /** API-level structured output (response_format / JSON mode). */
+  structuredOutput: boolean
+  /** Native tool/function calling. */
+  toolUse: boolean
+  /** Streaming SSE support. */
+  streaming: boolean
+  /** Max context window size (may differ from ModelSpec.contextWindow for practical limits). */
+  maxContextWindow: number
+}
+
 /** Model metadata — static information stored in the registry. */
 export interface ModelSpec {
   id: ModelID
@@ -96,6 +139,8 @@ export interface ModelSpec {
   maxOutputTokens: number
   pricingTier: PricingTier
   thinking: ThinkingCapability
+  /** PR-6.2: What this model can and cannot do. */
+  capabilities: ModelCapabilities
   /** Tags for purpose-based routing (e.g. "coding", "fast", "vision"). */
   tags: string[]
   /** Whether this model is the default for its tier. */
@@ -110,6 +155,8 @@ export interface ProviderRegistration {
   toolAdapter?: ToolSchemaAdapter
   /** Default model for this provider (used when none specified). */
   defaultModel: ModelID
+  /** PR-6.2: Provider-level capabilities (union of all registered models). */
+  capabilities?: ModelCapabilities
 }
 
 /** Adapts tool schemas between provider formats. */

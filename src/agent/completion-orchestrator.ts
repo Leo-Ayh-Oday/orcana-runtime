@@ -203,7 +203,7 @@ export class CompletionOrchestrator {
         out.injectMessages.push({ role: "user", content: formatTaskTrackerPrompt(input.taskTracker!) })
         out.statusMessages.push("任务追踪: 规划完成，进入执行阶段")
         out.traceEvents.push({
-          gate: "planning",
+          gate: "semantic:planning",
           decision: "accepted",
           score: ctxExtra._planningScore as number,
           signals: ctxExtra._planningSignals,
@@ -213,13 +213,13 @@ export class CompletionOrchestrator {
     }
 
     // Plan approved (user confirmed via UI)
-    if (completionResult.reason === "planning_accepted") {
+    if (completionResult.reason === "semantic:planning_accepted") {
       out.planningRejections = 0
       return { ...out, decision: "continue" }
     }
 
     // Ripple exit, task tracker, quality — all "continue"
-    if (completionResult.reason === "ripple_exit" || completionResult.reason === "task_tracker" || completionResult.reason === "quality") {
+    if (completionResult.reason === "semantic:ripple_exit" || completionResult.reason === "semantic:task_tracker" || completionResult.reason === "semantic:quality") {
       return { ...out, decision: "continue" }
     }
 
@@ -259,7 +259,7 @@ export class CompletionOrchestrator {
       out.injectMessages.push({ role: "assistant", content: compactAssistantContext(input.finalText) })
       out.injectMessages.push({ role: "user", content: formatCompletionGatePrompt(completionReport, input.language) })
       out.statusMessages.push(`external-completion-gate: blocked (${completionReport.missing.length} missing)`)
-      out.traceEvents.push({ gate: "external_completion", decision: "continue", missing: completionReport.missing })
+      out.traceEvents.push({ gate: "semantic:external_completion", decision: "continue", missing: completionReport.missing })
       return { ...out, decision: "continue" }
     }
 
@@ -267,14 +267,14 @@ export class CompletionOrchestrator {
       // Blocked at final round — exit with block message
       out.statusMessages.push(`external-completion-gate: blocked (${completionReport.missing.length} missing)`)
       out.yieldTexts.push(formatBlockedCompletion(completionReport, input.language))
-      out.traceEvents.push({ gate: "external_completion", decision: "blocked", missing: completionReport.missing })
+      out.traceEvents.push({ gate: "semantic:external_completion", decision: "blocked", missing: completionReport.missing })
       return { ...out, decision: "break_blocked" }
     }
 
     // External gate passed — record evidence
     out.statusMessages.push("external-completion-gate: evidence accepted")
     out.yieldTexts.push(formatCompletionEvidenceReport(input.finalText, completionReport, input.language))
-    out.traceEvents.push({ gate: "external_completion", decision: "accepted", evidence: completionReport.evidenceLines })
+    out.traceEvents.push({ gate: "semantic:external_completion", decision: "accepted", evidence: completionReport.evidenceLines })
 
     return null // proceed to FlashJudge
   }
@@ -320,7 +320,7 @@ export class CompletionOrchestrator {
       out.statusMessages.push(`flash-judge: ${judgeResult.evidenceFound.length} evidence items confirmed`)
       if (input.masterPlan) {
         out.tryNodeTransition = true
-        out.traceEvents.push({ gate: "master_plan", decision: "next_node", progress: "pending" })
+        out.traceEvents.push({ gate: "semantic:master_plan", decision: "next_node", progress: "pending" })
       }
       return null // proceed to evidence gate
     }
@@ -334,7 +334,7 @@ export class CompletionOrchestrator {
     out.injectMessages.push({ role: "assistant", content: compactAssistantContext(input.finalText) })
     out.injectMessages.push({ role: "user", content: FlashJudge.formatUnsatisfiedPrompt(judgeResult.gaps) })
     out.statusMessages.push(`flash-judge: not satisfied (${judgeResult.gaps.length} gaps)`)
-    out.traceEvents.push({ gate: "flash_judge", decision: "continue", gaps: judgeResult.gaps })
+    out.traceEvents.push({ gate: "semantic:flash_judge", decision: "continue", gaps: judgeResult.gaps })
     return { ...out, decision: "continue" }
   }
 
@@ -366,20 +366,20 @@ export class CompletionOrchestrator {
         ].join("\n")
         out.injectMessages.push({ role: "user", content: evidencePrompt })
         out.statusMessages.push(`evidence-gate: blocked (${evidenceResult.missing.length} missing)`)
-        out.traceEvents.push({ gate: "evidence", decision: "continue", missing: evidenceResult.missing })
+        out.traceEvents.push({ gate: "semantic:evidence", decision: "continue", missing: evidenceResult.missing })
         out.decision = "continue"
         return false
       }
       // Final round — block
       out.yieldTexts.push(formatCanClaimDoneBlocked(evidenceResult))
-      out.traceEvents.push({ gate: "evidence", decision: "blocked", missing: evidenceResult.blocked })
+      out.traceEvents.push({ gate: "semantic:evidence", decision: "blocked", missing: evidenceResult.blocked })
       out.decision = "break_blocked"
       return false
     }
 
     // Evidence gate passed
     out.statusMessages.push("evidence-gate: passed")
-    out.traceEvents.push({ gate: "evidence", decision: "accepted", satisfiedKinds: evidenceResult.satisfiedKinds })
+    out.traceEvents.push({ gate: "semantic:evidence", decision: "accepted", satisfiedKinds: evidenceResult.satisfiedKinds })
     return true
   }
 
@@ -405,7 +405,7 @@ export class CompletionOrchestrator {
       ].join("\n")
       out.injectMessages.push({ role: "user", content: prompt })
       out.statusMessages.push(`truthfulness-gate: ${contradictions.length} contradictions`)
-      out.traceEvents.push({ gate: "truthfulness", decision: "continue", contradictions: contradictions.length })
+      out.traceEvents.push({ gate: "semantic:truthfulness", decision: "continue", contradictions: contradictions.length })
       out.decision = "continue"
       return false
     }

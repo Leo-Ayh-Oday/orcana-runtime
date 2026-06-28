@@ -53,7 +53,7 @@ describe("evaluateToolPolicy — Gate 1: Rate Limit", () => {
     }))
     expect(result.allowed).toBe(false)
     expect(blocked(result).reason).toBe("rate_limit")
-    expect(blocked(result).source).toBe("rate_limit")
+    expect(blocked(result).source).toBe("policy:rate_limit")
     expect(blocked(result).priority).toBe(1)
     expect(blocked(result).blockMessage).toContain("5/5")
   })

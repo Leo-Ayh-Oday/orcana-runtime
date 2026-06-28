@@ -30,11 +30,11 @@ function makeAsyncGate(name: string, pass: boolean, reason?: string): Gate<unkno
 describe("GateTelemetry", () => {
   test("records pass and block outcomes", () => {
     const tel = new GateTelemetry()
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "block")
-    tel.record("ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "block")
+    tel.record("semantic:ripple_exit", "pass")
 
-    const hit = tel.get("ripple_exit")!
+    const hit = tel.get("semantic:ripple_exit")!
     expect(hit.triggers).toBe(3)
     expect(hit.passes).toBe(2)
     expect(hit.blocks).toBe(1)
@@ -42,14 +42,14 @@ describe("GateTelemetry", () => {
 
   test("tracks multiple gates independently", () => {
     const tel = new GateTelemetry()
-    tel.record("quality", "pass")
-    tel.record("quality", "block")
-    tel.record("ripple_exit", "block")
+    tel.record("semantic:quality", "pass")
+    tel.record("semantic:quality", "block")
+    tel.record("semantic:ripple_exit", "block")
 
-    expect(tel.get("quality")!.triggers).toBe(2)
-    expect(tel.get("quality")!.blocks).toBe(1)
-    expect(tel.get("ripple_exit")!.triggers).toBe(1)
-    expect(tel.get("ripple_exit")!.blocks).toBe(1)
+    expect(tel.get("semantic:quality")!.triggers).toBe(2)
+    expect(tel.get("semantic:quality")!.blocks).toBe(1)
+    expect(tel.get("semantic:ripple_exit")!.triggers).toBe(1)
+    expect(tel.get("semantic:ripple_exit")!.blocks).toBe(1)
   })
 
   test("interceptRate returns blocks/triggers", () => {
@@ -111,10 +111,10 @@ describe("GateTelemetry", () => {
 
   test("summary returns compact string", () => {
     const tel = new GateTelemetry()
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "block")
-    const s = tel.summary("ripple_exit")
-    expect(s).toContain("ripple_exit")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "block")
+    const s = tel.summary("semantic:ripple_exit")
+    expect(s).toContain("semantic:ripple_exit")
     expect(s).toContain("2t")
     expect(s).toContain("1b")
     expect(s).toContain("1p")
@@ -217,7 +217,7 @@ describe("GateTelemetry", () => {
     const root = mkdtempSync(join(tmpdir(), "gate-telemetry-"))
     try {
       const tel = new GateTelemetry()
-      tel.record("context_readiness", "block")
+      tel.record("policy:context_readiness", "block")
       const target = join(root, "nested", "telemetry.json")
 
       await tel.saveToFile(target)
@@ -265,7 +265,7 @@ describe("GateChain with telemetry", () => {
 
   test("evaluateSync records correctly when first gate blocks", () => {
     const chain = GateChain.pipe([
-      makeGate("budget", false, "context_budget"),
+      makeGate("budget", false, "policy:context_budget"),
       makeGate("disclosure", true),
     ])
     const tel = new GateTelemetry()
@@ -386,10 +386,10 @@ describe("GateChain with telemetry", () => {
 
     chain.evaluateSync(ctx, tel)
     const names = tel.gateNames().sort()
-    expect(names).toContain("context_budget")
-    expect(names).toContain("tool_disclosure")
-    expect(names).toContain("readonly_plan")
-    expect(names).toContain("ripple_tool_filter")
+    expect(names).toContain("policy:context_budget")
+    expect(names).toContain("policy:tool_disclosure")
+    expect(names).toContain("policy:readonly_plan")
+    expect(names).toContain("policy:ripple_tool_filter")
     // All should pass with cacheStableTools=true
     for (const name of names) {
       expect(tel.get(name)!.blocks).toBe(0)
@@ -420,7 +420,7 @@ describe("GateChain with telemetry", () => {
     const tel2 = new GateTelemetry()
     const chainResult = chain.evaluateSync(ctx, tel2)
     expect(chainResult.pass).toBe(false)
-    expect(tel2.get("context_budget")!.blocks).toBe(1)
+    expect(tel2.get("policy:context_budget")!.blocks).toBe(1)
   })
 
   test("RippleExitGate blocks completion with pending obligations in write mode", () => {
@@ -460,7 +460,7 @@ describe("GateChain with telemetry", () => {
 
     chain.evaluateSync(ctx, tel)
     // ripple_exit should block first with pending obligations
-    expect(tel.get("ripple_exit")!.blocks).toBe(1)
+    expect(tel.get("semantic:ripple_exit")!.blocks).toBe(1)
     expect(ctx.completionBlockMessage).not.toBeNull()
   })
 
@@ -502,10 +502,10 @@ describe("GateChain with telemetry", () => {
 
     chain.evaluateSync(ctx, tel)
     const names = tel.gateNames().sort()
-    expect(names).toContain("ripple_exit")
-    expect(names).toContain("planning_artifact")
-    expect(names).toContain("task_tracker")
-    expect(names).toContain("quality")
+    expect(names).toContain("semantic:ripple_exit")
+    expect(names).toContain("semantic:planning_artifact")
+    expect(names).toContain("semantic:task_tracker")
+    expect(names).toContain("semantic:quality")
     // All should pass in readonly mode
     for (const name of names) {
       expect(tel.get(name)!.blocks).toBe(0)

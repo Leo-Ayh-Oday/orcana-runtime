@@ -673,7 +673,7 @@ export async function* agentLoop(
     if (!preRoundResult.pass) {
       // Context budget block — hard exit
       yield { type: "status", data: `context-budget: block ${preRoundCtx.contextBudgetPercent}%` }
-      options.runTrace?.record("gate_decision", { gate: "context_budget", decision: "block", percent: preRoundCtx.contextBudgetPercent })
+      options.runTrace?.record("gate_decision", { gate: "policy:context_budget", decision: "block", percent: preRoundCtx.contextBudgetPercent })
       yield { type: "text", data: preRoundResult.message ?? "Context budget exceeded." }
       break
     }
@@ -1076,11 +1076,12 @@ export async function* agentLoop(
       })
 
       // ── Gate telemetry for tool policy gates ──
-      const toolGateNames = ["rate_limit", "permission", "readonly_intent", "ripple_block", "planning_phase", "context_readiness", "web_search_failed", "mode_contract", "tool_risk"]
+      // PR-7.1: layer-prefixed names for per-layer breakdown
+      const toolGateNames = ["policy:rate_limit", "policy:permission", "policy:readonly_intent", "policy:ripple_block", "policy:planning_phase", "policy:context_readiness", "policy:web_search_failed", "policy:mode_contract", "policy:tool_risk"]
       const blockedGate = policyResult.allowed ? null
-        : policyResult.reason.startsWith("permission") ? "permission"
-        : policyResult.reason.startsWith("tool_risk") ? "tool_risk"
-        : policyResult.reason
+        : policyResult.reason.startsWith("permission") ? "policy:permission"
+        : policyResult.reason.startsWith("tool_risk") ? "policy:tool_risk"
+        : `policy:${policyResult.reason}`
       for (const gn of toolGateNames) {
         if (gn === blockedGate) { gateTelemetry.record(gn, "block"); break }
         gateTelemetry.record(gn, "pass")
@@ -1733,7 +1734,7 @@ export async function* agentLoop(
     if (taskTracker?.phase === "planning" && missingLongTask.length > 0 && round + 1 < maxRounds) {
       rawMessages.push({ role: "user", content: formatTaskPlanningPrompt(taskTracker, round + 1) })
       yield { type: "status", data: "任务追踪: 等待计划文本，下一轮不允许调用工具" }
-      options.runTrace?.record("gate_decision", { gate: "task_tracker", decision: "plan_required", missing: missingLongTask })
+      options.runTrace?.record("gate_decision", { gate: "semantic:task_tracker", decision: "plan_required", missing: missingLongTask })
       continue
     }
     if (taskTracker && missingLongTask.length > 0) {
@@ -1745,7 +1746,7 @@ export async function* agentLoop(
         "下一轮必须处理第一个未完成项，并在完成后运行验证。",
       ].join("\n") })
       yield { type: "status", data: `任务追踪: 阻止结束，剩余 ${missingLongTask.length} 项` }
-      options.runTrace?.record("gate_decision", { gate: "task_tracker", decision: "continue", missing: missingLongTask })
+      options.runTrace?.record("gate_decision", { gate: "semantic:task_tracker", decision: "continue", missing: missingLongTask })
     } else if (completionGateText) {
       // PR-3.1: narrow_edit auto-complete must pass evidence gate before breaking
       if (evidenceLedger && taskTracker) {

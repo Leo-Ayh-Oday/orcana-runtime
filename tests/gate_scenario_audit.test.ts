@@ -146,8 +146,8 @@ describe("Pre-round: all 5 evaluate, gate count same readonly vs write", () => {
     const gates = tel.gateNames()
     console.log(`  Pre-round gates: ${gates.join(", ")}`)
     expect(gates.length).toBe(5)
-    expect(gates).toContain("context_budget")
-    expect(gates).toContain("readonly_plan")
+    expect(gates).toContain("policy:context_budget")
+    expect(gates).toContain("policy:readonly_plan")
   })
 
   test("readonly vs narrow_edit = same 5 gates", () => {
@@ -181,13 +181,13 @@ describe("Tool Policy: Scenario 1-3 (readonly) — writes BLOCKED", () => {
       toolCall: { id: "c1", name: "write_file", input: { filePath: "x.ts", content: "x" } },
       tool: mockTool("write_file", false) }))
     expect(r.allowed).toBe(false);
-    if (!r.allowed) { expect(r.source).toBe("readonly_intent"); expect(r.priority).toBe(3) }
+    if (!r.allowed) { expect(r.source).toBe("policy:readonly_intent"); expect(r.priority).toBe(3) }
   })
 
   test("shell blocked by readonly_intent", () => {
     const r = evaluateToolPolicy(pInput({ intentPolicy: intent }))
     expect(r.allowed).toBe(false);
-    if (!r.allowed) expect(r.source).toBe("readonly_intent")
+    if (!r.allowed) expect(r.source).toBe("policy:readonly_intent")
   })
 
   test("read_file allowed", () => {
@@ -210,7 +210,7 @@ describe("Tool Policy: Scenario 4 (narrow_edit) — full gates", () => {
       taskTracker: { phase: "planning", goal: "x", steps: [], requiredFiles: [], requiredVerificationKinds: [] } as any,
       toolCall: { id: "c1", name: "write_file", input: { filePath: "x.ts", content: "x" } },
       tool: mockTool("write_file", false) }))
-    if (!r.allowed) expect(r.source).toBe("planning_phase")
+    if (!r.allowed) expect(r.source).toBe("policy:planning_phase")
   })
 
   test("ripple_block blocks write when ripple active", () => {
@@ -220,14 +220,14 @@ describe("Tool Policy: Scenario 4 (narrow_edit) — full gates", () => {
       toolCall: { id: "c1", name: "write_file", input: { filePath: "x.ts", content: "x" } },
       tool: mockTool("write_file", false) }))
     expect(r.allowed).toBe(false);
-    if (!r.allowed) expect(r.source).toBe("ripple_block")
+    if (!r.allowed) expect(r.source).toBe("policy:ripple_block")
   })
 
   test("mode_contract: planner blocks shell", () => {
     const check = enforceModeTools(MODES["planner"], "shell")
     expect(check.allowed).toBe(false)
     const r = evaluateToolPolicy(pInput({ modeContract: MODES["planner"] }))
-    if (!r.allowed) expect(r.source).toBe("mode_contract")
+    if (!r.allowed) expect(r.source).toBe("policy:mode_contract")
   })
 })
 
@@ -294,10 +294,10 @@ describe("Completion: 4 sync gates always evaluate", () => {
     const gates = tel.gateNames()
     console.log(`  Completion gates: ${gates.join(", ")}`)
     expect(gates.length).toBe(4)
-    expect(gates).toContain("ripple_exit")
-    expect(gates).toContain("planning_artifact")
-    expect(gates).toContain("task_tracker")
-    expect(gates).toContain("quality")
+    expect(gates).toContain("semantic:ripple_exit")
+    expect(gates).toContain("semantic:planning_artifact")
+    expect(gates).toContain("semantic:task_tracker")
+    expect(gates).toContain("semantic:quality")
   })
 
   test("readonly intent → all gates pass (0 blocks)", () => {
@@ -316,7 +316,7 @@ describe("Completion: 4 sync gates always evaluate", () => {
       pendingRippleObligations: [{ targetFile: "src/cons.ts", symbol: "fn", caller: { file: "src/cons.ts", line: 1, symbol: "fn", text: "fn()" }, reason: "sig" }],
     }), tel)
     const json = tel.toJSON()
-    console.log(`  ripple_exit: triggers=${json.ripple_exit!.triggers} blocks=${json.ripple_exit!.blocks}`)
+    console.log(`  ripple_exit: triggers=${json["semantic:ripple_exit"]!.triggers} blocks=${json["semantic:ripple_exit"]!.blocks}`)
   })
 
   test("QualityGate: evaluates when typecheck failed", () => {
@@ -325,7 +325,7 @@ describe("Completion: 4 sync gates always evaluate", () => {
       intentPolicy: { mode: "narrow_edit", reason: "执行" },
       taskHadWrite: true, lastTypecheck: { passed: false, issues: 3, output: "err" },
     }), tel)
-    console.log(`  quality: triggers=${tel.toJSON().quality!.triggers} blocks=${tel.toJSON().quality!.blocks}`)
+    console.log(`  quality: triggers=${tel.toJSON()["semantic:quality"]!.triggers} blocks=${tel.toJSON()["semantic:quality"]!.blocks}`)
   })
 })
 

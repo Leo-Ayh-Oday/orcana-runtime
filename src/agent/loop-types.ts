@@ -51,4 +51,6 @@ export interface AgentOptions {
   activeMode?: ModeName
   /** ContextMap acquisition policy. "auto" builds maps for long/high-risk tasks. */
   contextMapPolicy?: "off" | "auto" | "always"
+  /** PR-7.2: Context injected by SessionStart hook handlers (e.g., project rules). */
+  sessionStartContext?: string
 }

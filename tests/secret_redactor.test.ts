@@ -1,4 +1,10 @@
-/** Tests for SecretRedactor — PR-5.4 unified secret redaction. */
+/** Tests for SecretRedactor — PR-5.4 unified secret redaction.
+ *
+ *  ALL test values use obviously-fake placeholder strings (xxx/XXXX)
+ *  to avoid triggering GitHub secret scanning false positives.
+ *  The regex patterns still match these placeholders — the tests
+ *  validate redaction logic, not real credential formats.
+ */
 import { describe, expect, test } from "bun:test"
 import {
   redact,
@@ -13,17 +19,17 @@ import {
 
 describe("redact — key-based", () => {
   test("redacts api_key value", () => {
-    const result = redact({ api_key: "sk-abc123secret" }) as Record<string, unknown>
+    const result = redact({ api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }) as Record<string, unknown>
     expect(result.api_key).toBe("[redacted]")
   })
 
   test("redacts token value", () => {
-    const result = redact({ token: "ghp_1234567890abcdef1234567890abcdef12345678" }) as Record<string, unknown>
+    const result = redact({ token: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }) as Record<string, unknown>
     expect(result.token).toBe("[redacted]")
   })
 
   test("redacts Authorization header", () => {
-    const result = redact({ Authorization: "Bearer sk-ant-abc123" }) as Record<string, unknown>
+    const result = redact({ Authorization: "Bearer sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxx" }) as Record<string, unknown>
     expect(result.Authorization).toBe("[redacted]")
   })
 
@@ -43,12 +49,12 @@ describe("redact — key-based", () => {
   })
 
   test("redacts private_key", () => {
-    const result = redact({ private_key: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" }) as Record<string, unknown>
+    const result = redact({ private_key: "-----BEGIN PRIVATE KEY-----\nxxx-placeholder\n-----END PRIVATE KEY-----" }) as Record<string, unknown>
     expect(result.private_key).toBe("[redacted]")
   })
 
   test("redacts JWT/signing_key", () => {
-    const result = redact({ signing_key: "hmac-secret-256" }) as Record<string, unknown>
+    const result = redact({ signing_key: "hmac-placeholder-xxx" }) as Record<string, unknown>
     expect(result.signing_key).toBe("[redacted]")
   })
 
@@ -61,8 +67,8 @@ describe("redact — key-based", () => {
 
   test("nested objects: secret keys at any depth are redacted", () => {
     const result = redact({
-      config: { api_key: "sk-nested" },
-      env: { DB_PASSWORD: "db-secret" },
+      config: { api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxx" },
+      env: { DB_PASSWORD: "db-placeholder" },
     }) as Record<string, unknown>
     const config = result.config as Record<string, unknown>
     expect(config.api_key).toBe("[redacted]")
@@ -75,61 +81,61 @@ describe("redact — key-based", () => {
 
 describe("redact — content-based", () => {
   test("redacts OpenAI-style API key in string", () => {
-    const result = redact({ value: "sk-proj-abc123def456ghi789jkl012mno345pqr678stu" })
+    const result = redact({ value: "sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts Anthropic API key", () => {
-    const result = redact({ value: "sk-ant-api03-abc123def456ghi789jkl012mno345pqr678stu901vwx" })
+    const result = redact({ value: "sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts DeepSeek API key", () => {
-    const result = redact({ value: "dsk-abc123def456ghi789jkl012" })
+    const result = redact({ value: "dsk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts AWS access key", () => {
-    const result = redact({ value: "AKIAIOSFODNN7EXAMPLE" })
+    const result = redact({ value: "AKIAXXXXXXXXXXXXXXXX" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts GitHub PAT", () => {
-    const result = redact({ value: "ghp_1234567890abcdef1234567890abcdef12345678" })
+    const result = redact({ value: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts private key block", () => {
-    const result = redact({ value: "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B\n-----END PRIVATE KEY-----" })
+    const result = redact({ value: "-----BEGIN PRIVATE KEY-----\nXXX-PLACEHOLDER-KEY-DATA-XXX\n-----END PRIVATE KEY-----" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts EC private key", () => {
-    const result = redact({ value: "-----BEGIN EC PRIVATE KEY-----\nMHQCAQEEIIFb\n-----END EC PRIVATE KEY-----" })
+    const result = redact({ value: "-----BEGIN EC PRIVATE KEY-----\nXXX-PLACEHOLDER-EC-KEY-XXX\n-----END EC PRIVATE KEY-----" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts JWT token", () => {
-    const result = redact({ value: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR" })
+    const result = redact({ value: "eyJxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxxxxxxxxxx" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts MongoDB connection string", () => {
-    const result = redact({ value: "mongodb+srv://admin:password123@cluster0.mongodb.net/db" })
+    const result = redact({ value: "mongodb://xxxxxxxx:xxxxxxxx@xxxxxxxx.xxxxxxx.xxx/xx" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
 
   test("redacts PostgreSQL connection string", () => {
-    const result = redact({ value: "postgresql://user:pass123@localhost:5432/mydb" })
+    const result = redact({ value: "postgresql://xxxxxxxx:xxxxxxxx@xxxxxxxxxxxx:xxxx/xx" })
     const obj = result as Record<string, unknown>
     expect(obj.value).toBe("[redacted]")
   })
@@ -190,23 +196,23 @@ describe("redact — structural limits", () => {
 
 describe("channel-specific redactors", () => {
   test("redactForTrace redacts secrets", () => {
-    const result = redactForTrace({ api_key: "sk-secret" }) as Record<string, unknown>
+    const result = redactForTrace({ api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }) as Record<string, unknown>
     expect(result.api_key).toBe("[redacted]")
   })
 
   test("redactForCheckpoint redacts secrets with shorter string limit", () => {
-    const result = redactForCheckpoint({ api_key: "sk-secret", long: "a".repeat(2000) }) as Record<string, unknown>
+    const result = redactForCheckpoint({ api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", long: "a".repeat(2000) }) as Record<string, unknown>
     expect(result.api_key).toBe("[redacted]")
     expect(String(result.long)).toContain("[truncated]")
   })
 
   test("redactForEvidence redacts secrets", () => {
-    const result = redactForEvidence({ token: "ghp_secret" }) as Record<string, unknown>
+    const result = redactForEvidence({ token: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxx" }) as Record<string, unknown>
     expect(result.token).toBe("[redacted]")
   })
 
   test("redactForToolOutput has larger string limit", () => {
-    const result = redactForToolOutput({ api_key: "sk-secret", text: "a".repeat(2000) }) as Record<string, unknown>
+    const result = redactForToolOutput({ api_key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", text: "a".repeat(2000) }) as Record<string, unknown>
     expect(result.api_key).toBe("[redacted]")
     // 2000 chars should NOT be truncated in tool output (5000 limit)
     expect(String(result.text)).not.toContain("[truncated]")
@@ -237,15 +243,15 @@ describe("redact — extra patterns", () => {
 
 describe("containsSecret", () => {
   test("detects API key", () => {
-    expect(containsSecret("sk-ant-api03-abc123def456ghi789jkl012mno345")).toBe(true)
+    expect(containsSecret("sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxx")).toBe(true)
   })
 
   test("detects private key", () => {
-    expect(containsSecret("-----BEGIN PRIVATE KEY-----\nMIIEvQIB")).toBe(true)
+    expect(containsSecret("-----BEGIN PRIVATE KEY-----\nXXX-PLACEHOLDER")).toBe(true)
   })
 
   test("detects GitHub token", () => {
-    expect(containsSecret("ghp_1234567890abcdef1234567890abcdef12345678")).toBe(true)
+    expect(containsSecret("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")).toBe(true)
   })
 
   test("normal text returns false", () => {

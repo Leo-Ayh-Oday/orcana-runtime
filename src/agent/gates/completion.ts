@@ -44,7 +44,7 @@ function continue_(ctx: CompletionContext, reason: string, assistantMsg: string,
 // ── Gate: Ripple Exit ──
 
 export class RippleExitGate implements Gate<CompletionContext> {
-  readonly name = "ripple_exit"
+  readonly name = "semantic:ripple_exit"
 
   evaluate(ctx: CompletionContext) {
     if (ctx.intentPolicy.mode === "readonly") return pass(ctx), { pass: true }
@@ -56,18 +56,18 @@ export class RippleExitGate implements Gate<CompletionContext> {
     const userMsg = formatRippleExitGateCallers(
       blocking.map(o => ({ caller: o.caller, symbol: o.symbol }))
     )
-    continue_(ctx, "ripple_exit", assistantMsg, userMsg,
+    continue_(ctx, "semantic:ripple_exit", assistantMsg, userMsg,
       `ripple-exit-gate: pending ${blocking.length}`,
       { pending: blocking.length })
     ctx.completionBlockMessage = userMsg
-    return { pass: false, reason: "ripple_exit" }
+    return { pass: false, reason: "semantic:ripple_exit" }
   }
 }
 
 // ── Gate: Planning Artifact (handles revision + plan_ready) ──
 
 export class PlanningArtifactGate implements Gate<CompletionContext> {
-  readonly name = "planning_artifact"
+  readonly name = "semantic:planning_artifact"
 
   evaluate(ctx: CompletionContext) {
     if (!ctx.taskTracker || ctx.taskTracker.phase !== "planning") return pass(ctx), { pass: true }
@@ -78,13 +78,13 @@ export class PlanningArtifactGate implements Gate<CompletionContext> {
       markPlanAccepted(ctx.taskTracker)
       const assistantMsg = compactAssistantContext(ctx.finalText)
       const userMsg = formatTaskTrackerPrompt(ctx.taskTracker)
-      continue_(ctx, "planning_accepted", assistantMsg, userMsg,
+      continue_(ctx, "semantic:planning_accepted", assistantMsg, userMsg,
         "任务追踪: 用户已确认规划，进入执行阶段",
         { decision: "accepted" })
       ctx.completionBlockMessage = userMsg
       // Signal loop.ts to reset planApproved + planningRejections
       ctx.shouldBreak = false  // continue, not break
-      return { pass: false, reason: "planning_accepted" }
+      return { pass: false, reason: "semantic:planning_accepted" }
     }
 
     const planningGate = evaluatePlanningArtifact(ctx.finalText, ctx.taskTracker)
@@ -101,12 +101,12 @@ export class PlanningArtifactGate implements Gate<CompletionContext> {
       if (!forceResult.allow) {
         // Still within retry budget — revision needed
         const userMsg = formatPlanningGatePrompt(planningGate, ctx.taskTracker)
-        continue_(ctx, "planning_revise", assistantMsg, userMsg,
+        continue_(ctx, "semantic:planning_revise", assistantMsg, userMsg,
           `planning-gate: revise plan (${planningGate.missing.length} missing)`,
           { missing: planningGate.missing, score: planningGate.score })
         ctx.completionBlockMessage = userMsg
         ;(ctx as unknown as Record<string, unknown>)._planningRejected = true
-        return { pass: false, reason: "planning_revise" }
+        return { pass: false, reason: "semantic:planning_revise" }
       }
 
       // Force-pass with minimal viable packet
@@ -138,14 +138,14 @@ export class PlanningArtifactGate implements Gate<CompletionContext> {
     }
     ctx.statusMessage = "plan-mode: awaiting user approval"
     ctx.traceEvent = { gate: "planning", decision: "plan_ready", score: planningGate.score }
-    return { pass: false, reason: "planning_ready" }
+    return { pass: false, reason: "semantic:planning_ready" }
   }
 }
 
 // ── Gate: Task Tracker Completion ──
 
 export class TaskTrackerCompletionGate implements Gate<CompletionContext> {
-  readonly name = "task_tracker"
+  readonly name = "semantic:task_tracker"
 
   evaluate(ctx: CompletionContext) {
     const missing = missingTaskRequirements(ctx.taskTracker)
@@ -161,18 +161,18 @@ export class TaskTrackerCompletionGate implements Gate<CompletionContext> {
       "请继续执行第一个未完成项。不要输出最终总结，除非清单全部完成并完成验证。",
     ].join("\n")
 
-    continue_(ctx, "task_tracker", assistantMsg, userMsg,
+    continue_(ctx, "semantic:task_tracker", assistantMsg, userMsg,
       `任务追踪: 仍有 ${missing.length} 项未完成，继续执行`,
       { missing: missing.length })
     ctx.completionBlockMessage = userMsg
-    return { pass: false, reason: "task_tracker" }
+    return { pass: false, reason: "semantic:task_tracker" }
   }
 }
 
 // ── Gate: Quality (Confidence + Contracts) ──
 
 export class QualityGate implements Gate<CompletionContext> {
-  readonly name = "quality"
+  readonly name = "semantic:quality"
 
   evaluate(ctx: CompletionContext) {
     if (ctx.intentPolicy.mode === "readonly") return pass(ctx), { pass: true }
@@ -219,11 +219,11 @@ export class QualityGate implements Gate<CompletionContext> {
 
     const assistantMsg = compactAssistantContext(ctx.finalText)
     const userMsg = formatQualityGatePrompt({ confidence, contractMessages, signals })
-    continue_(ctx, "quality", assistantMsg, userMsg,
+    continue_(ctx, "semantic:quality", assistantMsg, userMsg,
       `quality-gate: ${confidence.recommendation} ${Math.round(confidence.confidence * 100)}%`,
       { confidence: confidence.recommendation })
     ctx.completionBlockMessage = userMsg
-    return { pass: false, reason: "quality" }
+    return { pass: false, reason: "semantic:quality" }
   }
 }
 

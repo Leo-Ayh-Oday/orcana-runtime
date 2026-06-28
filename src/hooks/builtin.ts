@@ -36,9 +36,9 @@ export const writeGuardBefore: HookHandler = (input) => {
     if (!isNewFile && !writeGuardReadFiles.has(path)) {
       const message = `File ${path} hasn't been read yet — read it first before editing`
       if (isStrictMode()) {
-        return { blocked: true, warn: `${message} (blocked in strict mode)`, source: "writeGuard" }
+        return { blocked: true, warn: `${message} (blocked in strict mode)`, source: "hooks:writeGuard" }
       }
-      return { warn: message, source: "writeGuard" }
+      return { warn: message, source: "hooks:writeGuard" }
     }
   }
 
@@ -115,7 +115,7 @@ export function createJournalGuard(projectRoot: string): HookHandler {
               success: false,
               content: `操作被元 Agent 一票否决。${report}`,
             },
-            source: "journalGuard",
+            source: "hooks:journalGuard",
           }
         }
         // Warning only — append to result
@@ -124,7 +124,7 @@ export function createJournalGuard(projectRoot: string): HookHandler {
             success: true,
             content: input.result.content + report,
           },
-          source: "journalGuard",
+          source: "hooks:journalGuard",
         }
       }
     }

@@ -11,7 +11,7 @@ import type { PreRoundContext } from "./contexts"
 export type ContextBudgetMode = "normal" | "degraded" | "block"
 
 export class ContextBudgetGate implements Gate<PreRoundContext> {
-  readonly name = "context_budget"
+  readonly name = "policy:context_budget"
 
   private warnRatio: number
   private blockRatio: number

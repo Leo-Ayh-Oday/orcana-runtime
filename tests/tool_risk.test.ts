@@ -416,7 +416,7 @@ describe("evaluateToolPolicy — Risk gate prevents full-mode promotion", () => 
 
     expect(result.allowed).toBe(false)
     if (!result.allowed) {
-      expect(result.source).toBe("tool_risk:4")
+      expect(result.source).toBe("policy:tool_risk:4")
       expect(result.priority).toBe(8)
       expect(result.category).toBeDefined()
       expect(result.incrementRateLimit).toBeDefined()
@@ -433,7 +433,7 @@ describe("evaluateToolPolicy — Risk gate prevents full-mode promotion", () => 
 
     expect(result.allowed).toBe(false)
     if (!result.allowed) {
-      expect(result.source).toBe("rate_limit")
+      expect(result.source).toBe("policy:rate_limit")
       expect(result.priority).toBe(1)
     }
   })
@@ -447,7 +447,7 @@ describe("evaluateToolPolicy — Risk gate prevents full-mode promotion", () => 
 
     expect(result.allowed).toBe(false)
     if (!result.allowed) {
-      expect(result.source).toBe("permission:deny")
+      expect(result.source).toBe("policy:permission:deny")
       expect(result.priority).toBe(2)
     }
   })

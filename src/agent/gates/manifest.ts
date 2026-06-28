@@ -33,11 +33,13 @@ export interface GateManifest {
   summary: { keep: number; tune: number; observe: number; delete: number; merge: number; safety_net: number; pass_through: number }
 }
 
-/** Pass-through gates — structurally never block, only narrow tool sets. */
-const PASS_THROUGH = new Set(["tool_disclosure", "readonly_plan", "ripple_tool_filter"])
+/** Pass-through gates — structurally never block, only narrow tool sets.
+ *  PR-7.1: layer-prefixed names. */
+const PASS_THROUGH = new Set(["policy:tool_disclosure", "policy:readonly_plan", "policy:ripple_tool_filter"])
 
-/** Safety nets — keep regardless of intercept rate if FP rate is 0. */
-const SAFETY_NETS = new Set(["context_budget", "rate_limit", "permission"])
+/** Safety nets — keep regardless of intercept rate if FP rate is 0.
+ *  PR-7.1: layer-prefixed names. */
+const SAFETY_NETS = new Set(["policy:context_budget", "policy:rate_limit", "policy:permission"])
 
 /** Apply the Step 3 decision matrix to a GateTelemetry instance. */
 export function generateManifest(telemetry: GateTelemetry): GateManifest {

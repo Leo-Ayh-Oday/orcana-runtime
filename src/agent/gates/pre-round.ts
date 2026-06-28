@@ -20,7 +20,7 @@ import { getBlockingObligations, type RippleObligation } from "../../ripple/obli
 // ── Gate: Tool Disclosure ──
 
 export class ToolDisclosureGate implements Gate<PreRoundContext> {
-  readonly name = "tool_disclosure"
+  readonly name = "policy:tool_disclosure"
 
   evaluate(ctx: PreRoundContext): GateResult {
     if (ctx.cacheStableTools) return { pass: true }
@@ -36,7 +36,7 @@ export class ToolDisclosureGate implements Gate<PreRoundContext> {
 // ── Gate: Readonly / Plan-Only ──
 
 export class ReadonlyPlanGate implements Gate<PreRoundContext> {
-  readonly name = "readonly_plan"
+  readonly name = "policy:readonly_plan"
 
   evaluate(ctx: PreRoundContext): GateResult {
     if (ctx.cacheStableTools) return { pass: true }
@@ -57,7 +57,7 @@ export class ReadonlyPlanGate implements Gate<PreRoundContext> {
 // ── Gate: Context readiness ──
 
 export class ContextReadinessToolFilterGate implements Gate<PreRoundContext> {
-  readonly name = "context_readiness_filter"
+  readonly name = "policy:context_readiness_filter"
 
   evaluate(ctx: PreRoundContext): GateResult {
     if (ctx.contextReadinessBlocked) {
@@ -74,7 +74,7 @@ export class ContextReadinessToolFilterGate implements Gate<PreRoundContext> {
 // ── Gate: Ripple Tool Filter ──
 
 export class RippleToolFilterGate implements Gate<PreRoundContext> {
-  readonly name = "ripple_tool_filter"
+  readonly name = "policy:ripple_tool_filter"
 
   evaluate(ctx: PreRoundContext): GateResult {
     if (ctx.cacheStableTools) {

@@ -26,11 +26,11 @@ export function processGateOverflow(input: GateOverflowInput): GateOverflowOutpu
 
   // Build block list
   const blockedGates: string[] = []
-  if (rippleBlockActive) blockedGates.push("ripple")
-  if (pendingRippleObligationsLength > 0) blockedGates.push("ripple_obligations")
+  if (rippleBlockActive) blockedGates.push("policy:ripple")
+  if (pendingRippleObligationsLength > 0) blockedGates.push("semantic:ripple_obligations")
   if (postToolPlanningPrompt || postToolRequiredFilesPrompt) {
-    if (postToolPlanningPrompt) blockedGates.push("planning")
-    if (postToolRequiredFilesPrompt) blockedGates.push("required_files")
+    if (postToolPlanningPrompt) blockedGates.push("semantic:planning")
+    if (postToolRequiredFilesPrompt) blockedGates.push("semantic:required_files")
   }
 
   // Increment counters
@@ -54,11 +54,11 @@ export function processGateOverflow(input: GateOverflowInput): GateOverflowOutpu
       output.deferredMessages.push([
         "<system-reminder>",
         `[Gate overflow] ${gate} 已拦截 3 次。不要继续走同一条路径。`,
-        gate === "ripple" ? "→ 停止逐文件编辑，立即用 multi_edit 级联修复所有调用方。" : "",
-        gate === "ripple_obligations" ? "→ 读取被影响的调用方文件并级联修复，不要再次触发写盘。" : "",
-        gate === "planning" ? "→ 缩小任务范围，列出最小可交付单元，不要追求完美方案。" : "",
-        gate === "completion" ? "→ 检查是否缺少外部验证证据（typecheck/test/build）。不要声称完成但不验证。" : "",
-        gate === "required_files" ? "→ 立即创建缺失的必需文件，停止分析已经存在的文件。" : "",
+        gate === "policy:ripple" ? "→ 停止逐文件编辑，立即用 multi_edit 级联修复所有调用方。" : "",
+        gate === "semantic:ripple_obligations" ? "→ 读取被影响的调用方文件并级联修复，不要再次触发写盘。" : "",
+        gate === "semantic:planning" ? "→ 缩小任务范围，列出最小可交付单元，不要追求完美方案。" : "",
+        gate === "semantic:completion" ? "→ 检查是否缺少外部验证证据（typecheck/test/build）。不要声称完成但不验证。" : "",
+        gate === "semantic:required_files" ? "→ 立即创建缺失的必需文件，停止分析已经存在的文件。" : "",
         "</system-reminder>",
       ].filter(Boolean).join("\n"))
       output.statusEvents.push(`gate-overflow: ${gate} blocked 3 times`)

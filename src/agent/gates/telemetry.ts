@@ -10,8 +10,8 @@
  *    const tel = new GateTelemetry()
  *    chain.evaluate(ctx, tel)
  *    // After task completes:
- *    tel.markFalsePositive("quality")   // human review: quality gate blocked but shouldn't have
- *    tel.markMissed("ripple_exit")      // human review: ripple_exit should have blocked but didn't
+ *    tel.markFalsePositive("semantic:quality")   // human review: quality gate blocked but shouldn't have
+ *    tel.markMissed("semantic:ripple_exit")      // human review: ripple_exit should have blocked but didn't
  *    console.log(tel.report())
  */
 
@@ -80,7 +80,10 @@ export class GateTelemetry {
 
   // ── Report ──
 
-  /** Generate a markdown report sorted by blocks descending. */
+  /** Generate a markdown report with per-layer breakdown.
+   *
+   *  PR-7.1: Report now includes per-layer statistics (hooks/policy/semantic)
+   *  so operators can see which layer is blocking most and tune accordingly. */
   report(): string {
     const lines = ["## Gate Telemetry Report", ""]
     const entries = [...this.hits.entries()]
@@ -89,12 +92,47 @@ export class GateTelemetry {
       lines.push("_No gate evaluations recorded._")
       return lines.join("\n")
     }
+
+    // Per-layer aggregation
+    const layerTotals: Record<string, { triggers: number; blocks: number; passes: number }> = {}
+    for (const [name, h] of entries) {
+      const layer = this.classifyLayer(name)
+      const t = layerTotals[layer] ?? (layerTotals[layer] = { triggers: 0, blocks: 0, passes: 0 })
+      t.triggers += h.triggers
+      t.blocks += h.blocks
+      t.passes += h.passes
+    }
+
+    // Layer summary
+    lines.push("### Layer Breakdown", "")
+    for (const layer of ["hooks", "policy", "semantic"]) {
+      const t = layerTotals[layer]
+      if (!t) continue
+      const iRate = t.triggers > 0 ? ((t.blocks / t.triggers) * 100).toFixed(0) : "0"
+      lines.push(`- **${layer}**: ${t.triggers} triggers, ${t.blocks} blocks (${iRate}%), ${t.passes} passes`)
+    }
+    lines.push("")
+
+    // Per-gate details
+    lines.push("### Gate Details", "")
     for (const [name, h] of entries) {
       const iRate = h.triggers > 0 ? ((h.blocks / h.triggers) * 100).toFixed(0) : "0"
       const fpRate = h.blocks > 0 ? ((h.falsePositives / h.blocks) * 100).toFixed(0) : "0"
       lines.push(`- **${name}**: ${h.triggers} triggers, ${h.blocks} blocks (${iRate}%), ${h.falsePositives} FP (${fpRate}%), ${h.missed} missed`)
     }
     return lines.join("\n")
+  }
+
+  /** Classify a gate name to its layer for aggregation.
+   *  Uses the "hooks:"/"policy:"/"semantic:" prefix from PR-7.1. */
+  private classifyLayer(gateName: string): string {
+    if (gateName.startsWith("hooks:")) return "hooks"
+    if (gateName.startsWith("policy:")) return "policy"
+    if (gateName.startsWith("semantic:")) return "semantic"
+    // Legacy names — classify by known patterns
+    if (/^(context_budget|tool_disclosure|readonly_plan|context_readiness_filter|ripple_tool_filter)$/.test(gateName)) return "policy"
+    if (/^(writeGuard|safety-policy|journalGuard|journalVeto)$/.test(gateName)) return "hooks"
+    return "semantic"
   }
 
   /** Compact single-line summary for console/status display. */

@@ -98,11 +98,11 @@ export function createSafetyPolicyHook(options: SafetyPolicyOptions = {}): HookH
     if (tool === "shell" || tool === "start_service") {
       const command = typeof params.command === "string" ? params.command : ""
       const reason = hasDangerousShellPattern(command)
-      if (reason) return { blocked: true, warn: `Safety policy blocked ${tool}: ${reason}`, source: "safety-policy" }
+      if (reason) return { blocked: true, warn: `Safety policy blocked ${tool}: ${reason}`, source: "hooks:safety-policy" }
       if (tool === "shell") return {}
       const cwd = typeof params.cwd === "string" ? params.cwd : ""
       if (cwd && !allowOutsideProject && !isPathInside(projectRoot, cwd)) {
-        return { blocked: true, warn: `Safety policy blocked service cwd outside project: ${cwd}`, source: "safety-policy" }
+        return { blocked: true, warn: `Safety policy blocked service cwd outside project: ${cwd}`, source: "hooks:safety-policy" }
       }
     }
 
@@ -113,7 +113,7 @@ export function createSafetyPolicyHook(options: SafetyPolicyOptions = {}): HookH
     if (!isFileTool) return {}
 
     if (isSecretLikePath(path)) {
-      return { blocked: true, warn: `Safety policy blocked access to sensitive path: ${path}`, source: "safety-policy" }
+      return { blocked: true, warn: `Safety policy blocked access to sensitive path: ${path}`, source: "hooks:safety-policy" }
     }
 
     if (!allowOutsideProject && !isPathInside(projectRoot, path)) {
@@ -126,7 +126,7 @@ export function createSafetyPolicyHook(options: SafetyPolicyOptions = {}): HookH
         "/system/", "/etc/", "/boot/", "/sys/", "/proc/",
       ]
       if (dangerousPrefixes.some(p => normalized.startsWith(p))) {
-        return { blocked: true, warn: `Safety policy blocked dangerous path: ${path}`, source: "safety-policy" }
+        return { blocked: true, warn: `Safety policy blocked dangerous path: ${path}`, source: "hooks:safety-policy" }
       }
       // Path may be unresolvable or in a different project — let the tool handle it
       return {}

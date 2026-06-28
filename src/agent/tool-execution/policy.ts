@@ -80,7 +80,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       blockMessage: `频率限制：本回合 ${cat} 工具已达上限 (${currentCount}/${cap})。请在下一回合继续。`,
       category: cat,
       incrementRateLimit: cat,
-      source: "rate_limit",
+      source: "policy:rate_limit",
       priority: 1,
     }
   }
@@ -103,7 +103,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
           blockMessage: blockMsg,
           category: cat,
           incrementRateLimit: cat,
-          source: `permission:${perm.level}`,
+          source: `policy:permission:${perm.level}`,
           priority: 2,
         }
       }
@@ -120,7 +120,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       blockMessage: `意图门已阻止：当前请求是只读模式（${intentPolicy.reason}），不允许调用 ${toolCall.name}。请让用户明确要求执行后再写入或运行命令。`,
       category: cat,
       incrementRateLimit: cat,
-      source: "readonly_intent",
+      source: "policy:readonly_intent",
       priority: 3,
     }
   }
@@ -133,7 +133,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       blockMessage: `涟漪阻止：存在 ${pendingRippleObligations.length} 个未解决的调用方需要级联更新。请先用 multi_edit 完成所有受影响的调用方修改，然后再写新文件。`,
       category: cat,
       incrementRateLimit: cat,
-      source: "ripple_block",
+      source: "policy:ripple_block",
       priority: 4,
     }
   }
@@ -150,7 +150,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       blockMessage,
       category: cat,
       incrementRateLimit: cat,
-      source: "planning_phase",
+      source: "policy:planning_phase",
       priority: 5,
     }
   }
@@ -166,7 +166,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       blockMessage: `ContextReadiness gate blocked ${toolCall.name}: ${blockers} Continue with readonly locate/read/search work before editing.`,
       category: cat,
       incrementRateLimit: cat,
-      source: "context_readiness",
+      source: "policy:context_readiness",
       priority: 6,
     }
   }
@@ -179,7 +179,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       blockMessage: `⚠️ 网页搜索不可用：${webSearchFailReason || "SearXNG Docker 未运行"}。\n\n解决方案（你来决定）：\n1) 启动 SearXNG Docker 容器修复搜索\n2) 用 web_fetch 直接访问已知 URL\n3) 用本地代码搜索 (findstr / grep) 代替\n4) 向用户报告搜索不可用，继续现有的本地分析`,
       category: cat,
       incrementRateLimit: cat,
-      source: "web_search_failed",
+      source: "policy:web_search_failed",
       priority: 7,
     }
   }
@@ -194,7 +194,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
         blockMessage: modeCheck.reason,
         category: cat,
         incrementRateLimit: cat,
-        source: "mode_contract",
+        source: "policy:mode_contract",
         priority: 7,
       }
     }
@@ -211,7 +211,7 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       blockMessage: formatRiskBlockMessage(toolCall.name, risk, toolCall.input),
       category: cat,
       incrementRateLimit: cat,
-      source: `tool_risk:${risk.level}`,
+      source: `policy:tool_risk:${risk.level}`,
       priority: 8,
     }
   }

@@ -5,9 +5,9 @@ import { generateManifest, manifestReport } from "../src/agent/gates/manifest"
 describe("generateManifest", () => {
   test("classifies pass-through filters correctly", () => {
     const tel = new GateTelemetry()
-    tel.record("tool_disclosure", "pass")
-    tel.record("readonly_plan", "pass")
-    tel.record("ripple_tool_filter", "pass")
+    tel.record("policy:tool_disclosure", "pass")
+    tel.record("policy:readonly_plan", "pass")
+    tel.record("policy:ripple_tool_filter", "pass")
 
     const m = generateManifest(tel)
     expect(m.summary.pass_through).toBe(3)
@@ -19,29 +19,29 @@ describe("generateManifest", () => {
   test("classifies safety nets with 0% FP", () => {
     const tel = new GateTelemetry()
     // context_budget never blocked but triggered — safety net
-    tel.record("context_budget", "pass")
-    tel.record("context_budget", "pass")
+    tel.record("policy:context_budget", "pass")
+    tel.record("policy:context_budget", "pass")
 
     const m = generateManifest(tel)
-    const v = m.verdicts.find(x => x.gate === "context_budget")!
+    const v = m.verdicts.find(x => x.gate === "policy:context_budget")!
     expect(v.decision).toBe("safety_net")
   })
 
   test("high intercept + low FP → keep", () => {
     const tel = new GateTelemetry()
     // 30% intercept, 0% FP
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "block")
-    tel.record("ripple_exit", "block")
-    tel.record("ripple_exit", "block") // 3/9 = 33%
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "block")
+    tel.record("semantic:ripple_exit", "block")
+    tel.record("semantic:ripple_exit", "block") // 3/9 = 33%
 
     const m = generateManifest(tel)
-    const v = m.verdicts.find(x => x.gate === "ripple_exit")!
+    const v = m.verdicts.find(x => x.gate === "semantic:ripple_exit")!
     expect(v.decision).toBe("keep")
     expect(v.interceptRate).toBeCloseTo(3 / 9)
   })
@@ -49,14 +49,14 @@ describe("generateManifest", () => {
   test("high intercept + high FP → tune", () => {
     const tel = new GateTelemetry()
     // 25% intercept, 40% FP
-    tel.record("planning_phase", "pass")
-    tel.record("planning_phase", "pass")
-    tel.record("planning_phase", "pass")
-    tel.record("planning_phase", "block") // 1/4 = 25%
-    tel.markFalsePositive("planning_phase") // 1/1 = 100% FP (triggers tune)
+    tel.record("policy:planning_phase", "pass")
+    tel.record("policy:planning_phase", "pass")
+    tel.record("policy:planning_phase", "pass")
+    tel.record("policy:planning_phase", "block") // 1/4 = 25%
+    tel.markFalsePositive("policy:planning_phase") // 1/1 = 100% FP (triggers tune)
 
     const m = generateManifest(tel)
-    const v = m.verdicts.find(x => x.gate === "planning_phase")!
+    const v = m.verdicts.find(x => x.gate === "policy:planning_phase")!
     expect(v.decision).toBe("tune")
   })
 
@@ -95,25 +95,25 @@ describe("generateManifest", () => {
 
   test("missed > 0 → keep (critical signal)", () => {
     const tel = new GateTelemetry()
-    tel.record("quality", "pass")
-    tel.record("quality", "pass")
-    tel.markMissed("quality")
-    tel.markMissed("quality")
+    tel.record("semantic:quality", "pass")
+    tel.record("semantic:quality", "pass")
+    tel.markMissed("semantic:quality")
+    tel.markMissed("semantic:quality")
 
     const m = generateManifest(tel)
-    const v = m.verdicts.find(x => x.gate === "quality")!
+    const v = m.verdicts.find(x => x.gate === "semantic:quality")!
     expect(v.decision).toBe("keep")
     expect(v.action).toContain("漏拦")
   })
 
   test("verdicts sorted: keep first, pass_through last", () => {
     const tel = new GateTelemetry()
-    tel.record("tool_disclosure", "pass") // pass_through
-    tel.record("context_budget", "pass")  // safety_net
+    tel.record("policy:tool_disclosure", "pass") // pass_through
+    tel.record("policy:context_budget", "pass")  // safety_net
     // ripple_exit: 30% intercept → keep
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "pass")
-    tel.record("ripple_exit", "block")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("semantic:ripple_exit", "block")
     // gate: 10% → observe
     for (let i = 0; i < 9; i++) tel.record("low", "pass")
     tel.record("low", "block")
@@ -143,9 +143,9 @@ describe("generateManifest", () => {
 
   test("manifestReport includes all sections", () => {
     const tel = new GateTelemetry()
-    tel.record("ripple_exit", "block")
-    tel.record("ripple_exit", "pass")
-    tel.record("tool_disclosure", "pass")
+    tel.record("semantic:ripple_exit", "block")
+    tel.record("semantic:ripple_exit", "pass")
+    tel.record("policy:tool_disclosure", "pass")
 
     const m = generateManifest(tel)
     const report = manifestReport(m)

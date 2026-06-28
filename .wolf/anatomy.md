@@ -14,6 +14,7 @@
 ## gates/
 - `types.ts` — Gate, GateResult, GateTrace interfaces
 - `chain.ts` — GateChain.pipe([...]), evaluate/evaluateSync/evaluateWithTrace, optional GateTelemetry
+- `gate-layer.ts` — **PR-7.1**: Three-layer gate boundary classification (hooks/policy/semantic). `GateLayer` enum, `classifyGateSource()`, `GATE_MANIFEST` (25 entries), `gatesInLayer()`, `blockingGatesInLayer()`. Every gate has exactly one layer with source prefix.
 - `contexts.ts` — PreRoundContext, ToolContext, CompletionContext (mutable)
 - `context-budget.ts` — ContextBudgetGate (warn/block ratio from env)
 - `pre-round.ts` — ToolDisclosureGate, ReadonlyPlanGate, RippleToolFilterGate + createPreRoundChain()
@@ -31,11 +32,11 @@
 - `post-loop.ts` — runPostEditDiagnostics, runRippleVerification, collectThinkingRounds, microcompact, state machine update
 - `request-builder.ts` — buildContextMessages, buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens
 
-## Gate chains (4 phases)
-1. Pre-round: 4 gates via createPreRoundChain() → evaluateSync
-2. Per-tool: 6 gates via evaluateToolPolicy() → pure function
-3. Completion: 4 gates via createCompletionChain() → evaluateSync (+ FlashJudge inline in loop.ts)
-4. Overflow: processGateOverflow() → pure function
+## Gate chains (4 phases) — PR-7.1 layer-prefixed
+1. Pre-round: 5 gates (policy:context_budget, policy:tool_disclosure, policy:readonly_plan, policy:context_readiness_filter, policy:ripple_tool_filter)
+2. Per-tool: 9 gates via evaluateToolPolicy() — all policy:* sourced (rate_limit, permission, readonly_intent, ripple_block, planning_phase, context_readiness, web_search_failed, mode_contract, tool_risk)
+3. Completion: 4 sync gates via createCompletionChain() — all semantic:* (ripple_exit, planning_artifact, task_tracker, quality) + Orchestrator 5-phase (semantic:external_completion, semantic:flash_judge, semantic:evidence, semantic:truthfulness)
+4. Overflow: processGateOverflow() — mixed layers (policy:ripple, semantic:ripple_obligations, semantic:planning, semantic:required_files)
 
 ## Entry points
 - `src/ui/cli.ts` — wire: `gateTelemetryFile: ".wolf/gate-telemetry.json"`

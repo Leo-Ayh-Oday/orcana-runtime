@@ -83,6 +83,7 @@ export async function* agentLoop(
 ): AsyncGenerator<StreamEvent> {
   const maxRoundsFromEnv = process.env.DEEPSEEK_MAX_ROUNDS ? parseInt(process.env.DEEPSEEK_MAX_ROUNDS, 10) : undefined
   const { provider, model, tools, maxRounds = maxRoundsFromEnv ?? 50, stagedContext, hooks } = options
+  const startTime = Date.now() // PR-7.2: for Stop hook session duration
   const effectivePrompt = buildEffectivePrompt(prompt, options.conversationHistory)
   const language = detectLanguage(effectivePrompt)
   const langInstruction = languageInstruction(language)
@@ -107,6 +108,30 @@ export async function* agentLoop(
   }
 
   rawMessages.push({ role: "user", content: prompt })
+
+  // PR-7.2: Dispatch UserPromptSubmit hook — can inject context, replace prompt, or block
+  if (hooks) {
+    const promptResult = await hooks.dispatchPromptSubmit({ prompt, round: 0 })
+    if (promptResult.blocked) {
+      yield { type: "error", data: `Prompt blocked by hook: ${promptResult.blockReason}` }
+      if (hooks) {
+        await hooks.dispatchStop({ reason: "blocked", totalRounds: 0, sessionDurationMs: Date.now() - startTime })
+      }
+      return
+    }
+    if (promptResult.replacePrompt) {
+      // Replace the last user message with the transformed prompt
+      rawMessages[rawMessages.length - 1] = { role: "user", content: promptResult.replacePrompt }
+    }
+    if (promptResult.context) {
+      // Inject hook-provided context as a system message before the user prompt
+      rawMessages.splice(rawMessages.length - 1, 0, { role: "system", content: promptResult.context })
+    }
+    // SessionStart context is injected by the caller via options.sessionStartContext
+    if (options.sessionStartContext) {
+      rawMessages.splice(rawMessages.length - 1, 0, { role: "system", content: options.sessionStartContext })
+    }
+  }
 
   const state = createState()
   const cacheTracker = new CacheTracker()
@@ -295,6 +320,9 @@ export async function* agentLoop(
       source: structuredClarification ? "model_structured" : "model_failed",
     })
     await flushTelemetry()
+    if (hooks) {
+      await hooks.dispatchStop({ reason: "aborted", totalRounds: 0, sessionDurationMs: Date.now() - startTime })
+    }
     return
   }
 
@@ -494,7 +522,9 @@ export async function* agentLoop(
     return true
   }
 
+  let finalRound = 0 // PR-7.2: tracked for Stop hook outside loop scope
   for (let round = 0; round < maxRounds; round++) {
+    finalRound = round
     options.runTrace?.record("round_started", { round })
     const thinkingDecision = decideThinkingPlan(state, requestedMaxThinking ? "max" : options.thinkEffort, {
       prompt: effectivePrompt,
@@ -1869,4 +1899,13 @@ export async function* agentLoop(
     yield { type: "status", data: `gate-telemetry: ${gateTelemetry.gateNames().length} gates\n${gateTelemetry.report()}` }
   }
   await flushTelemetry()
+
+  // PR-7.2: Dispatch Stop hook (fire-and-forget — errors are silently caught)
+  if (hooks) {
+    await hooks.dispatchStop({
+      reason: "completed",
+      totalRounds: finalRound,
+      sessionDurationMs: Date.now() - startTime,
+    })
+  }
 }

@@ -1,6 +1,6 @@
 /** Built-in hooks — write guard (before/after), journal veto, context monitor, api fallback. */
 
-import type { HookHandler } from "./index"
+import type { LegacyHookHandler } from "./index"
 import { JournalEngine } from "../agent/journal"
 
 /**
@@ -26,7 +26,7 @@ function isStrictMode(): boolean {
 }
 
 /** Before-hook: checks if file has been read. In strict mode, blocks unread files. */
-export const writeGuardBefore: HookHandler = (input) => {
+export const writeGuardBefore: LegacyHookHandler = (input) => {
   const tool = input.tool ?? ""
   const rawPath = input.params?.path as string | undefined
   const path = rawPath ? normalizePath(rawPath) : undefined
@@ -46,7 +46,7 @@ export const writeGuardBefore: HookHandler = (input) => {
 }
 
 /** After-hook: tracks successful file reads into the read-set. */
-export const writeGuardAfter: HookHandler = (input) => {
+export const writeGuardAfter: LegacyHookHandler = (input) => {
   const tool = input.tool ?? ""
   const rawPath = input.params?.path as string | undefined
   const path = rawPath ? normalizePath(rawPath) : undefined
@@ -65,7 +65,7 @@ export function resetWriteGuard() {
 
 // ── Backward compat: old writeGuard as a combined export (deprecated) ──
 /** @deprecated Use writeGuardBefore + writeGuardAfter instead. */
-export const writeGuard: HookHandler = async (input) => {
+export const writeGuard: LegacyHookHandler = async (input) => {
   const before = await writeGuardBefore(input)
   if (before.blocked || before.warn) return before
   return writeGuardAfter(input)
@@ -79,7 +79,7 @@ export const writeGuard: HookHandler = async (input) => {
  * 这就是"元 Agent 仲裁"的落地实现：
  * 代码能跑 ≠ 通过，铁律是最后一道防线。
  */
-export function createJournalGuard(projectRoot: string): HookHandler {
+export function createJournalGuard(projectRoot: string): LegacyHookHandler {
   const engine = new JournalEngine(projectRoot)
   const changedFiles = new Set<string>()
 

@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs"
 import { resolve } from "node:path"
-import type { HookHandler } from "./index"
+import type { LegacyHookHandler } from "./index"
 
 export interface SafetyPolicyOptions {
   projectRoot?: string
@@ -87,7 +87,7 @@ function pathFromParams(params: Record<string, unknown> | undefined): string | u
   return typeof path === "string" && path.trim() ? path : undefined
 }
 
-export function createSafetyPolicyHook(options: SafetyPolicyOptions = {}): HookHandler {
+export function createSafetyPolicyHook(options: SafetyPolicyOptions = {}): LegacyHookHandler {
   const projectRoot = canonicalProjectRoot(options.projectRoot ?? process.cwd())
   const allowOutsideProject = options.allowOutsideProject ?? false
 

@@ -5,10 +5,10 @@
 ## runtime/ (NEW — PR-0.1)
 - `bootstrap.ts` — Shared runtime factory `createRuntime()`. Single assembly point for provider registry, ModelRouter, MultiProvider, MCP tools, HookSystem, StagedContextManager, SessionManager, ThinkingStore, KnowledgeBase, CompactionState, LSP client, run trace factory, version reader. Both CLI and TUI consume this — no more per-UI drift. Exports `Runtime` interface, `RuntimeBootstrapOptions`, `AgentOptions` builder, meta-tools (TASK_TOOL, REQUEST_DEEPER_THINKING).
 
-## hooks/ (Phase 1 PR-1.1/1.2 upgraded)
-- `index.ts` — HookSystem with priority-based semantics: blocked > replace > warn. return types: BeforeHookResult {blocked, replaceParams, warnings[], trace[]}, AfterHookResult {blocked, replaceResult, warnings[], trace[]}. Multiple handlers accumulate warnings, last replace wins. HookOutput: blocked/replace/result/warn/source fields. beforeCount/afterCount getters.
-- `builtin.ts` — writeGuardBefore (onToolBefore, checks read-set, strict mode blocks via DEEPSEEK_WRITE_GUARD_MODE=strict), writeGuardAfter (onToolAfter, tracks successful reads). JournalVeto with source:"journalGuard". Deprecated combined writeGuard kept for backward compat.
-- `safety-policy.ts` — All block outputs carry source:"safety-policy".
+## hooks/ (Phase 1 + PR-7.1/7.2 upgraded)
+- `index.ts` — **PR-7.2**: HookSystem with 5 lifecycle events (HookEvent enum: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop). `on(event, handler)` API with typed per-event inputs. `dispatchSessionStart()`, `dispatchPromptSubmit()`, `dispatchStop()` methods. Backward compat: `onToolBefore`/`onToolAfter` delegate to PreToolUse/PostToolUse. `runBefore`/`runAfter` kept as legacy aliases.
+- `builtin.ts` — writeGuardBefore (PreToolUse, checks read-set, strict mode blocks via DEEPSEEK_WRITE_GUARD_MODE=strict), writeGuardAfter (PostToolUse, tracks successful reads). JournalGuard (PostToolUse, veto on write operations). All sources prefixed with `hooks:` (PR-7.1).
+- `safety-policy.ts` — Safety policy hook (PreToolUse): dangerous commands, secret file paths, out-of-project writes. Source: `hooks:safety-policy`.
 - `pre-loop.ts` (round/) — runToolBeforeHook returns replaceParams. runToolAfterHook uses replaceResult. executeToolWithHooks: execute(params) receives effectiveParams (replaceParams applied). Streaming tool path also applies replaceParams (HIGH fix).
 
 ## gates/

@@ -331,6 +331,19 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   hooks.onToolAfter(writeGuardAfter)
   hooks.onToolAfter(createJournalGuard(projectRoot))
 
+  // ── 5b. Dispatch SessionStart (PR-7.2) ──
+  // Fire after all hooks are registered so they can inject session-level context.
+  const sessionStartResult = await hooks.dispatchSessionStart({
+    projectRoot,
+    mode: "coder",
+    toolNames: allToolDefs.map(d => d.name),
+  })
+  // Context injected by SessionStart hooks is available via buildAgentOptions.
+  // Blocked sessions are refused immediately.
+  if (sessionStartResult.blocked) {
+    throw new Error(`Session blocked by hook: ${sessionStartResult.blockReason}`)
+  }
+
   // ── 6. Context ──
   const stagedCtx = new StagedContextManager(projectRoot)
 
@@ -380,6 +393,10 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     sessionId,
     gateTelemetryFile,
     contextMapPolicy,
+    // PR-7.2: inject SessionStart context from hooks
+    sessionStartContext: sessionStartResult.context.length > 0
+      ? sessionStartResult.context.join("\n\n")
+      : undefined,
     ...overrides,
   })
 

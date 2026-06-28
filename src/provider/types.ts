@@ -6,7 +6,7 @@
  */
 
 export interface ProviderMessage {
-  role: "user" | "assistant"
+  role: "user" | "assistant" | "system"
   content: string | Array<Record<string, unknown>>
 }
 

@@ -4,6 +4,10 @@
  *  Thinking budget tiers are now provider-aware: each model's max thinking
  *  budget is looked up from its ModelSpec rather than assuming 8192/16384/32768
  *  (which was DeepSeek-V4-specific).
+ *
+ *  PR-6.1: Purpose-based routing enabled for cheap sub-calls (flash_triage,
+ *  completion_judge, plan_judge, ambiguity_detector) while agent_main stays
+ *  session-pinned to preserve prefix cache continuity.
  */
 
 import type { ProviderCallPurpose, ThinkingConfig } from "./types"
@@ -23,26 +27,93 @@ export interface ThinkingProfile {
   }
 }
 
+/** Purposes that should use a cheap model (fast, no thinking needed). */
+const CHEAP_PURPOSES: ReadonlySet<ProviderCallPurpose> = new Set([
+  "flash_triage",
+  "completion_judge",
+  "plan_judge",
+  "ambiguity_detector",
+  "thinking_compaction",
+  "semantic_recall_score",
+  "knowledge_distill",
+  "cold_memory_audit",
+])
+
 export class ModelRouter {
   private registry: ProviderRegistry
   private multi: MultiProvider
   /** Session-pinned model ID: resolved once at startup, never changes. */
   private sessionModel: string
+  /** Cached cheap model ID — resolved lazily. */
+  private _cheapModel: string | null = null
+  /** Whether purpose-based routing is enabled (default: true for cheap purposes). */
+  private purposeRoutingEnabled: boolean
 
-  constructor(registry: ProviderRegistry, multi: MultiProvider) {
+  constructor(
+    registry: ProviderRegistry,
+    multi: MultiProvider,
+    opts?: { purposeRouting?: boolean },
+  ) {
     this.registry = registry
     this.multi = multi
     this.sessionModel = multi.resolveForCall().modelId
+    this.purposeRoutingEnabled = opts?.purposeRouting ?? true
   }
 
-  /** Select model for a given purpose — always returns the session-pinned model.
+  /** Select model for a given purpose.
    *
-   *  Per-purpose routing (fast model for cheap calls, etc.) is disabled by
-   *  default to keep prefix cache continuity. All sub-calls use the same
-   *  model as the main agent loop.
+   *  PR-6.1: Cheap sub-calls (flash_triage, completion_judge, plan_judge,
+   *  ambiguity_detector, thinking_compaction, semantic_recall_score,
+   *  knowledge_distill, cold_memory_audit) are routed to the cheapest
+   *  available fast model. The main agent loop stays on the session-pinned
+   *  model to preserve prefix cache continuity.
    */
-  selectForPurpose(_purpose: ProviderCallPurpose): string {
+  selectForPurpose(purpose: ProviderCallPurpose): string {
+    if (this.purposeRoutingEnabled && CHEAP_PURPOSES.has(purpose)) {
+      return this.getCheapModel()
+    }
     return this.sessionModel
+  }
+
+  /** Get the session-pinned model (for agent_main and other primary calls). */
+  getSessionModel(): string {
+    return this.sessionModel
+  }
+
+  /** Get the cheap model for non-essential sub-calls.
+   *
+   *  Prefers a "fast"-tagged cheap model from the same provider as the
+   *  session model. Falls back to any fast model, then session model.
+   */
+  getCheapModel(): string {
+    if (this._cheapModel) return this._cheapModel
+
+    const sessionSpec = this.registry.resolveModel(this.sessionModel)
+    const sessionProvider = sessionSpec?.providerId
+
+    // Prefer same-provider cheap model
+    if (sessionProvider) {
+      const sameProviderCheap = this.registry.listModelsByTier("cheap")
+        .filter(id => {
+          const spec = this.registry.resolveModel(id)
+          return spec && spec.providerId === sessionProvider && spec.tags.includes("fast")
+        })
+      const match = sameProviderCheap[0]
+      if (match) {
+        this._cheapModel = match
+        return match
+      }
+    }
+
+    // Fallback: any cheap fast model
+    const cheap = this.registry.findCheapest(["fast"])
+    this._cheapModel = cheap ?? this.sessionModel
+    return this._cheapModel
+  }
+
+  /** Resolve a model ID to its full spec (for capability checks). */
+  resolveModel(modelId: string) {
+    return this.registry.resolveModel(modelId)
   }
 
   /** Adapt thinking config to the selected model's capability. */
@@ -100,6 +171,11 @@ export class ModelRouter {
   getContextWindow(modelId: string): number {
     const spec = this.registry.resolveModel(modelId)
     return spec?.contextWindow ?? 1_048_576
+  }
+
+  /** Check if a purpose should use a cheap model. */
+  static isCheapPurpose(purpose: ProviderCallPurpose): boolean {
+    return CHEAP_PURPOSES.has(purpose)
   }
 }
 

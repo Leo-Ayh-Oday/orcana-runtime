@@ -24,6 +24,7 @@ function mockTool(name: string, isReadonly: boolean): ToolDescriptor {
 }
 
 const WRITE_TOOL = mockTool("shell", false)
+const WRITE_TOOL_LOW_RISK = mockTool("write_file", false) // Risk 2 — used for non-risk gate tests
 const READ_TOOL = mockTool("read_file", true)
 const SEARCH_TOOL = mockTool("web_search", true)
 
@@ -52,6 +53,8 @@ describe("evaluateToolPolicy — Gate 1: Rate Limit", () => {
     }))
     expect(result.allowed).toBe(false)
     expect(blocked(result).reason).toBe("rate_limit")
+    expect(blocked(result).source).toBe("rate_limit")
+    expect(blocked(result).priority).toBe(1)
     expect(blocked(result).blockMessage).toContain("5/5")
   })
 
@@ -180,8 +183,8 @@ describe("evaluateToolPolicy — Gate 3: Readonly Intent", () => {
 
   test("allows write tools in long_task mode", () => {
     const result = evaluateToolPolicy(baseInput({
-      toolCall: { id: "c1", name: "shell", input: {} },
-      tool: WRITE_TOOL,
+      toolCall: { id: "c1", name: "write_file", input: { file_path: "test.ts", content: "// ok" } },
+      tool: WRITE_TOOL_LOW_RISK,
       intentPolicy: { mode: "long_task", reason: "building app" },
     }))
     expect(result.allowed).toBe(true)
@@ -212,8 +215,8 @@ describe("evaluateToolPolicy — Gate 4: Ripple Block", () => {
 
   test("allows writes when rippleBlockActive is false", () => {
     const result = evaluateToolPolicy(baseInput({
-      toolCall: { id: "c1", name: "shell", input: {} },
-      tool: WRITE_TOOL,
+      toolCall: { id: "c1", name: "write_file", input: { file_path: "test.ts", content: "// ok" } },
+      tool: WRITE_TOOL_LOW_RISK,
       rippleBlockActive: false,
       pendingRippleObligations: [],
     }))
@@ -243,8 +246,8 @@ describe("evaluateToolPolicy — Gate 5: Planning Phase", () => {
 
   test("allows writes when taskTracker is null", () => {
     const result = evaluateToolPolicy(baseInput({
-      toolCall: { id: "c1", name: "shell", input: {} },
-      tool: WRITE_TOOL,
+      toolCall: { id: "c1", name: "write_file", input: { file_path: "test.ts", content: "// ok" } },
+      tool: WRITE_TOOL_LOW_RISK,
       taskTracker: null,
     }))
     expect(result.allowed).toBe(true)

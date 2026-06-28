@@ -202,35 +202,12 @@ export function buildPlanStateContext(input: PlanStateInput): string {
 }
 
 // ── Tool chain guard ──
+// PR-6.3: Canonical implementation moved to provider/transcript-manager.ts.
+// Re-exported here for backward compatibility — all new callers should import
+// directly from transcript-manager.
 
-/** Check whether rawMessages contain any unclosed tool_use chains.
- *
- *  DeepSeek requires every assistant tool_use block to be immediately
- *  followed by a user tool_result block. If we archive messages while
- *  a tool_use is pending, the next request will be HTTP 400.
- */
-export function hasUnclosedToolChain(messages: ProviderMessage[]): boolean {
-  let pendingToolUses = 0
-  for (const msg of messages) {
-    if (msg.role === "assistant") {
-      const content = Array.isArray(msg.content) ? msg.content : []
-      for (const block of content) {
-        if (isRecord(block) && block.type === "tool_use") {
-          pendingToolUses++
-        }
-      }
-    }
-    if (msg.role === "user") {
-      const content = Array.isArray(msg.content) ? msg.content : []
-      for (const block of content) {
-        if (isRecord(block) && block.type === "tool_result") {
-          pendingToolUses = Math.max(0, pendingToolUses - 1)
-        }
-      }
-    }
-  }
-  return pendingToolUses > 0
-}
+import { hasUnclosedToolChain } from "../provider/transcript-manager"
+export { hasUnclosedToolChain }
 
 // ── Epoch action classification ──
 
@@ -378,10 +355,4 @@ export function formatEpochStatus(state: EpochState, round: number, totalChars: 
     `rollovers: ${state.rolloverCount}`,
   ]
   return lines.join(" | ")
-}
-
-// ── Internal helper ──
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

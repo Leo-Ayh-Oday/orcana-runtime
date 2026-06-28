@@ -9,6 +9,13 @@ import { searchAllSessions } from "../../session"
 import type { Session } from "../../session"
 import type { UsageStats } from "../../agent/loop"
 import type { CommandContext, CommandDef } from "./types"
+import {
+  listRewindPoints,
+  executeRewind,
+  formatRewindList,
+  formatRewindResult,
+  type RewindMode,
+} from "../../agent/rewind"
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`
 const green = (s: string) => `\x1b[1;32m${s}\x1b[0m`
@@ -28,11 +35,23 @@ function persistAndReturnId(ctx: CommandContext): string {
   return s.id
 }
 
+export interface RewindOverrides {
+  /** Current round number (for auto-save and rewind target). */
+  getCurrentRound: () => number
+  /** FileTransaction IDs created since the last rewind point (for rollback). */
+  getTransactionIds: () => string[]
+  /** Truncate conversation history to a specific round. */
+  truncateHistoryToRound: (round: number) => void
+  /** Session ID. */
+  getSessionId: () => string
+}
+
 export function createBuiltinCommands(
   overrides: {
     getSessionTokens: () => { input: number; output: number; ms: number }
     resetSessionTokens: () => void
     getLastUsage: () => UsageStats | null
+    rewind?: RewindOverrides
   },
 ): CommandDef[] {
   return [
@@ -167,6 +186,58 @@ export function createBuiltinCommands(
           console.log(green(`推理深度: ${val}\n`))
         } else {
           console.log(dim(`推理深度: ${ctx.thinkEffort}  (/effort auto|high|max)\n`))
+        }
+      },
+    },
+    {
+      name: "rewind",
+      description: "回退到检查点: /rewind list | /rewind <round> [code|conv|both]",
+      usage: "<list|round> [code|conv|both]",
+      handler: (args, ctx) => {
+        const rw = overrides.rewind
+        if (!rw) {
+          console.log(dim("回退功能未初始化。\n"))
+          return
+        }
+
+        const sub = args.positional.mode ?? args.raw
+        const modeArg = args.positional.mode2 ?? args.flags.mode as string | undefined
+
+        // /rewind list — show available rewind points
+        if (sub === "list" || sub === "ls" || !sub) {
+          const points = listRewindPoints(rw.getSessionId())
+          console.log(formatRewindList(points))
+          return
+        }
+
+        // /rewind <round> [code|conv|both]
+        const targetRound = parseInt(sub, 10)
+        if (isNaN(targetRound) || targetRound <= 0) {
+          console.log(dim("用法: /rewind <round> [code|conv|both]  或  /rewind list\n"))
+          return
+        }
+
+        // Parse mode
+        let mode: RewindMode = "code"
+        if (modeArg === "conv" || modeArg === "conversation") {
+          mode = "conversation"
+        } else if (modeArg === "both" || modeArg === "all") {
+          mode = "both"
+        }
+
+        const result = executeRewind({
+          sessionId: rw.getSessionId(),
+          targetRound,
+          mode,
+          fileTransactionIds: mode !== "conversation" ? rw.getTransactionIds() : undefined,
+        })
+
+        console.log(formatRewindResult(result))
+
+        // Truncate conversation if mode includes conversation
+        if (result.success && (mode === "conversation" || mode === "both")) {
+          rw.truncateHistoryToRound(targetRound)
+          console.log(green(`对话已截断到 round ${targetRound}\n`))
         }
       },
     },

@@ -6,6 +6,44 @@
 
 Orcana is a single-agent terminal coding assistant. Its core differentiator is not feature count — it's the depth and diversity of constraints enforced per round.
 
+### Module Status Legend
+
+| Label | Meaning |
+|-------|---------|
+| 🟢 **stable** | Implemented, tested, wired, production-facing |
+| 🟡 **partial** | Implemented but not fully wired, tested, or Phase 1 only |
+| 🔵 **planned** | Documented but not yet implemented |
+
+### Module Status Overview
+
+| Module | Status | Notes |
+|--------|--------|-------|
+| Loop / Gate Chain (26 gates) | 🟢 stable | Core orchestrator, all gates wired and tested |
+| Flash Triage | 🟢 stable | Semantic entrance classification, Flash model |
+| Flash Judge | 🟢 stable | Independent completion verifier, circuit breaker |
+| Ripple Engine 2.0 | 🟢 stable | 7 layers, 212 tests, 8.5/10 score |
+| Context Budget / Epoch | 🟢 stable | 4-layer context, tool chain guard |
+| Sandbox (Windows) | 🟢 stable | Job Object, PathGuard, env filtering, timeout |
+| Sandbox (macOS/Linux) | 🟡 partial | Degraded to env filtering + timeout only |
+| MasterPlan / TaskPacket | 🟡 partial | Wired but node→mode transition still stub |
+| ModeContract | 🟡 partial | 5 modes defined, shouldTransitionMode stub |
+| PatchTransaction | 🟡 partial | Phase 1 complete, Phase 2 atomics pending |
+| EvidenceLedger | 🟡 partial | Phase 1, dual-write with legacy verification |
+| Completion Gates | 🟡 partial | Gates inline in loop, not single-path yet |
+| HookSystem | 🟡 partial | PreTool/PostTool only, lifecycle events planned |
+| Checkpoint / Rewind | 🟡 partial | SHA + SQLite base, missing CLI /rewind UX |
+| MCP Bridge | 🟡 partial | Tools only, resources/prompts deferred |
+| Skills Registry | 🟡 partial | Trigger-based prompt append, no lifecycle stats |
+| ModelRouter (purpose routing) | 🟡 partial | Session model pinning, cheap subcall routing off |
+| FIM Editor | 🟡 partial | DeepSeek beta API, pending tx protection |
+| State Machine | 🟡 partial | Monitoring layer, not primary behavioral driver |
+| TUI | 🟡 partial | Core working, missing plan approval/evidence/rewind UX |
+| Secret Redaction | 🟡 partial | Trace only, not unified across all paths |
+| Context Map Pipeline | 🔵 planned | Interfaces exist, not fully wired |
+| Context Memory OS | 🔵 planned | Protocol-level, separate integration PR |
+| Recursive Evolution OS | 🔵 planned | Protocol-level, separate integration PR |
+| Multi-Agent (T3R) | 🔵 planned | Post-v1.0, single-agent first |
+
 ---
 
 ## Loop Anatomy — Per-Round Gate Chain
@@ -150,7 +188,7 @@ old + new content
 
 **Key features**: semantic-first caller discovery · 8 structured change kinds · 14 usage pattern classifier · waiver-with-reason obligation system · convention-based test file discovery · ast-grep external enrichment · zero-cost graceful degradation
 
-### 6. Sandbox — Defense-in-Depth
+### 6. Sandbox — Defense-in-Depth 🟢 stable / 🟡 partial
 
 `src/sandbox/sandbox.ts`
 
@@ -245,7 +283,7 @@ Per-round hard caps prevent tool-spam loops:
 - `file`: 10 calls/round
 - `network`: 3 calls/round
 
-### 15. Hook System
+### 15. Hook System 🟡 partial
 
 `loop.ts:167-225`
 
@@ -256,7 +294,7 @@ Before/after hooks per tool. Hooks can:
 
 Custom hooks are registered via `HookSystem` and injected at agent construction — user scripts, policy enforcement, logging, etc.
 
-### 16. State Machine — Explicit Lifecycle
+### 16. State Machine — Explicit Lifecycle 🟡 partial
 
 `src/agent/state-machine.ts`
 
@@ -625,7 +663,7 @@ These are hard-won lessons from development, recorded to prevent regression:
 | Sandbox | Win32 Job Objects + PathGuard |
 | Config | JSON flat-files (settings.json, mcp.json, permissions.json) |
 
-## Context Systems
+## Context Systems 🟡 partial / 🔵 planned
 
 The current architecture has a protocol layer for long-running context, project maps, and
 controlled self-evolution. The core modules remain pure TypeScript surfaces so they can be

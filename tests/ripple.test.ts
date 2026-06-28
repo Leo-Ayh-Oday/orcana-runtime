@@ -323,6 +323,7 @@ describe("Ripple Engine", () => {
       targetFile: "src/a.ts",
       changedSymbols: ["foo"],
       apiChanges: [],
+      usageImpacts: [],
       callers: [],
       findings: [{ file: "src/a.ts", severity: "warn", kind: "memory-contract", reason: "test warning" }],
       decision: "warn",
@@ -337,6 +338,7 @@ describe("Ripple Engine", () => {
       targetFile: "math.ts",
       changedSymbols: ["add"],
       apiChanges: [],
+      usageImpacts: [],
       callers: [{ file: "cart.ts", line: 2, symbol: "add", text: "export const total = add(1, 2)" }],
       findings: [{
         file: "cart.ts",

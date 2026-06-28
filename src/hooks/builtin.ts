@@ -1,4 +1,4 @@
-/** Built-in hooks — write guard, journal veto, context monitor, api fallback. */
+/** Built-in hooks — write guard (before/after), journal veto, context monitor, api fallback. */
 
 import type { HookHandler } from "./index"
 import { JournalEngine } from "../agent/journal"
@@ -6,6 +6,14 @@ import { JournalEngine } from "../agent/journal"
 /**
  * Guards against editing files that haven't been read first.
  * Ported from Oh-My-OpenAgent's Write-Existing-File-Guard.
+ *
+ * Split into two hooks:
+ *   - writeGuardBefore (onToolBefore): checks read-set, warns or blocks
+ *   - writeGuardAfter  (onToolAfter):  tracks successful reads into read-set
+ *
+ * Mode is controlled by DEEPSEEK_WRITE_GUARD_MODE env var:
+ *   - "warn" (default): warns but allows unread-file edits
+ *   - "strict": blocks unread-file edits
  */
 const writeGuardReadFiles = new Set<string>()
 
@@ -13,7 +21,32 @@ function normalizePath(p: string): string {
   return p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/")
 }
 
-export const writeGuard: HookHandler = (input) => {
+function isStrictMode(): boolean {
+  return process.env.DEEPSEEK_WRITE_GUARD_MODE === "strict"
+}
+
+/** Before-hook: checks if file has been read. In strict mode, blocks unread files. */
+export const writeGuardBefore: HookHandler = (input) => {
+  const tool = input.tool ?? ""
+  const rawPath = input.params?.path as string | undefined
+  const path = rawPath ? normalizePath(rawPath) : undefined
+
+  if ((tool === "write_file" || tool === "edit_file" || tool === "edit_fim") && path) {
+    const isNewFile = tool === "write_file" && !path.includes("/") && !path.includes("\\")
+    if (!isNewFile && !writeGuardReadFiles.has(path)) {
+      const message = `File ${path} hasn't been read yet — read it first before editing`
+      if (isStrictMode()) {
+        return { blocked: true, warn: `${message} (blocked in strict mode)`, source: "writeGuard" }
+      }
+      return { warn: message, source: "writeGuard" }
+    }
+  }
+
+  return {}
+}
+
+/** After-hook: tracks successful file reads into the read-set. */
+export const writeGuardAfter: HookHandler = (input) => {
   const tool = input.tool ?? ""
   const rawPath = input.params?.path as string | undefined
   const path = rawPath ? normalizePath(rawPath) : undefined
@@ -22,19 +55,20 @@ export const writeGuard: HookHandler = (input) => {
     writeGuardReadFiles.add(path)
   }
 
-  if ((tool === "write_file" || tool === "edit_file") && path) {
-    const isNewFile = tool === "write_file" && !normalizePath(rawPath!).includes("/")
-    if (!isNewFile && !writeGuardReadFiles.has(path)) {
-      return { warn: `File ${path} hasn't been read yet — read it first before editing` }
-    }
-  }
-
   return {}
 }
 
 /** Reset the tracked read-files set (e.g. on new session). */
 export function resetWriteGuard() {
   writeGuardReadFiles.clear()
+}
+
+// ── Backward compat: old writeGuard as a combined export (deprecated) ──
+/** @deprecated Use writeGuardBefore + writeGuardAfter instead. */
+export const writeGuard: HookHandler = async (input) => {
+  const before = await writeGuardBefore(input)
+  if (before.blocked || before.warn) return before
+  return writeGuardAfter(input)
 }
 
 /**
@@ -81,6 +115,7 @@ export function createJournalGuard(projectRoot: string): HookHandler {
               success: false,
               content: `操作被元 Agent 一票否决。${report}`,
             },
+            source: "journalGuard",
           }
         }
         // Warning only — append to result
@@ -89,6 +124,7 @@ export function createJournalGuard(projectRoot: string): HookHandler {
             success: true,
             content: input.result.content + report,
           },
+          source: "journalGuard",
         }
       }
     }

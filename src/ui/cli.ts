@@ -1,40 +1,28 @@
-/** DeepSeek Code v0.3.0 readline UI with streaming output and Chinese status text. */
+/** DeepSeek Code v0.3.0 readline UI with streaming output and Chinese status text.
+ *
+ *  Assembly is delegated to createRuntime() — this file is now a thin UX layer.
+ */
 
 import { agentLoop } from "../agent/loop"
-import { DeepSeekProvider } from "../provider/deepseek"
-import { AnthropicProvider } from "../provider/anthropic"
-import { OpenAIProvider } from "../provider/openai"
-import { MultiProvider } from "../provider/multi"
-import { ProviderRegistry } from "../provider/registry"
 import { ModelRouter } from "../provider/router"
-import { buildTools } from "../tools/registry"
-import { FILE_TOOLS } from "../tools/file"
-import { SHELL_TOOL } from "../tools/shell"
-import { START_SERVICE_TOOL } from "../tools/service"
-import { GIT_TOOLS } from "../tools/git"
-import { WEB_SEARCH } from "../tools/search"
-import { WEB_FETCH_TOOL } from "../tools/webfetch"
-import { CODEGRAPH_TOOLS } from "../tools/codegraph"
-import { LSP_TOOLS } from "../tools/lsp"
-import { TYPECHECK_TOOL } from "../tools/typescript"
-import type { ToolDef } from "../tools/registry"
+import type { ToolDescriptor } from "../tools/registry"
 import { StagedContextManager } from "../context/staged"
-import { SessionManager, SessionCorruptedError, SessionStore, searchAllSessions, needsMigration, migrateAllJsonSessions } from "../session"
-import { lastCheckpoint, buildRecoveryPrompt, verifyCheckpoint, registerCheckpointStore, unregisterCheckpointStore } from "../session/checkpoint"
+import { SessionManager, SessionCorruptedError, SessionStore, searchAllSessions } from "../session"
+import { lastCheckpoint, verifyCheckpoint, registerCheckpointStore, unregisterCheckpointStore } from "../session/checkpoint"
 import type { SessionCheckpoint } from "../session/checkpoint"
+import { saveRewindPoint } from "../agent/rewind"
 import { buildResumeContext, resumeMessages } from "../session/summarizer"
 import { ThinkingStore } from "../memory/thinking-store"
 import { KnowledgeBase } from "../memory/knowledge"
 import {
   addTurn,
-  buildCompactionPreview,
   buildDynamicMemoryContext,
   buildStableAnchorContext,
   createBaseCheckpoint,
-  createCompactor,
   restoreCompactorState,
   saveCompactorState,
 } from "../memory/compactor"
+import type { CompactionState } from "../memory/compactor"
 import type { UsageStats } from "../agent/loop"
 import { createStreamRenderState, dim, flushStreamRender, green, yellow, red, renderResponse, renderStreamChunk } from "./render"
 import { reprompt, startInput } from "./input"
@@ -47,12 +35,10 @@ import { shouldSkipProviderPurpose } from "../provider/cost-policy"
 import { playStartupScreen } from "./startup-screen"
 import { playInkStartupScreen } from "./ink-startup"
 import { HookSystem } from "../hooks"
-import { writeGuard, createJournalGuard } from "../hooks/builtin"
-import { createSafetyPolicyHook } from "../hooks/safety-policy"
 import { AgentRunTrace } from "../agent/run-trace"
 import { findPendingClarification } from "../agent/clarification"
-import { getLSPClient, resetLSPClient } from "../lsp/client"
-import { bootstrapMCP } from "../mcp/bridge"
+import { createRuntime } from "../runtime/bootstrap"
+import type { MultiProvider } from "../provider/multi"
 
 const formatK = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)
 const LITE_CONTEXT_MAX = 1_000_000
@@ -89,15 +75,15 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-function replaceCompactorState(compactor: ReturnType<typeof createCompactor>, next: ReturnType<typeof createCompactor>) {
+function replaceCompactorState(compactor: CompactionState, next: CompactionState) {
   Object.assign(compactor, next)
 }
 
-function rememberTurn(compactor: ReturnType<typeof createCompactor>, turn: { role: "user" | "assistant"; content: string }) {
+function rememberTurn(compactor: CompactionState, turn: { role: "user" | "assistant"; content: string }) {
   replaceCompactorState(compactor, addTurn(compactor, turn))
 }
 
-function maybeCreateM0(compactor: ReturnType<typeof createCompactor>, title: string) {
+function maybeCreateM0(compactor: CompactionState, title: string) {
   const thresholdTokens = envNumber("DEEPSEEK_M0_THRESHOLD_TOKENS", 50_000)
   if (compactor.anchor || compactor.estimatedTokens < thresholdTokens) return
   replaceCompactorState(compactor, createBaseCheckpoint(compactor, {
@@ -107,201 +93,28 @@ function maybeCreateM0(compactor: ReturnType<typeof createCompactor>, title: str
   }))
 }
 
-import { addNode, removeNode, skipNode, planRef, planProgress } from "../agent/master-plan"
-
-const REQUEST_DEEPER_THINKING: ToolDef = {
-  name: "request_deeper_thinking",
-  description:
-    "当你发现当前推理不足以解决此问题、需要更大的思考预算时调用。" +
-    "如果问题涉及架构决策、安全审查、跨文件影响、多层抽象或需要穷举边界条件，说明理由。" +
-    "触发后下一轮将升级到 think-max 32K tokens。",
-  isReadonly: true,
-  isConcurrencySafe: true,
-  userFacingName: "更深思考",
-  inputSchema: {
-    type: "object",
-    properties: {
-      reason: { type: "string", description: "为什么需要更深推理（架构/安全/跨文件/多抽象层/边界穷举）" },
-    },
-    required: ["reason"],
-  },
-  execute: async (_params: Record<string, unknown>) => {
-    return { success: true, content: "下一轮将使用 thinking max 32K tokens 深度推理。", metadata: { upgradeThinking: "max" } }
-  },
-}
-
-const TASK_TOOL: ToolDef = {
-  name: "task",
-  description:
-    "管理主计划的任务树。当一个长任务被分解为多个阶段时，用它追踪进度。\n" +
-    "\n" +
-    "## 什么时候用它\n" +
-    "- 任务涉及 3+ 个独立交付阶段（如「后端→前端→测试」）\n" +
-    "- 执行中发现新的必须完成的子任务，但不在当前计划里\n" +
-    "- 某个阶段发现没必要做了，需要从计划中移除\n" +
-    "- 完成一个阶段后，想查看整体进度决定下一步\n" +
-    "\n" +
-    "## 操作\n" +
-    "- list: 查看所有节点和状态\n" +
-    "- add: 新增节点。参数 title（标题）, depends_on（依赖哪个节点 ID，可选）\n" +
-    "- done: 标记完成。参数 node_id, reason（完成了什么，可选）\n" +
-    "- remove: 删除不需要的节点。参数 node_id, reason（为什么不需要）\n" +
-    "- skip: 跳过不做的节点。参数 node_id, reason",
-  isReadonly: false,
-  isConcurrencySafe: false,
-  userFacingName: "任务管理",
-  inputSchema: {
-    type: "object",
-    properties: {
-      operation: {
-        type: "string",
-        description: "list | add | done | remove | skip",
-      },
-      title: {
-        type: "string",
-        description: "add 时的节点标题",
-      },
-      node_id: {
-        type: "string",
-        description: "done/remove/skip 时的节点 ID",
-      },
-      depends_on: {
-        type: "string",
-        description: "add 时的依赖节点 ID（逗号分隔，可选）",
-      },
-      reason: {
-        type: "string",
-        description: "done/remove/skip 时的原因或证据",
-      },
-    },
-    required: ["operation"],
-  },
-  execute: async (params: Record<string, unknown>) => {
-    const plan = planRef.current
-    if (!plan) return { success: false, content: "没有活跃的主计划。长任务启动后主计划会自动创建。", error: "no active plan" }
-
-    const op = String(params.operation ?? "")
-    switch (op) {
-      case "list": {
-        const nodes = plan.nodes.map(n => {
-          const icon = { pending: "🔵", active: "🔄", blocked: "🟡", done: "✅", skipped: "❌" }[n.status]
-          return `${icon} ${n.id}. ${n.title}${n.dependsOn.length ? ` (依赖: ${n.dependsOn.join(", ")})` : ""}${n.evidence ? ` — ${n.evidence}` : ""}`
-        })
-        return { success: true, content: `主计划: ${planProgress(plan)}\n\n${nodes.join("\n")}` }
-      }
-      case "add": {
-        const title = String(params.title ?? "").trim()
-        if (!title) return { success: false, content: "add 需要 title 参数", error: "missing title" }
-        const deps = String(params.depends_on ?? "").split(",").map(s => s.trim()).filter(Boolean)
-        const node = addNode(plan, title, deps)
-        return { success: true, content: `已添加节点 ${node.id}. ${title}${deps.length ? ` (依赖: ${deps.join(", ")})` : ""}` }
-      }
-      case "done": {
-        const id = String(params.node_id ?? "")
-        if (!id) return { success: false, content: "done 需要 node_id 参数", error: "missing node_id" }
-        const node = plan.nodes.find(n => n.id === id)
-        if (!node) return { success: false, content: `节点 ${id} 不存在`, error: "not found" }
-        node.status = "done"
-        node.evidence = String(params.reason ?? "")
-        plan.updatedAt = Date.now()
-        return { success: true, content: `节点 ${id}. ${node.title} 已标记完成。${node.evidence ? `证据: ${node.evidence}` : ""}` }
-      }
-      case "remove": {
-        const id = String(params.node_id ?? "")
-        const reason = String(params.reason ?? "")
-        const ok = removeNode(plan, id, reason)
-        return ok
-          ? { success: true, content: `节点 ${id} 已删除。${reason ? `原因: ${reason}` : ""}` }
-          : { success: false, content: `无法删除节点 ${id}（不存在或已完成）`, error: "cannot remove" }
-      }
-      case "skip": {
-        const id = String(params.node_id ?? "")
-        const reason = String(params.reason ?? "")
-        const ok = skipNode(plan, id, reason)
-        return ok
-          ? { success: true, content: `节点 ${id} 已跳过。${reason ? `原因: ${reason}` : ""}` }
-          : { success: false, content: `无法跳过节点 ${id}（不存在或已完成）`, error: "cannot skip" }
-      }
-      default:
-        return { success: false, content: `未知操作: ${op}。支持: list | add | done | remove | skip`, error: "unknown operation" }
-    }
-  },
-}
 
 export async function startCLI(cliPrompt?: string, resumeId?: string) {
   const undoStack: Array<{ path: string; previousContent: string | null }> = []
-  const dsApiKey = process.env.DEEPSEEK_API_KEY ?? ""
-  const anthApiKey = process.env.ANTHROPIC_API_KEY ?? ""
-  const openaiApiKey = process.env.OPENAI_API_KEY ?? ""
 
-  // ── Multi-provider setup ──
-  const registry = new ProviderRegistry()
-
-  // DeepSeek (always registered — primary)
-  if (!dsApiKey) { console.error("DEEPSEEK_API_KEY not set (required for default provider)"); process.exit(1) }
-  const dsProvider = new DeepSeekProvider(dsApiKey)
-  registry.register({ id: "deepseek", provider: dsProvider, defaultModel: "deepseek-v4-pro" })
-
-  // Anthropic (optional)
-  if (anthApiKey) {
-    registry.register({ id: "anthropic", provider: new AnthropicProvider(anthApiKey), defaultModel: "claude-sonnet-4-6" })
-  }
-
-  // OpenAI (optional)
-  if (openaiApiKey) {
-    registry.register({ id: "openai", provider: new OpenAIProvider(openaiApiKey), defaultModel: "gpt-5" })
-  }
-
-  registry.registerBuiltinModels()
-
-  // MultiProvider wraps the registry — transparent to loop.ts
-  const modelOverride = process.env.DEEPSEEK_MODEL_OVERRIDE
-  const multiProvider = new MultiProvider({ registry, defaultModel: modelOverride ?? "deepseek-v4-pro" })
-  const modelRouter = new ModelRouter(registry, multiProvider)
-
-  // ── Migrate old JSON sessions to SQLite ──
-  if (needsMigration()) {
-    const result = migrateAllJsonSessions()
-    if (result.migrated > 0) {
-      process.stderr.write(`已迁移 ${result.migrated} 个旧格式会话到 SQLite\n`)
-    }
-    if (result.errors.length > 0) {
-      process.stderr.write(`迁移错误: ${result.errors.join(", ")}\n`)
-    }
-  }
-
-  // ── MCP bootstrap — connect servers + discover tools ──
-  const mcpResult = await bootstrapMCP({
-    onStatus: (msg) => { process.stderr.write(`${msg}\n`) },
+  // ── Shared runtime assembly ──
+  const runtime = await createRuntime({
+    projectRoot: process.cwd(),
+    mcpOnStatus: (msg) => { process.stderr.write(`${msg}\n`) },
   })
-  const mcpToolDefs = mcpResult.tools
-  if (mcpResult.failed.length > 0) {
-    process.stderr.write(`MCP: ${mcpResult.failed.length} server(s) failed: ${mcpResult.failed.join(", ")}\n`)
-  }
+  const modelRouter = runtime.modelRouter
+  const multiProvider = runtime.provider
+  const tools = runtime.tools
+  const hooks = runtime.hooks
+  const stagedCtx = runtime.stagedCtx
+  const sessions = runtime.sessions
+  const thinkingStore = runtime.thinkingStore
+  const knowledgeBase = runtime.knowledgeBase
+  const modelOverride = runtime.modelOverride
 
-  const toolDefs = [...FILE_TOOLS, SHELL_TOOL, START_SERVICE_TOOL, ...GIT_TOOLS, WEB_SEARCH, WEB_FETCH_TOOL, ...CODEGRAPH_TOOLS, ...LSP_TOOLS, TYPECHECK_TOOL, ...mcpToolDefs, TASK_TOOL, REQUEST_DEEPER_THINKING]
-  const tools = buildTools(...toolDefs)
-  const hooks = new HookSystem()
-  // Before hooks: safety → writeGuard (ordered: widest guard first)
-  hooks.onToolBefore(createSafetyPolicyHook({ projectRoot: process.cwd() }))
-  hooks.onToolBefore(writeGuard)
-  // After hooks: journal guard (vetoes on write after results)
-  hooks.onToolAfter(createJournalGuard(process.cwd()))
-  const stagedCtx = new StagedContextManager(process.cwd())
-  const sessions = new SessionManager()
-  const thinkingStore = new ThinkingStore()
-  const knowledgeBase = new KnowledgeBase()
-  let sessionId = resumeId || sessions.create().id
+  let sessionId = resumeId || runtime.sessionId
   let thinkEffort: "auto" | "high" | "max" = "auto"
   const history: Array<{ role: "user" | "assistant"; content: string }> = []
-
-  // ── LSP client — start lazily in background ──
-  const lspClient = getLSPClient(process.cwd())
-  lspClient.start().then(available => {
-    if (available) {
-      process.stderr.write(`LSP: typescript-language-server connected\n`)
-    }
-  }).catch(() => { /* silent — tsc fallback handles it */ })
 
   // ── SessionStore for checkpoint/save — open once for the session lifetime ──
   const sessionStore = new SessionStore(sessionId)
@@ -349,7 +162,7 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
   }
 
   const startupOptions = {
-    version: "0.3.0",
+    version: runtime.version,
     toolsCount: tools.length,
     thinkingEffort: thinkEffort,
     modelName: modelOverride ?? "deepseek-v4-pro",
@@ -357,7 +170,8 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
   const usedInkStartup = await playInkStartupScreen(startupOptions).catch(() => false)
   if (!usedInkStartup) await playStartupScreen(startupOptions)
 
-  const compactor = createCompactor()
+  // Use runtime's compactor but restore resume state if needed
+  const compactor = runtime.compactor
   if (resumeId) restoreCompactorState(compactor, resumeId)
 
   if (cliPrompt) {
@@ -374,6 +188,19 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       sessionId = id
       registerCheckpointStore(id, new SessionStore(id))
     }
+  }
+
+  // ── Rewind state (PR-4.3) ──
+  let currentRound = 0
+  const roundFileTransactionIds: string[] = []
+  // Track which round each transaction was created in
+  const transactionRoundMap = new Map<string, number>()
+  function trackTransaction(txId: string, round: number) {
+    roundFileTransactionIds.push(txId)
+    transactionRoundMap.set(txId, round)
+  }
+  function getTransactionIdsSinceRound(targetRound: number): string[] {
+    return roundFileTransactionIds.filter(txId => (transactionRoundMap.get(txId) ?? 0) >= targetRound)
   }
 
   // ── Command registry ──
@@ -398,6 +225,27 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
     getSessionTokens: () => ({ input: sessionInputTokens, output: sessionOutputTokens, ms: sessionMs }),
     resetSessionTokens: () => { sessionInputTokens = 0; sessionOutputTokens = 0; sessionMs = 0 },
     getLastUsage: () => lastUsage,
+    rewind: {
+      getCurrentRound: () => currentRound,
+      getTransactionIds: () => getTransactionIdsSinceRound(currentRound > 0 ? currentRound : 1),
+      truncateHistoryToRound: (targetRound: number) => {
+        // Truncate conversation: remove all messages after the target round's user prompt
+        // Each round is a user→assistant pair; find the right boundary
+        let userMsgCount = 0
+        let truncateIdx = history.length
+        for (let i = 0; i < history.length; i++) {
+          if (history[i]!.role === "user") {
+            userMsgCount++
+            if (userMsgCount > targetRound) {
+              truncateIdx = i
+              break
+            }
+          }
+        }
+        history.length = truncateIdx
+      },
+      getSessionId: () => sessionId,
+    },
   })) {
     commandRegistry.register(def)
   }
@@ -409,6 +257,21 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
     if (input.startsWith("/")) {
       const handled = commandRegistry.execute(input, { ...cmdCtx, reprompt: () => reprompt(rl) })
       if (handled) { reprompt(rl); return }
+    }
+
+    // PR-4.3: Auto-save rewind point on each user prompt
+    currentRound++
+    try {
+      saveRewindPoint({
+        sessionId: sessionId || `unsaved-${Date.now().toString(36)}`,
+        round: currentRound,
+        summary: input.slice(0, 200),
+        changedFiles: undoStack.map(s => s.path),
+        fileSHAs: {},
+        conversationTokens: history.reduce((sum, h) => sum + h.content.length, 0),
+      })
+    } catch {
+      // Non-critical — rewind auto-save failure shouldn't block the turn
     }
 
     lastUsage = null
@@ -439,7 +302,7 @@ function persistSession(
   sessions: SessionManager,
   history: Array<{ role: "user" | "assistant"; content: string }>,
   stagedCtx: StagedContextManager,
-  compactor: ReturnType<typeof createCompactor>,
+  compactor: CompactionState,
   sessionId: string,
   isNew: boolean,
   /** Optional: update active SessionStore when session ID changes (first save). */
@@ -470,7 +333,7 @@ async function runLiteTurn(
   router: ModelRouter,
   prompt: string,
   history: Array<{ role: "user" | "assistant"; content: string }>,
-  compactor: ReturnType<typeof createCompactor>,
+  compactor: CompactionState,
 ) {
   const started = Date.now()
   const streamRender = createStreamRenderState()
@@ -535,11 +398,11 @@ async function runLiteTurn(
 async function runTurn(
   provider: MultiProvider,
   router: ModelRouter,
-  tools: ReturnType<typeof buildTools>,
+  tools: ToolDescriptor[],
   prompt: string,
   stagedCtx: StagedContextManager,
   thinkingStore: ThinkingStore,
-  compactor: ReturnType<typeof createCompactor>,
+  compactor: CompactionState,
   history: Array<{ role: "user" | "assistant"; content: string }>,
   _undoStack: Array<{ path: string; previousContent: string | null }>,
   knowledgeBase: KnowledgeBase,
@@ -606,6 +469,7 @@ async function runTurn(
     sessionId,
     modelRouter: router,
     gateTelemetryFile: ".wolf/gate-telemetry.json",
+    contextMapPolicy: "auto" as const,
     ...(resumeFromCheckpoint ? { resumeFromCheckpoint } : {}),
   }
 

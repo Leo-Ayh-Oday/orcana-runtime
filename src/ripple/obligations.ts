@@ -23,7 +23,7 @@ export function normalizeProjectPath(path: string, projectRoot = process.cwd()):
 
 export function obligationsFromReport(report: RippleReport, modifiedFiles: Set<string>): RippleObligation[] {
   // PR 2: apiChanges is the canonical change source. changedSymbols is @deprecated.
-  if (report.apiChanges.length === 0 && report.changedSymbols.length === 0) return []
+  if ((report.apiChanges?.length ?? 0) === 0 && report.changedSymbols.length === 0) return []
   if (!report.callers.length) return []
   const obligations: RippleObligation[] = []
   for (const caller of report.callers) {

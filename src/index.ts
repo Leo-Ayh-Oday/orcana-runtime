@@ -52,7 +52,7 @@ const arg = process.argv[2] ?? ""
 
 async function main() {
   if (arg === "--version" || arg === "-v" || arg === "version") {
-    console.log("deepseek-orcana v0.2.1")
+    console.log("deepseek-orcana v0.3.0")
     return
   }
 

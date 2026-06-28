@@ -216,18 +216,71 @@ function checkScope(plan: MasterPlan): ValidationIssue[] {
   return issues
 }
 
+// ── PR-2.4: Additional checks ──
+
+/** Check that node titles are descriptive enough (not just single words). */
+function checkTitleQuality(plan: MasterPlan): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  for (const node of plan.nodes) {
+    if (node.title.length < 5) {
+      issues.push({
+        severity: "warn",
+        nodeId: node.id,
+        message: `节点 "${node.title}" 标题过短（${node.title.length} 字符），建议提供更多细节`,
+        check: "titleQuality",
+      })
+    }
+  }
+  return issues
+}
+
+/** Check that dependency IDs actually reference existing nodes. */
+function checkDependencyValidity(plan: MasterPlan): ValidationIssue[] {
+  const issues: ValidationIssue[] = []
+  const nodeIds = new Set(plan.nodes.map(n => n.id))
+
+  for (const node of plan.nodes) {
+    for (const depId of node.dependsOn) {
+      if (!nodeIds.has(depId)) {
+        issues.push({
+          severity: "error",
+          nodeId: node.id,
+          message: `节点 "${node.title}" 依赖不存在的节点 "${depId}"`,
+          check: "dependency",
+        })
+      }
+    }
+  }
+  return issues
+}
+
+/** Check that plan has at least one node (non-empty). */
+function checkNonEmpty(plan: MasterPlan): ValidationIssue[] {
+  if (plan.nodes.length === 0) {
+    return [{
+      severity: "error",
+      message: "MasterPlan 没有节点 — 至少需要一个执行步骤",
+      check: "nonEmpty",
+    }]
+  }
+  return []
+}
+
 // ── Main validation entry ──
 
 /** Run all structural checks against a MasterPlan.
  *  Pure function — no side effects, no model calls. */
 export function validatePlan(plan: MasterPlan): ValidationReport {
   const checks: Array<(p: MasterPlan) => ValidationIssue[]> = [
+    checkNonEmpty,           // PR-2.4: empty plan
     checkUniqueness,
     checkCycles,
+    checkDependencyValidity, // PR-2.4: dangling dependency references
     checkTrackerExistence,
     checkDoneCriteria,
     checkVerification,
     checkScope,
+    checkTitleQuality,       // PR-2.4: title quality warnings
   ]
 
   const issues: ValidationIssue[] = []
@@ -362,6 +415,80 @@ export function evaluatePlanForcePass(opts: {
 }
 
 // ── Report formatting (injectable into review prompts) ──
+
+// ── TaskPacket-level validation (PR-2.1) ──
+
+const VALID_VERIFICATION_KINDS = new Set(["typecheck", "test", "build", "lint", "smoke", "unknown"])
+
+/** Validate a single TaskPacket for structural integrity.
+ *  Called at packet creation time — fail closed on invalid packets. */
+export function validateTaskPacket(packet: TaskPacket): ValidationReport {
+  const issues: ValidationIssue[] = []
+
+  // Required fields
+  if (!packet.title || !packet.title.trim()) {
+    issues.push({ severity: "error", nodeId: packet.nodeId, message: "TaskPacket title 为空", check: "packet.title" })
+  }
+  if (!packet.goal || !packet.goal.trim()) {
+    issues.push({ severity: "error", nodeId: packet.nodeId, message: "TaskPacket goal 为空", check: "packet.goal" })
+  }
+  if (!packet.nodeId || !packet.nodeId.trim()) {
+    issues.push({ severity: "error", message: "TaskPacket nodeId 为空", check: "packet.nodeId" })
+  }
+
+  // Scope
+  if (packet.scope.length === 0) {
+    issues.push({ severity: "error", nodeId: packet.nodeId, message: `"${packet.title}" scope 为空`, check: "packet.scope" })
+  }
+  for (const item of packet.scope) {
+    if (!item.trim()) {
+      issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" scope 包含空条目`, check: "packet.scope" })
+    }
+  }
+
+  // Done criteria
+  if (packet.doneCriteria.length === 0) {
+    issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" doneCriteria 为空`, check: "packet.doneCriteria" })
+  }
+
+  // Verification
+  if (packet.verification.length === 0) {
+    issues.push({ severity: "error", nodeId: packet.nodeId, message: `"${packet.title}" verification 为空 — 至少需要 typecheck`, check: "packet.verification" })
+  }
+  for (const v of packet.verification) {
+    if (!v.kind) {
+      issues.push({ severity: "error", nodeId: packet.nodeId, message: `"${packet.title}" verification 缺少 kind`, check: "packet.verification" })
+    } else if (!VALID_VERIFICATION_KINDS.has(v.kind)) {
+      issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" verification kind 无效: ${v.kind}`, check: "packet.verification" })
+    }
+    if (!v.description || !v.description.trim()) {
+      issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" verification "${v.kind}" 缺少 description`, check: "packet.verification" })
+    }
+  }
+
+  // Ripple policy
+  if (typeof packet.ripplePolicy?.autoPropagate !== "boolean") {
+    issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" ripplePolicy.autoPropagate 不是 boolean`, check: "packet.ripplePolicy" })
+  }
+  if (typeof packet.ripplePolicy?.requireEvidence !== "boolean") {
+    issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" ripplePolicy.requireEvidence 不是 boolean`, check: "packet.ripplePolicy" })
+  }
+  if (typeof packet.ripplePolicy?.maxRetries !== "number" || packet.ripplePolicy?.maxRetries < 0) {
+    issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" ripplePolicy.maxRetries 无效`, check: "packet.ripplePolicy" })
+  }
+
+  // Context budget
+  if (packet.contextBudget) {
+    if (typeof packet.contextBudget.maxToolsPerNode !== "number" || packet.contextBudget.maxToolsPerNode <= 0) {
+      issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" contextBudget.maxToolsPerNode 无效`, check: "packet.contextBudget" })
+    }
+    if (typeof packet.contextBudget.maxRoundsPerNode !== "number" || packet.contextBudget.maxRoundsPerNode <= 0) {
+      issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" contextBudget.maxRoundsPerNode 无效`, check: "packet.contextBudget" })
+    }
+  }
+
+  return makeReport(issues)
+}
 
 /** Format validation issues for the model to see in review/transition prompts. */
 export function formatValidationReport(report: ValidationReport): string {

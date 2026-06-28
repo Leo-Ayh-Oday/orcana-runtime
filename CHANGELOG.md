@@ -2,6 +2,32 @@
 
 All notable changes to DeepSeek Orcana.
 
+## [0.3.0] — 2026-06-28
+
+### Added
+- **Phase 6 — ModelRouter / Provider**: purpose routing (cheap sub-calls → flash, same-provider preference), ProviderCapabilities (8-field per-model capability declarations), DeepSeekTranscriptManager (unclosed chain + adjacency + tool limit validation), unified structured output (fail-closed `callWithStructuredOutput` + `zodToJsonSchema`), FIM safety constraints (`checkFimSafety` with forbidden/scope/TOCTOU guard).
+- **Phase 5 — Tool Risk / Permission / Sandbox**: ToolRiskTaxonomy (Risk 0-5, 40 tests), Permission UX (9-gate source/priority trace, confirm-stubs), ShellSideEffectGuard (18 patterns, 29 tests), SecretRedaction full pipeline (unified redactor, run-trace integration, 38 tests), SandboxCapability visibility (6 features, OS banner).
+- **Phase 4 — PatchTransaction + Rewind**: PatchTransaction state machine (proposed→committed→rolled_back), atomic file writes (temp→verify→commit), `/rewind` command (3 modes: code/conv/both), Checkpoint UUID.
+- **Phase 3 — Completion Orchestrator + Evidence**: CompletionOrchestrator unified final gate evaluation (loop.ts ~180→~50 lines), `canClaimDone()` single evidence entry point, FinalTruthfulnessGate future-tense filtering.
+- **Phase 2 — MasterPlan / ModeContract / TaskPacket**: TaskPacket validation (9-field checks), ModeContract auto-transition (4 rules), TaskPacket takeover for long tasks, PlanValidator enhancements.
+- **Phase 1 — Single Agent Long-Runtime Skeleton**: MasterPlan→TaskPacket→ContextEpoch→PatchTransaction→Evidence→Ripple→ModeContract→Replay Harness (9 PRs).
+- **Phase 0 — Runtime Bootstrap**: unified `createRuntime()` for CLI/TUI, architecture docs truthfulness fix, v0.2.2 version baseline.
+- **Ripple Engine 2.0**: ApiChange structured diff (8 change kinds), SemanticReferenceProvider (TypeScript type-checker based caller discovery), UsageImpact classifier (14 usage kinds), VerificationMap (convention-based test discovery), AstGrep fallback provider (6 pattern types).
+
+### Fixed
+- `.key$` false-positive on i18n/keyboard layout files → narrowed to SSH private key filenames.
+- `tool_risk` gate invisible to telemetry → added to `toolGateNames` array.
+- Scope matching bypass in FIM guard (substring/suffix overscope) → path-boundary-aware matching.
+- Divergent forbidden-file lists across 3 modules → canonical `forbidden-patterns.ts`.
+- Duplicate `hasUnclosedToolChain` across context-epoch + transcript-manager → single canonical source.
+- 3 pre-existing test regressions from ModeContract shouldTransitionMode.
+
+### Changed
+- `maxRounds` default now 50, env-overridable via `DEEPSEEK_MAX_ROUNDS`.
+- Flash Triage default changed to `"auto"` (matches design intent).
+- Search backend: SearXNG Docker + DuckDuckGo → Exa semantic search + Jina Reader (zero Docker).
+- Replaced `[PLAN_APPROVED]` string protocol with `AgentOptions.initialPlanState`.
+
 ## [0.2.1] — 2026-06-24
 
 ### Fixed

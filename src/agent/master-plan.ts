@@ -1,16 +1,23 @@
 /** [Phase 2] Master Plan system — hierarchical task tree with review gates.
  *
- *  Status: IMPLEMENTED, NOT YET WIRED into loop.ts.
- *  Currently loop.ts uses task-tracker.ts directly. MasterPlan extends this with
- *  multi-node DAGs, blockedBy edges, and plan review gates. PlanJudge integration
- *  will require PlanJudge.evaluateSync() called at plan→code transition.
+ *  Status: IMPLEMENTED AND WIRED. loop.ts directly imports and calls:
+ *    - activateMasterPlan (3 call sites: 2 activate + 1 tryNodeTransition)
+ *    - tryNodeTransition (2 node-transition points)
+ *    - planRef.current / planProgress (consumed by TASK_TOOL)
+ *  MasterPlan nodes drive TaskPacket creation via buildPacketFromLine /
+ *  createTaskTrackerFromPacket. setActivePatchContext is called at each
+ *  node activation point. Plan state is serialized into cold memory for
+ *  prefix cache stability.
+ *
+ *  Remaining gaps for v1.0:
+ *    - Node→ModeContract auto-transition (shouldTransitionMode still stub)
+ *    - Node→PatchTransaction→EvidenceLedger→Completion single path (partially wired)
  *
  *  Inspired by MiMo Code's task registry + checkpoint §4 integration:
  *    - Task IDs: "1", "2", "3"... (simple, no dots needed for main agent)
  *    - Each node wraps a TaskTracker for its own sub-steps
  *    - Node completion injects "Review Master Plan" as the last step
  *    - Review gate: model re-reads master plan status before moving to next node
- *    - Plan state is serialized into cold memory for prefix cache stability
  *
  *  Flow:
  *    主计划 → 激活节点1 → [子追踪: build steps → verify → "回顾主计划"]

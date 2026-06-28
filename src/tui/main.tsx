@@ -2,15 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, render, useInput, useStdin, useStdout } from "ink"
 import { agentLoop } from "../agent/loop"
 import type { AgentOptions } from "../agent/loop-types"
-import { DeepSeekProvider } from "../provider/deepseek"
-import { buildTools } from "../tools/registry"
-import { READ_FILE, WRITE_FILE, EDIT_FILE, MULTI_EDIT } from "../tools/file"
-import { SHELL_TOOL } from "../tools/shell"
-import { WEB_SEARCH } from "../tools/search"
-import { WEB_FETCH_TOOL } from "../tools/webfetch"
-import { PROJECT_STRUCTURE, FIND_SYMBOL, FIND_REFERENCES } from "../tools/codegraph"
-import { GIT_STATUS, GIT_DIFF, GIT_LOG } from "../tools/git"
-import { START_SERVICE_TOOL } from "../tools/service"
+import type { Runtime } from "../runtime/bootstrap"
 import { InkStartupScreen } from "../ui/ink-startup"
 import { Dashboard, type DashProps } from "./dashboard"
 import { InputLine, type SlashCommandHint } from "./input"
@@ -179,7 +171,7 @@ function initialState(): AgentState {
   }
 }
 
-function useAgentStream(apiKey: string, prompt?: string) {
+function useAgentStream(runtime: Runtime, prompt?: string) {
   const historyRef = useRef<Array<{ role: ModelHistoryRole; content: string }>>([])
   const messageIdRef = useRef(0)
   const lastEventRef = useRef<{ key: string; at: number } | null>(null)
@@ -235,31 +227,13 @@ function useAgentStream(apiKey: string, prompt?: string) {
     const historySnapshot = historyRef.current.slice()
     const userId = ++messageIdRef.current
     const assistantId = ++messageIdRef.current
-    const provider = new DeepSeekProvider(apiKey)
-    const allTools = buildTools(
-      READ_FILE,
-      WRITE_FILE,
-      EDIT_FILE,
-      MULTI_EDIT,
-      SHELL_TOOL,
-      WEB_SEARCH,
-      WEB_FETCH_TOOL,
-      PROJECT_STRUCTURE,
-      FIND_SYMBOL,
-      FIND_REFERENCES,
-      GIT_STATUS,
-      GIT_DIFF,
-      GIT_LOG,
-      START_SERVICE_TOOL,
-    )
-    const opts: AgentOptions = {
-      provider,
-      model: "deepseek-v4-pro",
-      tools: allTools,
+    const opts: AgentOptions = runtime.buildAgentOptions({
+      model: runtime.modelRouter.selectForPurpose("agent_main"),
+      tools: runtime.tools,
       maxRounds: 30,
       conversationHistory: historySnapshot,
       gateTelemetryFile: ".wolf/gate-telemetry.json",
-    }
+    })
 
     let cancelled = false
     let textBuf = ""
@@ -470,7 +444,7 @@ function useAgentStream(apiKey: string, prompt?: string) {
     })
 
     return () => { cancelled = true }
-  }, [apiKey, addEventMessage])
+  }, [runtime, addEventMessage])
 
   const answerClarification = useCallback((answer: { question: string; key: string; label: string }) => {
     setClarification(current => {
@@ -906,11 +880,11 @@ function ClarificationPanel({ wizard, width, tick }: { wizard: ClarificationWiza
   )
 }
 
-export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string }) {
+export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime }) {
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout.rows ?? 32)
   const cols = stdout.columns ?? 96
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification } = useAgentStream(apiKey, prompt)
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification } = useAgentStream(runtime, prompt)
   const [tick, setTick] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<TranscriptScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
@@ -1048,8 +1022,8 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
         <TuiInputGuard />
         <Box flexGrow={1}>
           <InkStartupScreen
-            version="0.3.0"
-            toolsCount={24}
+            version={runtime.version}
+            toolsCount={runtime.tools.length}
             thinkingEffort="auto"
             modelName={state.modelName}
           />
@@ -1130,12 +1104,19 @@ export function ChatApp({ prompt, apiKey }: { prompt?: string; apiKey: string })
   )
 }
 
-export function startInkTUI(prompt?: string) {
+export async function startInkTUI(prompt?: string) {
   const apiKey = process.env.DEEPSEEK_API_KEY
   if (!apiKey) {
     console.error("DEEPSEEK_API_KEY not set")
     process.exit(1)
   }
-  const { waitUntilExit } = render(<ChatApp prompt={prompt} apiKey={apiKey} />)
+  // Lazy-import to avoid circular dependency at module load time
+  const { createRuntime } = await import("../runtime/bootstrap")
+  const runtime = await createRuntime({
+    projectRoot: process.cwd(),
+    enableMCP: true,
+    enableLSP: true,
+  })
+  const { waitUntilExit } = render(<ChatApp prompt={prompt} runtime={runtime} />)
   return waitUntilExit()
 }

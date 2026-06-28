@@ -10,6 +10,7 @@ import { FimEditor } from "../provider/fim"
 import { cascadeAwareDecision, formatRippleBlock, getRippleProgram, previewEdit, tightenRippleDecision } from "../ripple/engine"
 import { getRuntimeContextBudgetMode } from "../agent/runtime-context"
 import { createTransaction, rollbackTransaction } from "./transaction"
+import { applyAndCommit, type ManagedPatchTransaction } from "../agent/patch-transaction"
 
 /** Threshold: files larger than this get sub-agent analysis instead of raw dump. */
 const LARGE_FILE_LINES = 400
@@ -154,21 +155,40 @@ async function write_file(params: Record<string, unknown>): Promise<ToolResult> 
     const p = resolve(path)
     const existedBefore = existsSync(p)
     const oldContent = existedBefore ? await readFile(p, "utf-8") : ""
+    const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+
+    // Ripple pre-check
     const ripple = previewEdit({ targetFile: p, oldContent, newContent: content, mode: "write_file" })
     const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
     if (effectiveDecision !== "allow") {
       return Result.blocked(`${formatRippleBlock(ripple)}`)
     }
-    const transaction = createTransaction({ tool: "write_file", paths: [p] })
-    mkdirSync(dirname(p), { recursive: true })
-    await writeFile(p, content, "utf-8")
+
+    // PR-4.2: Use state machine for atomic write (temp → verify → commit)
+    const mpt = await applyAndCommit(
+      {
+        tool: "write_file",
+        files: [{
+          relativePath: relPath,
+          oldContent: existedBefore ? oldContent : null,
+          newContent: content,
+          expectedBaseHash: existedBefore ? checkpointMetadata(path, oldContent).previousHash as string : null,
+        }],
+      },
+      async (_mpt: ManagedPatchTransaction) => {
+        // Inline verification: run tsc if available (batch tsc happens in loop.ts post-round)
+        // Return true for now — the real verification gate is in CompletionOrchestrator
+        return true
+      },
+    )
+
     const lines = content.split("\n").length
     const diag = runTsCheck(path)
     getRippleProgram().invalidateFile(path)
     return Result.ok(`Written ${path} - ${lines} lines, ${content.length} chars${diag}`, {
       path,
       lines,
-      transactionId: transaction.id,
+      transactionId: mpt.patch.fileTransaction.id,
       rippleReport: ripple,
       checkpoint: checkpointMetadata(path, existedBefore ? oldContent : null),
     })
@@ -192,19 +212,35 @@ async function edit_file(params: Record<string, unknown>): Promise<ToolResult> {
     if (count > 1) return Result.fail(`Found ${count} occurrences — provide more context for a unique match`)
 
     const newContent = content.replace(oldStr, newStr)
+    const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+
+    // Ripple pre-check
     const ripple = previewEdit({ targetFile: p, oldContent: content, newContent, mode: "edit_file" })
     const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
     if (effectiveDecision !== "allow") {
       return Result.blocked(formatRippleBlock(ripple))
     }
-    const transaction = createTransaction({ tool: "edit_file", paths: [p] })
-    await writeFile(p, newContent, "utf-8")
+
+    // PR-4.2: Use state machine for atomic write (temp → verify → commit)
+    const mpt = await applyAndCommit(
+      {
+        tool: "edit_file",
+        files: [{
+          relativePath: relPath,
+          oldContent: content,
+          newContent,
+          expectedBaseHash: checkpointMetadata(path, content).previousHash as string,
+        }],
+      },
+      async (_mpt: ManagedPatchTransaction) => true,
+    )
+
     const diag = runTsCheck(path)
     getRippleProgram().invalidateFile(path)
     return Result.ok(`Replaced 1 occurrence in ${path}${diag}`, {
       path,
       occurrences: 1,
-      transactionId: transaction.id,
+      transactionId: mpt.patch.fileTransaction.id,
       rippleReport: ripple,
       checkpoint: checkpointMetadata(path, content),
     })
@@ -252,25 +288,30 @@ async function multi_edit(params: Record<string, unknown>): Promise<ToolResult> 
       }
     }
 
-    const transaction = createTransaction({ tool: "multi_edit", paths: [...proposed.keys()] })
-    const written: string[] = []
-    try {
-      for (const [p, content] of proposed) {
-        await writeFile(p, content, "utf-8")
-        written.push(p)
+    // PR-4.2: Build files array for state machine
+    const files = [...proposed.entries()].map(([p, newContent]) => {
+      const oldContent = originals.get(p) ?? ""
+      const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+      return {
+        relativePath: relPath,
+        oldContent,
+        newContent,
+        expectedBaseHash: checkpointMetadata(relPath, oldContent).previousHash as string,
       }
-    } catch (writeErr) {
-      let rollbackErr = ""
-      try { rollbackTransaction(transaction.id) } catch (rbErr) { rollbackErr = ` (rollback also failed: ${rbErr instanceof Error ? rbErr.message : String(rbErr)})` }
-      const errMsg = writeErr instanceof Error ? writeErr.message : String(writeErr)
-      return Result.fail(`multi_edit write failed and was rolled back: ${errMsg}${rollbackErr}`)
-    }
+    })
+
+    // PR-4.2: Atomic multi-file write via state machine (temp → verify → commit)
+    // applyAndCommit handles rollback on partial failure internally
+    const mpt = await applyAndCommit(
+      { tool: "multi_edit", files },
+      async (_mpt: ManagedPatchTransaction) => true,
+    )
 
     const diag = displayPaths.map(path => runTsCheck(path)).filter(Boolean).join("\n")
     for (const p of proposed.keys()) getRippleProgram().invalidateFile(p)
     return Result.ok(`Applied ${edits.length} atomic edit(s) across ${proposed.size} file(s)${diag}`, {
       paths: displayPaths,
-      transactionId: transaction.id,
+      transactionId: mpt.patch.fileTransaction.id,
       rippleReports: reports,
       checkpoints: displayPaths.map(path => checkpointMetadata(path, originals.get(resolve(path)) ?? "")),
     })

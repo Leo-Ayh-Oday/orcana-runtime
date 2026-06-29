@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>不允许交付烂代码的编码智能体。</strong><br>
-  每轮 28 道安全门控 · 7 层变更影响分析 · 没证据不能 claim done
+  28 道安全门控按生命周期自动匹配 · 7 层变更影响分析 · 没证据不能 claim done
 </p>
 
 <p align="center">
@@ -51,7 +51,7 @@ orcana last                  # 恢复最近会话
 
 ## 为什么选 Orcana
 
-多数 coding agent 只有 3-5 个防护。Orcana **每轮执行穿过 28 道独立安全机制**——分层覆盖思考、工具执行和完成三个阶段。不信任任何单一机制。
+多数 coding agent 只有 3-5 个防护。Orcana 有 **28 道独立安全机制**——按生命周期分布在五个阶段。不信任任何单一机制。
 
 | 时机 | 机制 | 防止什么 |
 |------|------|---------|
@@ -75,6 +75,8 @@ orcana last                  # 恢复最近会话
 | | Evidence Gate | 无证据声称——没跑过 typecheck/test/build 就不能 `canClaimDone()` |
 | | Truthfulness Gate | 验证撒谎——交叉检查最终文本和证据账本 |
 | **紧急** | Gate Overflow | 无限循环——3 次拦截→策略提示，5 次→硬 BLOCKED |
+
+门控按生命周期自动匹配，不是每轮全量触发：~7 道每轮必过，其余按阶段目标激活（流恢复 1、完成判定 6、工具执行 7、周期维护 7）。
 
 → [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 28-gate 回路解剖和 DeepSeek V4 机制深潜。
 

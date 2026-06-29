@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>The coding agent that refuses to ship broken code.</strong><br>
-  28 safety gates per round. 7-layer change-impact analysis. Evidence-backed completion.
+  28 safety gates across the execution lifecycle. 7-layer change-impact analysis. Evidence-backed completion.
 </p>
 
 <p align="center">
@@ -52,7 +52,7 @@ orcana last                           # Resume latest
 
 ## Why Orcana
 
-Most coding agents have 3–5 guardrails. Orcana has **28 distinct safety mechanisms per round** — layered across thinking, tool execution, and completion. No single mechanism is trusted alone.
+Most coding agents have 3–5 guardrails. Orcana has **28 distinct safety mechanisms** — distributed across the execution lifecycle. No single mechanism is trusted alone.
 
 | When | Mechanism | What it prevents |
 |------|-----------|-----------------|
@@ -76,6 +76,8 @@ Most coding agents have 3–5 guardrails. Orcana has **28 distinct safety mechan
 | | Evidence Gate | Unverified claims — `canClaimDone()` returns false without typecheck/test/build proof |
 | | Truthfulness Gate | Lying about verification — cross-checks final text claims against Evidence Ledger |
 | **Emergency** | Gate Overflow | Infinite loops — 3 blocks → strategy switch prompt, 5 → hard BLOCKED |
+
+Not all 28 gates fire every round — they're distributed by lifecycle: ~7 pre-round, ~7 during tool execution, ~6 at completion, ~7 periodic/historical. Each gate activates only when its phase is reached.
 
 → [ARCHITECTURE.md](./ARCHITECTURE.md) for the complete 28-gate loop anatomy and DeepSeek V4 mechanism deep-dives.
 

@@ -46,9 +46,9 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 
 ---
 
-## Loop Anatomy — Per-Round Gate Chain
+## Loop Anatomy — Gate Chain
 
-Each round of `agentLoop()` in [`src/agent/loop.ts`](src/agent/loop.ts) passes through this sequence:
+Each round of `agentLoop()` in [`src/agent/loop.ts`](src/agent/loop.ts) passes through the lifecycle-matched sequence below. Gates are NOT all fired every round — they activate only in their target phase:
 
 ```
 ROUND START
@@ -95,7 +95,7 @@ ROUND START
   └─ [28] Revise Plan                  — stuck detection → push back to planning
 ```
 
-> **28 distinct safety mechanisms per round.** Most coding agents have 3-5.
+> **28 distinct safety mechanisms.** Gates are lifecycle-matched — ~7 fire every round (1–7), the rest activate conditionally by phase: stream recovery (1), completion (6), tool execution (7), periodic maintenance (7). Most coding agents have 3-5 total.
 
 ---
 

@@ -66,6 +66,7 @@ Most coding agents have 3–5 guardrails. Orcana has **26 distinct safety mechan
 | | Rate Limiter | Tool spam — per-category caps per round (shell=5, file=10, network=3) |
 | | Mode Contract | Role violations — planner can't write code, reviewer can't execute |
 | **After tools execute** | Error Tracker | Blind retries — 2 repeated failures → forced web search, 4 → admit defeat |
+| | Parallel Readonly Execution | Slow info-gathering — all readonly calls in a round run concurrently via `Promise.all` |
 | | Shell Side-Effect Guard | Dangerous commands — 18 patterns detect recursive rm, force push, system mutation |
 | | Write Guard | Un-read file edits — strict mode blocks writes to files never read |
 | | Journal Veto | Iron-law violations — meta-agent veto on write operations |
@@ -78,6 +79,16 @@ Most coding agents have 3–5 guardrails. Orcana has **26 distinct safety mechan
 | **Emergency** | Gate Overflow | Infinite loops — 3 blocks → strategy switch prompt, 5 → hard BLOCKED |
 
 → [ARCHITECTURE.md](./ARCHITECTURE.md) for the complete 26-gate loop anatomy and DeepSeek V4 mechanism deep-dives.
+
+> **Sandbox note**: On macOS/Linux, the sandbox runs in degraded mode — PathGuard is post-execution audit (detects and records), not real-time prevention. Only Windows gets kernel-level Job Object isolation. The README table describes the *design intent*; see [SECURITY.md](./SECURITY.md) for platform-by-platform capabilities.
+
+## Known Limitations
+
+Real trade-offs we're tracking, not hiding:
+
+- **Thinking Compaction** is one-shot per session (triggers once at 40% context). On very long tasks, context can still grow to the 60% Budget Gate block with no second compaction pass.
+- **Flash Judge** circuit-breaks after 3 evaluations per task. If still NOT_SATISFIED after 3, the session blocks — it won't silently accept unverified completion.
+- **Dual config**: `settings.json` `loop.maxSteps` takes priority over `DEEPSEEK_MAX_ROUNDS` env var. If both are set, the JSON value wins.
 
 ## Ripple Engine 2.0
 

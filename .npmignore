@@ -26,6 +26,6 @@ coverage/
 *.sqlite-wal
 *.tsbuildinfo
 
-_splash_preview.ts
+scripts/_splash_preview.ts
+scripts/start.bat
 parse_trending.mjs
-start.bat

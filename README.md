@@ -1,94 +1,143 @@
 # DeepSeek Orcana
 
-DeepSeek Orcana is a Bun + TypeScript + Ink terminal coding agent. It is designed for local codebase workflows: reading code, editing files, calling tools, running verification commands, and reducing the risk of broken edits or false completion through layered runtime constraints.
+<p align="center">
+  <strong>The coding agent that refuses to ship broken code.</strong><br>
+  26 safety gates per round. 7-layer change-impact analysis. Evidence-backed completion.
+</p>
 
-Orcana is not designed as a free-form chatbot wrapped around shell access. It is a constraint-first coding agent runtime: the agent loop, tool layer, permission gates, context budget, verification checks, and recovery paths are treated as first-class runtime components.
+<p align="center">
+  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/dw/deepseek-orcana" alt="downloads"></a>
+  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/deepseek-orcana?style=flat" alt="stars"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-%23f9f1e4" alt="Bun"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/lang-TypeScript-%233178c6" alt="TypeScript"></a>
+</p>
 
-## Current Position
+<p align="center">
+  <a href="./README.zh.md">中文</a>
+</p>
 
-Orcana is currently a single-agent terminal coding runtime powered by DeepSeek’s Anthropic-compatible API by default. It is suitable for:
+---
 
-* Understanding and modifying TypeScript / JavaScript projects
-* Multi-round coding tasks with verification
-* Local tool-based development workflows
-* Researching coding-agent runtime design, tool governance, context management, and verification loops
+## What is Orcana?
 
-It should not yet be described as a fully mature Claude Code equivalent. The repository already contains a strong agent-runtime foundation, but several capabilities are still partial or planned, including full MCP resources/prompts, full hook lifecycle events, IDE integration, checkpoint/rewind UX, and multi-agent execution.
+Orcana is a **constraint-first terminal coding agent**. It reads, writes, and reasons about code — but unlike a generic LLM-with-shell, every action passes through independent safety gates, every edit is checked for downstream impact, and completion requires verifiable evidence.
 
-## Quick Start
+```
+You: "add a logout button"
+Orcana: reads files → traces callers → writes code → runs typecheck → runs tests → Flash Judge verifies → done
+         ↑                ↑              ↑            ↑              ↑              ↑
+      Permission       Ripple        Sandbox      Evidence        Flash        Completion
+       Gate            Engine        Guard        Ledger         Judge          Gate
+```
 
-### Requirements
+> **Orcana** = Orca + Arcana + NA (Native Agent). Moves through deep code like an orca — understands hidden currents, turns complexity into results.
 
-* Bun >= 1.3.0
-* Node.js >= 18
-* DeepSeek API key
-
-### Install
+## Install
 
 ```bash
 npm install -g deepseek-orcana
-```
-
-Available commands:
-
-```bash
-orcana
-deepseek-orcana
-deepseek-code
-deepseek
-```
-
-### Configure
-
-```bash
 export DEEPSEEK_API_KEY="sk-your-key-here"
-```
-
-Or copy the example environment file:
-
-```bash
-cp .env.example .env
-```
-
-### Use
-
-```bash
 orcana
-orcana "explain this codebase"
-orcana --cli
-orcana list
-orcana last
 ```
 
-## Core Capabilities
+Also available as `deepseek-orcana`, `deepseek-code`, `deepseek`.
 
-* Agent Loop: multi-round execution, tool calls, context budget, verification, and completion control
-* Tool Layer: file, search, shell, git, MCP, LSP, TypeScript, WebFetch, and transaction tools
-* Permission Gate: category-based and project-level control over risky tool calls
-* Ripple Engine: TypeScript-aware change-impact analysis and cascade-risk detection
-* Provider Layer: DeepSeek by default, with Anthropic / OpenAI / multi-provider extension points
-* Context System: context budgeting, caching, compaction, and task-relevant context organization
-* Sandbox: Windows Job Object + PathGuard; degraded sandbox mode on macOS/Linux
-* TUI: Ink-based terminal user interface
+```bash
+orcana "refactor the auth module"     # One-shot task
+orcana --cli                          # Classic CLI mode
+orcana list                           # Saved sessions
+orcana last                           # Resume latest
+```
 
-## Documentation
+## Why Orcana
 
-* [Getting Started](docs/en/getting-started.md)
-* [Configuration](docs/en/configuration.md)
-* [CLI Reference](docs/en/cli-reference.md)
-* [Architecture Overview](docs/en/architecture/overview.md)
-* [Agent Loop](docs/en/architecture/agent-loop.md)
-* [Tool Layer](docs/en/architecture/tool-layer.md)
-* [Ripple Engine](docs/en/architecture/ripple-engine.md)
-* [Sandbox and Permissions](docs/en/architecture/sandbox-and-permissions.md)
-* [Testing](docs/en/development/testing.md)
-* [Security](docs/en/security.md)
-* [Roadmap](docs/en/roadmap.md)
+Most coding agents have 3–5 guardrails. Orcana has **26 distinct safety mechanisms per round** — layered across thinking, tool execution, and completion. No single mechanism is trusted alone.
+
+| When | Mechanism | What it prevents |
+|------|-----------|-----------------|
+| **Before the model speaks** | Context Budget Gate | Silent context overflow (WARN 524K / BLOCK 629K) |
+| | Flash Triage | Wrong task classification (1 call replaces 4 keyword classifiers) |
+| | Thinking Escalation | Stubborn retries — auto-upgrades to 32K max thinking on ≥3 errors |
+| **Before tools execute** | Permission Gate | Unauthorized tool use (category-based + project-level control) |
+| | Ripple Block Gate | Broken callers — blocks writes until every affected call site is handled |
+| | ContextReadiness Gate | Editing before reading — blocks writes if project context isn't acquired yet |
+| | Rate Limiter | Tool spam — per-category caps per round (shell=5, file=10, network=3) |
+| | Mode Contract | Role violations — planner can't write code, reviewer can't execute |
+| **After tools execute** | Error Tracker | Blind retries — 2 repeated failures → forced web search, 4 → admit defeat |
+| | Shell Side-Effect Guard | Dangerous commands — 18 patterns detect recursive rm, force push, system mutation |
+| | Write Guard | Un-read file edits — strict mode blocks writes to files never read |
+| | Journal Veto | Iron-law violations — meta-agent veto on write operations |
+| **Before claiming "done"** | Ripple Exit Gate | Unresolved cascade — won't finish with pending ripple obligations |
+| | Task Tracker Gate | Incomplete work — blocks completion when checklist items remain |
+| | Quality Gate | Low-confidence delivery — blocks when confidence < threshold |
+| | Flash Judge | False completion — independent Flash model verifies claims |
+| | Evidence Gate | Unverified claims — `canClaimDone()` returns false without typecheck/test/build proof |
+| | Truthfulness Gate | Lying about verification — cross-checks final text claims against Evidence Ledger |
+| **Emergency** | Gate Overflow | Infinite loops — 3 blocks → strategy switch prompt, 5 → hard BLOCKED |
+
+→ [ARCHITECTURE.md](./ARCHITECTURE.md) for the complete 26-gate loop anatomy and DeepSeek V4 mechanism deep-dives.
+
+## Ripple Engine 2.0
+
+**Before any file write, Orcana asks: "who calls this?"** The Ripple Engine traces TypeScript dependencies through 7 layers — from API surface diff to semantic reference resolution to obligation gate — and blocks the write until every affected caller is updated.
+
+```
+API change ──► L1 Diff (8 change kinds) ──► L2 TypeChecker.findReferences ──► L3 Classify (14 usage kinds)
+                                                          │
+                                                          ▼
+                                              L4 Test Discovery ──► L5 Obligation Gate
+                                                          │
+                                              L7 AstGrep (enrichment)
+                                                          │
+                                                          ▼
+                                                   allow / warn / block
+```
+
+212 tests. 8.5/10 self-assessed. → [docs/ripple-engine.md](docs/ripple-engine.md)
 
 ## Project Status
 
-Orcana is currently in the 0.3.x stage. Stable, partial, and planned capabilities are explicitly marked in the architecture documentation. Treat the status table as the source of truth.
+**v0.3.x** — single-agent runtime foundation is complete. Some capabilities are partial, none are fake.
 
-## License
+| Status | Meaning |
+|--------|---------|
+| 🟢 Stable | Wired into main loop, reliable for daily tasks |
+| 🟡 Partial | Implemented but has gaps — platform limitations, UX rough edges, or narrow coverage |
+| 🔵 Planned | On the roadmap, not yet built |
 
-MIT
+See [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) for the 10-Phase plan to v1.0.
+
+## Document Map
+
+**New here?** Start with Design Philosophy, then Architecture.
+
+| Doc | What you'll learn |
+|-----|-------------------|
+| [docs/design-philosophy.md](./docs/design-philosophy.md) | Why constraint-first — from Tool Loop to Evidence Ledger |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Complete 26-gate loop, DeepSeek V4 mechanisms, anti-loop patterns |
+| [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10-Phase roadmap to v1.0, P0/P1/P2 priorities |
+| [docs/ripple-engine.md](./docs/ripple-engine.md) | 7-layer change-impact analysis deep-dive |
+| [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | Every gate, every scenario, verified behavior |
+| [SECURITY.md](./SECURITY.md) | Sandbox capabilities, vulnerability reporting |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Setup, conventions, PR process |
+
+## Development
+
+```bash
+bun install
+bun run typecheck    # tsc --noEmit
+bun test             # run test suite
+bun run build        # tsc → dist/
+```
+
+## Built On
+
+| Project | Role |
+|---------|------|
+| [OpenCode](https://github.com/anomalyco/opencode) (MIT) | Architecture foundation — MCP bridge, config system, TUI patterns, agent loop |
+| [CodeGraph](https://github.com/colbymchenry/codegraph) (MIT) | MCP-powered code intelligence — symbol search, reference resolution |
+| [Reasonix](https://github.com/esengine/reasonix) (MIT) | Cache-first context compaction — tiered thresholds, frozen stable prefix |
+
+[ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md) · [LICENSE](./LICENSE) (MIT)

@@ -4,6 +4,11 @@ dist/
 *.log
 .codegraph/
 .wolf/
+.wolf/**/*
+
+# Dev scripts — not part of the distributed package
+scripts/_splash_preview.ts
+scripts/start.bat
 
 # Bun-only project — no npm lockfile
 package-lock.json

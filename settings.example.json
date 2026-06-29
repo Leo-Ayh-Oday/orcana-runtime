@@ -1,8 +1,8 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "_comment": "Copy this file to ~/.deepseek-code/settings.json and customize. All fields are optional — defaults are used when omitted.",
+  "_comment": "Copy to ~/.deepseek-code/settings.json and customize. All fields optional — defaults used when omitted.",
 
   "provider": {
+    "_comment": "Provider config. modelOverride: set to a model ID to override default. Cost mode: 'normal' (allow thinking) or 'strict' (no thinking, cheaper).",
     "baseUrl": "https://api.deepseek.com/anthropic",
     "apiKey": "${DEEPSEEK_API_KEY}",
     "modelOverride": null,
@@ -11,6 +11,7 @@
   },
 
   "mcp": {
+    "_comment": "MCP servers. Disable 'codegraph' if you haven't installed it. Failed servers are skipped with a warning — the agent continues without them.",
     "servers": {
       "codegraph": {
         "command": "codegraph",
@@ -28,6 +29,7 @@
   },
 
   "permissions": {
+    "_comment": "Tool permission rules. categoryOverrides: customize risk levels per tool category.",
     "rules": [
       {
         "toolName": "Bash",
@@ -47,28 +49,31 @@
   },
 
   "tui": {
+    "_comment": "TUI settings. theme: 'dark' | 'light' | 'auto' (match terminal). maxHistory: message scrollback limit (100 recommended).",
     "splash": true,
     "theme": "dark",
     "maxHistory": 100
   },
 
   "memory": {
+    "_comment": "Memory subsystem. checkpointThresholdTokens: minimum tokens between checkpoints.",
     "checkpointThresholdTokens": 50000,
     "compactionEnabled": true,
     "knowledgeBaseEnabled": true
   },
 
   "sandbox": {
+    "_comment": "Sandbox config. blockedPaths are additional paths outside the project root that tools cannot access. On macOS/Linux the sandbox runs in degraded mode (PathGuard audit only, no kernel isolation).",
     "enabled": true,
-    "blockedPaths": [
-      "C:\\Windows",
-      "C:\\Program Files",
-      "/System",
-      "/etc"
-    ]
+    "blockedPaths": {
+      "win32": ["C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)"],
+      "darwin": ["/System", "/etc", "/tmp"],
+      "linux": ["/System", "/etc", "/boot"]
+    }
   },
 
   "loop": {
+    "_comment": "Loop config. maxSteps overrides DEEPSEEK_MAX_ROUNDS env var. autoContinue: false means plan requires user approval before execution.",
     "maxSteps": 100,
     "autoContinue": false,
     "planModeDefault": false

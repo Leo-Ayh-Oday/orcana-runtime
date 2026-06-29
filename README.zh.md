@@ -65,6 +65,7 @@ orcana last                  # 恢复最近会话
 | | Rate Limiter | 工具滥刷——每轮每类有上限（shell=5, file=10, network=3） |
 | | Mode Contract | 角色越界——planner 不能写代码，reviewer 不能执行 |
 | **工具执行后** | Error Tracker | 无脑重试——重复 2 次触发强制搜索学习，4 次承认失败 |
+| | Parallel Readonly Execution | 信息收集慢——同轮所有只读调用通过 `Promise.all` 并发执行 |
 | | Shell Side-Effect Guard | 危险命令——18 种模式检测递归删除、强制推送、系统变更 |
 | | Write Guard | 未读即改——strict 模式禁止编辑未曾读取的文件 |
 | | Journal Veto | 铁律违规——元 Agent 一票否决写操作 |
@@ -77,6 +78,16 @@ orcana last                  # 恢复最近会话
 | **紧急** | Gate Overflow | 无限循环——3 次拦截→策略提示，5 次→硬 BLOCKED |
 
 → [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 26-gate 回路解剖和 DeepSeek V4 机制深潜。
+
+> **沙箱说明**：macOS/Linux 上沙箱运行在降级模式——PathGuard 是事后审计（检测+记录），不是实时拦截。只有 Windows 有内核级 Job Object 隔离。README 表格描述的是*设计意图*；平台差异详见 [SECURITY.md](./SECURITY.md)。
+
+## 已知限制
+
+真实取舍，不隐藏：
+
+- **Thinking Compaction** 每会话只触发一次（40% 上下文时）。在极长任务上，上下文仍会增长到 60% Budget Gate 阻断，中间没有第二次 compaction。
+- **Flash Judge** 每任务最多 3 次评估即熔断。如果 3 次后仍是 NOT_SATISFIED，会话阻断——不会沉默接受无验证的完成。
+- **双配置路径**：`settings.json` 的 `loop.maxSteps` 优先于 `DEEPSEEK_MAX_ROUNDS` 环境变量。同时设置时 JSON 值生效。
 
 ## Ripple Engine 2.0 — 代码变更影响分析
 

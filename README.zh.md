@@ -2,12 +2,11 @@
 
 <p align="center">
   <strong>不允许交付烂代码的编码智能体。</strong><br>
-  每轮 26 道安全门控 · 7 层变更影响分析 · 没证据不能 claim done
+  每轮 28 道安全门控 · 7 层变更影响分析 · 没证据不能 claim done
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm"></a>
-  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/dw/deepseek-orcana" alt="downloads"></a>
   <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/deepseek-orcana?style=flat" alt="stars"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-%23f9f1e4" alt="Bun"></a>
@@ -52,7 +51,7 @@ orcana last                  # 恢复最近会话
 
 ## 为什么选 Orcana
 
-多数 coding agent 只有 3-5 个防护。Orcana **每轮执行穿过 26 道独立安全机制**——分层覆盖思考、工具执行和完成三个阶段。不信任任何单一机制。
+多数 coding agent 只有 3-5 个防护。Orcana **每轮执行穿过 28 道独立安全机制**——分层覆盖思考、工具执行和完成三个阶段。不信任任何单一机制。
 
 | 时机 | 机制 | 防止什么 |
 |------|------|---------|
@@ -77,7 +76,7 @@ orcana last                  # 恢复最近会话
 | | Truthfulness Gate | 验证撒谎——交叉检查最终文本和证据账本 |
 | **紧急** | Gate Overflow | 无限循环——3 次拦截→策略提示，5 次→硬 BLOCKED |
 
-→ [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 26-gate 回路解剖和 DeepSeek V4 机制深潜。
+→ [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 28-gate 回路解剖和 DeepSeek V4 机制深潜。
 
 > **沙箱说明**：macOS/Linux 上沙箱运行在降级模式——PathGuard 是事后审计（检测+记录），不是实时拦截。只有 Windows 有内核级 Job Object 隔离。README 表格描述的是*设计意图*；平台差异详见 [SECURITY.md](./SECURITY.md)。
 
@@ -126,7 +125,7 @@ API 变更 ──► L1 Diff（8 种变更类型）──► L2 TypeChecker.find
 | 文档 | 你会了解到 |
 |------|-----------|
 | [docs/design-philosophy.md](./docs/design-philosophy.md) | 为什么约束优先——从工具循环到证据账本 |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 完整 26-gate 回路、DeepSeek V4 机制、反循环模式 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 完整 28-gate 回路、DeepSeek V4 机制、反循环模式 |
 | [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10 Phase 路线图、P0/P1/P2 优先级 |
 | [docs/ripple-engine.md](./docs/ripple-engine.md) | 7 层变更影响分析深度解析 |
 | [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | 每个 gate、每个场景、验证行为 |

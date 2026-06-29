@@ -18,7 +18,7 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| Loop / Gate Chain (26 gates) | 🟢 stable | Core orchestrator, all gates wired and tested |
+| Loop / Gate Chain (28 gates) | 🟢 stable | Core orchestrator, all gates wired and tested |
 | Flash Triage | 🟢 stable | Semantic entrance classification, Flash model |
 | Flash Judge | 🟢 stable | Independent completion verifier, circuit breaker |
 | Ripple Engine 2.0 | 🟢 stable | 7 layers, 212 tests, 8.5/10 score |
@@ -63,38 +63,39 @@ ROUND START
   │
   ▼ PROVIDER STREAM
   │
-  ├─ [7] Provider Stream Recovery     — long-task vs generic recovery prompts on error
+  ├─ [8] Provider Stream Recovery     — long-task vs generic recovery prompts on error
   │
   ▼ NO TOOL CALLS? → Final Text Gates
   │
-  ├─ [8] Ripple Exit Gate             — unresolved cascade obligations → continue
-  ├─ [9] Planning Gate                — plan quality eval (missing items, score)
-  ├─ [10] Task Tracker Completion      — all steps done? verification evidence present?
-  ├─ [11] Quality Gate                 — confidence + contracts + typecheck → retry/accept
-  ├─ [12] External Completion Gate     — regex-based evidence checklist
-  ├─ [13] Flash Judge                  — independent Flash model evaluates completion
+  ├─ [9] Ripple Exit Gate             — unresolved cascade obligations → continue
+  ├─ [10] Planning Gate                — plan quality eval (missing items, score)
+  ├─ [11] Task Tracker Completion      — all steps done? verification evidence present?
+  ├─ [12] Quality Gate                 — confidence + contracts + typecheck → retry/accept
+  ├─ [13] External Completion Gate     — regex-based evidence checklist
+  ├─ [14] Flash Judge                  — independent Flash model evaluates completion
   │
   ▼ TOOL EXECUTION
   │
-  ├─ [14] Self-Learning Error Tracker  — repeated failures → escalating system prompts
-  ├─ [15] Smart Truncation             — head+tail with error-aware allocation
-  ├─ [16] Ripple Verification          — LSP fast path / tsc ground truth per modified file
-  ├─ [17] Microcompact (forward)       — trim large tool results before history
-  ├─ [18] Gate Overflow Tracker        — 3 blocks → strategy switch, 5 blocks → BLOCKED
-  ├─ [19] Post-Round Batch TypeCheck   — tsc once per round, not per file
+  ├─ [15] Self-Learning Error Tracker  — repeated failures → escalating system prompts
+  ├─ [16] Smart Truncation             — head+tail with error-aware allocation
+  ├─ [17] Parallel Readonly Execution  — all readonly tool calls in a round run concurrently
+  ├─ [18] Ripple Verification          — LSP fast path / tsc ground truth per modified file
+  ├─ [19] Microcompact (forward)       — trim large tool results before history
+  ├─ [20] Gate Overflow Tracker        — 3 blocks → strategy switch, 5 blocks → BLOCKED
+  ├─ [21] Post-Round Batch TypeCheck   — tsc once per round, not per file
   │
   ▼ HISTORICAL (periodic)
   │
-  ├─ [20] Microcompact (retrospective) — compact historical results every 10 rounds
-  ├─ [21] Thinking Compaction          — compress chains at 40% context budget
-  ├─ [22] Semantic Recall              — L3 volatile context via Flash-scored similarity
-  ├─ [23] Knowledge Distillation       — web_search results → knowledge base
-  ├─ [24] Knowledge Reconciliation     — prune + FTS5 rebuild every 50 rounds
-  ├─ [25] Adaptive Checkpoint          — density-aware snapshot (complexity × budget)
-  └─ [26] Revise Plan                  — stuck detection → push back to planning
+  ├─ [22] Microcompact (retrospective) — compact historical results every 10 rounds
+  ├─ [23] Thinking Compaction          — compress chains at 40% context budget
+  ├─ [24] Semantic Recall              — L3 volatile context via Flash-scored similarity
+  ├─ [25] Knowledge Distillation       — web_search results → knowledge base
+  ├─ [26] Knowledge Reconciliation     — prune + FTS5 rebuild every 50 rounds
+  ├─ [27] Adaptive Checkpoint          — density-aware snapshot (complexity × budget)
+  └─ [28] Revise Plan                  — stuck detection → push back to planning
 ```
 
-> **26 distinct safety mechanisms per round.** Most coding agents have 3-5.
+> **28 distinct safety mechanisms per round.** Most coding agents have 3-5.
 
 ---
 
@@ -536,7 +537,7 @@ Set via `DEEPSEEK_COST_MODE=strict`. In strict mode, the agent works with Pro-on
 | **Thinking tokens** | Persist, compact, recall reasoning chains | ❌ Not available |
 | **Flash model** | 6 independent sub-processor roles | Separate API key to another provider |
 | **FIM endpoint** | `edit_fim` tool | ❌ Not available |
-| **1M context** | 50-round loops with 26 gates | Smaller window → more compaction |
+| **1M context** | 50-round loops with 28 gates | Smaller window → more compaction |
 | **Prefix auto-cache** | Frozen stable prefix across all rounds | No cache → 5-10× cost increase |
 | **Thinking budget tiers** | Auto-escalate to 32K on error cascades | ❌ Not available |
 | **Cost mode** | Normal/strict toggle | No equivalent |

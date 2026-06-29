@@ -2,12 +2,11 @@
 
 <p align="center">
   <strong>The coding agent that refuses to ship broken code.</strong><br>
-  26 safety gates per round. 7-layer change-impact analysis. Evidence-backed completion.
+  28 safety gates per round. 7-layer change-impact analysis. Evidence-backed completion.
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm"></a>
-  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/dw/deepseek-orcana" alt="downloads"></a>
   <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/deepseek-orcana?style=flat" alt="stars"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-%23f9f1e4" alt="Bun"></a>
@@ -53,7 +52,7 @@ orcana last                           # Resume latest
 
 ## Why Orcana
 
-Most coding agents have 3–5 guardrails. Orcana has **26 distinct safety mechanisms per round** — layered across thinking, tool execution, and completion. No single mechanism is trusted alone.
+Most coding agents have 3–5 guardrails. Orcana has **28 distinct safety mechanisms per round** — layered across thinking, tool execution, and completion. No single mechanism is trusted alone.
 
 | When | Mechanism | What it prevents |
 |------|-----------|-----------------|
@@ -78,7 +77,7 @@ Most coding agents have 3–5 guardrails. Orcana has **26 distinct safety mechan
 | | Truthfulness Gate | Lying about verification — cross-checks final text claims against Evidence Ledger |
 | **Emergency** | Gate Overflow | Infinite loops — 3 blocks → strategy switch prompt, 5 → hard BLOCKED |
 
-→ [ARCHITECTURE.md](./ARCHITECTURE.md) for the complete 26-gate loop anatomy and DeepSeek V4 mechanism deep-dives.
+→ [ARCHITECTURE.md](./ARCHITECTURE.md) for the complete 28-gate loop anatomy and DeepSeek V4 mechanism deep-dives.
 
 > **Sandbox note**: On macOS/Linux, the sandbox runs in degraded mode — PathGuard is post-execution audit (detects and records), not real-time prevention. Only Windows gets kernel-level Job Object isolation. The README table describes the *design intent*; see [SECURITY.md](./SECURITY.md) for platform-by-platform capabilities.
 
@@ -127,7 +126,7 @@ See [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) for the 10-Phase plan to v1.0
 | Doc | What you'll learn |
 |-----|-------------------|
 | [docs/design-philosophy.md](./docs/design-philosophy.md) | Why constraint-first — from Tool Loop to Evidence Ledger |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | Complete 26-gate loop, DeepSeek V4 mechanisms, anti-loop patterns |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Complete 28-gate loop, DeepSeek V4 mechanisms, anti-loop patterns |
 | [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10-Phase roadmap to v1.0, P0/P1/P2 priorities |
 | [docs/ripple-engine.md](./docs/ripple-engine.md) | 7-layer change-impact analysis deep-dive |
 | [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | Every gate, every scenario, verified behavior |

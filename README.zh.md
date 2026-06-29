@@ -1,101 +1,142 @@
 # DeepSeek Orcana
 
-> Constraint-first DeepSeek coding agent runtime for terminal workflows.
-
-DeepSeek Orcana 是一个面向本地代码库的终端编码智能体。它基于 **Bun + TypeScript + Ink** 构建，默认使用 DeepSeek 的 Anthropic-compatible API，并围绕工具治理、权限控制、代码影响分析、沙箱、记忆、MCP 和验证闭环构建了一套 coding agent runtime。
-
-Orcana 的目标不是简单地把大模型接到 shell 上，而是让智能体在每一轮执行中都经过约束、审计和验证，从而更难写坏代码、更难误判完成、更容易从失败中恢复。
-
 <p align="center">
-  <strong>DeepSeek Native</strong> ·
-  <strong>Terminal Coding Agent</strong> ·
-  <strong>Tool Governance</strong> ·
-  <strong>MCP</strong> ·
-  <strong>Ripple Analysis</strong> ·
-  <strong>Verification Loop</strong>
+  <strong>不允许交付烂代码的编码智能体。</strong><br>
+  每轮 26 道安全门控 · 7 层变更影响分析 · 没证据不能 claim done
 </p>
 
-## 为什么值得关注？
+<p align="center">
+  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/dw/deepseek-orcana" alt="downloads"></a>
+  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/deepseek-orcana?style=flat" alt="stars"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-%23f9f1e4" alt="Bun"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/lang-TypeScript-%233178c6" alt="TypeScript"></a>
+</p>
 
-Orcana 聚焦的是 Claude Code / Codex / Cursor Agent 这类编码智能体背后的核心问题：
-**当模型拥有文件、终端、搜索、Git、MCP 等工具时，怎样让它可靠地完成真实工程任务？**
+<p align="center">
+  <a href="./README.md">English</a>
+</p>
 
-因此 Orcana 把重点放在几个底层能力上：
+---
 
-* **Constraint-first Agent Loop**：多层门控约束每一轮模型行动，避免盲目循环和过早完成。
-* **Tool Governance**：工具注册、权限分类、确认机制、只读工具、并发安全、流式执行与错误处理。
-* **Ripple Engine**：TypeScript-aware 代码变更影响分析，追踪 API 变更、调用方、测试与验证义务。
-* **Permission & Sandbox**：路径守卫、环境变量白名单、命令风险控制、Windows Job Object 沙箱。
-* **Verification Loop**：通过测试、类型检查、Flash Judge 和证据账本降低“口头完成”的风险。
-* **Memory & Context System**：长上下文预算、压缩、记忆回召、跨会话经验沉淀。
-* **MCP Ready**：支持 MCP 工具桥接，为外部工具、代码图谱和项目上下文扩展预留接口。
-* **Research-friendly Runtime**：适合研究 coding agent 的工具层、规划层、上下文层和自我修复机制。
+## Orcana 是什么？
 
-## 当前状态
+Orcana 是一个**约束优先的终端编码智能体**。它能读代码、写代码、推理架构——但和那些"把大模型接到 shell 上"的工具不同，Orcana 的每一次行动都穿过独立安全门控，每一次编辑都检查下游影响，完成交付需要可验证的证据。
 
-Orcana 仍是一个快速演进中的开源项目。部分能力已经可用，部分能力仍处于 partial 或 planned 状态。README 只展示核心方向；具体实现状态请以 `ARCHITECTURE.md` 和源码为准。
+```
+你说："帮我加个退出登录按钮"
+Orcana：读文件 → 追踪调用方 → 写代码 → 跑 typecheck → 跑测试 → Flash Judge 验证 → 交付
+         ↑            ↑           ↑          ↑            ↑              ↑
+      权限门       涟漪引擎    沙箱守卫    证据账本     独立法官       完成门控
+```
 
-## Quick Start
+> **Orcana** = Orca（虎鲸）+ Arcana（奥术）+ NA（Native Agent）。像虎鲸穿行深海——感知暗流，把复杂工程变成可执行结果。
+
+## 安装
 
 ```bash
 npm install -g deepseek-orcana
-```
-
-```bash
 export DEEPSEEK_API_KEY="sk-your-key-here"
 orcana
 ```
 
-可用命令：
+可用命令：`orcana`、`deepseek-orcana`、`deepseek-code`、`deepseek`。
 
 ```bash
-orcana
-orcana "explain this codebase"
-orcana --cli
-orcana list
-orcana last
+orcana "重构认证模块"        # 单次任务
+orcana --cli                 # 经典 CLI 模式
+orcana list                  # 查看历史会话
+orcana last                  # 恢复最近会话
 ```
-当前状态
 
-DeepSeek Orcana 目前处于早期快速演进阶段，定位是一个 constraint-first terminal coding agent runtime，而不是普通的命令行聊天工具。项目已经具备较完整的单智能体运行时骨架，包括 Agent Loop、工具层、权限控制、Ripple 代码影响分析、上下文预算、记忆系统、沙箱、TUI 和验证闭环。
+## 为什么选 Orcana
 
-为了避免把 planned 能力误写成已完成能力，Orcana 使用以下状态标记：
+多数 coding agent 只有 3-5 个防护。Orcana **每轮执行穿过 26 道独立安全机制**——分层覆盖思考、工具执行和完成三个阶段。不信任任何单一机制。
 
-状态	含义
-Stable	已接入主流程，可在常规任务中使用
-Partial	已有实现，但仍存在边界条件、平台限制或体验缺口
-Experimental	可用于研究和验证，但接口或行为可能变化
-Planned	路线图能力，尚未作为稳定功能提供
-已具备的核心能力
-模块	当前状态	说明
-Agent Loop	Stable	多轮执行、工具调用、上下文预算、完成度判断和失败恢复
-Tool Registry	Stable	文件、搜索、Shell、Git、LSP、TypeScript、WebFetch、MCP 等工具注册与调用
-Permission Gate	Stable	按工具类别控制 safe / file / network / shell / git 等风险调用
-Ripple Engine	Stable / Experimental	TypeScript-aware 变更影响分析，用于追踪 API 变更、调用方和验证义务
-Verification Loop	Stable / Partial	结合测试、typecheck、Flash Judge 和证据记录降低“口头完成”风险
-Memory System	Partial	支持压缩、召回和跨会话经验沉淀，仍在演进中
-MCP Bridge	Partial	当前重点支持 MCP tools，resources / prompts / elicitation 等能力仍在规划中
-Sandbox	Partial	Windows Job Object + PathGuard 已接入；macOS / Linux 沙箱仍为降级模式
-TUI	Partial	基于 Ink 的终端界面可用，但长输入、滚动、计划审批、证据回放等体验仍需增强
-Multi-Agent	Planned	当前主线仍是高约束单 Agent，多 Agent 会在单 Agent runtime 足够稳定后再推进
-当前阶段的设计重点
+| 时机 | 机制 | 防止什么 |
+|------|------|---------|
+| **模型开口前** | Context Budget Gate | 静默超出上下文（524K WARN / 629K BLOCK） |
+| | Flash Triage | 任务分类错误（1 次调用替代 4 个关键词分类器） |
+| | Thinking Escalation | 固执重试——≥3 错误自动升级到 32K max thinking |
+| **工具执行前** | Permission Gate | 越权操作——按类别 + 项目级控制风险调用 |
+| | Ripple Block Gate | 写崩调用方——所有受影响调用点处理完才放行 |
+| | ContextReadiness Gate | 没读就改——项目上下文没获取够就禁止写入 |
+| | Rate Limiter | 工具滥刷——每轮每类有上限（shell=5, file=10, network=3） |
+| | Mode Contract | 角色越界——planner 不能写代码，reviewer 不能执行 |
+| **工具执行后** | Error Tracker | 无脑重试——重复 2 次触发强制搜索学习，4 次承认失败 |
+| | Shell Side-Effect Guard | 危险命令——18 种模式检测递归删除、强制推送、系统变更 |
+| | Write Guard | 未读即改——strict 模式禁止编辑未曾读取的文件 |
+| | Journal Veto | 铁律违规——元 Agent 一票否决写操作 |
+| **宣称"完成"前** | Ripple Exit Gate | 级联未解决——涟漪义务未清不能结束 |
+| | Task Tracker Gate | 任务未完成——清单项没勾完就阻止 |
+| | Quality Gate | 低质量交付——置信度不足时阻止完成 |
+| | Flash Judge | 虚假完成——独立 Flash 模型验证声称的完成 |
+| | Evidence Gate | 无证据声称——没跑过 typecheck/test/build 就不能 `canClaimDone()` |
+| | Truthfulness Gate | 验证撒谎——交叉检查最终文本和证据账本 |
+| **紧急** | Gate Overflow | 无限循环——3 次拦截→策略提示，5 次→硬 BLOCKED |
 
-Orcana 当前最重要的目标不是堆更多工具，而是把单 Agent 做到更可靠：
+→ [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 26-gate 回路解剖和 DeepSeek V4 机制深潜。
 
-更强的工具治理和风险评估
-更可靠的 patch / diff / rollback 工作流
-更清晰的验证证据链
-更强的上下文预算和压缩策略
-更可观测的 agent 执行轨迹
-更适合真实项目的 TUI 交互体验
-未来发展路线
+## Ripple Engine 2.0 — 代码变更影响分析
 
-Orcana 的长期目标是成为一个 DeepSeek-native 的本地编码智能体运行时，在终端中提供接近 Claude Code / Codex / Cursor Agent 的真实工程任务能力，同时保持开放、可研究、可扩展。
+**每次文件写入前，Orcana 都会问："谁在调用它？"** Ripple Engine 通过 7 层追踪 TypeScript 依赖——从 API 差异到语义引用解析到义务门控——在所有受影响调用方更新完之前阻断写入。
 
-核心原则：
+```
+API 变更 ──► L1 Diff（8 种变更类型）──► L2 TypeChecker.findReferences ──► L3 用法分类（14 种）
+                                                │
+                                                ▼
+                                    L4 测试发现 ──► L5 义务门控
+                                                │
+                                    L7 AstGrep（补充）
+                                                │
+                                                ▼
+                                        allow / warn / block
+```
 
-先可靠，再自主。
-先单 Agent 闭环，再多 Agent 协作。
-先工具治理，再工具数量。
-先验证证据，再模型自述。
-先真实代码能力，再生态包装。
+212 tests。自评 8.5/10。→ [docs/ripple-engine.md](docs/ripple-engine.md)
+
+## 项目状态
+
+**v0.3.x** — 单 Agent 运行时骨架已完整，部分能力还在打磨。不虚标，不画饼。
+
+| 状态 | 含义 |
+|------|------|
+| 🟢 Stable | 已接入主流程，日常任务可靠 |
+| 🟡 Partial | 已实现但有限制——平台差异、交互糙、或覆盖窄 |
+| 🔵 Planned | 在路线图上，还没做 |
+
+详见 [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md)——10 Phase 路线图到 v1.0。
+
+## 文档导航
+
+**刚来？** 先读设计哲学，再看架构。
+
+| 文档 | 你会了解到 |
+|------|-----------|
+| [docs/design-philosophy.md](./docs/design-philosophy.md) | 为什么约束优先——从工具循环到证据账本 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 完整 26-gate 回路、DeepSeek V4 机制、反循环模式 |
+| [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10 Phase 路线图、P0/P1/P2 优先级 |
+| [docs/ripple-engine.md](./docs/ripple-engine.md) | 7 层变更影响分析深度解析 |
+| [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | 每个 gate、每个场景、验证行为 |
+| [SECURITY.md](./SECURITY.md) | 沙箱能力、漏洞报告 |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | 环境搭建、代码规范、PR 流程 |
+
+## 开发
+
+```bash
+bun install
+bun run typecheck    # tsc --noEmit
+bun test             # 运行测试
+bun run build        # tsc → dist/
+```
+
+## 基于
+
+| 项目 | 角色 |
+|------|------|
+| [OpenCode](https://github.com/anomalyco/opencode) (MIT) | 架构基础——MCP bridge、配置系统、TUI 模式、Agent Loop |
+| [CodeGraph](https://github.com/colbymchenry/codegraph) (MIT) | MCP 代码智能——符号搜索、引用追踪 |
+| [Reasonix](https://github.com/esengine/reasonix) (MIT) | 缓存优先上下文压缩——分层阈值、冻结稳定前缀 |
+
+[ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md) · [LICENSE](./LICENSE) (MIT)

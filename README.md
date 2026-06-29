@@ -1,207 +1,94 @@
 # DeepSeek Orcana
 
-<p align="center"><strong>A Bun-based terminal coding agent with constraint-first architecture and DeepSeek-powered runtime.</strong></p>
+DeepSeek Orcana 是一个基于 Bun + TypeScript + Ink 的终端编码智能体。它面向本地代码库工作流，能够读取代码、编辑文件、调用工具、运行验证命令，并通过多层约束机制降低智能体在长任务中写坏代码、误判完成或破坏仓库状态的风险。
 
-<p align="center">
-  <a href="./README.zh.md">中文</a> | English
-</p>
+Orcana 的设计重点不是“让模型自由发挥”，而是把编码智能体的执行过程拆成可约束、可观察、可验证、可恢复的运行时系统。
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/dw/deepseek-orcana" alt="npm weekly downloads"></a>
-  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/deepseek-orcana?style=flat" alt="GitHub stars"></a>
-  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana/issues"><img src="https://img.shields.io/github/issues/Leo-Ayh-Oday/deepseek-orcana" alt="GitHub issues"></a>
-  <br>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://bun.sh"><img src="https://img.shields.io/badge/runtime-Bun-f9f1e4" alt="Runtime: Bun"></a>
-  <a href="./CONTRIBUTING.md"><img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions welcome"></a>
-</p>
+## 当前定位
 
----
+Orcana 目前是一个单智能体 terminal coding agent runtime，默认使用 DeepSeek 的 Anthropic-compatible API。它适合用于：
 
-DeepSeek Orcana is a single-agent terminal coding assistant. It reads, writes, and reasons about code — with a **constraint-first design** that makes it actively harder for AI to produce bad code.
+* 理解和修改 TypeScript / JavaScript 项目
+* 多轮代码编辑与验证
+* 工具调用受控的本地开发任务
+* 研究 coding agent 的工具层、约束层、上下文层和验证闭环
 
-Built with Bun + TypeScript + Ink (React TUI). Uses DeepSeek's Anthropic-compatible API as the default provider.
+它暂时不应该被描述为“完全等同 Claude Code 的成熟产品”。当前仓库已经具备较完整的 agent runtime 骨架，但部分能力仍处于 partial 或 planned 状态，例如完整 MCP resources/prompts、完整 hooks 生命周期、IDE 集成、checkpoint/rewind 用户界面、多智能体系统等。
 
-What is Orcana?
-Orcana = Orca + Arcana + NA.
+## 快速开始
 
-Orca symbolizes intelligence, strength, and deep-sea navigation. Arcana represents deep knowledge hidden beneath the surface. NA stands for Native Agent.
+### 环境要求
 
-Orcana is a native coding agent that moves through the deep ocean of code like an orca, understands the hidden currents of complex systems, and turns engineering complexity into executable results.
+* Bun >= 1.3.0
+* Node.js >= 18
+* DeepSeek API Key
 
-## Highlights
-
-**26 safety mechanisms per round.** Every agent loop iteration passes through a chain of independent gates. No single mechanism is trusted alone. Built on **DeepSeek V4's unique capabilities** — thinking tokens, Flash sub-processing, FIM, 1M context, prefix caching — that no other model provides in combination.
-
-| Layer | Mechanism | Source |
-|-------|-----------|--------|
-| **Thinking** | Reasoning chain capture → persist, compact, recall across sessions (V4 proprietary) | `deepseek.ts:145-184` |
-| **Flash Sub-Processing** | 6 independent Flash roles: Judge, Triage, Compaction, Recall, Distill, Plan-Judge | `flash-judge.ts`, `flash-triage.ts` |
-| **FIM** | Fill-in-the-Middle editing via V4 `/beta/completions` endpoint | `provider/fim.ts` |
-| **Budget** | 1M context window: WARN at 524K, BLOCK at 629K | `loop.ts:684` |
-| **Cache** | Prefix auto-caching → frozen stable prefix computed once, hits every round | `deepseek.ts:42`, `loop.ts:733` |
-| **Thinking Escalation** | Auto-upgrade to 32K max thinking on error cascades (≥3) or broad edits (≥5) | `router.ts:62-70` |
-| **Entrance** | Flash Triage — one Flash call replaces 4 keyword classifiers | `agent/flash-triage.ts` |
-| **Safety** | Gate overflow: 3 blocks → strategy switch, 5 → BLOCKED | `loop.ts:1562-1607` |
-| **Learning** | Error tracker: 2 repeated failures → web search prompt, 4 → admit defeat | `loop.ts:96-123` |
-| **Verification** | Flash Judge — independent model evaluates completion (SATISFIED/NOT_SATISFIED/IMPOSSIBLE) | `agent/flash-judge.ts` |
-| **Testimony** | Testimony Ledger — tracks promises vs delivery, detects circular promises | `flash-judge.ts:196-249` |
-| **Dependency** | Ripple Engine 2.0 — 7-layer TS-aware cascade detection, 8.5/10 | [docs/ripple-engine.md](docs/ripple-engine.md) |
-| **Sandbox** | Job Object (kernel32) + PathGuard + env whitelist + timeout | `src/sandbox/` |
-| **Memory** | CJK bigram+trigram tokenizer, thinking compaction, knowledge reconciliation | `src/memory/` |
-
-→ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full 26-gate loop anatomy, DeepSeek V4 mechanism deep-dives, and anti-loop engineering. See [docs/ripple-engine.md](docs/ripple-engine.md) for the 7-layer Ripple Engine 2.0 architecture.
-
-> 📖 **Design Philosophy**: [From Tool Loop to Evidence Ledger — why Orcana is built as a constraint-first coding agent runtime](./docs/design-philosophy.md)
-
-## Quick Start
-
-### Requirements
-- **Bun** ≥ 1.3
-- **Node.js** ≥ 18 (for npm shim)
-- **DeepSeek API key** ([Get one here](https://platform.deepseek.com))
-
-### Install
+### 安装
 
 ```bash
 npm install -g deepseek-orcana
 ```
 
-The package exposes these commands: `orcana`, `deepseek-orcana`, `deepseek-code`, `deepseek`.
-
-> `deepseek-code` is occupied on npm. The package name is `deepseek-orcana`; `orcana` is the primary command.
-
-### Configure
+安装后可使用以下命令：
 
 ```bash
-# Set your API key
+orcana
+deepseek-orcana
+deepseek-code
+deepseek
+```
+
+### 配置
+
+```bash
 export DEEPSEEK_API_KEY="sk-your-key-here"
-
-# Or copy the example env file
-cp .env.example .env   # then edit .env with your key
 ```
 
-See [`.env.example`](./.env.example) for all configuration options.
-
-### Usage
+也可以复制示例配置：
 
 ```bash
-orcana                              # Start TUI
-orcana "explain this codebase"      # One-shot prompt
-orcana --cli                        # Classic CLI mode
-orcana list                         # List saved sessions
-orcana last                         # Resume latest session
+cp .env.example .env
 ```
 
-## Configuration
-
-Orcana uses `~/.deepseek-code/settings.json` for persistent configuration. Copy [`settings.example.json`](./settings.example.json) as a starting point:
+### 使用
 
 ```bash
-mkdir -p ~/.deepseek-code
-cp settings.example.json ~/.deepseek-code/settings.json
+orcana
+orcana "explain this codebase"
+orcana --cli
+orcana list
+orcana last
 ```
 
-### Config Files
+## 核心能力
 
-| File | Location | Purpose |
-|------|----------|---------|
-| `settings.json` | `~/.deepseek-code/` | Provider, TUI, memory, sandbox, MCP |
-| `mcp.json` | `~/.deepseek-code/` | MCP server definitions |
-| `permissions.json` | `~/.deepseek-code/` or `<project>/.deepseek-code/` | Tool access rules |
-| `.env` | Project root | API keys (never committed) |
+* Agent Loop：多轮执行、工具调用、上下文预算、验证与退出判断
+* Tool Layer：文件、搜索、Shell、Git、MCP、LSP、TypeScript、WebFetch 等工具
+* Permission Gate：按工具类别与项目规则控制风险调用
+* Ripple Engine：TypeScript-aware 的变更影响分析与级联风险检测
+* Provider Layer：DeepSeek 默认 provider，并保留 Anthropic / OpenAI / multi-provider 扩展
+* Context System：上下文预算、缓存、压缩与任务相关信息组织
+* Sandbox：Windows Job Object + PathGuard；macOS/Linux 当前为降级沙箱模式
+* TUI：基于 Ink 的终端交互界面
 
-## Architecture
+## 文档导航
 
-```
-CLI/TUI (Ink React)
-    │
-    ▼
-Loop Controller
-    ├─ Permission Gate ── blocks unsafe calls pre-execution
-    ├─ Flash Judge ────── completeness evaluation per step
-    ├─ State Machine ──── enforces phase transitions
-    ├─ Ripple Engine ──── TypeScript-aware cascade detection (7-layer, 8.5/10)
-    ├─ Sandbox ────────── path-guard + job-object isolation
-    └─ Memory ─────────── SQLite hybrid + compaction cycles
-```
+* [Getting Started](docs/zh/getting-started.md)
+* [Configuration](docs/zh/configuration.md)
+* [CLI Reference](docs/zh/cli-reference.md)
+* [Architecture Overview](docs/zh/architecture/overview.md)
+* [Agent Loop](docs/zh/architecture/agent-loop.md)
+* [Tool Layer](docs/zh/architecture/tool-layer.md)
+* [Ripple Engine](docs/zh/architecture/ripple-engine.md)
+* [Sandbox and Permissions](docs/zh/architecture/sandbox-and-permissions.md)
+* [Testing](docs/zh/development/testing.md)
+* [Security](docs/zh/security.md)
+* [Roadmap](docs/zh/roadmap.md)
 
-### Ripple Engine 2.0 — Change Impact Analysis
+## 项目状态
 
-**Prevents broken writes.** Before any file write, the Ripple Engine traces how the change propagates through the codebase and blocks the write until every affected caller is handled.
-
-```
- old + new
-  content
-     │
-     ▼
-┌─────────────────────┐
-│ L1  API Diff        │  8 change kinds, pre-computed severity
-│     diffApiSurface  │  export_removed · signature · async · kind · return · fields
-└────────┬────────────┘
-     │
-     ▼
-┌─────────────────────┐
-│ L2  Semantic Ref    │  PRIMARY path: TypeChecker.findReferences
-│     findCallers     │  resolves imports, follows alias chains
-│ L7  AstGrep (enrich)│  SUPPLEMENT: 6 patterns/symbol, dedup by file:line
-│     (text fallback)  │  FALLBACK: AST walk + semantic verify
-└────────┬────────────┘
-     │  RippleCaller[]
-     ▼
-┌─────────────────────┐
-│ L3  Usage Classify  │  14 usage kinds → 500+ concrete actions
-│     classifyCallers │  call_expr · method_call · extends · destructure · JSX · re-export …
-└────────┬────────────┘
-     │
-     ▼
-┌─────────────────────┐
-│ L4  Verification    │  Test discovery (4 conventions), coverage, strictness
-│     buildVerifyMap  │  Auto-generates: typecheck + test commands per file
-└────────┬────────────┘
-     │
-     ▼
-┌─────────────────────┐
-│ L5  Obligation Gate │  Hard exit gate: non-waived obligations block completion
-│     waive (w/reason)│  Waiver requires explicit reason — no silent dismissal
-└────────┬────────────┘
-     │
-     ▼
-  RippleReport → Gate decision (allow / warn / block)
-```
-
-→ See [docs/ripple-engine.md](docs/ripple-engine.md) for full architecture, 7-layer deep-dive, and 212-test coverage map.
-
-Read [ARCHITECTURE.md](./ARCHITECTURE.md) for design decisions, constraints philosophy, and the "Do-Not-Repeat" knowledge base.
-
-## Development
-
-```bash
-bun install
-bun run typecheck    # tsc --noEmit
-bun run test         # run stable test suite
-bun run build        # tsc → dist/
-```
-
-## Built On
-
-| Project | Role |
-|---------|------|
-| [OpenCode](https://github.com/anomalyco/opencode) (MIT) | Architecture foundation — MCP bridge, config system, TUI patterns, agent loop |
-| [CodeGraph](https://github.com/colbymchenry/codegraph) (MIT) | MCP-powered code intelligence — symbol search, references, project structure |
-| [Reasonix](https://github.com/esengine/reasonix) (MIT) | Cache-first context compaction — tiered thresholds, frozen prefix, microcompact |
-
-See [ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md) for details.
+Orcana 当前处于 0.3.x 阶段。稳定能力、部分接入能力和尚未实现能力会在架构文档中明确标注。请以文档中的 status 表为准，不要把 planned 能力当作已完成能力使用。
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
-
-## Contributing
-
-PRs welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
-
-## Security
-
-See [SECURITY.md](./SECURITY.md) for vulnerability reporting.
+MIT

@@ -148,5 +148,32 @@ export const UI_UX_PRO_MAX: SkillDef = {
 7. **图片/图标不存在别引用** — 用 CSS 画或用 emoji/unicode 替代
 8. **hover/focus/active 三态完整** — 每个可交互元素
 9. **颜色用 CSS 变量** — \`--color-primary\` 不硬编码 hex
-10. **移动端适配** — @media 覆盖 hover:none, 关闭自定义光标, 可点击≥44px`,
+10. **移动端适配** — @media 覆盖 hover:none, 关闭自定义光标, 可点击≥44px
+
+---
+
+## 8. Peer Skill — 关联技能
+
+### → motion-pro-max（动效层）
+
+本 skill 负责**静态视觉**：配色、字体、排版、组件结构、布局规范。
+
+当涉及以下内容时，**必须切换到 motion-pro-max**：
+- 页面入场/退场动效、Hero 动画、ScrollTrigger 滚动叙事
+- GSAP 方案、弹簧曲线、时长标尺、stagger 节奏
+- 动效代码生成 + 质量门审查 + 交付 Evidence
+
+**协作模式**：
+\`\`\`
+ui-ux-pro-max-plus 定风格/配色/字体/组件规范
+        ↓
+motion-pro-max 定动效策略/弹簧/场景配方
+        ↓
+motion-review 5 维打分审查
+        ↓
+交付
+\`\`\`
+
+如果用户同时提到"高级 UI + 动效"，两个 skill 一起激活，先出设计规范再出动效方案。`,
+
 }

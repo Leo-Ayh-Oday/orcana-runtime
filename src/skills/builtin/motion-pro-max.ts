@@ -366,5 +366,31 @@ Suggestion: [N]
 
 ## Notes
 [需要用户确认/需要安装插件/需要替换 token]
-\`\`\``,
+\`\`\`
+
+---
+
+## Peer Skill — 关联技能
+
+### → ui-ux-pro-max-plus（静态视觉层）
+
+本 skill 负责**动效层**：GSAP 动画、时间曲线、ScrollTrigger、交互动效、质量审查、Evidence 输出。
+
+当涉及以下内容时，**必须先调用 ui-ux-pro-max-plus** 获取设计规范：
+- 配色方案、字体配对、组件结构、布局网格
+- 设计风格选择（Minimalist / Glassmorphism / Dark Premium 等）
+- 静态视觉规范（CSS 变量、阴影分层、Z-index 系统）
+
+**协作模式**：
+\`\`\`
+ui-ux-pro-max-plus 定风格/配色/字体/组件规范
+        ↓
+motion-pro-max 定动效策略/弹簧/场景配方
+        ↓
+motion-review 5 维打分审查
+        ↓
+交付
+\`\`\`
+
+如果用户只说"高级感"但未明确动效需求，先展示 ui-ux-pro-max-plus 的 18 风格表让用户选方向，再根据选定风格从 §风格→动效速查表 派发对应弹簧。`,
 }

@@ -28,7 +28,7 @@ describe("processGateOverflow", () => {
       rippleBlockActive: true,
       gateBlockCounts: counts,
     }))
-    expect(counts.get("ripple")?.count).toBe(1)
+    expect(counts.get("policy:ripple")?.count).toBe(1)
     expect(result.blocked).toBe(false)
   })
 
@@ -38,7 +38,7 @@ describe("processGateOverflow", () => {
       pendingRippleObligationsLength: 3,
       gateBlockCounts: counts,
     }))
-    expect(counts.get("ripple_obligations")?.count).toBe(1)
+    expect(counts.get("semantic:ripple_obligations")?.count).toBe(1)
   })
 
   test("increments planning counter when post-tool planning prompt exists", () => {
@@ -47,7 +47,7 @@ describe("processGateOverflow", () => {
       postToolPlanningPrompt: "re-evaluate architecture",
       gateBlockCounts: counts,
     }))
-    expect(counts.get("planning")?.count).toBe(1)
+    expect(counts.get("semantic:planning")?.count).toBe(1)
   })
 
   test("increments required_files counter", () => {
@@ -56,7 +56,7 @@ describe("processGateOverflow", () => {
       postToolRequiredFilesPrompt: "missing README.md",
       gateBlockCounts: counts,
     }))
-    expect(counts.get("required_files")?.count).toBe(1)
+    expect(counts.get("semantic:required_files")?.count).toBe(1)
   })
 
   test("accumulates counts across rounds — same gate blocked repeatedly", () => {
@@ -64,15 +64,15 @@ describe("processGateOverflow", () => {
 
     // Round 0
     processGateOverflow(baseInput({ round: 0, rippleBlockActive: true, gateBlockCounts: counts }))
-    expect(counts.get("ripple")?.count).toBe(1)
+    expect(counts.get("policy:ripple")?.count).toBe(1)
 
     // Round 1
     processGateOverflow(baseInput({ round: 1, rippleBlockActive: true, gateBlockCounts: counts }))
-    expect(counts.get("ripple")?.count).toBe(2)
+    expect(counts.get("policy:ripple")?.count).toBe(2)
 
     // Round 2
     processGateOverflow(baseInput({ round: 2, rippleBlockActive: true, gateBlockCounts: counts }))
-    expect(counts.get("ripple")?.count).toBe(3)
+    expect(counts.get("policy:ripple")?.count).toBe(3)
   })
 
   test("3 blocks → strategy switch message injected, not yet BLOCKED", () => {
@@ -89,7 +89,7 @@ describe("processGateOverflow", () => {
     expect(result.deferredMessages.length).toBeGreaterThan(0)
     expect(result.deferredMessages[0]!).toContain("Gate overflow")
     expect(result.deferredMessages[0]!).toContain("multi_edit")
-    expect(result.statusEvents).toContain("gate-overflow: ripple blocked 3 times")
+    expect(result.statusEvents).toContain("gate-overflow: policy:ripple blocked 3 times")
   })
 
   test("5 blocks → BLOCKED state", () => {
@@ -105,7 +105,7 @@ describe("processGateOverflow", () => {
     const result = processGateOverflow(baseInput({ round: 4, rippleBlockActive: true, gateBlockCounts: counts }))
 
     expect(result.blocked).toBe(true)
-    expect(result.blockedGate).toBe("ripple")
+    expect(result.blockedGate).toBe("policy:ripple")
     expect(result.blockedCount).toBe(5)
   })
 
@@ -118,7 +118,7 @@ describe("processGateOverflow", () => {
     const result = processGateOverflow(baseInput({ round: 6, rippleBlockActive: true, gateBlockCounts: counts }))
 
     expect(result.blocked).toBe(true)
-    expect(counts.get("ripple")?.count).toBe(7)
+    expect(counts.get("policy:ripple")?.count).toBe(7)
   })
 
   test("cleans stale entries after 2 rounds without a block", () => {
@@ -126,15 +126,15 @@ describe("processGateOverflow", () => {
 
     // Round 0: ripple blocked
     processGateOverflow(baseInput({ round: 0, rippleBlockActive: true, gateBlockCounts: counts }))
-    expect(counts.has("ripple")).toBe(true)
+    expect(counts.has("policy:ripple")).toBe(true)
 
     // Round 1: nothing blocked — ripple was last seen at 0, round-0 = 1, < 2 so kept
     processGateOverflow(baseInput({ round: 1, gateBlockCounts: counts }))
-    expect(counts.has("ripple")).toBe(true)
+    expect(counts.has("policy:ripple")).toBe(true)
 
     // Round 2: nothing blocked — round-0 = 2, >= 2 so cleaned
     processGateOverflow(baseInput({ round: 2, gateBlockCounts: counts }))
-    expect(counts.has("ripple")).toBe(false)
+    expect(counts.has("policy:ripple")).toBe(false)
   })
 
   test("tracks multiple gates independently", () => {
@@ -148,9 +148,9 @@ describe("processGateOverflow", () => {
       gateBlockCounts: counts,
     }))
 
-    expect(counts.get("ripple")?.count).toBe(1)
-    expect(counts.get("ripple_obligations")?.count).toBe(1)
-    expect(counts.get("planning")?.count).toBe(1)
+    expect(counts.get("policy:ripple")?.count).toBe(1)
+    expect(counts.get("semantic:ripple_obligations")?.count).toBe(1)
+    expect(counts.get("semantic:planning")?.count).toBe(1)
   })
 
   test("first gate to reach 5 blocks wins — BLOCKED gate is deterministic", () => {
@@ -189,7 +189,7 @@ describe("processGateOverflow", () => {
     const result = processGateOverflow(baseInput({ round: 2, pendingRippleObligationsLength: 1, gateBlockCounts: counts }))
 
     expect(result.blocked).toBe(false)
-    expect(result.deferredMessages[0]!).toContain("ripple_obligations")
+    expect(result.deferredMessages[0]!).toContain("semantic:ripple_obligations")
     expect(result.deferredMessages[0]!).toContain("调用方")
   })
 
@@ -228,7 +228,7 @@ describe("processGateOverflow", () => {
     }
     const result = processGateOverflow(baseInput({ round: 2, rippleBlockActive: true, gateBlockCounts: counts }))
 
-    expect(result.statusEvents[0]!).toBe("gate-overflow: ripple blocked 3 times")
+    expect(result.statusEvents[0]!).toBe("gate-overflow: policy:ripple blocked 3 times")
   })
 
   test("counts reset after being cleaned (stale cleanup works)", () => {
@@ -236,15 +236,15 @@ describe("processGateOverflow", () => {
 
     // Round 0: ripple blocked
     processGateOverflow(baseInput({ round: 0, rippleBlockActive: true, gateBlockCounts: counts }))
-    expect(counts.get("ripple")?.count).toBe(1)
+    expect(counts.get("policy:ripple")?.count).toBe(1)
 
     // Rounds 1-2: no blocks, entry goes stale at round 2 (2 rounds since lastSeen=0)
     processGateOverflow(baseInput({ round: 1, gateBlockCounts: counts }))
     processGateOverflow(baseInput({ round: 2, gateBlockCounts: counts }))
-    expect(counts.has("ripple")).toBe(false)
+    expect(counts.has("policy:ripple")).toBe(false)
 
     // Round 3: ripple blocked again — should start fresh
     processGateOverflow(baseInput({ round: 3, rippleBlockActive: true, gateBlockCounts: counts }))
-    expect(counts.get("ripple")?.count).toBe(1)
+    expect(counts.get("policy:ripple")?.count).toBe(1)
   })
 })

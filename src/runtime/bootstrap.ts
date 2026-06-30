@@ -31,7 +31,7 @@ import { writeGuardBefore, writeGuardAfter, createJournalGuard } from "../hooks/
 import { createSafetyPolicyHook } from "../hooks/safety-policy"
 import { StagedContextManager } from "../context/staged"
 import { SessionManager, SessionStore, needsMigration, migrateAllJsonSessions } from "../session"
-import { registerCheckpointStore } from "../session/checkpoint"
+import { registerCheckpointStore, unregisterCheckpointStore } from "../session/checkpoint"
 import { ThinkingStore } from "../memory/thinking-store"
 import { KnowledgeBase } from "../memory/knowledge"
 import {
@@ -349,9 +349,9 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
 
   // ── 7. Session ──
   const sessions = new SessionManager()
-  const sessionId = sessions.create().id
-  const sessionStore = new SessionStore(sessionId)
-  registerCheckpointStore(sessionId, sessionStore)
+  let activeSessionId = sessions.create().id
+  const sessionStore = new SessionStore(activeSessionId)
+  registerCheckpointStore(activeSessionId, sessionStore)
 
   // ── 8. Memory ──
   const thinkingStore = new ThinkingStore()
@@ -370,9 +370,9 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
 
   // ── 10. Session switching helper ──
   const switchSession = (newId: string) => {
-    // Unregister old, register new — caller manages the old SessionStore lifecycle
-    // This is intentionally minimal: CLI session management is complex enough
-    // that we don't auto-close old stores here.
+    if (newId === activeSessionId) return
+    unregisterCheckpointStore(activeSessionId)
+    activeSessionId = newId
     registerCheckpointStore(newId, new SessionStore(newId))
   }
 
@@ -390,7 +390,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     autoFinishOnVerifiedWrite: true,
     autoApprovePlan: false,
     modelRouter,
-    sessionId,
+    sessionId: activeSessionId,
     gateTelemetryFile,
     contextMapPolicy,
     // PR-7.2: inject SessionStart context from hooks
@@ -422,7 +422,9 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     hooks,
     stagedCtx,
     sessions,
-    sessionId,
+    get sessionId() {
+      return activeSessionId
+    },
     thinkingStore,
     knowledgeBase,
     compactor,
@@ -433,6 +435,10 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     buildAgentOptions,
     registerSessionCheckpointStore: (sid: string) => {
       const store = new SessionStore(sid)
+      if (sid !== activeSessionId) {
+        unregisterCheckpointStore(activeSessionId)
+        activeSessionId = sid
+      }
       registerCheckpointStore(sid, store)
       return store
     },

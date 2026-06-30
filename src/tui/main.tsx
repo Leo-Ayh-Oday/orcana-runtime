@@ -1118,5 +1118,9 @@ export async function startInkTUI(prompt?: string) {
     enableLSP: true,
   })
   const { waitUntilExit } = render(<ChatApp prompt={prompt} runtime={runtime} />)
-  return waitUntilExit()
+  try {
+    return await waitUntilExit()
+  } finally {
+    runtime.dispose()
+  }
 }

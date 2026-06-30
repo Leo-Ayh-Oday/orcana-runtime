@@ -1,0 +1,69 @@
+{
+  "name": "motion-pro-max",
+  "version": "2.0.0",
+  "description": "Design-system-aware GSAP animation harness — 26-scene dispatch + design constraints + quality gates + evidence output. Routable, reviewable, production-grade.",
+  "lifecycle": "active",
+  "tier": "harness-grade",
+
+  "triggers": [
+    "动效", "动画", "motion", "animation", "GSAP", "ScrollTrigger",
+    "丝滑", "高级感", "页面过渡", "scroll", "parallax", "stagger",
+    "入场动画", "生产级动效", "page transition"
+  ],
+
+  "useWhen": [
+    "用户要求生成前端动效代码",
+    "用户要求审查动画质量",
+    "用户要求把 UI 风格映射成动效策略",
+    "用户要求 GSAP / ScrollTrigger / Flip / DrawSVG 方案"
+  ],
+
+  "doNotUseWhen": [
+    "纯视觉静态 UI 设计，不涉及动效",
+    "后端、数据库、CLI、TUI 非视觉动画任务",
+    "用户明确要求不用 GSAP",
+    "只需要一句普通解释，不需要代码或方案"
+  ],
+
+  "allowedTools": ["read_file", "search", "web_search"],
+
+  "requiredEvidence": [
+    "usedReferences",
+    "selectedSceneRecipe",
+    "qualityGate",
+    "accessibility",
+    "performance"
+  ],
+
+  "riskLevel": "medium",
+
+  "referenceRouting": {
+    "生成 Hero / 卡片 / Modal 等场景": ["scene-recipes.md"],
+    "选择弹簧 / 时长 / 曲线": ["motion-system.md"],
+    "风格转动效策略": ["style-motion-map.md"],
+    "React / Next / Vue / Svelte": ["framework-integration.md"],
+    "审查已有代码": ["quality-gates.md"],
+    "找灵感 / 参考": ["real-references.md"]
+  },
+
+  "optionalReferences": {
+    "深入理解动效原理": ["motion-principles.md"]
+  },
+
+  "qualityGates": {
+    "fatal": 13,
+    "warning": 8,
+    "suggestion": 7,
+    "deliveryRule": "Fatal > 0 or Score < 80 = cannot deliver"
+  },
+
+  "dependencies": {
+    "gsap": { "required": true, "version": ">=3.12" },
+    "@gsap/react": { "required": false, "condition": "React/Next.js projects" }
+  },
+
+  "peerSkills": {
+    "ui-ux-pro-max-plus": { "relationship": "complement", "description": "静态视觉设计 → 本 skill 负责动效层" },
+    "motion-review": { "relationship": "required", "description": "动效代码生成后必须调用审查" }
+  }
+}

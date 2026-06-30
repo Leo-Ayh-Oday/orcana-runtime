@@ -341,21 +341,25 @@ useGSAP(() => {
 - Duration: [ms]
 - Plugin: [插件列表]
 
-## Design Constraints
-- Tokens: [CSS 变量列表]
-- Reduced motion: [降级方案]
-- Performance: [transform+opacity only / will-change cleanup]
-- Accessibility: [focus-visible / contrast]
+## Design Handoff Used
+- Style: [来自 ui-ux-pro-max-plus 的 designStyle]
+- Color tokens: [使用的色值]
+- Typography: [标题/正文字体]
+- Component constraints: [卡片层级/按钮态/shadows]
+- Motion intensity: [handoff 指定的允许动效强度]
 
 ## Implementation
 [代码]
+
+## Reduced Motion
+[降级策略]
 
 ## Quality Gate Result
 Fatal: [N] — [通过/未通过项]
 Warning: [N]
 Suggestion: [N]
 
-## Evidence
+## Motion Evidence
 - usedReferences: [引用了哪些速查表]
 - selectedSceneRecipe: [场景#]
 - selectedStyle: [风格]
@@ -370,27 +374,71 @@ Suggestion: [N]
 
 ---
 
-## Peer Skill — 关联技能
+## §8 Peer Skill Protocol
 
-### → ui-ux-pro-max-plus（静态视觉层）
+### Peer Skills
 
-本 skill 负责**动效层**：GSAP 动画、时间曲线、ScrollTrigger、交互动效、质量审查、Evidence 输出。
+| Skill | Role | Relationship |
+|-------|------|-------------|
+| \`ui-ux-pro-max-plus\` | 设计权威 — 风格/配色/字体/组件规范 | 上游（仅消费其 Handoff Packet） |
+| \`motion-review\` | 独立审查 — 5 维打分，Fatal>0 阻断交付 | 下游 verifier（必调） |
 
-当涉及以下内容时，**必须先调用 ui-ux-pro-max-plus** 获取设计规范：
-- 配色方案、字体配对、组件结构、布局网格
-- 设计风格选择（Minimalist / Glassmorphism / Dark Premium 等）
-- 静态视觉规范（CSS 变量、阴影分层、Z-index 系统）
+### Handoff Rule — 消费 Design Handoff Packet
 
-**协作模式**：
+- 本 skill 从 ui-ux-pro-max-plus 的 **Design Handoff Packet**（JSON）获取设计信息
+- **禁止**读取 ui-ux-pro-max-plus 的完整 SKILL.md 或 references
+- 只从 handoff 中取：\`designStyle\`, \`brandTone\`, \`colorSystem\`, \`typography\`, \`componentRules\`, \`motionHints\`
+- 从 \`motionHints.allowedIntensity\` 决定动效强度等级
+- 从 \`motionHints.avoid\` 获取动效禁区列表
+
+### Escalation Rule — 缺少 handoff 时
+
 \`\`\`
-ui-ux-pro-max-plus 定风格/配色/字体/组件规范
+if 无 Design Handoff Packet:
+  → 向用户请求：先激活 ui-ux-pro-max-plus 确定设计方向
+  → 获取 compact handoff（仅 JSON，不要求完整 SKILL.md）
+  → 继续动效生成
+
+不允许：
+  ❌ 递归调用 ui-ux-pro-max-plus 的完整 SKILL.md
+  ❌ 在没有 handoff 的情况下自己猜设计风格
+  ❌ 启动 ui-ux-pro-max-plus 后又触发本 skill（循环）
+\`\`\`
+
+### Review Rule — 交付前必调 motion-review
+
+\`\`\`
+motion-pro-max 生成动效代码
         ↓
-motion-pro-max 定动效策略/弹簧/场景配方
+motion-review 独立审查
         ↓
-motion-review 5 维打分审查
-        ↓
+Fatal > 0 → 自动修复 → 重审（最多 3 轮）
+Score < 80 → 不能交付
+Score >= 80 → 通过
+\`\`\`
+
+### 完整协作链路
+
+\`\`\`
+用户请求
+  ↓
+ui-ux-pro-max-plus → 输出 Design Handoff Packet
+  ↓
+motion-pro-max → 读取 handoff → 查 26 场景表 → 匹配弹簧/时长
+  ↓
+motion-pro-max → 生成代码（所有 raw value 用 token）
+  ↓
+motion-review → 5 维打分 + 13 Fatal 检查
+  ↓
+Fatal > 0 or Score < 80? → 修复 → 重审
+  ↓
 交付
 \`\`\`
 
-如果用户只说"高级感"但未明确动效需求，先展示 ui-ux-pro-max-plus 的 18 风格表让用户选方向，再根据选定风格从 §风格→动效速查表 派发对应弹簧。`,
+### 禁止递归循环
+
+\`\`\`
+❌ ui-ux 激活 → 发现需要动效 → 激活 motion → 发现需要设计规范 → 再激活 ui-ux → 循环
+✅ ui-ux 激活 → 输出 handoff → 交给主循环 → motion 读取 handoff → 动效实现
+\`\`\``,
 }

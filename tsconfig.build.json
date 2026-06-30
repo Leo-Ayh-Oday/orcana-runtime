@@ -4,6 +4,7 @@
   "exclude": [
     "src/**/*.test.ts",
     "src/**/*.test.tsx",
+    "src/skills/builtin/examples",
     "tests",
     "tests/tmp"
   ]

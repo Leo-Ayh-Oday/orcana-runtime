@@ -20,3 +20,4 @@ package-lock.json
 .next/
 blog/.next/
 tests/tmp/
+.trae/

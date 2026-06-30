@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orcana Skill Manifest — Machine-Readable Template",
+  "description": "This JSON Schema defines the structure for both manifest.json (per-skill) and ai-manifest.json (the template itself). Orcana Runtime reads this to validate new skills before loading them.",
+  "type": "object",
+  "required": ["name", "version", "description", "lifecycle", "tier", "triggers", "useWhen", "doNotUseWhen", "allowedTools", "requiredEvidence", "riskLevel"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Kebab-case identifier. Must match the directory name."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version. Increment major on protocol changes, minor on new features, patch on fixes."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 200,
+      "description": "One-line description of what this skill does."
+    },
+    "lifecycle": {
+      "type": "string",
+      "enum": ["candidate", "quarantined", "active", "deprecated"],
+      "description": "Current lifecycle state. New skills MUST start as 'candidate'."
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["lite", "workflow", "harness-grade"],
+      "description": "Skill complexity tier. Determines which files are required."
+    },
+    "triggers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 3,
+      "description": "Keywords that activate this skill. At least 3, preferably 5+."
+    },
+    "useWhen": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Specific scenarios where this skill should activate."
+    },
+    "doNotUseWhen": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 2,
+      "description": "Specific scenarios where this skill should NOT activate. Must have at least 2."
+    },
+    "allowedTools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Whitelist of tool names this skill can access. NEVER include '*' or leave empty."
+    },
+    "requiredEvidence": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Evidence fields that must be present in the skill's output."
+    },
+    "riskLevel": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"],
+      "description": "Blast radius if the skill produces incorrect output."
+    },
+    "requiresReview": {
+      "type": "boolean",
+      "description": "Whether output must pass independent review before delivery."
+    },
+    "referenceRouting": {
+      "type": "object",
+      "description": "Map of user intent descriptions to arrays of reference file paths.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" },
+        "minItems": 1
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "npm packages required by this skill.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "required": { "type": "boolean" },
+          "version": { "type": "string" }
+        }
+      }
+    },
+    "peerSkills": {
+      "type": "object",
+      "description": "Related skills and their relationship to this one.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["relationship", "description"],
+        "properties": {
+          "relationship": {
+            "type": "string",
+            "enum": ["complement", "required", "upstream", "downstream"]
+          },
+          "description": { "type": "string" }
+        }
+      }
+    }
+  }
+}

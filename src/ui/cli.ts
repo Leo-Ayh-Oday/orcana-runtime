@@ -1,4 +1,4 @@
-/** DeepSeek Code v0.3.0 readline UI with streaming output and Chinese status text.
+/** DeepSeek Code readline UI with streaming output and Chinese status text.
  *
  *  Assembly is delegated to createRuntime() — this file is now a thin UX layer.
  */

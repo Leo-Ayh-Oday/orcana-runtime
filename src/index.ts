@@ -4,6 +4,7 @@
 import { startCLI } from "./ui/cli"
 import { startInkTUI } from "./tui/main"
 import { SessionManager } from "./session"
+import { VERSION_LABEL } from "./version"
 
 // ── Health server ──────────────────────────────────────────────
 export function startHealthServer(port?: number): { url: string; stop: () => void } {
@@ -52,7 +53,7 @@ const arg = process.argv[2] ?? ""
 
 async function main() {
   if (arg === "--version" || arg === "-v" || arg === "version") {
-    console.log("deepseek-orcana v0.3.0")
+    console.log(`deepseek-orcana ${VERSION_LABEL}`)
     return
   }
 

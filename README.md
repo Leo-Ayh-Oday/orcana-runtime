@@ -37,7 +37,28 @@ Orcana: reads files → traces callers → writes code → runs typecheck → ru
 
 ```bash
 npm install -g deepseek-orcana
+```
+
+Set your API key:
+
+**macOS / Linux / Git Bash**
+```bash
 export DEEPSEEK_API_KEY="sk-your-key-here"
+```
+
+**Windows PowerShell**
+```powershell
+$env:DEEPSEEK_API_KEY="sk-your-key-here"
+```
+
+**Windows CMD**
+```cmd
+set DEEPSEEK_API_KEY=sk-your-key-here
+```
+
+Then start:
+
+```bash
 orcana
 ```
 

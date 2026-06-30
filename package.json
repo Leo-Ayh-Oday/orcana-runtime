@@ -1,6 +1,6 @@
 {
   "name": "deepseek-orcana",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Terminal coding agent with model-backed runtime, TUI, and workflow gates.",
   "type": "module",
   "license": "MIT",
@@ -68,10 +68,10 @@
     "ink-text-input": "^6.0.0",
     "ora": "^8.2.0",
     "react": "^19.2.7",
-    "string-width": "^8.2.1"
+    "string-width": "^8.2.1",
+    "typescript": "^6.0.3"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^6.0.3"
+    "@types/bun": "latest"
   }
 }

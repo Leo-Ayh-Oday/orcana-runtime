@@ -48,6 +48,7 @@ import { AgentRunTrace } from "../agent/run-trace"
 import { getLSPClient } from "../lsp/client"
 import { bootstrapMCP, type MCPBridgeResult } from "../mcp/bridge"
 import type { AgentOptions } from "../agent/loop-types"
+import { VERSION } from "../version"
 
 // ── Meta-tools (task, deeper_thinking) — defined here so both CLI and TUI share them ──
 import { addNode, removeNode, skipNode, planRef, planProgress } from "../agent/master-plan"
@@ -156,25 +157,6 @@ const TASK_TOOL: ToolDef = {
   },
 }
 
-// ── Version — read once from package.json, fallback to hardcoded ──
-// ── Version — read from package.json at import time (Bun ESM-compatible) ──
-import { readFileSync } from "node:fs"
-import { resolve, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
-
-const _pkgVersion: string = (() => {
-  try {
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const pkgPath = resolve(__dirname, "..", "..", "package.json")
-    const raw = readFileSync(pkgPath, "utf-8")
-    const pkg = JSON.parse(raw)
-    return pkg.version ?? "0.3.0"
-  } catch {
-    return "0.3.0"
-  }
-})()
-
 // ── Runtime options ──
 
 export interface RuntimeBootstrapOptions {
@@ -261,7 +243,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   const enableLSP = options.enableLSP ?? true
   const gateTelemetryFile = options.gateTelemetryFile ?? ".wolf/gate-telemetry.json"
   const contextMapPolicy = options.contextMapPolicy ?? "auto"
-  const version = _pkgVersion
+  const version = VERSION
 
   // ── 1. Provider registry ──
   if (!dsApiKey) throw new Error("DEEPSEEK_API_KEY not set (required for default provider)")

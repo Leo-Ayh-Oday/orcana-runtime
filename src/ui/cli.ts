@@ -7,8 +7,8 @@ import { agentLoop } from "../agent/loop"
 import { ModelRouter } from "../provider/router"
 import type { ToolDescriptor } from "../tools/registry"
 import { StagedContextManager } from "../context/staged"
-import { SessionManager, SessionCorruptedError, SessionStore, searchAllSessions } from "../session"
-import { lastCheckpoint, verifyCheckpoint, registerCheckpointStore, unregisterCheckpointStore } from "../session/checkpoint"
+import { SessionManager, SessionCorruptedError, searchAllSessions } from "../session"
+import { lastCheckpoint, verifyCheckpoint } from "../session/checkpoint"
 import type { SessionCheckpoint } from "../session/checkpoint"
 import { saveRewindPoint } from "../agent/rewind"
 import { buildResumeContext, resumeMessages } from "../session/summarizer"
@@ -116,10 +116,6 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
   let thinkEffort: "auto" | "high" | "max" = "auto"
   const history: Array<{ role: "user" | "assistant"; content: string }> = []
 
-  // ── SessionStore for checkpoint/save — open once for the session lifetime ──
-  const sessionStore = new SessionStore(sessionId)
-  registerCheckpointStore(sessionId, sessionStore)
-
   let resumeFromCheckpoint: SessionCheckpoint | null = null
 
   if (resumeId) {
@@ -160,6 +156,7 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       }
     }
   }
+  runtime.switchSession(sessionId)
 
   const startupOptions = {
     version: runtime.version,
@@ -176,17 +173,20 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
 
   if (cliPrompt) {
     process.stdout.write(`${dim(">")}  ${cliPrompt}\n\n`)
-    if (shouldUseChatLite(cliPrompt) && !shouldSkipProviderPurpose("chat_lite")) await runLiteTurn(multiProvider, modelRouter, cliPrompt, history, compactor)
-    else await runTurn(multiProvider, modelRouter, tools, cliPrompt, stagedCtx, thinkingStore, compactor, history, undoStack, knowledgeBase, thinkEffort, hooks, sessionId, resumeFromCheckpoint)
+    try {
+      if (shouldUseChatLite(cliPrompt) && !shouldSkipProviderPurpose("chat_lite")) await runLiteTurn(multiProvider, modelRouter, cliPrompt, history, compactor)
+      else await runTurn(multiProvider, modelRouter, tools, cliPrompt, stagedCtx, thinkingStore, compactor, history, undoStack, knowledgeBase, thinkEffort, hooks, sessionId, resumeFromCheckpoint)
+    } finally {
+      runtime.dispose()
+    }
     return
   }
 
   // ── Safe session ID setter — re-registers checkpoint store on change ──
   const setSessionId = (id: string) => {
     if (id !== sessionId) {
-      unregisterCheckpointStore(sessionId)
       sessionId = id
-      registerCheckpointStore(id, new SessionStore(id))
+      runtime.switchSession(id)
     }
   }
 

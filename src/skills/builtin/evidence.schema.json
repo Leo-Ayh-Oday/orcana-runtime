@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Motion Evidence",
+  "description": "Mandatory evidence output from every motion-pro-max code generation. Recorded by EvidenceLedger for gate verification.",
+  "type": "object",
+  "required": ["usedReferences", "selectedSceneRecipe", "qualityGate", "accessibility", "performance"],
+  "properties": {
+    "usedReferences": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Which reference files were consulted for this generation"
+    },
+    "selectedSceneRecipe": {
+      "type": "string",
+      "description": "Scene recipe number and name, e.g. '#1 Hero 标题逐字入场'"
+    },
+    "selectedStyle": {
+      "type": "string",
+      "description": "Design style selected, e.g. 'Minimalist', 'Dark Premium'"
+    },
+    "generatedFiles": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of files created or modified"
+    },
+    "qualityGate": {
+      "type": "object",
+      "required": ["fatal", "warning", "suggestion"],
+      "properties": {
+        "fatal": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "suggestion": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "accessibility": {
+      "type": "object",
+      "required": ["reducedMotion", "focusVisible"],
+      "properties": {
+        "reducedMotion": { "type": "boolean" },
+        "focusVisible": { "type": "boolean" },
+        "contrastRatio": { "type": "number" }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "required": ["transformOpacityOnly", "quickToForPointerMove"],
+      "properties": {
+        "transformOpacityOnly": { "type": "boolean" },
+        "quickToForPointerMove": { "type": "boolean" },
+        "willChangeCleanup": { "type": "boolean" }
+      }
+    },
+    "motionStrategy": {
+      "type": "object",
+      "properties": {
+        "scene": { "type": "string" },
+        "style": { "type": "string" },
+        "motionLanguage": { "type": "string", "enum": ["L1", "L2", "L3", "L4", "L5"] },
+        "spring": { "type": "string" },
+        "durationMs": { "type": "integer" },
+        "plugins": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "reviewScore": {
+      "type": "object",
+      "properties": {
+        "designConsistency": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "motionPhysics": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "performance": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "accessibility": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "frameworkCorrectness": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "total": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL"]
+    }
+  }
+}

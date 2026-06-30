@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Machine-executable quality gate checks for animation code review.",
+  "fatal": [
+    {
+      "id": "no-outline-none",
+      "pattern": "outline\\s*:\\s*none",
+      "message": "禁止 outline: none，破坏键盘无障碍。使用 :focus-visible 品牌双环",
+      "autoFix": "replace with: outline: 2px solid var(--color-brand); outline-offset: 2px",
+      "wgac": "2.4.7"
+    },
+    {
+      "id": "no-bare-zindex",
+      "pattern": "z-index\\s*:\\s*(?!var\\()\\d{3,}",
+      "message": "禁止 z-index 裸值（9999/1000等）。使用 --z-modal / --z-tooltip 等 CSS 变量",
+      "autoFix": false
+    },
+    {
+      "id": "no-single-box-shadow",
+      "pattern": "box-shadow\\s*:\\s*[^,;]*(?!.*,.*)",
+      "message": "禁止单层 box-shadow。使用 --shadow-md / --shadow-xl 等多层变量",
+      "autoFix": false
+    },
+    {
+      "id": "no-pure-black-white",
+      "pattern": "(color|background)\\s*:\\s*#000|(color|background)\\s*:\\s*#fff\\b|(color|background)\\s*:\\s*white\\b|(color|background)\\s*:\\s*black\\b",
+      "message": "禁止 color: #000 / background: #fff。使用带色相的 OKLCH 近似值",
+      "autoFix": "replace #000 → oklch(0 0 0) / #fff → oklch(1 0 0)"
+    },
+    {
+      "id": "no-transition-all",
+      "pattern": "transition\\s*:\\s*all\\b",
+      "message": "禁止 transition: all。显式指定 transform / opacity 等属性列表",
+      "autoFix": false
+    },
+    {
+      "id": "no-bare-ease-linear",
+      "pattern": "(?:transition-timing-function|ease)\\s*:\\s*(?:ease|linear)(?!.*var\\()",
+      "message": "禁止 ease / linear 关键字。使用 --ease-out-expo / --ease-in-out-quart 等命名曲线",
+      "autoFix": false
+    },
+    {
+      "id": "transform-opacity-only",
+      "pattern": "(?:width|height|top|left|right|bottom|margin|padding)\\s*(?::|in|to|from)",
+      "message": "动画只动 transform + opacity。禁止 width/height/top/left/margin/padding",
+      "autoFix": "replace with transform-based equivalent"
+    },
+    {
+      "id": "prefers-reduced-motion",
+      "requiredText": "prefers-reduced-motion",
+      "message": "复杂动效必须包裹在 (prefers-reduced-motion: no-preference) 中，reduce 时只保留 opacity fade",
+      "autoFix": false
+    },
+    {
+      "id": "contrast-ratio",
+      "message": "正文对比度 ≥ 4.5:1，大标题 ≥ 3:1 — WCAG AA",
+      "autoFix": false,
+      "wgac": "1.4.3"
+    },
+    {
+      "id": "no-bare-gsap-to-in-pointer",
+      "pattern": "(?:mousemove|pointermove).*gsap\\.to|gsap\\.to.*(?:mousemove|pointermove)",
+      "message": "高频 mousemove/pointermove 中禁止反复 gsap.to。使用 gsap.quickTo",
+      "autoFix": "replace gsap.to → gsap.quickTo"
+    },
+    {
+      "id": "no-scrolltrigger-markers",
+      "pattern": "markers\\s*:\\s*true",
+      "message": "ScrollTrigger markers: true 不得出现在生产代码",
+      "autoFix": "replace with markers: false or remove"
+    },
+    {
+      "id": "will-change-cleanup",
+      "message": "will-change 必须在 animation complete 后释放。加 onComplete: () => el.style.willChange = 'auto'",
+      "autoFix": false
+    },
+    {
+      "id": "react-usegsap-scope-cleanup",
+      "checkType": "structural",
+      "message": "React 组件必须 useGSAP + scope + cleanup。禁止 useEffect 裸用 gsap",
+      "requiredPatterns": ["useGSAP", "useRef", "scope"],
+      "forbiddenPatterns": ["useEffect.*gsap\\.", "useLayoutEffect.*gsap\\."],
+      "autoFix": false
+    }
+  ],
+  "warning": [
+    { "id": "no-ai-purple-pink", "pattern": "#8B5CF6.*#EC4899|#EC4899.*#8B5CF6", "message": "AI 紫粉渐变是 AI 指纹。使用品牌色 OKLCH 渐变" },
+    { "id": "no-neon-glow", "pattern": "box-shadow.*(?:#f0f|#0ff|#ff0|#0f0)\\b", "message": "霓虹发光边框显廉价。改用 --shadow-brand 低饱和品牌阴影" },
+    { "id": "max-two-springs", "message": "同项目弹簧 ≤ 2 种：主题弹簧(L1+L2) + 反馈弹簧(L3+L4)" },
+    { "id": "use-text-scale", "pattern": "font-size\\s*:\\s*(?:13|17|22|15|19)px", "message": "字号使用 --text-* 阶梯，禁止随意 px 值" },
+    { "id": "use-oklch", "pattern": "(?:#[0-9A-Fa-f]{3,8}|rgb\\(|hsl\\()", "message": "颜色使用 OKLCH。禁止 HEX/RGB/HSL 直接写入" },
+    { "id": "spacing-4x", "pattern": "(?:margin|padding|gap)\\s*:\\s*(?:5|13|23)\\b", "message": "间距为 4 的倍数。禁止 5px/13px/23px" },
+    { "id": "card-three-levels", "message": "卡片有 3 级层级区分 — Primary/Secondary/Tertiary" },
+    { "id": "no-default-font", "pattern": "font-family\\s*:\\s*(?:Arial|Helvetica)(?:\\s|;|,)", "message": "font-family 不是 Arial/Helvetica 默认。加载品牌字体" }
+  ],
+  "suggestion": [
+    { "id": "stagger-exponential", "message": "列表入场 stagger 指数递减 delay(n)=delay(n-1)*0.8" },
+    { "id": "exit-faster-than-enter", "message": "退场比入场快 — Modal 开 450ms 关 250ms" },
+    { "id": "five-interaction-states", "message": "交互元素 5 态完整: Default/Hover/Active/Focus-Visible/Disabled" },
+    { "id": "focus-visible-double-ring", "message": ":focus-visible 品牌双环 — 白色间隔 + 品牌色外框" },
+    { "id": "glass-border-inset", "message": "毛玻璃有 border + inset 内发光，不是裸 backdrop-filter: blur()" },
+    { "id": "mobile-tap-44px", "message": "移动端可点击元素 ≥ 44×44px" },
+    { "id": "l5-mobile-off", "message": "L5 氛围动效移动端用 matchMedia 关闭" }
+  ]
+}

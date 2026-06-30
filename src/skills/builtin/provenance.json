@@ -1,0 +1,32 @@
+{
+  "name": "motion-pro-max",
+  "version": "2.0.0",
+  "created": "2026-06-04",
+  "updated": "2026-06-30",
+  "author": "Orcana Skill Forge",
+  "source": {
+    "origin": "Built from GSAP official docs + DESIGN_SYSTEM_v1.1 (Obsidian wiki/前端设计知识库/)",
+    "references": [
+      "https://gsap.com/resources/React/",
+      "https://gsap.com/docs/v3/GSAP/",
+      "https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-reduced-motion",
+      "https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Performance/CSS"
+    ]
+  },
+  "designSystem": {
+    "name": "DESIGN_SYSTEM_v1.1",
+    "location": "Obsidian wiki/前端设计知识库/DESIGN_SYSTEM_v1.1.md",
+    "chapters": ["§1 Typography", "§2 Color (OKLCH)", "§3 Shadows", "§4 Spacing", "§5 Z-Index", "§6 Motion Physics", "§7 Interaction States", "§8 Anti-Patterns", "§9 Pre-Delivery Checklist"]
+  },
+  "changelog": [
+    { "version": "1.0.0", "date": "2026-06-04", "changes": "Initial version — 26-scene dispatch, SKILL.md + references" },
+    { "version": "2.0.0", "date": "2026-06-30", "changes": "Harness-grade upgrade: manifest.json, checks.json, rubric.md, evidence.schema.json, provenance.json, examples/, reference routing, engine routing, plugin authorization table, mobile degradation matrix, React fatal rules, bad/good examples, mandatory output format" }
+  ],
+  "security": {
+    "riskLevel": "medium",
+    "allowedTools": ["read_file", "search", "web_search"],
+    "sandboxedExecution": false,
+    "requiresReview": true,
+    "reviewTool": "motion-review"
+  }
+}

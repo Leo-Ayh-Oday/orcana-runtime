@@ -152,28 +152,71 @@ export const UI_UX_PRO_MAX: SkillDef = {
 
 ---
 
-## 8. Peer Skill — 关联技能
+## §8 Peer Skill Protocol
 
-### → motion-pro-max（动效层）
+### Peer Skills
 
-本 skill 负责**静态视觉**：配色、字体、排版、组件结构、布局规范。
+| Skill | Role | Relationship |
+|-------|------|-------------|
+| motion-pro-max | 动效执行 — GSAP 动画 + 质量门 + Evidence | 下游消费者 |
+| motion-review | 独立审查 — 5 维打分，Fatal>0 阻断交付 | 下游 verifier |
 
-当涉及以下内容时，**必须切换到 motion-pro-max**：
-- 页面入场/退场动效、Hero 动画、ScrollTrigger 滚动叙事
-- GSAP 方案、弹簧曲线、时长标尺、stagger 节奏
-- 动效代码生成 + 质量门审查 + 交付 Evidence
+### Design Handoff Packet
 
-**协作模式**：
+本 skill 完成设计决策后，**必须输出**以下结构化交接包，供 motion-pro-max 消费。motion-pro-max **不读取本 skill 的完整 SKILL.md 或 references** — 仅从此 handoff 获取设计信息。
+
+\`\`\`json
+{
+  "designStyle": "Clean Tech",
+  "brandTone": "calm, premium, technical",
+  "colorSystem": {
+    "primary": "oklch(0.45 0.22 265)",
+    "surface": "oklch(1 0 0)",
+    "textPrimary": "oklch(0.15 0 0)"
+  },
+  "typography": {
+    "heading": "--text-hero (2.5-4rem, 700-800)",
+    "body": "--text-md (1rem, 400)"
+  },
+  "componentRules": {
+    "card": "3-level hierarchy (Primary/Secondary/Tertiary)",
+    "button": "5 states (Default/Hover/Active/Focus-Visible/Disabled)",
+    "shadow": "--shadow-md / --shadow-lg / --shadow-xl"
+  },
+  "motionHints": {
+    "allowedIntensity": "medium",
+    "avoid": ["bouncy modal", "neon glow", "transition: all"]
+  }
+}
 \`\`\`
-ui-ux-pro-max-plus 定风格/配色/字体/组件规范
-        ↓
-motion-pro-max 定动效策略/弹簧/场景配方
-        ↓
-motion-review 5 维打分审查
-        ↓
-交付
+
+### Escalation Rule
+
+- 本 skill **不递归调用** motion-pro-max 的完整 SKILL.md
+- 输出 Design Handoff Packet 即视为完成交接
+- 如果用户需要动效实现，handoff 交给主循环路由到 motion-pro-max
+
+### Handoff Flow
+
+\`\`\`
+ui-ux → 输出 Design Handoff Packet → 交给主循环
+                                      ↓
+                              motion-pro-max 读取 handoff（不读完整 ui-ux）
+                                      ↓
+                              motion-review 审查
+                                      ↓
+                              交付
 \`\`\`
 
-如果用户同时提到"高级 UI + 动效"，两个 skill 一起激活，先出设计规范再出动效方案。`,
+### 输出格式 — 追加 Handoff Packet
+
+完成设计决策后，在输出末尾追加：
+
+\`\`\`markdown
+## Design Handoff Packet
+\`\`\`json
+{ "designStyle": "...", "brandTone": "...", "colorSystem": {...}, "typography": {...}, "componentRules": {...}, "motionHints": {...} }
+\`\`\`
+\`\`\``,
 
 }

@@ -10,60 +10,19 @@
  */
 
 import type { SkillDef } from "./types"
+import { UI_UX_PRO_MAX } from "./builtin/ui-ux-pro-max"
+import { MOTION_PRO_MAX } from "./builtin/motion-pro-max"
+import { MOTION_REVIEW } from "./builtin/motion-review"
 
 function registered(): SkillDef[] {
   return [
-    // ═══ Existing high-quality skills (adapted for DeepSeek Code) ═══
+    // ═══ Full built-in skills ═══
 
-    {
-      name: "design-quality",
-      description: "前端设计质量标准 — 防「能跑就行」，确保视觉产出有品牌感（叠加 UI UX Pro Max + motion-pro-max）",
-      triggers: ["前端", "UI", "设计", "界面", "页面", "组件", "React", "Vue", "CSS", "样式", "布局", "颜色", "app", "frontend", "component", "landing", "动效", "动画", "animation", "motion"],
-      autoTrigger: true,
-      prompt: [
-        "## 设计质量标准（design-quality skill 激活）",
-        "",
-        "### 硬性规则",
-        "1. 不能只用默认列表页 — 首屏必须有视觉层次: hero/bento/卡片/封面任选",
-        "2. 至少 2 个视觉断点: @media 768px + 1024px",
-        "3. 至少 1 个非纯色视觉元素: 渐变/阴影/边框/纹理/玻璃效果",
-        "4. 排版层级: 至少 3 种字号 (hero 2-3rem / 正文 1rem / 辅助 0.85rem)",
-        "5. hover/focus/active 三态完整 (每个可交互元素)",
-        "",
-        "### 配色 (来自 UI UX Pro Max)",
-        "| 场景 | 主色 | 辅助色 | 强调色 |",
-        "|-----|------|-------|----|",
-        "| 科技/SaaS | Blue-600 | Slate-500 | Cyan-400 |",
-        "| 健康/医疗 | Teal-600 | Gray-500 | Emerald-400 |",
-        "| 金融 | Indigo-700 | Gray-600 | Amber-500 |",
-        "| 创意 | Violet-500 | Slate-400 | Rose-400 |",
-        "| 暗色奢华 | Gold/Amber | Dark Gray | White |",
-        "颜色用 CSS 变量 (--color-*)，不硬编码。",
-        "",
-        "### 动效 (来自 motion-pro-max)",
-        "- 入场用 `--ease-out-expo` (cubic-bezier(0.16,1,0.3,1))",
-        "- 退场用 `--ease-in-expo`，退场 < 入场时长",
-        "- stagger 基于 index 指数递减",
-        "- 所有动效包在 `@media (prefers-reduced-motion: no-preference)` 内",
-        "- Modal z-index: 100, Toast: 200, Dropdown: 50",
-        "- 禁用 transition:all，只动 transform + opacity",
-        "- 阴影分层: card(--shadow-md) / hover(--shadow-lg) / modal(--shadow-xl)",
-        "- 按钮 5 态: default/hover/active/focus-visible/disabled",
-        "",
-        "### 设计方向 (选一个)",
-        "- 暗色奢华: 深底色 + 金色/铜色 + 细边框 + 柔和阴影",
-        "- 瑞士国际: 白底 + 网格 + 无衬线 + 红/黑强调色",
-        "- 玻璃拟态: 半透明卡片 + backdrop-blur + 柔和彩色渐变",
-        "- 编辑型: 粗体标题 + 大量留白 + 衬线字体 + 引号装饰",
-        "- 霓虹暗色: 黑底 + 单一霓虹色 + 发光效果 + terminal 风格",
-        "",
-        "### 代码规范",
-        "- 组件用语义 HTML (header/main/section/article/nav > div)",
-        "- CSS 用 flex/grid，不用 magic numbers",
-        "- 图片/图标不存在别引用 — 用 CSS 画或用 emoji/unicode 替代",
-        "- @media 覆盖移动端交互 (hover:none, 关闭自定义光标)",
-      ].join("\n"),
-    },
+    UI_UX_PRO_MAX,
+    MOTION_PRO_MAX,
+    MOTION_REVIEW,
+
+    // ═══ Quality/process skills ═══
 
     {
       name: "architecture-review",

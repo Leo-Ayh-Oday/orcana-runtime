@@ -16,14 +16,31 @@ const excluded = new Set([
   "tests/thinking_quality.test.ts",
 ])
 
+const excludedDirs = [
+  "tests/tmp",
+  "src/skills/builtin/examples",
+]
+
+function toRepoPath(fullPath) {
+  return relative(root, fullPath).split(sep).join("/")
+}
+
+function isExcludedDir(fullPath) {
+  const rel = toRepoPath(fullPath)
+  return excludedDirs.some(dir => rel === dir || rel.startsWith(`${dir}/`))
+}
+
 function walk(dir, out = []) {
+  if (isExcludedDir(dir)) return out
+
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry)
     const stat = statSync(full)
     if (stat.isDirectory()) {
+      if (isExcludedDir(full)) continue
       walk(full, out)
     } else if (entry.endsWith(".test.ts") || entry.endsWith(".test.tsx")) {
-      const rel = relative(root, full).split(sep).join("/")
+      const rel = toRepoPath(full)
       if (!excluded.has(rel)) out.push(rel)
     }
   }

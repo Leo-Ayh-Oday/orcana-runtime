@@ -1,0 +1,369 @@
+/** OrcanaComposer — 基于 react-ink-textarea 的多行输入组件。
+ *
+ *  职责：
+ *    - 多行编辑（Enter 发送，Shift+Enter 换行 —— TextArea 默认行为）
+ *    - 大粘贴 placeholder 系统（diff 检测 → 替换为 PASTE:N token → 可展开/折叠）
+ *    - 命令面板（/ 开头时禁用 TextArea 的 Enter/方向键，由 wrapper 处理）
+ *    - 历史导航（onFirstLineUp/onLastLineDown → history 或 scroll）
+ *    - 修复"英文说明吞掉正文"问题（TextArea 有自己的 viewport，不靠 displayWindow 切片）
+ *
+ *  设计原则：
+ *    - TextArea 负责文本编辑和光标管理（CJK/emoji 宽度、撤销、bracketed paste）
+ *    - OrcanaComposer 负责 paste block 系统、命令面板、历史导航
+ *    - controlled mode：value/cursorPosition 由 wrapper 管理，便于 paste token 替换
+ *
+ *  未来替换：如果 react-ink-textarea 不再维护，只需替换 TextArea import，
+ *  OrcanaComposer 的 paste block / 命令面板 / 历史逻辑不受影响。
+ */
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Box, Text } from "ink"
+import { TextArea } from "react-ink-textarea"
+import { C } from "../theme/theme"
+import type { SlashCommandHint } from "../input"
+
+// ── Paste block 系统（从 input.tsx 适配） ──
+
+export interface PasteBlock {
+  id: number
+  token: string
+  text: string
+  lines: number
+  chars: number
+}
+
+const PASTE_PREFIX = "PASTE:"
+const PASTE_SUFFIX = ""
+const pasteTokenRegex = /PASTE:(\d+)/g
+const pasteTriggerChars = Number(process.env.DEEPSEEK_TUI_PASTE_CHARS ?? "800")
+const pasteTriggerLines = Number(process.env.DEEPSEEK_TUI_PASTE_LINES ?? "2")
+
+export function pasteToken(id: number): string {
+  return `${PASTE_PREFIX}${id}${PASTE_SUFFIX}`
+}
+
+export function countLines(text: string): number {
+  if (!text) return 0
+  return text.split("\n").length
+}
+
+export function labelForPaste(block: PasteBlock): string {
+  const linePart = block.lines > 1 ? ` +${block.lines} lines` : ""
+  return `[Pasted text #${block.id}${linePart}, ${block.chars} chars loaded]`
+}
+
+export function displayDraft(value: string, blocks: PasteBlock[]): string {
+  const byId = new Map(blocks.map(block => [String(block.id), block]))
+  return value.replace(pasteTokenRegex, (_token, id: string) => {
+    const block = byId.get(id)
+    return block ? labelForPaste(block) : `[Pasted text #${id}]`
+  })
+}
+
+export function expandDraft(value: string, blocks: PasteBlock[]): string {
+  const byId = new Map(blocks.map(block => [String(block.id), block]))
+  return value.replace(pasteTokenRegex, (_token, id: string) => byId.get(id)?.text ?? "")
+}
+
+export function shouldStagePaste(text: string): boolean {
+  if (!text) return false
+  const lines = countLines(text)
+  return lines >= pasteTriggerLines || text.length >= pasteTriggerChars
+}
+
+/** 找出 newValue 相对于 oldValue 的插入文本。
+ *  通过公共前缀/后缀计算，返回插入的位置和内容。 */
+export function findInsertedText(
+  oldValue: string,
+  newValue: string,
+): { inserted: string; start: number; end: number } | null {
+  // 剪枝：如果 newValue 更短，说明是删除操作，不是粘贴
+  if (newValue.length <= oldValue.length) return null
+  // 剪枝：如果差值太小，不可能是大粘贴
+  const diffLen = newValue.length - oldValue.length
+  if (diffLen < pasteTriggerChars && countLines(newValue) - countLines(oldValue) < pasteTriggerLines) {
+    // 可能是多行小粘贴，继续检查
+    if (diffLen < 40) return null
+  }
+
+  // 找公共前缀
+  let prefixLen = 0
+  const minLen = Math.min(oldValue.length, newValue.length)
+  while (prefixLen < minLen && oldValue[prefixLen] === newValue[prefixLen]) {
+    prefixLen++
+  }
+
+  // 找公共后缀
+  let suffixLen = 0
+  while (
+    suffixLen < minLen - prefixLen &&
+    oldValue[oldValue.length - 1 - suffixLen] === newValue[newValue.length - 1 - suffixLen]
+  ) {
+    suffixLen++
+  }
+
+  const inserted = newValue.slice(prefixLen, newValue.length - suffixLen)
+  if (!inserted) return null
+
+  return {
+    inserted,
+    start: prefixLen,
+    end: newValue.length - suffixLen,
+  }
+}
+
+/** 将 flat string position 转换为 [row, col] tuple（TextArea 的 cursorPosition 格式）。 */
+export function flatToRowCol(text: string, pos: number): [number, number] {
+  let row = 0
+  let lastNewline = -1
+  for (let i = 0; i < pos && i < text.length; i++) {
+    if (text[i] === "\n") {
+      row++
+      lastNewline = i
+    }
+  }
+  const col = pos - lastNewline - 1
+  return [row, col < 0 ? 0 : col]
+}
+
+// ── OrcanaComposer ──
+
+export interface OrcanaComposerProps {
+  onSubmit: (value: string) => void
+  disabled?: boolean
+  placeholder?: string
+  status?: string
+  rightStatus?: string
+  commands?: SlashCommandHint[]
+  focused?: boolean
+  onScrollUp?: () => void
+  onScrollDown?: () => void
+  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number }) => void
+}
+
+export function OrcanaComposer({
+  onSubmit,
+  disabled = false,
+  placeholder,
+  status,
+  rightStatus,
+  commands = [],
+  focused = true,
+  onScrollUp,
+  onScrollDown,
+  onChromeChange,
+}: OrcanaComposerProps) {
+  // ── 状态 ──
+  const [value, setValue] = useState("")
+  const [cursor, setCursor] = useState<[number, number]>([0, 0])
+  const [history, setHistory] = useState<string[]>([])
+  const [historyIdx, setHistoryIdx] = useState(-1)
+  const [commandIdx, setCommandIdx] = useState(0)
+  const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>([])
+  const [nextPasteId, setNextPasteId] = useState(1)
+
+  // ── 派生数据 ──
+  const visibleDraft = useMemo(() => displayDraft(value, pasteBlocks), [pasteBlocks, value])
+  const showCommands = !disabled && value.trimStart().startsWith("/")
+  const slashQuery = value.trimStart().startsWith("/")
+    ? (value.trimStart().slice(1).split(/\s+/)[0] ?? "")
+    : ""
+  const commandMatches = commands.filter(cmd => cmd.name.startsWith(slashQuery)).slice(0, 3)
+  const selectedCommand = commandMatches[Math.min(commandIdx, Math.max(0, commandMatches.length - 1))]
+  const pasteCount = pasteBlocks.filter(block => value.includes(block.token)).length
+
+  // ── 通知 parent chrome 状态 ──
+  useEffect(() => {
+    onChromeChange?.({ commandOpen: showCommands, pasteCount })
+  }, [onChromeChange, pasteCount, showCommands])
+
+  // ── onChange：处理 paste 检测 ──
+  const handleChange = useCallback(
+    (newValue: string) => {
+      // 检测大粘贴插入
+      const diff = findInsertedText(value, newValue)
+      if (diff && shouldStagePaste(diff.inserted)) {
+        const id = nextPasteId
+        const token = pasteToken(id)
+        const block: PasteBlock = {
+          id,
+          token,
+          text: diff.inserted,
+          lines: countLines(diff.inserted),
+          chars: diff.inserted.length,
+        }
+        setNextPasteId(id + 1)
+        setPasteBlocks(blocks => [...blocks, block])
+        setHistoryIdx(-1)
+        setCommandIdx(0)
+        // 用 token 替换插入的大文本
+        const tokenizedValue = newValue.slice(0, diff.start) + token + newValue.slice(diff.end)
+        setValue(tokenizedValue)
+        // 设置光标到 token 之后
+        setCursor(flatToRowCol(tokenizedValue, diff.start + token.length))
+        return
+      }
+
+      setHistoryIdx(-1)
+      setCommandIdx(0)
+      setValue(newValue)
+    },
+    [value, nextPasteId],
+  )
+
+  // ── onCursorChange ──
+  const handleCursorChange = useCallback((pos: [number, number]) => {
+    setCursor(pos)
+  }, [])
+
+  // ── onSubmit：展开 paste token 后提交 ──
+  const handleSubmit = useCallback(
+    (rawValue: string) => {
+      const expanded = expandDraft(rawValue, pasteBlocks)
+      const trimmed = expanded.trim()
+      if (!trimmed) return
+
+      // 命令面板选择
+      const hasCommandArgs = trimmed.startsWith("/") && /\s/.test(trimmed.slice(1))
+      const finalValue =
+        showCommands && selectedCommand && !hasCommandArgs ? `/${selectedCommand.name}` : trimmed
+
+      // 保存历史
+      const historyLabel = displayDraft(rawValue, pasteBlocks).trim()
+      setHistory(h => [...h.slice(-50), historyLabel || finalValue.slice(0, 240)])
+      setHistoryIdx(-1)
+      setCommandIdx(0)
+
+      onSubmit(finalValue)
+      setValue("")
+      setCursor([0, 0])
+      setPasteBlocks([])
+    },
+    [pasteBlocks, showCommands, selectedCommand, onSubmit],
+  )
+
+  // ── onTab：命令面板导航 ──
+  const handleTab = useCallback(
+    (shift: boolean) => {
+      if (showCommands && commandMatches.length > 0) {
+        setCommandIdx(idx => {
+          const delta = shift ? -1 : 1
+          return (idx + delta + commandMatches.length) % commandMatches.length
+        })
+      }
+    },
+    [showCommands, commandMatches.length],
+  )
+
+  // ── onFirstLineUp：第一行按 Up → history 或 scroll ──
+  const handleFirstLineUp = useCallback(() => {
+    if (showCommands && commandMatches.length > 0) {
+      setCommandIdx(idx => (idx <= 0 ? commandMatches.length - 1 : idx - 1))
+      return
+    }
+    if (!value.trim() && onScrollUp) {
+      onScrollUp()
+      return
+    }
+    if (history.length > 0) {
+      const newIdx = historyIdx === -1 ? history.length - 1 : Math.max(0, historyIdx - 1)
+      setHistoryIdx(newIdx)
+      setPasteBlocks([])
+      setValue(history[newIdx]!)
+      setCursor([0, history[newIdx]!.length])
+    }
+  }, [showCommands, commandMatches.length, value, onScrollUp, history, historyIdx])
+
+  // ── onLastLineDown：最后一行按 Down → history 或 scroll ──
+  const handleLastLineDown = useCallback(() => {
+    if (showCommands && commandMatches.length > 0) {
+      setCommandIdx(idx => (idx + 1) % commandMatches.length)
+      return
+    }
+    if (!value.trim() && onScrollDown) {
+      onScrollDown()
+      return
+    }
+    if (historyIdx >= 0) {
+      const newIdx = historyIdx + 1
+      if (newIdx >= history.length) {
+        setHistoryIdx(-1)
+        setValue("")
+        setCursor([0, 0])
+        setPasteBlocks([])
+      } else {
+        setHistoryIdx(newIdx)
+        setPasteBlocks([])
+        setValue(history[newIdx]!)
+        setCursor([0, history[newIdx]!.length])
+      }
+    }
+  }, [showCommands, commandMatches.length, value, onScrollDown, history, historyIdx])
+
+  // ── 输入状态行 ──
+  const compactInputStatus = disabled
+    ? "运行中"
+    : showCommands
+      ? "↑/↓ 选择 · Tab 切换 · Enter 发送"
+      : pasteCount > 0
+        ? `已载入 ${pasteCount} 段粘贴内容 · Backspace 移除`
+        : ""
+
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      {/* 命令面板 */}
+      {showCommands && (
+        <Box flexDirection="column" marginBottom={1} marginLeft={2}>
+          {commandMatches.length === 0 ? (
+            <Text color={C.dim}>无匹配命令</Text>
+          ) : (
+            commandMatches.map((cmd, index) => (
+              <Text key={cmd.name} color={index === commandIdx ? C.cyan : C.dim}>
+                {index === commandIdx ? ">" : " "} /{cmd.name} <Text color={C.dim}>{cmd.description}</Text>
+              </Text>
+            ))
+          )}
+        </Box>
+      )}
+
+      {/* 粘贴内容指示器 */}
+      {pasteCount > 0 && !showCommands && (
+        <Box marginLeft={2} marginBottom={0}>
+          <Text color={C.yellow}>{compactInputStatus}</Text>
+        </Box>
+      )}
+
+      {/* TextArea：多行输入核心 */}
+      <TextArea
+        focus={focused && !disabled}
+        value={value}
+        cursorPosition={cursor}
+        onChange={handleChange}
+        onCursorChange={handleCursorChange}
+        onSubmit={handleSubmit}
+        onTab={handleTab}
+        onFirstLineUp={handleFirstLineUp}
+        onLastLineDown={handleLastLineDown}
+        placeholder={placeholder || "Message DeepSeek Code... (Enter send · Shift+Enter newline)"}
+        disableArrowNavigation={showCommands}
+        keybindings={showCommands ? { Enter: false } : undefined}
+        viewportLines={3}
+        initialLineCount={1}
+        cursorInterval={500}
+        typingPause={450}
+      />
+
+      {/* 状态行 */}
+      {status && !showCommands && (
+        <Box flexDirection="row">
+          <Text color={C.dim}> {status}</Text>
+          {rightStatus && (
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text color={C.dim}>{rightStatus}</Text>
+            </Box>
+          )}
+        </Box>
+      )}
+    </Box>
+  )
+}

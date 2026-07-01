@@ -142,6 +142,12 @@ API change ──► L1 Diff (8 change kinds) ──► L2 TypeChecker.findRefer
 
 See [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) for the 10-Phase plan to v1.0.
 
+## Uninstall
+
+```bash
+npm uninstall -g deepseek-orcana
+```
+
 ## Document Map
 
 **New here?** Start with Design Philosophy, then Architecture.

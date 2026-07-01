@@ -8,6 +8,7 @@ import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { RightRailData } from "../state/selectors"
+import { RuntimePanel, isRuntimePanelEnabled } from "./RuntimePanel"
 
 // ── 内部工具组件 ──
 
@@ -44,10 +45,12 @@ function toolIcon(status: RightRailData["toolHistory"][number]["status"]): strin
 
 export interface RightRailProps extends RightRailData {
   width?: number
+  tick?: number
 }
 
 export const RightRail = React.memo(function RightRail(props: RightRailProps) {
-  const { round, contextTokens, contextMax, cacheHitRate, cacheHits, rippleFindings, toolHistory, taskProgress } = props
+  const { round, contextTokens, contextMax, cacheHitRate, cacheHits, toolHistory, taskProgress, runtime, rippleFindings } = props
+  const tick = props.tick ?? 0
   const width = props.width ?? 42
   const ctxPct = Math.round((contextTokens / contextMax) * 100)
   const ctxColor = ctxPct > 50 ? C.red : ctxPct > 30 ? C.yellow : C.green
@@ -68,16 +71,23 @@ export const RightRail = React.memo(function RightRail(props: RightRailProps) {
         </Box>
       )}
 
-      {rippleFindings.length > 0 && (
+      {isRuntimePanelEnabled() ? (
         <Box flexDirection="column">
-          <Text color={C.yellow}>Ripple</Text>
-          {rippleFindings.slice(0, 3).map((finding, index) => (
-            <Text key={index} color={finding.severity === "block" ? C.red : C.yellow}>
-              ! {finding.file}: {finding.reason.slice(0, 42)}
-            </Text>
-          ))}
+          <RuntimePanel {...runtime} tick={tick} width={width - 2} />
           <Box height={1} />
         </Box>
+      ) : (
+        rippleFindings.length > 0 && (
+          <Box flexDirection="column">
+            <Text color={C.yellow}>Ripple</Text>
+            {rippleFindings.slice(0, 3).map((finding, index) => (
+              <Text key={index} color={finding.severity === "block" ? C.red : C.yellow}>
+                ! {finding.file}: {finding.reason.slice(0, 42)}
+              </Text>
+            ))}
+            <Box height={1} />
+          </Box>
+        )
       )}
 
       <Text bold color={C.blue}>Tools</Text>

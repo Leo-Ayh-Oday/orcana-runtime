@@ -23,6 +23,7 @@
 import type {
   TuiDashToolHistoryEntry,
   TuiRippleFinding,
+  TuiRipplePhase,
   TuiState,
   TuiMessage,
   TuiToolEvent,
@@ -179,6 +180,8 @@ export interface RightRailData {
   toolHistory: TuiDashToolHistoryEntry[]
   taskProgress: { done: number; total: number; current: string }
   thinkingChain?: string
+  /** PR-5: RuntimePanel 数据 */
+  runtime: RuntimePanelData
 }
 
 interface TaskProgressLike {
@@ -219,5 +222,48 @@ export function selectRightRail(state: TuiState): RightRailData {
     toolHistory: state.dashToolHistory,
     taskProgress,
     thinkingChain: undefined,
+    runtime: selectRuntimePanel(state),
+  }
+}
+
+// ── PR-5: RuntimePanel 选择器 ──
+
+export interface RuntimePanelData {
+  ripplePhase: TuiRipplePhase
+  rippleFindings: TuiRippleFinding[]
+  gateSummary: { total: number; pass: number; block: number; warn: number; skip: number }
+  evidenceSummary: { total: number; passed: number; failed: number; blocked: number; running: number; skipped: number }
+  patchSummary: { total: number; proposed: number; committed: number; rolledBack: number }
+  activeTools: number
+}
+
+/** 选择 RuntimePanel 数据（PR-5）。
+ *  返回涟漪阶段、门禁/证据/补丁汇总，用于右侧运行态面板。 */
+export function selectRuntimePanel(state: TuiState): RuntimePanelData {
+  return {
+    ripplePhase: state.ripplePhase,
+    rippleFindings: state.rippleFindings,
+    gateSummary: {
+      total: state.gates.length,
+      pass: state.gates.filter(g => g.status === "pass").length,
+      block: state.gates.filter(g => g.status === "block").length,
+      warn: state.gates.filter(g => g.status === "warn").length,
+      skip: state.gates.filter(g => g.status === "skip").length,
+    },
+    evidenceSummary: {
+      total: state.evidence.length,
+      passed: state.evidence.filter(e => e.status === "passed").length,
+      failed: state.evidence.filter(e => e.status === "failed").length,
+      blocked: state.evidence.filter(e => e.status === "blocked").length,
+      running: state.evidence.filter(e => e.status === "running").length,
+      skipped: state.evidence.filter(e => e.status === "skipped").length,
+    },
+    patchSummary: {
+      total: state.patches.length,
+      proposed: state.patches.filter(p => p.status === "proposed").length,
+      committed: state.patches.filter(p => p.status === "committed").length,
+      rolledBack: state.patches.filter(p => p.status === "rolled_back").length,
+    },
+    activeTools: state.tools.filter(t => t.status === "running").length,
   }
 }

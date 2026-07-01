@@ -79,6 +79,7 @@ export function createInitialTuiState(): TuiState {
     round: 0,
     cacheHitHistory: [],
     rippleFindings: [],
+    ripplePhase: "idle",
     dashToolHistory: [],
     // Internal
     _nextId: 0,
@@ -511,6 +512,12 @@ export function reduceTuiEvent(
         done: true,
         messages,
       }
+    }
+
+    // ── 涟漪引擎阶段（PR-5） ──
+
+    case "ripple.phase": {
+      return { ...state, ripplePhase: event.phase }
     }
 
     default: {

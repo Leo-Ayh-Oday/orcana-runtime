@@ -1,22 +1,22 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
-const { spawnSync } = require("node:child_process")
-const { fileURLToPath, pathToFileURL } = require("node:url")
-const path = require("node:path")
+// Orcana CLI entry — Bun-first. Node wrapper not needed; this imports the compiled ESM directly.
+const { pathToFileURL } = await import("node:url")
+const path = await import("node:path")
 
-const root = path.resolve(__dirname, "..")
-const entry = path.join(root, "dist", "src", "index.js")
-const args = process.argv.slice(2)
+const root = path.resolve(import.meta.dir, "..")
+const entry = path.join(root, "dist", "index.js")
 
-const result = spawnSync("bun", [fileURLToPath(pathToFileURL(entry)), ...args], {
-  stdio: "inherit",
-  shell: process.platform === "win32",
-})
-
-if (result.error) {
-  console.error("Orcana requires Bun. Install it from https://bun.sh, then run this command again.")
-  console.error(result.error.message)
+try {
+  await import(pathToFileURL(entry).href)
+} catch (error) {
+  console.error("")
+  console.error("Orcana failed to start.")
+  console.error("")
+  if (error && error.message) console.error(error.message)
+  else console.error(error)
+  console.error("")
+  console.error("Orcana requires Bun. Install it from https://bun.sh")
+  console.error("")
   process.exit(1)
 }
-
-process.exit(result.status ?? 0)

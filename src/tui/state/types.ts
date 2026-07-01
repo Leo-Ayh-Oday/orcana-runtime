@@ -113,6 +113,10 @@ export interface TuiRippleFinding {
   reason: string
 }
 
+/** 涟漪引擎运行态阶段（PR-5）。
+ *  idle → scan → propagate → verify → settled/blocked → idle */
+export type TuiRipplePhase = "idle" | "scan" | "propagate" | "verify" | "blocked" | "settled"
+
 export interface TuiDashToolHistoryEntry {
   name: string
   status: "running" | "done" | "blocked" | "error"
@@ -142,6 +146,8 @@ export interface TuiState {
   round: number
   cacheHitHistory: number[]
   rippleFindings: TuiRippleFinding[]
+  /** PR-5: 涟漪引擎当前阶段，用于 RuntimePanel 动画 */
+  ripplePhase: TuiRipplePhase
   dashToolHistory: TuiDashToolHistoryEntry[]
   _nextId: number
   _lastEventKey: string | null

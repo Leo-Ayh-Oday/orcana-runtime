@@ -1,6 +1,6 @@
 {
   "name": "deepseek-orcana",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Terminal coding agent with model-backed runtime, TUI, and workflow gates.",
   "type": "module",
   "license": "MIT",
@@ -19,20 +19,20 @@
     "bun",
     "typescript"
   ],
-  "main": "dist/src/index.js",
+  "main": "dist/index.js",
   "exports": {
-    ".": "./dist/src/index.js",
+    ".": "./dist/index.js",
     "./package.json": "./package.json"
   },
   "bin": {
-    "orcana": "bin/deepseek-code.cjs",
-    "deepseek-orcana": "bin/deepseek-code.cjs",
-    "deepseek-code": "bin/deepseek-code.cjs",
-    "deepseek": "bin/deepseek-code.cjs"
+    "orcana": "./bin/deepseek-code.cjs",
+    "deepseek-orcana": "./bin/deepseek-code.cjs",
+    "deepseek-code": "./bin/deepseek-code.cjs",
+    "deepseek": "./bin/deepseek-code.cjs"
   },
   "files": [
     "bin/",
-    "dist/src/",
+    "dist/",
     "README.md",
     "README.zh.md",
     "LICENSE"
@@ -56,9 +56,9 @@
     "test:watch": "node scripts/run-tests.cjs --watch"
   },
   "engines": {
-    "bun": ">=1.3.0",
-    "node": ">=18"
+    "bun": ">=1.3.0"
   },
+  "author": "Oday Leo <leooday814@gmail.com>",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.102.0",
     "@clack/prompts": "^1.5.1",

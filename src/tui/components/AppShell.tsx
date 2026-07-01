@@ -258,7 +258,7 @@ export function AppShell(props: AppShellProps) {
 
         {layout.showDash && (
           <Box width={42}>
-            <RightRail {...rightRail} />
+            <RightRail {...rightRail} tick={tick} />
           </Box>
         )}
       </Box>

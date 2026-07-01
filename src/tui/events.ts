@@ -1,10 +1,11 @@
 import type { ClarificationReady } from "../agent/clarification"
-import type { TuiMode } from "./state/types"
+import type { TuiMode, TuiRipplePhase } from "./state/types"
 
 export type {
   TuiClarificationOption,
   TuiClarificationQuestion,
   TuiClarificationState,
+  TuiRipplePhase,
 } from "./state/types"
 
 export type TuiEventKind = "tool" | "task" | "plan" | "error"
@@ -89,11 +90,11 @@ export type TuiEvent =
   | { type: "ui.done"; done: boolean }
   | { type: "ui.queue_count"; count: number }
   | { type: "ui.error_line"; text: string }
-  | {
-      type: "ui.event_message"
+  | { type: "ui.event_message"
       kind: TuiEventKind
       text: string
       dedupeKey?: string
       minIntervalMs?: number
     }
   | { type: "clarification.ready"; data: ClarificationReady }
+  | { type: "ripple.phase"; phase: TuiRipplePhase }

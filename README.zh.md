@@ -141,6 +141,12 @@ API 变更 ──► L1 Diff（8 种变更类型）──► L2 TypeChecker.find
 
 详见 [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md)——10 Phase 路线图到 v1.0。
 
+## 卸载
+
+```bash
+npm uninstall -g deepseek-orcana
+```
+
 ## 文档导航
 
 **刚来？** 先读设计哲学，再看架构。

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { RuntimeController } from "../src/runtime/controller"
 import { RuntimeEventBus } from "../src/runtime/event-bus"
 import type { RuntimeEvent } from "../src/runtime/events"
+import { createRuntimeSession, updateRuntimeSessionStatus } from "../src/runtime/session"
 
 function statusEvent(status: "idle" | "running" | "done", timestamp: number): RuntimeEvent {
   return { type: "session.status", status, timestamp }
@@ -75,6 +77,101 @@ describe("RuntimeEventBus", () => {
     history.push(statusEvent("done", 2))
 
     expect(bus.getHistory()).toEqual([statusEvent("running", 1)])
+  })
+})
+
+describe("RuntimeController", () => {
+  test("start emits session boundary events once", () => {
+    let time = 10
+    const controller = new RuntimeController({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      now: () => time++,
+    })
+
+    controller.start()
+    controller.start()
+
+    expect(controller.eventBus.getHistory()).toEqual([
+      { type: "session.started", sessionId: "s1", repoRoot: "E:/repo", timestamp: 11 },
+      { type: "session.status", status: "idle", timestamp: 11 },
+    ])
+  })
+
+  test("submit_prompt is classified as an agent request without executing it", () => {
+    const controller = new RuntimeController({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      now: () => 1,
+    })
+
+    const result = controller.handleIntent({ type: "submit_prompt", text: "fix the failing test" })
+
+    expect(result).toEqual({ ok: true, action: "agent_request", status: "planning" })
+    expect(controller.getSession().status).toBe("planning")
+    expect(controller.eventBus.getHistory()).toEqual([
+      { type: "session.status", status: "planning", timestamp: 1 },
+    ])
+  })
+
+  test("slash_command remains local control-plane intent", () => {
+    const controller = new RuntimeController({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+    })
+
+    const result = controller.handleIntent({ type: "slash_command", raw: "/status" })
+
+    expect(result.action).toBe("local_command")
+    expect(result.status).toBe("idle")
+    expect(controller.eventBus.getHistory()).toEqual([])
+  })
+
+  test("interrupt moves runtime to blocked status", () => {
+    const controller = new RuntimeController({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      now: () => 5,
+    })
+
+    const result = controller.handleIntent({ type: "interrupt" })
+
+    expect(result).toEqual({ ok: true, action: "interrupted", status: "blocked" })
+    expect(controller.eventBus.getHistory()).toEqual([
+      { type: "session.status", status: "blocked", timestamp: 5 },
+    ])
+  })
+})
+
+describe("RuntimeSession", () => {
+  test("creates idle session metadata", () => {
+    expect(createRuntimeSession({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      timestamp: 100,
+    })).toEqual({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      status: "idle",
+      createdAt: 100,
+      updatedAt: 100,
+    })
+  })
+
+  test("status updates preserve identity and creation time", () => {
+    const session = createRuntimeSession({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      timestamp: 100,
+    })
+
+    expect(updateRuntimeSessionStatus(session, "running", 200)).toEqual({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      status: "running",
+      createdAt: 100,
+      updatedAt: 200,
+    })
   })
 })
 

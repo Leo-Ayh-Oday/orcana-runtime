@@ -57,6 +57,34 @@ async function main() {
     return
   }
 
+  if (arg === "--help" || arg === "-h" || arg === "help") {
+    console.log([
+      "Orcana — DeepSeek-native terminal coding agent runtime",
+      "",
+      "Usage:",
+      "  orcana [prompt]",
+      "  orcana --cli [prompt]",
+      "  orcana --tui",
+      "  orcana list",
+      "  orcana last",
+      "  orcana <session-id>",
+      "  orcana --version",
+      "  orcana --help",
+      "",
+      "Examples:",
+      '  orcana "explain this codebase"',
+      '  orcana "fix the failing test"',
+      "  orcana --cli",
+      "  orcana list",
+      "",
+      "Environment:",
+      "  DEEPSEEK_API_KEY    DeepSeek API key (required)",
+      "",
+      "Docs: https://github.com/Leo-Ayh-Oday/deepseek-orcana",
+    ].join("\n"))
+    return
+  }
+
   if (arg === "tui" || arg === "--tui") {
     const prompt = process.argv.slice(3).join(" ") || undefined
     await startInkTUI(prompt)

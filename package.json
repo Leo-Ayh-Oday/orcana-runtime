@@ -33,6 +33,7 @@
   "files": [
     "bin/",
     "dist/",
+    ".env.example",
     "README.md",
     "README.zh.md",
     "LICENSE"

@@ -455,6 +455,15 @@ class LongTaskStreamErrorOnlyProvider implements LLMProvider {
   }
 }
 
+class NonRetryableStreamErrorProvider implements LLMProvider {
+  rounds = 0
+
+  async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    this.rounds += 1
+    yield { type: "error", data: "auth invalid api key" }
+  }
+}
+
 class GenericThrowStreamErrorThenTextProvider implements LLMProvider {
   rounds = 0
   messages: ProviderCallOptions["messages"][] = []
@@ -1657,6 +1666,27 @@ describe("Agent loop greedy tool execution", () => {
     expect(text).toContain("Recovered answer.")
     expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying interrupted round"))).toBe(true)
     expect(JSON.stringify(provider.messages[1])).toContain("Provider Stream Recovery")
+  })
+
+  test("non-retryable provider stream failure blocks instead of retrying", async () => {
+    const provider = new NonRetryableStreamErrorProvider()
+    const trace = new MemoryTrace()
+    const events: StreamEvent[] = []
+
+    for await (const event of agentLoop("Say hello briefly", {
+      provider,
+      model: "test",
+      tools: [],
+      maxRounds: 2,
+      runTrace: trace as unknown as AgentRunTrace,
+    })) {
+      events.push(event)
+    }
+
+    expect(provider.rounds).toBe(1)
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: blocked"))).toBe(true)
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(false)
+    expect(trace.events.some(event => event.type === "gate_decision" && JSON.stringify(event.data).includes("non_retryable"))).toBe(true)
   })
 
   test("idle provider stream times out and reaches recovery gate", async () => {

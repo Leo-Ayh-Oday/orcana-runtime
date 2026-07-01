@@ -1,6 +1,7 @@
 /** Agent while-True tool loop — with self-learn triggers, staged context, thinking store, post-edit lint. */
 
 import type { LLMProvider, ProviderMessage, ProviderTokenUsage, StreamEvent } from "../provider/types"
+import { classifyProviderError } from "../provider/retry"
 import type { ToolDescriptor, ToolResult } from "../tools/registry"
 import { createState, decideThinkingPlan, updateState } from "./router"
 import { buildSystemPrompt } from "./prompts"
@@ -785,6 +786,7 @@ export async function* agentLoop(
     const completedToolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
     let thinkingBlocks: Array<{ thinking: string; signature: string }> = []
     let streamError = ""
+    let streamErrorRetryable = true
     const roundStart = Date.now()
     let bufferedTextEmitted = false
     const shouldBufferCompletionText = taskTracker?.phase === "building" || taskTracker?.phase === "complete" || taskHadWrite || taskToolErrors > 0
@@ -816,10 +818,17 @@ export async function* agentLoop(
           }
           completedToolCalls.push(event.data as typeof completedToolCalls[0]); yield event
         }
-        else if (event.type === "error") { streamError = String(event.data ?? ""); yield event }
+        else if (event.type === "error") {
+          streamError = String(event.data ?? "")
+          // Provider formats non-retryable errors as "auth ..." or "client ..."
+          streamErrorRetryable = !(streamError.startsWith("auth ") || streamError.startsWith("client "))
+          yield event
+        }
       }
     } catch (e) {
       streamError = e instanceof Error ? e.message : String(e)
+      const classified = classifyProviderError(e)
+      streamErrorRetryable = classified.retryable
       yield { type: "error", data: streamError }
     }
 
@@ -861,6 +870,18 @@ export async function* agentLoop(
     }
 
     if (streamError) {
+      if (!streamErrorRetryable) {
+        yield { type: "error", data: streamError }
+        yield { type: "status", data: `provider-stream-gate: blocked (non-retryable: ${streamError.slice(0, 80)})` }
+        options.runTrace?.record("gate_decision", {
+          gate: "provider_stream",
+          decision: "blocked",
+          reason: "non_retryable",
+          error: streamError,
+        })
+        break
+      }
+
       if (taskTracker) {
         const missingAfterStreamFailure = missingTaskRequirements(taskTracker)
         if (round + 1 < maxRounds) {

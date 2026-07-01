@@ -21,3 +21,4 @@ package-lock.json
 blog/.next/
 tests/tmp/
 .trae/
+*.tgz

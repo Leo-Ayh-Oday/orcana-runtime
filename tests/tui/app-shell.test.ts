@@ -12,6 +12,7 @@
 import { describe, expect, test } from "bun:test"
 import { SLASH_COMMANDS, computeAppShellLayout } from "../../src/tui/components/AppShell"
 import type { InputChromeState, ClarificationWizardState } from "../../src/tui/components/AppShell"
+import { tuiTokens } from "../../src/tui/tokens"
 import type { TaskProgressState } from "../../src/tui/components/PlanPanel"
 import type { ClarificationQuestion } from "../../src/agent/clarification"
 
@@ -106,10 +107,11 @@ describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
     expect(layout.showDash).toBe(true)
   })
 
-  test("RightRail hidden on narrow screen (<110 cols) even when hasDash=true", () => {
+  test("RightRail hidden on narrow screen (<breakpoint) even when hasDash=true", () => {
+    const bp = tuiTokens.layout.breakpointCompact
     const layout = computeAppShellLayout({
       rows: 40,
-      cols: 100,
+      cols: bp - 16,
       hasDash: true,
       isWorking: false,
       clarification: null,
@@ -132,10 +134,11 @@ describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
     expect(layout.showDash).toBe(false)
   })
 
-  test("RightRail hidden at exactly 109 cols", () => {
+  test("RightRail hidden at breakpoint - 1 cols", () => {
+    const bp = tuiTokens.layout.breakpointCompact
     const layout = computeAppShellLayout({
       rows: 40,
-      cols: 109,
+      cols: bp - 1,
       hasDash: true,
       isWorking: false,
       clarification: null,
@@ -145,10 +148,11 @@ describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
     expect(layout.showDash).toBe(false)
   })
 
-  test("RightRail visible at exactly 110 cols", () => {
+  test("RightRail visible at breakpoint cols", () => {
+    const bp = tuiTokens.layout.breakpointCompact
     const layout = computeAppShellLayout({
       rows: 40,
-      cols: 110,
+      cols: bp,
       hasDash: true,
       isWorking: false,
       clarification: null,

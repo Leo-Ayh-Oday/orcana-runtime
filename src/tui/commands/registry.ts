@@ -155,7 +155,7 @@ export const COMMANDS: CommandDef[] = [
   },
   {
     name: "exit",
-    description: "Exit DeepSeek Code",
+    description: "Exit Orcana",
     category: "system",
   },
 ]

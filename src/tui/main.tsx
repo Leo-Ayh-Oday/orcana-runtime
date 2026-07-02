@@ -22,10 +22,12 @@ import { mouseEvents } from "./stdin-filter"
 
 type ModelHistoryRole = "user" | "assistant"
 
-const TUI_STARTUP_MS = 2400
-const TUI_STREAM_FLUSH_MS = Number(process.env.DEEPSEEK_TUI_STREAM_FLUSH_MS ?? "120")
-const TUI_FRAME_MS = Number(process.env.DEEPSEEK_TUI_FRAME_MS ?? "320")
-const TUI_SCROLL_STEP = Number(process.env.DEEPSEEK_TUI_SCROLL_STEP ?? "3")
+import { tuiTokens } from "./tokens"
+
+const TUI_STARTUP_MS = tuiTokens.motion.startupMs
+const TUI_STREAM_FLUSH_MS = tuiTokens.motion.streamFlushMs
+const TUI_FRAME_MS = tuiTokens.motion.frameMs
+const TUI_SCROLL_STEP = tuiTokens.layout.scrollStep
 
 function TuiInputGuard() {
   // 保持 stdin 在 raw mode，并过滤鼠标/转义序列，防止泄漏到 TextArea。
@@ -572,11 +574,11 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       return
     }
     if (key.ctrl && key.upArrow) {
-      scrollUp(3)
+      scrollUp(TUI_SCROLL_STEP)
       return
     }
     if (key.ctrl && key.downArrow) {
-      scrollDown(3)
+      scrollDown(TUI_SCROLL_STEP)
     }
   }, { isActive: !showStartup })
 
@@ -646,7 +648,7 @@ export async function startInkTUI(prompt?: string) {
 
   // 设置终端标题（生产级 TUI 标配）
   const projectDir = process.cwd().split(/[/\\]/).pop() ?? "deepseek-code"
-  process.stdout.write(`\x1B]0;DeepSeek Code — ${projectDir}\x07`)
+  process.stdout.write(`\x1B]0;Orcana — ${projectDir}\x07`)
 
   // SIGINT/Ctrl+C 优雅退出：恢复终端状态后退出。
   // process.exit 不触发 finally 块，必须手动清理。

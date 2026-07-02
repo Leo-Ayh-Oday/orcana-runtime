@@ -2,8 +2,8 @@
  *
  *  职责：
  *    - 组合 HeaderBar / StatusBar / Scrollback / RightRail / PlanPanel / OrcanaComposer / FooterHints
- *    - 宽屏 (>= 110 cols)：Scrollback + RightRail 并排
- *    - 窄屏 (< 110 cols)：隐藏 RightRail
+ *    - 宽屏 (>= tuiTokens.layout.breakpointCompact cols)：Scrollback + RightRail 并排
+ *    - 窄屏 (< tuiTokens.layout.breakpointCompact cols)：隐藏 RightRail
  *    - splash 启动画面保留但不是主功能
  *    - 消费 PR-1 TuiState（通过 selectors + 直接字段）
  *
@@ -12,6 +12,7 @@
 import React from "react"
 import { Box, Text, useStdout } from "ink"
 import { C } from "../theme/theme"
+import { tuiTokens } from "../tokens"
 import type { Runtime } from "../../runtime/bootstrap"
 import { InkStartupScreen } from "../../ui/ink-startup"
 import type { SlashCommandHint } from "../input"
@@ -51,7 +52,7 @@ export interface ClarificationWizardState {
 function EmptySurface() {
   return (
     <Box flexDirection="column">
-      <Text color={C.cyan} bold>DeepSeek Code</Text>
+      <Text color={C.cyan} bold>Orcana</Text>
       <Text color={C.dim}>Harness runtime ready. Type / for commands.</Text>
       <Box height={1} />
       <Text color={C.blue}>status <Text color={C.dim}>/</Text> ready</Text>
@@ -154,7 +155,7 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
   const clarificationRows = clarification ? Math.min(10, 4 + (question?.options.length ?? 0)) : 0
   const taskRows = task ? (task.phase === "planning" ? 3 : Math.min(5, 1 + Math.min(3, task.steps.length))) : 0
   const panelRows = clarificationRows || taskRows
-  const showDash = hasDash && cols >= 110
+  const showDash = hasDash && cols >= tuiTokens.layout.breakpointCompact
   // OrcanaComposer 多行布局：TextArea(textRows 行) + 状态行(1行) + 可能的粘贴指示(1行)
   // 命令面板打开时占 5 行（3 条候选 + 标题 + 空行）
   // FooterHints 占 1 行，footerHeight 需额外 +1
@@ -252,7 +253,7 @@ export function AppShell(props: AppShellProps) {
             ) : (
               <Scrollback
                 messages={state.messages}
-                width={cols - (layout.showDash ? 44 : 2)}
+                width={cols - (layout.showDash ? tuiTokens.layout.rail.max : 2)}
                 height={Math.max(4, layout.bodyHeight - 1)}
                 tick={tick}
                 status={state.status}
@@ -265,7 +266,7 @@ export function AppShell(props: AppShellProps) {
         </Box>
 
         {layout.showDash && (
-          <Box width={42}>
+          <Box width={Math.min(tuiTokens.layout.rail.max, Math.max(tuiTokens.layout.rail.min, Math.floor(cols * 0.28)))}>
             <RightRail {...rightRail} tick={tick} />
           </Box>
         )}
@@ -281,7 +282,7 @@ export function AppShell(props: AppShellProps) {
         <OrcanaComposer
           onSubmit={props.submit}
           disabled={showStartup || !!clarification}
-          placeholder={clarification ? "按上方选项确认..." : isWorking ? "输入后续消息，Enter 排队..." : "Message DeepSeek Code..."}
+          placeholder={clarification ? "按上方选项确认..." : isWorking ? "输入后续消息，Enter 排队..." : "Message Orcana..."}
           status={isWorking ? `agent running · Enter queues next message${state.queueCount > 0 ? ` · queued ${state.queueCount}` : ""}` : state.status}
           rightStatus={footerTelemetry}
           commands={SLASH_COMMANDS}

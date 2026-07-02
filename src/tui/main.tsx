@@ -16,6 +16,7 @@ import { AppShell, type ClarificationWizardState, type InputChromeState } from "
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import type { ScrollbackScrollState } from "./components/Scrollback"
 import type { TaskProgressState } from "./components/PlanPanel"
+import { renderMessageLines } from "./components/MessageItem"
 import { dispatchTuiCommand } from "./commands/dispatcher"
 import { resolveActiveContext } from "./input/types"
 import { resolveKeyAction } from "./input/keymap"
@@ -74,6 +75,25 @@ function summarizeQueuedPromptForTranscript(text: string): string {
   if (chars <= 280 && lines <= 3) return preview || normalized
   const label = `[queued while agent is working: +${lines} lines, ${chars} chars]`
   return preview ? `${label}\npreview: ${preview}` : label
+}
+
+function traceRenderedAssistant(
+  trace: StreamTraceState,
+  store: TuiStore,
+  finalTextLength: number,
+): void {
+  const state = store.getState()
+  const assistant = [...state.messages].reverse().find(m => m.role === "assistant")
+  const rawChars = assistant?.text.length ?? finalTextLength
+  const rendered = assistant
+    ? renderMessageLines(assistant, process.stdout.columns ?? 96, state.status)
+    : []
+  const displayChars = rendered.reduce((sum, line) => sum + line.text.length, 0)
+  const viewportTrimmed = Boolean(
+    assistant?.text.includes("live output trimmed")
+    || rendered.some(line => line.text.includes("hidden above")),
+  )
+  traceEndRound(trace, rawChars, rendered.length > 0 ? displayChars : finalTextLength, viewportTrimmed)
 }
 
 function useAgentStream(runtime: Runtime, prompt?: string) {
@@ -153,6 +173,7 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
         maxRounds: 30,
         conversationHistory: historySnapshot,
         gateTelemetryFile: ".wolf/gate-telemetry.json",
+        runTrace: runtime.startRunTrace(p),
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -226,7 +247,6 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
       // Phase 2: trace final accumulated text
       const finalText = assistantText.trim()
       traceFinalAccumulated(traceRef.current, finalText.length, false)
-      traceEndRound(traceRef.current, finalText.length, finalText.length, false)
       historyRef.current = [
         ...historySnapshot,
         { role: "user", content: p },
@@ -234,6 +254,7 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
       ]
       // assistant.final("") marks pending message non-pending, preserves accumulated text
       store.dispatch({ type: "assistant.final", text: "" })
+      traceRenderedAssistant(traceRef.current, store, finalText.length)
       store.dispatch({ type: "ui.done", done: true })
       store.dispatch({ type: "ui.status", text: "done" })
       finishRun()
@@ -241,10 +262,10 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
       const message = error instanceof Error ? error.message : String(error)
       flush()
       traceFinalAccumulated(traceRef.current, message.length, true)
-      traceEndRound(traceRef.current, assistantText.length, message.length, false)
       store.dispatch({ type: "ui.error_line", text: message })
       store.dispatch({ type: "ui.done", done: true })
       store.dispatch({ type: "assistant.final", text: message })
+      traceRenderedAssistant(traceRef.current, store, message.length)
       finishRun()
     })
 

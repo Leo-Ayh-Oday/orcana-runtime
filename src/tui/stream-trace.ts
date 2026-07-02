@@ -46,7 +46,8 @@ export interface StreamTraceState {
 // ── 工厂 ──
 
 export function createStreamTrace(dir = ".deepseek-code"): StreamTraceState {
-  const enabled = process.env.DEEPSEEK_TUI_TRACE_STREAM === "1"
+  const traceSetting = process.env.DEEPSEEK_TUI_TRACE_STREAM
+  const enabled = traceSetting !== "0" && traceSetting !== "off" && traceSetting !== "false"
   return {
     enabled,
     dir,

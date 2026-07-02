@@ -1,47 +1,51 @@
-/** RightRail — 右侧栏组件，替代 Dashboard。
+/** RightRail — Orcana runtime rail（Visual Step 3）。
  *
- *  显示：Active Task / Tools (Touched Files) / Ripple Findings / Cache hits / Context
- *  使用 PR-1 selectRightRail 返回的 RightRailData（与 DashProps 结构兼容）。
- *  窄屏 (< 100 cols) 时由 AppShell 隐藏此组件。 */
+ *  固定顺序：
+ *    1. ModeContract (outside, in AppShell)
+ *    2. Runtime: round, active phase, queue
+ *    3. Ripple: phase + blocking obligations
+ *    4. Gates: pass/warn/block/skip
+ *    5. Evidence: passed/failed/running
+ *    6. Patch: proposed/committed/rolled back
+ *    7. Tools: last 3-5
+ *    8. Context: ctx/cache compact meter
+ *
+ *  idle 也显示 rail，但内容紧凑。
+ *  blocked 优先展示原因。
+ */
 
 import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { RightRailData } from "../state/selectors"
-import { RuntimePanel, isRuntimePanelEnabled } from "./RuntimePanel"
-
-// ── 内部工具组件 ──
+import { RuntimePanel } from "./RuntimePanel"
 
 function ProgressBar({ value, max, width = 20, color = C.cyan }: { value: number; max: number; width?: number; color?: string }) {
   const pct = Math.min(1, Math.max(0, max > 0 ? value / max : 0))
   const filled = Math.round(pct * width)
-  const bar = "#".repeat(filled) + "-".repeat(width - filled)
   return (
     <Box flexDirection="row">
-      <Text color={color}>{bar}</Text>
+      <Text color={color}>{"▓".repeat(filled)}{"░".repeat(width - filled)}</Text>
       <Text color={C.dim}> {Math.round(pct * 100)}%</Text>
     </Box>
   )
 }
 
-function MiniSparkline({ data, width = 20, color = C.cyan }: { data: number[]; width?: number; color?: string }) {
-  if (!data.length) return <Text color={C.dim}>no data</Text>
-  const chars = ".:-=+*#@"
-  const max = Math.max(...data, 1)
-  const spark = data
-    .map(value => chars[Math.min(chars.length - 1, Math.round((value / max) * (chars.length - 1)))] ?? "_")
-    .join("")
-  return <Text color={color}>{spark.slice(-width)}</Text>
-}
-
-function toolIcon(status: RightRailData["toolHistory"][number]["status"]): string {
+function toolStatusIcon(status: string): string {
   if (status === "running") return ">"
-  if (status === "done") return "x"
+  if (status === "done") return "✓"
   if (status === "blocked") return "!"
-  return "!"
+  if (status === "error") return "✗"
+  return "·"
 }
 
-// ── RightRail ──
+function toolStatusColor(status: string): string {
+  if (status === "running") return C.cyan
+  if (status === "done") return C.green
+  if (status === "blocked") return C.yellow
+  if (status === "error") return C.red
+  return C.dim
+}
 
 export interface RightRailProps extends RightRailData {
   width?: number
@@ -49,60 +53,111 @@ export interface RightRailProps extends RightRailData {
 }
 
 export const RightRail = React.memo(function RightRail(props: RightRailProps) {
-  const { round, contextTokens, contextMax, cacheHitRate, cacheHits, toolHistory, taskProgress, runtime, rippleFindings } = props
+  const { round, contextTokens, contextMax, cacheHitRate, toolHistory, taskProgress, runtime, rippleFindings } = props
   const tick = props.tick ?? 0
-  const width = props.width ?? 42
-  const ctxPct = Math.round((contextTokens / contextMax) * 100)
+  const width = props.width ?? 38
+  const ctxPct = Math.round(contextMax > 0 ? (contextTokens / contextMax) * 100 : 0)
   const ctxColor = ctxPct > 50 ? C.red : ctxPct > 30 ? C.yellow : C.green
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={C.border} paddingX={1} width={width}>
-      <Text bold color={C.cyan}>Orcana</Text>
-      <Text color={C.dim}>
-        round {round} / ctx <Text color={ctxColor}>{ctxPct}%</Text> / cache <Text color={cacheHitRate > 80 ? C.green : C.yellow}>{cacheHitRate}%</Text>
-      </Text>
-      <Box height={1} />
+      {/* 1. Runtime identity */}
+      <Box flexDirection="row">
+        <Text color={C.cyan} bold>runtime</Text>
+        {round > 0 && <Text color={C.dim}>  r{round}</Text>}
+      </Box>
 
-      {taskProgress.total > 0 && (
-        <Box flexDirection="column">
-          <Text color={C.blue}>Task: {taskProgress.current}</Text>
-          <ProgressBar value={taskProgress.done} max={taskProgress.total} width={26} />
-          <Box height={1} />
-        </Box>
-      )}
-
-      {isRuntimePanelEnabled() ? (
-        <Box flexDirection="column">
+      {/* 2. Ripple phase (if active or has findings) */}
+      {(runtime.ripplePhase !== "idle" || rippleFindings.length > 0) && (
+        <Box flexDirection="column" marginTop={1}>
           <RuntimePanel {...runtime} tick={tick} width={width - 2} />
-          <Box height={1} />
         </Box>
-      ) : (
-        rippleFindings.length > 0 && (
-          <Box flexDirection="column">
-            <Text color={C.yellow}>Ripple</Text>
-            {rippleFindings.slice(0, 3).map((finding, index) => (
-              <Text key={index} color={finding.severity === "block" ? C.red : C.yellow}>
-                ! {finding.file}: {finding.reason.slice(0, 42)}
-              </Text>
-            ))}
-            <Box height={1} />
-          </Box>
-        )
       )}
 
-      <Text bold color={C.blue}>Tools</Text>
-      {toolHistory.length === 0 && <Text color={C.dim}>  idle</Text>}
-      {toolHistory.slice(-6).map((tool, index) => {
-        const color = tool.status === "done" ? C.green : tool.status === "error" ? C.red : tool.status === "blocked" ? C.yellow : C.cyan
-        return <Text key={index} color={color}>  [{toolIcon(tool.status)}] {tool.name}</Text>
-      })}
+      {/* 3. Gates */}
+      {runtime.gateSummary.total > 0 && (
+        <Box flexDirection="row" marginTop={1}>
+          <Text color={C.blue}>gates</Text>
+          <Text color={C.dim}> </Text>
+          <Text color={runtime.gateSummary.block > 0 ? C.red : C.green}>
+            {runtime.gateSummary.pass}p/{runtime.gateSummary.block}b/{runtime.gateSummary.warn}w/{runtime.gateSummary.skip}s
+          </Text>
+        </Box>
+      )}
 
-      <Box height={1} />
-      <Text color={C.dim}>Cache hits</Text>
-      <MiniSparkline data={cacheHits} width={24} />
-      <Box height={1} />
-      <Text color={C.dim}>Context</Text>
-      <ProgressBar value={contextTokens} max={contextMax} color={ctxColor} />
+      {/* 4. Evidence */}
+      {runtime.evidenceSummary.total > 0 && (
+        <Box flexDirection="row">
+          <Text color={C.blue}>evidence</Text>
+          <Text color={C.dim}> </Text>
+          <Text color={runtime.evidenceSummary.failed > 0 ? C.red : C.green}>
+            {runtime.evidenceSummary.passed}p/{runtime.evidenceSummary.failed}f
+          </Text>
+        </Box>
+      )}
+
+      {/* 5. Patches */}
+      {runtime.patchSummary.total > 0 && (
+        <Box flexDirection="row">
+          <Text color={C.blue}>patches</Text>
+          <Text color={C.dim}> </Text>
+          <Text color={runtime.patchSummary.rolledBack > 0 ? C.yellow : C.dim}>
+            {runtime.patchSummary.committed > 0 ? `${runtime.patchSummary.committed} committed` : ""}
+            {runtime.patchSummary.proposed > 0 ? ` · ${runtime.patchSummary.proposed} proposed` : ""}
+            {runtime.patchSummary.rolledBack > 0 ? ` · ${runtime.patchSummary.rolledBack} rolled back` : ""}
+          </Text>
+        </Box>
+      )}
+
+      {/* 6. Active tools */}
+      {runtime.activeTools > 0 && (
+        <Box flexDirection="row">
+          <Text color={C.cyan}>tools</Text>
+          <Text color={C.dim}> {runtime.activeTools} running</Text>
+        </Box>
+      )}
+
+      {/* 7. Recent tool history */}
+      {toolHistory.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold color={C.blue}>Recent</Text>
+          {toolHistory.slice(-4).map((tool, idx) => (
+            <Text key={idx} color={toolStatusColor(tool.status)}>
+              {"  "}[{toolStatusIcon(tool.status)}] {tool.name}
+            </Text>
+          ))}
+        </Box>
+      )}
+
+      {/* 8. Context compact meter */}
+      <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="row">
+          <Text color={C.dim}>ctx </Text>
+          <Text color={ctxColor}>{ctxPct}%</Text>
+          <Text color={C.dim}>  cache </Text>
+          <Text color={cacheHitRate > 80 ? C.green : C.yellow}>{cacheHitRate}%</Text>
+        </Box>
+        <ProgressBar value={contextTokens} max={contextMax} width={24} color={ctxColor} />
+      </Box>
+
+      {/* Ripple findings (if any, above context but after runtime panel) */}
+      {rippleFindings.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          {rippleFindings.slice(0, 2).map((f, idx) => (
+            <Text key={idx} color={f.severity === "block" ? C.red : C.yellow}>
+              {"  "}{f.severity === "block" ? "✗" : "!"} {f.file.slice(-20)}: {f.reason.slice(0, 24)}
+            </Text>
+          ))}
+          {rippleFindings.length > 2 && <Text color={C.dim}>  +{rippleFindings.length - 2} more</Text>}
+        </Box>
+      )}
+
+      {/* Idle state still shows rail but compact */}
+      {runtime.ripplePhase === "idle" && runtime.gateSummary.total === 0 && runtime.patchSummary.total === 0 && runtime.activeTools === 0 && (
+        <Box marginTop={1}>
+          <Text color={C.dim}>idle · waiting for task</Text>
+        </Box>
+      )}
     </Box>
   )
 })

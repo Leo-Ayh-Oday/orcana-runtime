@@ -19,8 +19,8 @@ import type { SlashCommandHint } from "../input"
 import { OrcanaComposer } from "./OrcanaComposer"
 import { getCommandHints } from "../commands/registry"
 import type { ClarificationQuestion } from "../../agent/clarification"
-import { selectRightRail, selectEvidenceSummary, selectGateSummary, selectRuntimePanel } from "../state/selectors"
-import type { TuiState } from "../state/types"
+import { selectRightRail, selectRuntimePanel } from "../state/selectors"
+import type { TuiState, TuiMode } from "../state/types"
 import { HeaderBar } from "./HeaderBar"
 import { StatusBar } from "./StatusBar"
 import { Scrollback, type ScrollbackScrollState } from "./Scrollback"
@@ -29,10 +29,11 @@ import { PlanPanel, FlowLine, type TaskProgressState } from "./PlanPanel"
 import { FooterHints } from "./FooterHints"
 import { fitText } from "./MessageItem"
 import { resolveActiveContext } from "../input/types"
-import { ModeContract } from "./ModeContract"
+import { ModeContract, ModeBadge } from "./ModeContract"
 import { ConfirmModal } from "./ConfirmModal"
 import { RewindModal, type RewindModalState } from "./RewindModal"
 import type { ConfirmRequest } from "../confirm-stubs"
+import { extractRuntimeCounters, formatRuntimeCounters } from "../format-runtime"
 
 // ── 常量 ──
 
@@ -54,14 +55,24 @@ export interface ClarificationWizardState {
 
 // ── 内部组件 ──
 
-function EmptySurface() {
+function EmptySurface({ mode, modelName }: { mode: TuiMode; modelName: string }) {
   return (
     <Box flexDirection="column">
-      <Text color={C.cyan} bold>Orcana</Text>
-      <Text color={C.dim}>Harness runtime ready. Type / for commands.</Text>
+      <Box flexDirection="row">
+        <Text color={C.cyan} bold>Orcana</Text>
+        <Text color={C.dim}>  mode:</Text>
+        <ModeBadge mode={mode} />
+        <Text color={C.dim}>  {modelName}</Text>
+      </Box>
       <Box height={1} />
-      <Text color={C.blue}>status <Text color={C.dim}>/</Text> ready</Text>
-      <Text color={C.dim}>model {process.env.DEEPSEEK_MODEL_OVERRIDE ?? "deepseek-v4-pro"}</Text>
+      <Text color={C.dim}>Try:</Text>
+      <Box flexDirection="row">
+        <Text color={C.cyan}>  /status</Text>
+        <Text color={C.dim}>  ·  /gates  ·  /evidence  ·  /models</Text>
+      </Box>
+      <Text color={C.dim}>  /help  — all commands</Text>
+      <Box height={1} />
+      <Text color={C.dim}>Type your request or / for commands.</Text>
     </Box>
   )
 }
@@ -186,8 +197,6 @@ export function AppShell(props: AppShellProps) {
   // 派生数据
   const task = state.task as TaskProgressState | undefined
   const rightRail = selectRightRail(state)
-  const evidence = selectEvidenceSummary(state)
-  const gates = selectGateSummary(state)
   const isWorking = !state.done && !state.errorLine
   const hasRuntimeSignal =
     rightRail.round > 0
@@ -203,30 +212,10 @@ export function AppShell(props: AppShellProps) {
   // 布局计算（Phase 5: modal 占用 4-6 行 panel 空间）
   const layout = computeAppShellLayout({ rows, cols, hasDash, isWorking, clarification, task, inputChrome })
 
-  // Phase 3: 运行态控制台数据
-  const runtimePanel = selectRuntimePanel(state)
-  const activeTools = runtimePanel.activeTools
-  const ctxPct = Math.round(
-    state.tokens.contextMax > 0
-      ? (state.tokens.inputTokens / state.tokens.contextMax) * 100
-      : 0,
-  )
-  const cachePct = state.tokens.cacheHitRate ?? 0
-  const runtimeSummary = `ctx ${ctxPct}% / cache ${cachePct}% / r${state.round}`
+  // Visual Step 2: 统一计数器
+  const counters = extractRuntimeCounters(state)
   const provider = state.session.provider
-  // 补丁数据从 runtimePanel 获取，用于 StatusBar 窄屏计数器
-  const patchSummary = runtimePanel.patchSummary
-
-  // footerTelemetry（保留原有兼容）
-  const footerTelemetry = fitText(
-    (state.telemetry || runtimeSummary)
-      .replace(`model ${state.modelName} / `, "")
-      .replace(`${state.modelName} / `, "")
-      .replace(/^model\s+/i, "")
-      .replace(/\s*\/\s*/g, "  ")
-      .replace(/\bround\b/gi, "r"),
-    Math.max(16, Math.min(34, Math.floor(cols * 0.3))),
-  )
+  const runtimePanel = selectRuntimePanel(state)
 
   // ── splash 启动画面 ──
   if (showStartup) {
@@ -256,42 +245,21 @@ export function AppShell(props: AppShellProps) {
 
   return (
     <Box flexDirection="column" height={rows} paddingX={1}>
-      {/* HeaderBar (Phase 3: +mode +provider +runtimeSummary) */}
+      {/* HeaderBar (Visual Step 2: simplified, no runtimeSummary) */}
       <HeaderBar
         modelName={state.modelName}
         provider={provider}
         mode={state.mode}
-        status={state.status}
         done={state.done}
         errorLine={state.errorLine}
         queueCount={state.queueCount}
         tick={tick}
         cols={cols}
         isWorking={isWorking}
-        runtimeSummary={runtimeSummary}
       />
 
-      {/* StatusBar (Phase 3: +round +gateWarn +activeTools +patch*) */}
-      <StatusBar
-        round={state.round}
-        messagesCount={state.messages.length}
-        scrollOffset={scrollState.normalizedOffset}
-        scrollMax={scrollState.maxOffset}
-        taskDone={task?.done ?? 0}
-        taskTotal={task?.total ?? 0}
-        taskPhase={task?.phase ?? ""}
-        gatePass={gates.pass}
-        gateBlock={gates.block}
-        gateWarn={gates.warn}
-        gateSkip={gates.skip}
-        evidencePassed={evidence.passed}
-        evidenceFailed={evidence.failed}
-        evidenceRunning={0}
-        activeTools={activeTools}
-        patchProposed={patchSummary.proposed}
-        patchCommitted={patchSummary.committed}
-        patchRolledBack={patchSummary.rolledBack}
-      />
+      {/* StatusBar (Visual Step 2: single counters object) */}
+      <StatusBar counters={counters} cols={cols} />
 
       {/* Phase 5: Modal overlays (between StatusBar and Body) */}
       {confirmModal && (
@@ -310,7 +278,7 @@ export function AppShell(props: AppShellProps) {
         <Box flexDirection="column" flexGrow={1} marginRight={1}>
           <Box flexDirection="column" flexGrow={1}>
             {empty ? (
-              <EmptySurface />
+              <EmptySurface mode={state.mode} modelName={state.modelName} />
             ) : (
               <Scrollback
                 messages={state.messages}
@@ -318,6 +286,7 @@ export function AppShell(props: AppShellProps) {
                 height={Math.max(4, layout.bodyHeight - 1)}
                 tick={tick}
                 status={state.status}
+                round={state.round}
                 scrollOffset={scrollOffset}
                 onScrollState={onScrollState}
               />
@@ -347,13 +316,16 @@ export function AppShell(props: AppShellProps) {
           onSubmit={props.submit}
           disabled={showStartup || !!clarification || modalActive}
           placeholder={
-            modalActive ? "modal active — use keyboard shortcuts shown below" :
-            clarification ? "按上方选项确认..." :
-            isWorking ? "输入后续消息，Enter 排队..." :
+            modalActive ? "modal active" :
+            clarification ? "confirm or cancel above" :
+            isWorking ? "Queue message..." :
             "Message Orcana..."
           }
-          status={isWorking ? `agent running · Enter queues next message${state.queueCount > 0 ? ` · queued ${state.queueCount}` : ""}` : state.status}
-          rightStatus={footerTelemetry}
+          status={
+            isWorking
+              ? `agent running · Enter queues${state.queueCount > 0 ? ` (queued ${state.queueCount})` : ""}`
+              : ""
+          }
           commands={SLASH_COMMANDS}
           focused={!showStartup && !modalActive}
           onChromeChange={props.setInputChrome}

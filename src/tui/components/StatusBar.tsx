@@ -1,115 +1,94 @@
-/** StatusBar — 状态摘要行（Phase 3 增强），位于 HeaderBar 和 Scrollback 之间。
+/** StatusBar — 运行时计数器行（Visual Step 2）。
  *
- *  显示：round / Task 进度 / Gate 状态 / Evidence 摘要 / Patch 状态 / 活跃工具
- *  窄屏时保留最关键 counters（gate block + evidence fail）。 */
+ *  Visual Step 2: 单一 formatRuntimeCounters 驱动，不再有 16 个独立 prop。
+ *  "r3 · gates 2p/1b · evidence 1p/1f · patches 1 proposed · tools 2 · ctx 18%"
+ *
+ *  规则：
+ *    - 无数据不显示该段（formatRuntimeCounters 内部处理）
+ *    - blocked/failed 优先并高亮
+ *    - 窄屏自动减少段数
+ */
 
 import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
+import type { RuntimeCounters } from "../format-runtime"
 
 export interface StatusBarProps {
-  /** 当前 agent round */
-  round: number
-  /** 消息总数 */
-  messagesCount: number
-  scrollOffset: number
-  scrollMax: number
-  taskDone: number
-  taskTotal: number
-  taskPhase: string
-  taskGoal?: string
-  gatePass: number
-  gateBlock: number
-  gateWarn: number
-  gateSkip: number
-  evidencePassed: number
-  evidenceFailed: number
-  evidenceRunning: number
-  /** 活跃工具数（状态为 "running" 的工具） */
-  activeTools: number
-  /** Patch 状态汇总 */
-  patchProposed: number
-  patchCommitted: number
-  patchRolledBack: number
+  counters: RuntimeCounters
+  cols: number
 }
 
-export const StatusBar = React.memo(function StatusBar(props: StatusBarProps) {
-  const parts: Array<{ text: string; color: string }> = []
+export const StatusBar = React.memo(function StatusBar({ counters, cols }: StatusBarProps) {
+  const hasGates = counters.gatePass + counters.gateBlock + counters.gateWarn + counters.gateSkip > 0
+  const hasEvidence = counters.evidencePassed + counters.evidenceFailed + counters.evidenceRunning > 0
+  const hasPatches = counters.patchProposed + counters.patchCommitted + counters.patchRolledBack > 0
 
-  // Phase 3: round always shown (when > 0)
-  if (props.round > 0) {
-    parts.push({ text: `r${props.round}`, color: C.cyan })
+  const segments: Array<{ text: string; color: string }> = []
+
+  // Round
+  if (counters.round > 0) {
+    segments.push({ text: `r${counters.round}`, color: C.cyan })
   }
 
-  // Task 进度（Phase 3: 前置到 round 之后）
-  if (props.taskTotal > 0) {
-    parts.push({
-      text: `task ${props.taskDone}/${props.taskTotal} ${props.taskPhase}`,
-      color: props.taskPhase === "complete" ? C.green : C.blue,
+  // Gates — block 优先
+  if (hasGates) {
+    const parts: string[] = []
+    if (counters.gateBlock > 0) parts.push(`${counters.gateBlock}b`)
+    if (counters.gatePass > 0) parts.push(`${counters.gatePass}p`)
+    if (counters.gateWarn > 0) parts.push(`${counters.gateWarn}w`)
+    if (counters.gateSkip > 0) parts.push(`${counters.gateSkip}s`)
+    segments.push({
+      text: `gates ${parts.join("/")}`,
+      color: counters.gateBlock > 0 ? C.red : counters.gateWarn > 0 ? C.yellow : C.green,
     })
   }
 
-  // Gate 状态（Phase 3: 增加 warn 计数）
-  const gateTotal = props.gatePass + props.gateBlock + props.gateWarn + props.gateSkip
-  if (gateTotal > 0) {
-    const gateParts: string[] = []
-    if (props.gatePass > 0) gateParts.push(`${props.gatePass}p`)
-    if (props.gateBlock > 0) gateParts.push(`${props.gateBlock}b`)
-    if (props.gateWarn > 0) gateParts.push(`${props.gateWarn}w`)
-    if (props.gateSkip > 0) gateParts.push(`${props.gateSkip}s`)
-    parts.push({
-      text: `gates ${gateParts.join("·")}`,
-      color: props.gateBlock > 0 ? C.red : props.gateWarn > 0 ? C.yellow : C.green,
+  // Evidence — failed 优先
+  if (hasEvidence) {
+    const parts: string[] = []
+    if (counters.evidenceFailed > 0) parts.push(`${counters.evidenceFailed}f`)
+    if (counters.evidencePassed > 0) parts.push(`${counters.evidencePassed}p`)
+    if (counters.evidenceRunning > 0) parts.push(`${counters.evidenceRunning}r`)
+    segments.push({
+      text: `evidence ${parts.join("/")}`,
+      color: counters.evidenceFailed > 0 ? C.red : C.green,
     })
   }
 
-  // Evidence 摘要
-  const evidenceTotal = props.evidencePassed + props.evidenceFailed + props.evidenceRunning
-  if (evidenceTotal > 0) {
-    const evParts: string[] = []
-    if (props.evidencePassed > 0) evParts.push(`${props.evidencePassed}p`)
-    if (props.evidenceFailed > 0) evParts.push(`${props.evidenceFailed}f`)
-    if (props.evidenceRunning > 0) evParts.push(`${props.evidenceRunning}r`)
-    parts.push({
-      text: `evidence ${evParts.join("·")}`,
-      color: props.evidenceFailed > 0 ? C.red : C.green,
+  // Patches
+  if (hasPatches) {
+    const parts: string[] = []
+    if (counters.patchProposed > 0) parts.push(`${counters.patchProposed} proposed`)
+    if (counters.patchCommitted > 0) parts.push(`${counters.patchCommitted} committed`)
+    if (counters.patchRolledBack > 0) parts.push(`${counters.patchRolledBack} rolled back`)
+    segments.push({
+      text: parts.join(" · "),
+      color: counters.patchRolledBack > 0 ? C.yellow : C.dim,
     })
   }
 
-  // Phase 3: Patch 状态
-  const patchTotal = props.patchProposed + props.patchCommitted + props.patchRolledBack
-  if (patchTotal > 0) {
-    const ptParts: string[] = []
-    if (props.patchProposed > 0) ptParts.push(`${props.patchProposed} proposed`)
-    if (props.patchCommitted > 0) ptParts.push(`${props.patchCommitted} committed`)
-    if (props.patchRolledBack > 0) ptParts.push(`${props.patchRolledBack} rolled back`)
-    parts.push({
-      text: `patches ${ptParts.join("·")}`,
-      color: props.patchRolledBack > 0 ? C.yellow : C.dim,
-    })
+  // Tools
+  if (counters.activeTools > 0) {
+    segments.push({ text: `tools ${counters.activeTools}`, color: C.cyan })
   }
 
-  // Phase 3: 活跃工具
-  if (props.activeTools > 0) {
-    parts.push({ text: `tools ${props.activeTools} running`, color: C.cyan })
-  }
+  // ctx/cache
+  segments.push({
+    text: `ctx ${counters.cachePct >= 0 ? `${counters.ctxPct}%` : `${counters.ctxPct}%`}`,
+    color: C.dim,
+  })
 
-  // 消息计数 + 滚动（降级到末尾，次要信息）
-  if (props.messagesCount > 0) {
-    parts.push({ text: `${props.messagesCount} msgs`, color: C.dim })
-    if (props.scrollMax > 0) {
-      parts.push({ text: `view ${props.scrollOffset}/${props.scrollMax}`, color: C.dim })
-    }
-  }
-
-  if (parts.length === 0) return null
+  // Narrow screen: drop low-priority segments
+  const maxSegments = cols < 80 ? 3 : cols < 100 ? 5 : segments.length
+  const visible = segments.slice(0, maxSegments)
 
   return (
     <Box flexDirection="row">
-      {parts.map((part, index) => (
-        <React.Fragment key={index}>
-          {index > 0 && <Text color={C.dim}> · </Text>}
-          <Text color={part.color}>{part.text}</Text>
+      {visible.map((seg, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <Text color={C.dim}> · </Text>}
+          <Text color={seg.color}>{seg.text}</Text>
         </React.Fragment>
       ))}
     </Box>

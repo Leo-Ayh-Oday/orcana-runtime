@@ -1,19 +1,17 @@
-/** Scrollback — 消息视口渲染（Phase 4 性能优化）。
+/** Scrollback — 消息视口渲染（Visual Step 1 更新）。
  *
- *  设计要点：
- *    - 拆分两层 useMemo：
- *      1. allLines（重）：messages/width/status 变化时全量重算，不含 tick
- *      2. animatedLines（轻）：仅处理视口内 pending 行，O(height) 代价
- *    - tick 不再触发 O(messages) flatMap 重算
- *    - pending 消息通过 RenderedLine.pendingAnim 标记叠加动画
- *    - 保留 hiddenAbove/hiddenBelow 指示器 + row cap
- */
+ *  Visual Step 1 变更：
+ *    - pending 动画使用 classifyPendingActivity 替代随机动词
+ *    - hiddenAbove/hiddenBelow 改为短文案
+ *    - 所有动态字符来自 tuiTokens.motion */
 
 import React, { useEffect, useMemo } from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { TuiMessage } from "../state/types"
 import { renderMessageLines, type RenderedLine } from "./MessageItem"
+import { classifyPendingActivity, defaultActivity, formatPendingLine } from "../pending-activity"
+import { tuiTokens } from "../tokens"
 
 export interface ScrollbackScrollState {
   maxOffset: number
@@ -28,37 +26,37 @@ export interface ScrollbackProps {
   height: number
   tick: number
   status: string
+  round: number
   scrollOffset: number
   onScrollState?: (state: ScrollbackScrollState) => void
 }
 
-// ── 动画 ──
+// ── 动画 (Visual Step 1: classified pending activity) ──
 
-const SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-const SPINNER_VERBS = ["thinking", "routing", "reading", "checking"]
-
-/** Phase 4: 叠加 pending 动画到静态行。O(N) 但 N = 视口高度（通常 < 50）。
- *  导出供测试。 */
-export function applyPendingAnimation(lines: RenderedLine[], tick: number): RenderedLine[] {
+/** Visual Step 1: 叠加 pending 动画到静态行。O(N) 但 N = 视口高度。
+ *  使用 classifyPendingActivity 替代随机动词。 */
+export function applyPendingAnimation(
+  lines: RenderedLine[],
+  tick: number,
+  status: string,
+  round: number,
+): RenderedLine[] {
   let hasPending = false
   for (const line of lines) {
     if (line.pendingAnim) { hasPending = true; break }
   }
   if (!hasPending) return lines
 
-  const spinner = SPINNER_CHARS[tick % 10] ?? "?"
-  const verb = SPINNER_VERBS[tick % 4] ?? "working"
-  const tail = ["", ".", "..", "..."][tick % 4] ?? ""
+  const activity = status ? classifyPendingActivity(status) : defaultActivity()
+  const pendingText = formatPendingLine(activity, tick, round)
 
   return lines.map(line => {
     if (!line.pendingAnim) return line
     if (line.pendingAnim === "spinner") {
-      return {
-        ...line,
-        text: `${spinner} ${verb}${line.pendingStatus ? ` · ${line.pendingStatus}` : ""}`,
-      }
+      return { ...line, text: pendingText }
     }
-    // tail animation: append "...", "..", ".", "" to last line of streaming text
+    // tail animation: append "...", "..", ".", "" to last streaming line
+    const tail = ["", ".", "..", "..."][tick % 4] ?? ""
     return { ...line, text: line.text + tail }
   })
 }
@@ -69,10 +67,10 @@ export const Scrollback = React.memo(function Scrollback({
   height,
   tick,
   status,
+  round,
   scrollOffset,
   onScrollState,
 }: ScrollbackProps) {
-  // Phase 4: 是否真的有 pending 消息需要动画（避免无效 tick 重算）
   const hasPending = messages.some(m => m.pending)
 
   // ── Layer 1（重）: 全量行计算，不含 tick ──
@@ -93,12 +91,12 @@ export const Scrollback = React.memo(function Scrollback({
   const hiddenAbove = start > 0
   const hiddenBelow = start + height < allLines.length
 
-  // ── Layer 2（轻）: pending 动画叠加，仅处理视口内行 ──
+  // ── Layer 2（轻）: pending 动画叠加（Visual Step 1: classified activity） ──
   const animatedTick = hasPending ? tick : 0
   const visibleLines = useMemo(
-    () => applyPendingAnimation(visibleStatic, animatedTick),
+    () => applyPendingAnimation(visibleStatic, animatedTick, status, round),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleStatic, animatedTick],
+    [visibleStatic, animatedTick, status, round],
   )
 
   useEffect(() => {
@@ -109,7 +107,7 @@ export const Scrollback = React.memo(function Scrollback({
 
   return (
     <Box flexDirection="column">
-      {hiddenAbove && <Text color={C.dim}>  ↑ earlier messages (scroll wheel / Up / PageUp)</Text>}
+      {hiddenAbove && <Text color={C.dim}>  ↑ earlier</Text>}
       {visibleLines.slice(
         hiddenAbove ? 1 : 0,
         hiddenBelow ? Math.max(0, visibleLines.length - 1) : visibleLines.length,
@@ -121,7 +119,7 @@ export const Scrollback = React.memo(function Scrollback({
           <Text color={line.color === C.red ? C.red : C.white}>{line.text}</Text>
         </Box>
       ))}
-      {hiddenBelow && <Text color={C.dim}>  ↓ newer messages (scroll wheel / Down / PageDown)</Text>}
+      {hiddenBelow && <Text color={C.dim}>  ↓ newer</Text>}
     </Box>
   )
 })

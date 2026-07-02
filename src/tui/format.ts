@@ -13,7 +13,10 @@ export function cleanDisplayText(text: string): string {
 
 export function trimForViewport(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
-  return `...\n${text.slice(-maxChars)}`
+  const hidden = text.length - maxChars
+  // 明确告知用户有多少字符被隐藏，避免误以为输出不完整
+  // 保留尾部（最近的输出更重要），头部用指示器替代
+  return `⋯ ${hidden} chars hidden above (scroll up in transcript for full content)\n${text.slice(-maxChars)}`
 }
 
 export function fitTerminalText(text: string, width: number): string {

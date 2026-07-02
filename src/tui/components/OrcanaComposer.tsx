@@ -138,8 +138,6 @@ export interface OrcanaComposerProps {
   rightStatus?: string
   commands?: SlashCommandHint[]
   focused?: boolean
-  onScrollUp?: () => void
-  onScrollDown?: () => void
   onChromeChange?: (state: { commandOpen: boolean; pasteCount: number; textRows: number }) => void
 }
 
@@ -151,8 +149,6 @@ export function OrcanaComposer({
   rightStatus,
   commands = [],
   focused = true,
-  onScrollUp,
-  onScrollDown,
   onChromeChange,
 }: OrcanaComposerProps) {
   // ── 状态 ──
@@ -268,14 +264,11 @@ export function OrcanaComposer({
     [showCommands, commandMatches.length],
   )
 
-  // ── onFirstLineUp：第一行按 Up → history 或 scroll ──
+  // ── onFirstLineUp：第一行按 Up → 命令面板或历史导航 ──
+  // 不再做滚动 — 滚动由鼠标滚轮、PageUp/PageDown、Ctrl+Up/Ctrl+Down 负责
   const handleFirstLineUp = useCallback(() => {
     if (showCommands && commandMatches.length > 0) {
       setCommandIdx(idx => (idx <= 0 ? commandMatches.length - 1 : idx - 1))
-      return
-    }
-    if (!value.trim() && onScrollUp) {
-      onScrollUp()
       return
     }
     if (history.length > 0) {
@@ -285,16 +278,12 @@ export function OrcanaComposer({
       setValue(history[newIdx]!)
       setCursor([0, history[newIdx]!.length])
     }
-  }, [showCommands, commandMatches.length, value, onScrollUp, history, historyIdx])
+  }, [showCommands, commandMatches.length, history, historyIdx])
 
-  // ── onLastLineDown：最后一行按 Down → history 或 scroll ──
+  // ── onLastLineDown：最后一行按 Down → 命令面板或历史导航 ──
   const handleLastLineDown = useCallback(() => {
     if (showCommands && commandMatches.length > 0) {
       setCommandIdx(idx => (idx + 1) % commandMatches.length)
-      return
-    }
-    if (!value.trim() && onScrollDown) {
-      onScrollDown()
       return
     }
     if (historyIdx >= 0) {
@@ -311,7 +300,7 @@ export function OrcanaComposer({
         setCursor([0, history[newIdx]!.length])
       }
     }
-  }, [showCommands, commandMatches.length, value, onScrollDown, history, historyIdx])
+  }, [showCommands, commandMatches.length, history, historyIdx])
 
   // ── 输入状态行 ──
   const compactInputStatus = disabled

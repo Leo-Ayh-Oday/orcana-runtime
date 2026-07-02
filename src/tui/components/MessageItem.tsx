@@ -86,7 +86,9 @@ export function renderMessageLines(
 
   if (message.text) {
     const assistantContent = stripCompletionReportForTranscript(message.text)
-    const assistantText = `${cleanDisplayText(trimForViewport(assistantContent, Math.max(1200, Math.min(5000, width * 42))))}${message.pending ? tail : ""}`
+    // 增大截断上限：原 5000 → 12000，避免常见长输出（代码块、详细解释）被截断
+    // 下限也提高到 2000，确保短终端也能看到完整的小回复
+    const assistantText = `${cleanDisplayText(trimForViewport(assistantContent, Math.max(2000, Math.min(12000, width * 80))))}${message.pending ? tail : ""}`
     return formatDisplayText(assistantText, contentWidth).map((line, index) => ({
       marker: index === 0 ? marker : " ",
       text: line,
@@ -95,18 +97,12 @@ export function renderMessageLines(
   }
 
   if (message.pending) {
+    // Braille spinner — 生产级 TUI 标准动画，紧凑且丝滑
+    const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[tick % 10]
     const verb = ["thinking", "routing", "reading", "checking"][tick % 4]
-    const statusText = `${verb}${status ? ` / ${status}` : ""}`
-    const line = Array.from({ length: Math.max(18, Math.min(contentWidth, 72)) }, (_, index) => {
-      const phase = (index + tick) % 12
-      if (phase === 0) return "="
-      if (phase <= 2 || phase >= 10) return "~"
-      if (phase <= 4 || phase >= 8) return "-"
-      return "."
-    }).join("")
+    const statusText = `${spinner} ${verb}${status ? ` · ${status}` : ""}`
     return [
       { marker, text: statusText, color },
-      { marker: " ", text: line, color: C.cyan },
     ]
   }
 

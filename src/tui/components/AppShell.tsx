@@ -245,7 +245,7 @@ export function AppShell(props: AppShellProps) {
 
   return (
     <Box flexDirection="column" height={rows} paddingX={1}>
-      {/* HeaderBar (Visual Step 2: simplified, no runtimeSummary) */}
+      {/* HeaderBar (Phase 4a: single-line status bar) */}
       <HeaderBar
         modelName={state.modelName}
         provider={provider}
@@ -256,6 +256,9 @@ export function AppShell(props: AppShellProps) {
         tick={tick}
         cols={cols}
         isWorking={isWorking}
+        round={counters.round}
+        ctxPct={counters.ctxPct}
+        cachePct={counters.cachePct}
       />
 
       {/* StatusBar (Visual Step 2: single counters object) */}
@@ -296,11 +299,13 @@ export function AppShell(props: AppShellProps) {
         </Box>
 
         {layout.showDash && (
-          <Box width={Math.min(tuiTokens.layout.rail.max, Math.max(tuiTokens.layout.rail.min, Math.floor(cols * 0.28)))} flexDirection="column">
-            {/* Phase 3: ModeContract at top of rail */}
-            <ModeContract mode={state.mode} width={Math.max(24, Math.floor(cols * 0.26))} />
-            <Box height={1} />
-            <RightRail {...rightRail} tick={tick} />
+          <Box flexDirection="row">
+            <Text color={C.border}>│</Text>
+            <Box width={Math.min(tuiTokens.layout.rail.max, Math.max(tuiTokens.layout.rail.min, Math.floor(cols * 0.28)))} flexDirection="column" paddingLeft={1}>
+              <ModeContract mode={state.mode} width={Math.max(24, Math.floor(cols * 0.26))} />
+              <Box height={1} />
+              <RightRail {...rightRail} tick={tick} />
+            </Box>
           </Box>
         )}
       </Box>

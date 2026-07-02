@@ -31,7 +31,8 @@ describe("applyPendingAnimation (Visual Step 1)", () => {
     const lines = [line({ text: "", pendingAnim: "spinner" as const, pendingStatus: "working" })]
     const r = applyPendingAnimation(lines, 0, "working", 0)
     expect(r.length).toBe(1)
-    expect(r[0]!.text).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working$/)
+    // Glyph comes from glyph theme (ASCII or Unicode). Verify pattern: <glyph> working
+    expect(r[0]!.text).toMatch(/^. working$/)
   })
 
   test("glyph rotates with tick", () => {

@@ -310,10 +310,6 @@ describe("component: formatDuration", () => {
 
 describe("component: ToolCard renders summary, not full output", () => {
   test("TuiToolEvent has summary and outputSummary but no 'output' field", () => {
-    // This is a type-level test: TuiToolEvent has summary? and outputSummary? but no output field.
-    // The ToolCard component only renders tool.summary and tool.outputSummary.
-    // If someone adds an `output` field to the type, this test should be updated to verify
-    // it's NOT rendered by ToolCard.
     const tool = {
       id: "t1",
       tool: "read_file",
@@ -321,10 +317,137 @@ describe("component: ToolCard renders summary, not full output", () => {
       summary: "Read 10 lines",
       outputSummary: "File content preview...",
     }
-    // Verify the tool has summary and outputSummary
     expect(tool.summary).toBe("Read 10 lines")
     expect(tool.outputSummary).toBe("File content preview...")
-    // Verify there's no `output` field (TypeScript would flag if we tried to access it)
     expect((tool as Record<string, unknown>).output).toBeUndefined()
+  })
+})
+
+// ── Phase 2: Truncation tests ──
+
+import { trimForViewport } from "../../src/tui/format"
+
+describe("trimForViewport (Phase 2)", () => {
+  test("text shorter than maxChars is returned unchanged", () => {
+    const text = "short response"
+    expect(trimForViewport(text, 2000)).toBe(text)
+  })
+
+  test("text under 2000 chars is always fully displayed", () => {
+    const text = "a".repeat(1500)
+    const result = trimForViewport(text, 2000)
+    expect(result).toBe(text)
+    expect(result.length).toBe(1500)
+  })
+
+  test("text over maxChars shows truncated marker", () => {
+    const text = "beginning part\n" + "x".repeat(3000) + "\nending part"
+    const result = trimForViewport(text, 200)
+    // Should contain the "hidden above" notice
+    expect(result).toContain("hidden above")
+    expect(result).not.toBe(text)
+  })
+
+  test("truncated text keeps the tail, discards the head", () => {
+    const text = "HEAD_CONTENT_" + "x".repeat(500) + "_TAIL_CONTENT"
+    const result = trimForViewport(text, 300)
+    expect(result).toContain("_TAIL_CONTENT")
+    expect(result).not.toContain("HEAD_CONTENT_")
+  })
+
+  test("empty string returns empty", () => {
+    expect(trimForViewport("", 100)).toBe("")
+  })
+
+  test("maxChars=0 always triggers truncation", () => {
+    const result = trimForViewport("hello", 0)
+    expect(result).toContain("hidden above")
+    expect(result).toContain("hello")
+  })
+})
+
+describe("renderMessageLines truncation (Phase 2)", () => {
+  test("assistant text < 2000 chars is preserved in full (no truncation marker)", () => {
+    const short = "Short response"
+    const message: TuiMessage = {
+      id: "m1",
+      role: "assistant",
+      text: short,
+      createdAt: 0,
+    }
+    const lines = renderMessageLines(message, 40, "")
+    expect(lines.length).toBeGreaterThan(0)
+    const allText = lines.map(l => l.text).join("\n")
+    expect(allText).toContain("Short response")
+    expect(allText).not.toContain("hidden above")
+  })
+
+  test("assistant text > width*80 shows truncation marker", () => {
+    const long = "a".repeat(5000)
+    const message: TuiMessage = {
+      id: "m1",
+      role: "assistant",
+      text: long,
+      createdAt: 0,
+    }
+    // width=30 → maxChars = 30*80 = 2400 < 5000, should truncate
+    const lines = renderMessageLines(message, 30, "")
+    expect(lines.length).toBeGreaterThan(0)
+    const allText = lines.map(l => l.text).join("\n")
+    // Should contain truncation notice
+    expect(allText).toContain("hidden above")
+  })
+
+  test("pending message is not truncated by trimForViewport", () => {
+    const long = "x".repeat(5000)
+    const message: TuiMessage = {
+      id: "m1",
+      role: "assistant",
+      text: long,
+      pending: true,
+      createdAt: 0,
+    }
+    // Pending messages should show as much as possible during streaming
+    const lines = renderMessageLines(message, 40, "streaming")
+    expect(lines.length).toBeGreaterThan(0)
+    // Pending messages skip trimForViewport — full text should be there
+    const allText = lines.map(l => l.text).join("\n")
+    expect(allText.length).toBeGreaterThan(2000)
+  })
+})
+
+describe("assistant.final empty text preserves deltas (Phase 2)", () => {
+  test("assistant.final with empty text uses existing accumulated text", () => {
+    // This tests the reducer logic: when assistant.final text="" arrives,
+    // the TuiMessage.text should be the accumulated delta text, not empty.
+    // We verify this by checking that renderMessageLines on a non-pending message
+    // with text returns content (not empty).
+    const message: TuiMessage = {
+      id: "m1",
+      role: "assistant",
+      text: "accumulated from deltas",
+      pending: false,
+      createdAt: 0,
+    }
+    const lines = renderMessageLines(message, 40, "")
+    expect(lines.length).toBeGreaterThan(0)
+    // The message text should appear in the rendered output
+    const allText = lines.map(l => l.text).join("\n")
+    expect(allText).toContain("accumulated from deltas")
+  })
+
+  test("assistant.final with non-empty text replaces accumulated", () => {
+    // When final arrives with explicit text (error path), it replaces deltas
+    const message: TuiMessage = {
+      id: "m1",
+      role: "assistant",
+      text: "error: something went wrong",
+      pending: false,
+      createdAt: 0,
+    }
+    const lines = renderMessageLines(message, 40, "")
+    expect(lines.length).toBeGreaterThan(0)
+    const allText = lines.map(l => l.text).join("\n")
+    expect(allText).toContain("error: something went wrong")
   })
 })

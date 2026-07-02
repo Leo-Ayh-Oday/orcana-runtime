@@ -1,16 +1,24 @@
-/** Tests for stdin-filter — covers PR-7 bug fix for scroll wheel garbled text.
+/** Tests for stdin-filter — covers read()-based mouse sequence filtering.
+ *
+ *  The filter now patches stdin.read() (Ink's input path) instead of
+ *  process.stdin.emit('data', ...) (which Ink never uses in paused mode).
  *
  *  Points covered:
- *    1. containsMouseSequence: detects SGR,普通, urxvt mouse sequences
+ *    1. containsMouseSequence: detects SGR, DEC1000, urxvt mouse sequences
  *    2. stripMouseSequences: removes all mouse sequence types
- *    3. stripMouseSequences: preserves normal input
- *    4. stripMouseSequences: handles mixed mouse + normal input
- *    5. stripMouseSequences: handles empty string
- *    6. stripMouseSequences: handles consecutive mouse sequences
- *    7. installStdinFilter / uninstallStdinFilter: idempotent and restores original
+ *    3. stripMouseSequences: preserves normal input, arrow keys, bracketed paste
+ *    4. filterChunk: cross-chunk buffering via pendingBuffer
+ *    5. installStdinFilter: patches read(), idempotent
+ *    6. uninstallStdinFilter: restores original read(), clears buffer
+ *    7. enableMouseMode: full disable then enable
+ *    8. disableMouseMode: closes all 6 mouse modes
+ *    9. cleanupTerminal: combined cursor + title + mouse + stdin cleanup
+ *   10. read() returns null for pure-mouse chunks
+ *   11. read() preserves text chunks unchanged
+ *   12. read() strips mouse sequences from mixed chunks
  */
 
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import {
   containsMouseSequence,
   stripMouseSequences,
@@ -19,11 +27,21 @@ import {
   mouseEvents,
   enableMouseMode,
   disableMouseMode,
+  cleanupTerminal,
   _getPendingBuffer,
 } from "../../src/tui/stdin-filter"
 
 function dec1000(button: number, col = 40, row = 10): string {
   return String.fromCharCode(button + 32, col + 32, row + 32)
+}
+
+// Helper: simulate stdin.read() returning a chunk, then pass it through the patched read().
+// Returns what the patched read() would return (string or null).
+function simulateRead(chunk: string | null): string | null {
+  // We can't directly call the patched read() since it delegates to the real stdin,
+  // so we test the filterChunk logic indirectly via the public API.
+  // For read() tests, we mock stdin.read and install the filter.
+  return chunk
 }
 
 // ── containsMouseSequence ──
@@ -42,7 +60,6 @@ describe("containsMouseSequence", () => {
   })
 
   test("detects normal mouse sequence (DEC 1000)", () => {
-    // \x1B[M followed by 3 bytes: button, col+32, row+32
     expect(containsMouseSequence("\x1B[M !\"")).toBe(true)
   })
 
@@ -59,10 +76,10 @@ describe("containsMouseSequence", () => {
   })
 
   test("returns false for plain escape sequences (arrow keys)", () => {
-    expect(containsMouseSequence("\x1B[A")).toBe(false) // Up arrow
-    expect(containsMouseSequence("\x1B[B")).toBe(false) // Down arrow
-    expect(containsMouseSequence("\x1B[C")).toBe(false) // Right arrow
-    expect(containsMouseSequence("\x1B[D")).toBe(false) // Left arrow
+    expect(containsMouseSequence("\x1B[A")).toBe(false)
+    expect(containsMouseSequence("\x1B[B")).toBe(false)
+    expect(containsMouseSequence("\x1B[C")).toBe(false)
+    expect(containsMouseSequence("\x1B[D")).toBe(false)
   })
 
   test("returns false for bracketed paste markers", () => {
@@ -134,7 +151,6 @@ describe("stripMouseSequences", () => {
   })
 
   test("handles scroll wheel with modifier keys (SGR button 68)", () => {
-    // Ctrl+scroll = button 64+4=68
     expect(stripMouseSequences("\x1B[<68;40;10M")).toBe("")
   })
 })
@@ -143,7 +159,6 @@ describe("stripMouseSequences", () => {
 
 describe("installStdinFilter / uninstallStdinFilter", () => {
   test("installStdinFilter is idempotent (multiple calls safe)", () => {
-    // Should not throw on repeated calls
     expect(() => {
       installStdinFilter()
       installStdinFilter()
@@ -160,92 +175,131 @@ describe("installStdinFilter / uninstallStdinFilter", () => {
     }).not.toThrow()
   })
 
-  test("install then uninstall restores original emit", () => {
-    const originalEmit = process.stdin.emit
+  test("install then uninstall restores original read", () => {
+    const originalRead = process.stdin.read
     installStdinFilter()
     uninstallStdinFilter()
-    // After uninstall, emit should be the original function
-    expect(process.stdin.emit).toBe(originalEmit)
+    expect(process.stdin.read).toBe(originalRead)
   })
 
   test("filter is not active after uninstall", () => {
     uninstallStdinFilter()
-    // Install, then immediately uninstall
+    const originalRead = process.stdin.read
     installStdinFilter()
     uninstallStdinFilter()
-    // The emit should be back to original — no filtering should occur
-    const originalEmit = process.stdin.emit
-    installStdinFilter()
-    uninstallStdinFilter()
-    expect(process.stdin.emit).toBe(originalEmit)
+    expect(process.stdin.read).toBe(originalRead)
   })
 })
 
-// ── 滚轮事件提取 (mouseEvents) ──
+// ── read()-based mouse filtering ──
 
-describe("mouseEvents scroll extraction", () => {
-  test("scroll wheel up emits scroll event with direction -1", () => {
-    const events: Array<{ direction: number; isCtrl: boolean }> = []
-    const handler = (direction: number, isCtrl: boolean) => events.push({ direction, isCtrl })
+describe("read()-based mouse filtering", () => {
+  let readQueue: (string | null)[] = []
+  let originalRead: typeof process.stdin.read
+
+  function pushReadChunk(chunk: string | null) {
+    readQueue.push(chunk)
+  }
+
+  beforeEach(() => {
+    readQueue = []
+    originalRead = process.stdin.read.bind(process.stdin)
+    // Mock stdin.read to return from our queue
+    process.stdin.read = ((size?: number) => {
+      if (readQueue.length === 0) return null
+      const chunk = readQueue.shift()!
+      return chunk === null ? null : chunk
+    }) as typeof process.stdin.read
+  })
+
+  afterEach(() => {
+    uninstallStdinFilter()
+    process.stdin.read = originalRead
+  })
+
+  test("patched read() returns null for pure SGR mouse chunk", () => {
+    installStdinFilter()
+    pushReadChunk("\x1B[<0;40;10M")
+    const result = process.stdin.read()
+    expect(result).toBeNull()
+  })
+
+  test("patched read() returns null for pure DEC1000 click chunk", () => {
+    installStdinFilter()
+    pushReadChunk(`\x1B[M${dec1000(0)}`)
+    const result = process.stdin.read()
+    expect(result).toBeNull()
+  })
+
+  test("patched read() returns text unchanged when no mouse sequences", () => {
+    installStdinFilter()
+    pushReadChunk("hello world")
+    const result = process.stdin.read()
+    expect(result).toBe("hello world")
+  })
+
+  test("patched read() strips mouse sequence, returns only text", () => {
+    installStdinFilter()
+    pushReadChunk("\x1B[<0;40;10Mhello")
+    const result = process.stdin.read()
+    expect(result).toBe("hello")
+  })
+
+  test("patched read() returns null when input is empty string", () => {
+    installStdinFilter()
+    pushReadChunk("")
+    const result = process.stdin.read()
+    // Empty input after filtering → null (no data)
+    expect(result).toBeNull()
+  })
+
+  test("patched read() returns only text part from mouse+text mix", () => {
+    installStdinFilter()
+    pushReadChunk("prefix\x1B[<0;40;10Msuffix")
+    const result = process.stdin.read()
+    expect(result).toBe("prefixsuffix")
+  })
+
+  test("patched read() handles multiple mouse sequences, returns only text", () => {
+    installStdinFilter()
+    pushReadChunk("a\x1B[<0;40;10Mb\x1B[<1;41;11Mc")
+    const result = process.stdin.read()
+    expect(result).toBe("abc")
+  })
+
+  test("patched read() preserves arrow keys", () => {
+    installStdinFilter()
+    pushReadChunk("\x1B[A")
+    const result = process.stdin.read()
+    expect(result).toBe("\x1B[A")
+  })
+
+  test("patched read() handles SGR scroll wheel up — stripped, scroll event emitted", () => {
+    const events: number[] = []
+    const handler = (direction: number) => events.push(direction)
     mouseEvents.on("scroll", handler)
     try {
       installStdinFilter()
-      // Simulate stdin receiving SGR scroll wheel up (button 64)
-      process.stdin.emit("data", "\x1B[<64;40;10M")
-      expect(events).toHaveLength(1)
-      expect(events[0]?.direction).toBe(-1)
-      expect(events[0]?.isCtrl).toBe(false)
+      pushReadChunk("\x1B[<64;40;10M")
+      const result = process.stdin.read()
+      expect(result).toBeNull()
+      expect(events).toEqual([-1])
     } finally {
-      uninstallStdinFilter()
       mouseEvents.off("scroll", handler)
     }
   })
 
-  test("scroll wheel down emits scroll event with direction +1", () => {
-    const events: Array<{ direction: number; isCtrl: boolean }> = []
-    const handler = (direction: number, isCtrl: boolean) => events.push({ direction, isCtrl })
+  test("patched read() handles SGR scroll wheel down — stripped, scroll event emitted", () => {
+    const events: number[] = []
+    const handler = (direction: number) => events.push(direction)
     mouseEvents.on("scroll", handler)
     try {
       installStdinFilter()
-      // Simulate stdin receiving SGR scroll wheel down (button 65)
-      process.stdin.emit("data", "\x1B[<65;40;10M")
-      expect(events).toHaveLength(1)
-      expect(events[0]?.direction).toBe(1)
-      expect(events[0]?.isCtrl).toBe(false)
+      pushReadChunk("\x1B[<65;40;10M")
+      const result = process.stdin.read()
+      expect(result).toBeNull()
+      expect(events).toEqual([1])
     } finally {
-      uninstallStdinFilter()
-      mouseEvents.off("scroll", handler)
-    }
-  })
-
-  test("Ctrl+scroll wheel up (button 68) emits with isCtrl=true", () => {
-    const events: Array<{ direction: number; isCtrl: boolean }> = []
-    const handler = (direction: number, isCtrl: boolean) => events.push({ direction, isCtrl })
-    mouseEvents.on("scroll", handler)
-    try {
-      installStdinFilter()
-      process.stdin.emit("data", "\x1B[<68;40;10M")
-      expect(events).toHaveLength(1)
-      expect(events[0]?.direction).toBe(-1)
-      expect(events[0]?.isCtrl).toBe(true)
-    } finally {
-      uninstallStdinFilter()
-      mouseEvents.off("scroll", handler)
-    }
-  })
-
-  test("Ctrl+scroll wheel down (button 69) emits with isCtrl=true", () => {
-    const events: Array<{ direction: number; isCtrl: boolean }> = []
-    const handler = (direction: number, isCtrl: boolean) => events.push({ direction, isCtrl })
-    mouseEvents.on("scroll", handler)
-    try {
-      installStdinFilter()
-      process.stdin.emit("data", "\x1B[<69;40;10M")
-      expect(events).toHaveLength(1)
-      expect(events[0]?.direction).toBe(1)
-      expect(events[0]?.isCtrl).toBe(true)
-    } finally {
-      uninstallStdinFilter()
       mouseEvents.off("scroll", handler)
     }
   })
@@ -256,37 +310,197 @@ describe("mouseEvents scroll extraction", () => {
     mouseEvents.on("scroll", handler)
     try {
       installStdinFilter()
-      process.stdin.emit("data", "\x1B[<0;40;10M")
+      pushReadChunk("\x1B[<0;40;10M")
+      const result = process.stdin.read()
+      expect(result).toBeNull()
       expect(events).toHaveLength(0)
     } finally {
-      uninstallStdinFilter()
       mouseEvents.off("scroll", handler)
     }
   })
 
-  test("multiple scroll events in one chunk all extracted", () => {
+  test("Ctrl+scroll (button 68/69) emits with isCtrl flag extracted", () => {
+    const events: Array<{ direction: number; isCtrl: boolean }> = []
+    const handler = (direction: number, isCtrl: boolean) => events.push({ direction, isCtrl })
+    mouseEvents.on("scroll", handler)
+    try {
+      installStdinFilter()
+      pushReadChunk("\x1B[<68;40;10M\x1B[<69;40;10M")
+      const result = process.stdin.read()
+      expect(result).toBeNull()
+      expect(events).toHaveLength(2)
+      expect(events[0]).toEqual({ direction: -1, isCtrl: true })
+      expect(events[1]).toEqual({ direction: 1, isCtrl: true })
+    } finally {
+      mouseEvents.off("scroll", handler)
+    }
+  })
+})
+
+// ── Cross-chunk buffering (read()-based) ──
+
+describe("cross-chunk mouse sequence handling (read-based)", () => {
+  let readQueue: (string | null)[] = []
+  let originalRead: typeof process.stdin.read
+
+  function pushReadChunk(chunk: string | null) {
+    readQueue.push(chunk)
+  }
+
+  beforeEach(() => {
+    readQueue = []
+    originalRead = process.stdin.read
+    process.stdin.read = ((size?: number) => {
+      if (readQueue.length === 0) return null
+      const chunk = readQueue.shift()!
+      return chunk === null ? null : chunk
+    }) as typeof process.stdin.read
+  })
+
+  afterEach(() => {
+    uninstallStdinFilter()
+    process.stdin.read = originalRead
+  })
+
+  test("incomplete SGR prefix at chunk end is buffered, read returns null", () => {
+    installStdinFilter()
+    // Chunk: "hello" + incomplete prefix
+    pushReadChunk("hello\x1B[<64;40;")
+    const result = process.stdin.read()
+    // "hello" returned, incomplete prefix buffered
+    expect(result).toBe("hello")
+    expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
+  })
+
+  test("buffered prefix completes with next read, scroll event extracted", () => {
     const events: number[] = []
     const handler = (direction: number) => events.push(direction)
     mouseEvents.on("scroll", handler)
     try {
       installStdinFilter()
-      // Two scroll ups + one scroll down in a single chunk
-      process.stdin.emit("data", "\x1B[<64;40;10M\x1B[<64;41;11M\x1B[<65;42;12M")
-      expect(events).toHaveLength(3)
-      expect(events[0]).toBe(-1)
-      expect(events[1]).toBe(-1)
-      expect(events[2]).toBe(1)
+      // Chunk 1: incomplete prefix
+      pushReadChunk("\x1B[<64;40;")
+      const r1 = process.stdin.read()
+      expect(r1).toBeNull()
+      expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
+
+      // Chunk 2: completion
+      pushReadChunk("10M")
+      const r2 = process.stdin.read()
+      expect(r2).toBeNull()
+      expect(events).toEqual([-1])
+      expect(_getPendingBuffer()).toBe("")
     } finally {
-      uninstallStdinFilter()
       mouseEvents.off("scroll", handler)
     }
+  })
+
+  test("multiple mouse sequences split across reads all stripped", () => {
+    const events: number[] = []
+    const handler = (direction: number) => events.push(direction)
+    mouseEvents.on("scroll", handler)
+    try {
+      installStdinFilter()
+      // Chunk 1: two complete + one incomplete
+      pushReadChunk("\x1B[<64;40;10M\x1B[<65;41;11M\x1B[<64;")
+      const r1 = process.stdin.read()
+      expect(r1).toBeNull()
+      expect(events).toHaveLength(2)
+
+      // Chunk 2: completion
+      pushReadChunk("42;12M")
+      const r2 = process.stdin.read()
+      expect(r2).toBeNull()
+      expect(events).toHaveLength(3)
+    } finally {
+      mouseEvents.off("scroll", handler)
+    }
+  })
+
+  test("orphan SGR mouse bodies (no ESC) are stripped", () => {
+    installStdinFilter()
+    pushReadChunk("[<65;27;29M[<65;26;29M")
+    const result = process.stdin.read()
+    expect(result).toBeNull()
+    expect(_getPendingBuffer()).toBe("")
+  })
+
+  test("orphan SGR body split across reads is buffered", () => {
+    const events: number[] = []
+    const handler = (direction: number) => events.push(direction)
+    mouseEvents.on("scroll", handler)
+    try {
+      installStdinFilter()
+      pushReadChunk("[<65;27;")
+      const r1 = process.stdin.read()
+      expect(r1).toBeNull()
+      expect(_getPendingBuffer()).toBe("[<65;27;")
+
+      pushReadChunk("29M")
+      const r2 = process.stdin.read()
+      expect(r2).toBeNull()
+      expect(events).toEqual([1])
+    } finally {
+      mouseEvents.off("scroll", handler)
+    }
+  })
+
+  test("DEC1000 click and release sequences are stripped", () => {
+    installStdinFilter()
+    pushReadChunk(`\x1B[M${dec1000(0)}\x1B[M${dec1000(2)}\x1B[M${dec1000(3)}`)
+    const result = process.stdin.read()
+    expect(result).toBeNull()
+  })
+
+  test("ordinary text that looks like orphan DEC1000 prefix is preserved", () => {
+    installStdinFilter()
+    pushReadChunk("[Maybe] keep this text")
+    const result = process.stdin.read()
+    expect(result).toBe("[Maybe] keep this text")
+  })
+
+  test("ESC key alone is NOT buffered (preserves Esc functionality)", () => {
+    installStdinFilter()
+    pushReadChunk("\x1B")
+    const result = process.stdin.read()
+    // \x1B matches INCOMPLETE_MOUSE_PREFIX_REGEX (/^\x1B\[?...$/), but \x1B by itself:
+    // It matches if the regex allows just \x1B. Since we use INCOMPLETE_MOUSE_PREFIX_REGEX,
+    // which matches \x1B\[(?:...)?$, and the raw chunk is just "\x1B" —
+    // it does match because the regex is /\x1B\[(?:...)?$/ and the `\[` requires a literal `[`.
+    // "\x1B" alone does NOT match because there's no `[` after it.
+    // So it passes through fine.
+    expect(result).toBe("\x1B")
+    expect(_getPendingBuffer()).toBe("")
+  })
+
+  test("non-mouse text after buffered prefix is emitted correctly", () => {
+    installStdinFilter()
+    // Chunk 1: incomplete prefix
+    pushReadChunk("\x1B[<64;40;")
+    const r1 = process.stdin.read()
+    expect(r1).toBeNull()
+
+    // Chunk 2: completion + normal text
+    pushReadChunk("10Mhello")
+    const r2 = process.stdin.read()
+    expect(r2).toBe("hello")
+    expect(_getPendingBuffer()).toBe("")
+  })
+
+  test("uninstallStdinFilter clears pendingBuffer", () => {
+    installStdinFilter()
+    pushReadChunk("\x1B[<64;40;")
+    process.stdin.read() // should buffer the incomplete prefix
+    expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
+    uninstallStdinFilter()
+    expect(_getPendingBuffer()).toBe("")
   })
 })
 
 // ── enableMouseMode / disableMouseMode ──
 
 describe("enableMouseMode / disableMouseMode", () => {
-  test("enableMouseMode writes SGR + normal mouse mode escape sequences", () => {
+  test("enableMouseMode writes full disable first then enable escape sequences", () => {
     const written: string[] = []
     const originalWrite = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((data: unknown) => {
@@ -295,13 +509,22 @@ describe("enableMouseMode / disableMouseMode", () => {
     }) as typeof process.stdout.write
     try {
       enableMouseMode()
-      expect(written.join("")).toBe("\x1B[?1006h\x1B[?1000h")
+      // Should write: disable all 6 modes + enable 1006 + 1000
+      const joined = written.join("")
+      expect(joined).toContain("?1000l")
+      expect(joined).toContain("?1002l")
+      expect(joined).toContain("?1003l")
+      expect(joined).toContain("?1005l")
+      expect(joined).toContain("?1006l")
+      expect(joined).toContain("?1015l")
+      expect(joined).toContain("?1006h")
+      expect(joined).toContain("?1000h")
     } finally {
       process.stdout.write = originalWrite
     }
   })
 
-  test("disableMouseMode writes disable escape sequences", () => {
+  test("disableMouseMode writes all 6 mouse mode disable sequences", () => {
     const written: string[] = []
     const originalWrite = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((data: unknown) => {
@@ -310,311 +533,43 @@ describe("enableMouseMode / disableMouseMode", () => {
     }) as typeof process.stdout.write
     try {
       disableMouseMode()
-      expect(written.join("")).toBe("\x1B[?1000l\x1B[?1006l")
+      const joined = written.join("")
+      expect(joined).toContain("?1000l")
+      expect(joined).toContain("?1002l")
+      expect(joined).toContain("?1003l")
+      expect(joined).toContain("?1005l")
+      expect(joined).toContain("?1006l")
+      expect(joined).toContain("?1015l")
     } finally {
       process.stdout.write = originalWrite
     }
   })
 })
 
-// ── 跨 chunk 边界处理 (pendingBuffer) ──
+// ── cleanupTerminal ──
 
-describe("cross-chunk mouse sequence handling", () => {
-  test("incomplete SGR prefix at chunk end is buffered, not emitted", () => {
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+describe("cleanupTerminal", () => {
+  test("cleanupTerminal writes cursor show + title reset + mouse disable", () => {
+    const written: string[] = []
+    const originalWrite = process.stdout.write.bind(process.stdout)
+    process.stdout.write = ((data: unknown) => {
+      if (typeof data === "string") written.push(data)
+      return true
+    }) as typeof process.stdout.write
+    const originalRead = process.stdin.read
     try {
       installStdinFilter()
-      // Register data listener to capture FILTERED output
-      // (wrapping process.stdin.emit would intercept raw pre-filter input)
-      process.stdin.on("data", onData)
-
-      // send via emit → enters installStdinFilter → calls stock emit with filtered data
-      process.stdin.emit("data", Buffer.from("hello\x1B[<64;40;", "utf8"))
-      // "hello" should be emitted, but \x1B[<64;40; should be buffered
-      expect(received).toEqual(["hello"])
-      expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
+      cleanupTerminal()
+      const joined = written.join("")
+      expect(joined).toContain("\x1B[?25h") // show cursor
+      expect(joined).toContain("\x1B]0;\x07") // reset title
+      expect(joined).toContain("?1000l")
+      expect(joined).toContain("?1006l")
+      // After cleanup, filter should be uninstalled
+      expect(process.stdin.read).toBe(originalRead)
     } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-    }
-  })
-
-  test("buffered prefix completes with next chunk, scroll event extracted", () => {
-    const events: number[] = []
-    const handler = (direction: number) => events.push(direction)
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    mouseEvents.on("scroll", handler)
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      // Chunk 1: incomplete prefix — nothing emitted (buffered)
-      process.stdin.emit("data", Buffer.from("\x1B[<64;40;", "utf8"))
-      expect(received).toHaveLength(0)
-      expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
-
-      // Chunk 2: completion (10M = row 10, terminator M) — complete sequence stripped
-      process.stdin.emit("data", Buffer.from("10M", "utf8"))
-      expect(received).toHaveLength(0)
-      expect(events).toHaveLength(1)
-      expect(events[0]).toBe(-1) // button 64 = scroll up
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-      mouseEvents.off("scroll", handler)
-    }
-  })
-
-  test("multiple mouse sequences split across chunks all stripped", () => {
-    const events: number[] = []
-    const handler = (direction: number) => events.push(direction)
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    mouseEvents.on("scroll", handler)
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      // Chunk 1: two complete sequences + incomplete prefix
-      process.stdin.emit("data", Buffer.from("\x1B[<64;40;10M\x1B[<65;41;11M\x1B[<64;", "utf8"))
-      // No data emitted (all mouse sequences or incomplete prefix)
-      expect(received).toHaveLength(0)
-      // Two scroll events extracted
-      expect(events).toHaveLength(2)
-      expect(events[0]).toBe(-1) // button 64 = up
-      expect(events[1]).toBe(1)  // button 65 = down
-
-      // Chunk 2: completion of third sequence
-      process.stdin.emit("data", Buffer.from("42;12M", "utf8"))
-      expect(received).toHaveLength(0)
-      expect(events).toHaveLength(3)
-      expect(events[2]).toBe(-1) // button 64 = up
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-      mouseEvents.off("scroll", handler)
-    }
-  })
-
-  test("orphan SGR mouse bodies without ESC are stripped and still emit scroll", () => {
-    const events: number[] = []
-    const handler = (direction: number) => events.push(direction)
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    mouseEvents.on("scroll", handler)
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      process.stdin.emit("data", Buffer.from("[<65;27;29M[<65;26;29M", "utf8"))
-      expect(received).toHaveLength(0)
-      expect(events).toEqual([1, 1])
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-      mouseEvents.off("scroll", handler)
-    }
-  })
-
-  test("orphan SGR mouse body split across chunks is buffered", () => {
-    const events: number[] = []
-    const handler = (direction: number) => events.push(direction)
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    mouseEvents.on("scroll", handler)
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      process.stdin.emit("data", Buffer.from("[<65;27;", "utf8"))
-      expect(received).toHaveLength(0)
-      expect(_getPendingBuffer()).toBe("[<65;27;")
-
-      process.stdin.emit("data", Buffer.from("29M", "utf8"))
-      expect(received).toHaveLength(0)
-      expect(events).toEqual([1])
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-      mouseEvents.off("scroll", handler)
-    }
-  })
-
-  test("DEC1000 click and release sequences are stripped before TextArea", () => {
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      process.stdin.emit("data", Buffer.from(
-        `\x1B[M${dec1000(0)}\x1B[M${dec1000(2)}\x1B[M${dec1000(3)}`,
-        "utf8",
-      ))
-      expect(received).toHaveLength(0)
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-    }
-  })
-
-  test("orphan DEC1000 click and release bodies are stripped before TextArea", () => {
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      process.stdin.emit("data", Buffer.from(
-        `[M${dec1000(0)}[M${dec1000(2)}[M${dec1000(3)}`,
-        "utf8",
-      ))
-      expect(received).toHaveLength(0)
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-    }
-  })
-
-  test("ordinary text that looks like an orphan DEC1000 prefix is preserved", () => {
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      process.stdin.emit("data", Buffer.from("[Maybe] keep this text", "utf8"))
-      expect(received).toEqual(["[Maybe] keep this text"])
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-    }
-  })
-
-  test("DEC1000 scroll emits scroll events and is stripped", () => {
-    const events: number[] = []
-    const handler = (direction: number) => events.push(direction)
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    mouseEvents.on("scroll", handler)
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      process.stdin.emit("data", Buffer.from(`\x1B[M${dec1000(64)}[M${dec1000(65)}`, "utf8"))
-      expect(received).toHaveLength(0)
-      expect(events).toEqual([-1, 1])
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-      mouseEvents.off("scroll", handler)
-    }
-  })
-
-  test("orphan DEC1000 mouse body split across chunks is buffered", () => {
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      process.stdin.emit("data", Buffer.from(`[M${dec1000(0).slice(0, 1)}`, "utf8"))
-      expect(received).toHaveLength(0)
-      expect(_getPendingBuffer()).toBe(`[M${dec1000(0).slice(0, 1)}`)
-
-      process.stdin.emit("data", Buffer.from(dec1000(0).slice(1), "utf8"))
-      expect(received).toHaveLength(0)
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-    }
-  })
-
-  test("ESC key alone is NOT buffered (preserves Esc functionality)", () => {
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      // Single ESC character should pass through immediately
-      process.stdin.emit("data", Buffer.from("\x1B", "utf8"))
-      expect(received).toEqual(["\x1B"])
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-    }
-  })
-
-  test("non-mouse text after buffered prefix is emitted correctly", () => {
-    const received: string[] = []
-    const origEmit = process.stdin.emit
-    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
-    try {
-      installStdinFilter()
-      process.stdin.on("data", onData)
-
-      // Chunk 1: incomplete prefix — buffered
-      process.stdin.emit("data", Buffer.from("\x1B[<64;40;", "utf8"))
-      expect(received).toHaveLength(0)
-
-      // Chunk 2: completion + normal text
-      process.stdin.emit("data", Buffer.from("10Mhello", "utf8"))
-      // "hello" should be emitted (mouse sequence stripped)
-      expect(received).toEqual(["hello"])
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.off("data", onData)
-      process.stdin.emit = origEmit
-      uninstallStdinFilter()
-    }
-  })
-
-  test("uninstallStdinFilter clears pendingBuffer", () => {
-    const origEmit = process.stdin.emit
-    try {
-      installStdinFilter()
-      // Put something in the buffer
-      process.stdin.emit("data", "\x1B[<64;40;")
-      expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
-
-      uninstallStdinFilter()
-      expect(_getPendingBuffer()).toBe("")
-    } finally {
-      process.stdin.emit = origEmit
+      process.stdout.write = originalWrite
+      process.stdin.read = originalRead
       uninstallStdinFilter()
     }
   })

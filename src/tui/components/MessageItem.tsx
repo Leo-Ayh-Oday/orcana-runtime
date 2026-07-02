@@ -9,7 +9,7 @@ import { cleanDisplayText, formatDisplayText, trimForViewport } from "../format"
 import { fitTerminalText } from "../format"
 import type { TuiMessage } from "../state/types"
 
-export type ChatEventKind = "tool" | "task" | "plan" | "activity" | "error"
+export type ChatEventKind = "tool" | "task" | "plan" | "activity" | "error" | "gate" | "evidence" | "patch"
 
 export function eventMarker(kind?: ChatEventKind): string {
   if (kind === "tool") return "$"
@@ -17,6 +17,9 @@ export function eventMarker(kind?: ChatEventKind): string {
   if (kind === "plan") return "+"
   if (kind === "activity") return "~"
   if (kind === "error") return "!"
+  if (kind === "gate") return "g"
+  if (kind === "evidence") return "e"
+  if (kind === "patch") return "p"
   return "-"
 }
 
@@ -26,6 +29,9 @@ export function eventColor(kind?: ChatEventKind): string {
   if (kind === "plan") return C.cyan
   if (kind === "activity") return C.yellow
   if (kind === "error") return C.red
+  if (kind === "gate") return C.yellow
+  if (kind === "evidence") return C.blue
+  if (kind === "patch") return C.green
   return C.dim
 }
 

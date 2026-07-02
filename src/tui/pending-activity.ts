@@ -8,7 +8,10 @@
  *    - 动画只变 glyph/pulse，stableLabel 不变
  *    - pendingStatus 为空时 classify 返回 "working"
  *    - 条件匹配从具体到模糊：先匹配关键词，再 fallback
+ *    - Phase 3: glyph 字符统一从 getGlyphTheme() 获取，避免硬编码 Unicode mojibake
  */
+
+import { getGlyphTheme } from "./tokens"
 
 export type PendingActivity =
   | "routing"
@@ -69,17 +72,17 @@ export function activityLabel(activity: PendingActivity, round: number): string 
   }
 }
 
-/** pending activity glyph。tick 驱动变化，但 glyph 本身不改变 stableLabel。 */
+/** pending activity glyph。tick 驱动变化，使用 glyph 主题避免硬编码 Unicode。 */
 export function activityGlyph(activity: PendingActivity, tick: number): string {
-  const spinners = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+  const g = getGlyphTheme()
   switch (activity) {
-    case "routing": return spinners[tick % 10] ?? "?"
-    case "reading": return spinners[tick % 10] ?? "?"
-    case "editing": return "›‹›‹›‹›‹›‹"[tick % 10] ?? "›"
-    case "verifying": return "▁▂▃▄▅▆▇█▇▆▅▄▃▂"[tick % 14] ?? "▁"
-    case "blocked": return tick % 2 === 0 ? "!" : " "
-    case "streaming": return spinners[tick % 10] ?? "?"
-    case "working": return spinners[tick % 10] ?? "?"
+    case "routing": return g.spinnerChars[tick % g.spinnerLen] ?? "?"
+    case "reading": return g.spinnerChars[tick % g.spinnerLen] ?? "?"
+    case "editing": return g.editingGlow[tick % g.editingGlowLen] ?? ">"
+    case "verifying": return g.verifyWave[tick % g.verifyWaveLen] ?? "."
+    case "blocked": return tick % 2 === 0 ? g.warningIcon : " "
+    case "streaming": return g.spinnerChars[tick % g.spinnerLen] ?? "?"
+    case "working": return g.spinnerChars[tick % g.spinnerLen] ?? "?"
   }
 }
 

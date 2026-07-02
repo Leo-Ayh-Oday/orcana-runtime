@@ -89,7 +89,7 @@ export function MinimalSonar() {
       <Text color={Cyan}>{`      ╭┤    sonar · swarm      ├╮`}</Text>
       <Text color={Blue}>{`      ╰─────────────────────────╯`}</Text>
       <Text> </Text>
-      <Text color={Dim}>{`      ∿∿∿ ripple · think · verify ∿∿∿`}</Text>
+      <Text color={Dim}>{`      ~~~ ripple - think - verify ~~~`}</Text>
     </Box>
   )
 }

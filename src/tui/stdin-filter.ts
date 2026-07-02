@@ -34,19 +34,37 @@ export const mouseEvents = new EventEmitter()
 // SGR 鼠标序列：\x1B[<button;col;rowM 或 m
 const SGR_MOUSE_REGEX = /\x1B\[<(\d+);\d+;\d+[mM]/g
 
-/** 从原始数据中提取滚轮事件并发出 scroll 事件。 */
+/** 防御性正则：匹配没有 ESC 前缀的孤立鼠标序列体。
+ *  当 \x1B 已被消费但序列体 [<button;col;rowM 仍残留在输入流中时，
+ *  作为最后安全网。图案 [<\d+;\d+;\d+[mM] 在正常用户输入中不存在。 */
+const ORPHAN_SGR_BODY_REGEX = /\[<(\d+);\d+;\d+[mM]/g
+
+/** 从字符串中移除孤立鼠标序列体（无 ESC 前缀）。 */
+function stripOrphanMouseBodies(data: string): string {
+  return data.replace(ORPHAN_SGR_BODY_REGEX, "")
+}
+
+/** 从原始数据中提取滚轮事件并发出 scroll 事件。
+ *  先用完整 SGR 正则匹配；若无匹配，fallback 到孤立序列体正则以防 ESC 丢失。 */
 function extractScrollEvents(data: string): void {
-  SGR_MOUSE_REGEX.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = SGR_MOUSE_REGEX.exec(data)) !== null) {
-    const button = parseInt(match[1], 10)
-    // SGR 滚轮编码：64 = 向上滚, 65 = 向下滚
-    // 带修饰键的滚轮：68 = Ctrl+向上, 69 = Ctrl+向下
-    if (button === 64 || button === 68) {
-      mouseEvents.emit("scroll", -1, button === 68)
-    } else if (button === 65 || button === 69) {
-      mouseEvents.emit("scroll", 1, button === 69)
+  const tryRegex = (regex: RegExp): boolean => {
+    regex.lastIndex = 0
+    let found = false
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(data)) !== null) {
+      found = true
+      const button = parseInt(match[1], 10)
+      if (button === 64 || button === 68) {
+        mouseEvents.emit("scroll", -1, button === 68)
+      } else if (button === 65 || button === 69) {
+        mouseEvents.emit("scroll", 1, button === 69)
+      }
     }
+    return found
+  }
+
+  if (!tryRegex(SGR_MOUSE_REGEX)) {
+    tryRegex(ORPHAN_SGR_BODY_REGEX)
   }
 }
 
@@ -107,8 +125,10 @@ export function disableMouseMode(): void {
  * 此正则匹配以 \x1B[ 开头的不完整前缀：
  *   \x1B[, \x1B[<, \x1B[<64, \x1B[<64;, \x1B[<64;40, \x1B[<64;40;, \x1B[<64;40;10
  *
- * 注意：不匹配单独的 \x1B（ESC 键），避免 Esc 取消 clarification 等功能延迟。
- * 跨 chunk 将 \x1B 和 [ 分开的情况极罕见（终端通常一次发完整序列），可接受。
+ * 也匹配裸 \x1B（ESC 字节）——当终端将一个 SGR 序列拆分在 \x1B 和 [ 之间时。
+ * 裸 \x1B 的处理策略：不缓存（避免延迟 ESC 键）。
+ * 取而代之，当裸 \x1B 在 chunk 边界被消费后，后续的孤立序列体 [<button;col;rowM
+ * 会被 ORPHAN_SGR_BODY_REGEX 作为安全网 strip。
  */
 const INCOMPLETE_MOUSE_PREFIX_REGEX = /\x1B\[(?:<(?:\d+;(?:\d+;(?:\d+)?)?)?)?$/
 
@@ -149,12 +169,12 @@ export function installStdinFilter(): void {
         pendingBuffer = ""
 
         // 提取滚轮事件（在 strip 之前解析）
-        if (raw.includes("\x1B[<")) {
+        if (raw.includes("[<")) {
           extractScrollEvents(raw)
         }
 
-        // strip 完整的鼠标序列
-        let filtered = stripMouseSequences(raw)
+        // strip 完整的鼠标序列和孤立序列体
+        let filtered = stripOrphanMouseBodies(stripMouseSequences(raw))
 
         // 检查末尾是否有不完整的鼠标序列前缀（跨 chunk 边界）
         // 如果有，保留在 pendingBuffer 中，等下一个 chunk 合并处理

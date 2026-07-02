@@ -1,5 +1,6 @@
 /** MessageItem — 渲染单条 TuiMessage 为行数组。
- *  从 main.tsx 的 renderMessageLines 提取，保持纯函数 + memo 化。 */
+ *  Phase 4: renderMessageLines 是纯函数（无 tick），pending 动画由 Scrollback 在
+ *  视口裁剪后以 O(height) 代价叠加，不再触发 O(messages) 全量重算。 */
 
 import React from "react"
 import { Box, Text } from "ink"
@@ -48,13 +49,20 @@ export interface RenderedLine {
   marker: string
   text: string
   color: string
+  /** Phase 4: pending 动画类型。undefined = 静态行。
+   *  "tail" — 流式输出尾行动画（附加 "...", "..", ".", "" 到行末）
+   *  "spinner" — Braille spinner（⠋⠙⠹...）+ 动词 */
+  pendingAnim?: "tail" | "spinner"
+  /** pendingAnim="spinner" 时使用的状态文本。 */
+  pendingStatus?: string
 }
 
-/** 将一条消息渲染为行数组（纯函数，不含 React）。 */
+/** Phase 4: 纯函数 — 不含 tick。
+ *  pending 消息返回带 pendingAnim 标记的静态行，
+ *  动画由调用方（Scrollback）在视口裁剪后以 O(height) 代价叠加。 */
 export function renderMessageLines(
   message: TuiMessage,
   width: number,
-  tick: number,
   status: string,
 ): RenderedLine[] {
   const contentWidth = Math.max(12, width - 4)
@@ -66,7 +74,6 @@ export function renderMessageLines(
       : message.error
         ? C.red
         : C.blue
-  const tail = ["", ".", "..", "..."][tick % 4] ?? ""
 
   if (message.role === "user") {
     const userText = cleanDisplayText(trimForViewport(message.text, Math.max(240, width * 5)))
@@ -88,23 +95,26 @@ export function renderMessageLines(
 
   if (message.text) {
     const assistantContent = stripCompletionReportForTranscript(message.text)
-    // 增大截断上限：原 5000 → 12000，避免常见长输出（代码块、详细解释）被截断
-    // 下限也提高到 2000，确保短终端也能看到完整的小回复
-    const assistantText = `${cleanDisplayText(trimForViewport(assistantContent, Math.max(2000, Math.min(12000, width * 80))))}${message.pending ? tail : ""}`
-    return formatDisplayText(assistantText, contentWidth).map((line, index) => ({
+    const truncated = trimForViewport(assistantContent, Math.max(2000, Math.min(12000, width * 80)))
+    const assistantText = cleanDisplayText(truncated)
+    const formatted: RenderedLine[] = formatDisplayText(assistantText, contentWidth).map((line, index) => ({
       marker: index === 0 ? marker : " ",
       text: line,
       color,
     }))
+
+    // Phase 4: 标记最后一行需要尾行动画（仅 pending 时）
+    if (message.pending && formatted.length > 0) {
+      const last = formatted[formatted.length - 1]!
+      last.pendingAnim = "tail"
+    }
+    return formatted
   }
 
   if (message.pending) {
-    // Braille spinner — 生产级 TUI 标准动画，紧凑且丝滑
-    const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[tick % 10]
-    const verb = ["thinking", "routing", "reading", "checking"][tick % 4]
-    const statusText = `${spinner} ${verb}${status ? ` · ${status}` : ""}`
+    // Phase 4: 返回静态占位行，pendingAnim="spinner" 标记由 Scrollback 叠加动画
     return [
-      { marker, text: statusText, color },
+      { marker, text: "", color, pendingAnim: "spinner", pendingStatus: status },
     ]
   }
 
@@ -114,13 +124,13 @@ export function renderMessageLines(
 export interface MessageItemProps {
   message: TuiMessage
   width: number
-  tick: number
   status: string
 }
 
-/** React 组件：渲染单条消息（不含间距行）。 */
-export const MessageItem = React.memo(function MessageItem({ message, width, tick, status }: MessageItemProps) {
-  const lines = renderMessageLines(message, width, tick, status)
+/** React 组件：渲染单条消息（不含间距行）。
+ *  Phase 4: 不再接收 tick。pending 动画由 Scrollback 统一在视口层叠加。 */
+export const MessageItem = React.memo(function MessageItem({ message, width, status }: MessageItemProps) {
+  const lines = renderMessageLines(message, width, status)
   return (
     <>
       {lines.map((line, index) => (

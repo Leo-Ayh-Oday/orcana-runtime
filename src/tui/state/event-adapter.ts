@@ -70,6 +70,10 @@ export class StreamEventAdapter {
   private pendingTools: Map<string, string[]> = new Map()
   /** 递增 tool 计数器，用于生成唯一 ID。 */
   private toolCounter = 0
+  /** 本轮已启动的工具计数（toolName → count），token_usage 时聚合并清空。 */
+  private roundToolCalls: Map<string, number> = new Map()
+  /** 本轮工具汇总是否已发射（避免 token_usage 多次发射重复摘要）。 */
+  private roundSummaryEmitted = false
 
   /** 将一个 StreamEvent 翻译为 0..N 个 TuiEvent。
    *  纯翻译 + 内部状态更新（pendingTools），不触碰 TuiState。 */
@@ -150,16 +154,14 @@ export class StreamEventAdapter {
     queue.push(id)
     this.pendingTools.set(name, queue)
 
-    return [
-      { type: "tool.started", id, tool: name },
-      {
-        type: "ui.event_message",
-        kind: "tool",
-        text: `tool start: ${name}`,
-        dedupeKey: `tool-start:${name}`,
-        minIntervalMs: 250,
-      },
-    ]
+    // 记录每轮工具计数（用于 token_usage 时发聚合摘要）。
+    // 若这是本轮第一个工具调用 → 重置 summary 标志位。
+    if (this.roundToolCalls.size === 0) {
+      this.roundSummaryEmitted = false
+    }
+    this.roundToolCalls.set(name, (this.roundToolCalls.get(name) ?? 0) + 1)
+
+    return [{ type: "tool.started", id, tool: name }]
   }
 
   private adaptToolResult(ev: StreamEvent): TuiEvent[] {
@@ -177,21 +179,12 @@ export class StreamEventAdapter {
 
     const summary = summarizeToolOutput(d.content)
 
-    return [
-      {
-        type: "tool.finished",
-        id,
-        ok: true,
-        outputSummary: summary || undefined,
-      },
-      {
-        type: "ui.event_message",
-        kind: "tool",
-        text: `tool done: ${name}${summary}`,
-        dedupeKey: `tool-done:${name}:${summary}`,
-        minIntervalMs: 250,
-      },
-    ]
+    return [{
+      type: "tool.finished",
+      id,
+      ok: true,
+      outputSummary: summary || undefined,
+    }]
   }
 
   private adaptTokenUsage(ev: StreamEvent): TuiEvent[] {
@@ -199,6 +192,24 @@ export class StreamEventAdapter {
     if (!d || typeof d !== "object") return []
 
     const events: TuiEvent[] = []
+
+    // ── 本轮工具活动聚合摘要（仅 provider 侧真实数据时发射一次） ──
+    const isProviderUsage = d.cacheSource === "provider" || typeof d.actualModel === "string"
+    if (isProviderUsage && !this.roundSummaryEmitted && this.roundToolCalls.size > 0) {
+      const parts = [...this.roundToolCalls.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, count]) => count > 1 ? `${name} ×${count}` : name)
+      const round = typeof d.round === "number" ? d.round : "?"
+      events.push({
+        type: "ui.event_message",
+        kind: "activity",
+        text: `round ${round} · ${parts.join(" · ")}`,
+        dedupeKey: `round-activity:${round}`,
+        minIntervalMs: 0,
+      })
+      this.roundSummaryEmitted = true
+      this.roundToolCalls.clear()
+    }
 
     // 模型名更新
     const nextModel = typeof d.actualModel === "string"
@@ -272,5 +283,7 @@ export class StreamEventAdapter {
   reset(): void {
     this.pendingTools.clear()
     this.toolCounter = 0
+    this.roundToolCalls.clear()
+    this.roundSummaryEmitted = false
   }
 }

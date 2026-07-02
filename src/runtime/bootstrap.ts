@@ -16,6 +16,10 @@ import { OpenAIProvider } from "../provider/openai"
 import { MultiProvider } from "../provider/multi"
 import { ProviderRegistry } from "../provider/registry"
 import { ModelRouter } from "../provider/router"
+import { toModelSpec } from "../provider/capabilities"
+import { loadConfig, resolveModelForRole, type LoadConfigOptions } from "../config/config-loader"
+import type { OrcanaConfig } from "../config/config-schema"
+import { getDefaultAuthStore, type AuthStore } from "../config/auth-store"
 import { buildTools, type ToolDef, type ToolDescriptor } from "../tools/registry"
 import { FILE_TOOLS } from "../tools/file"
 import { SHELL_TOOL } from "../tools/shell"
@@ -162,7 +166,7 @@ const TASK_TOOL: ToolDef = {
 export interface RuntimeBootstrapOptions {
   /** Project root directory. Defaults to process.cwd(). */
   projectRoot?: string
-  /** API keys. If not provided, read from process.env. */
+  /** API keys. If not provided, read from auth store or process.env. */
   dsApiKey?: string
   anthApiKey?: string
   openaiApiKey?: string
@@ -178,6 +182,10 @@ export interface RuntimeBootstrapOptions {
   gateTelemetryFile?: string
   /** ContextMap acquisition policy. */
   contextMapPolicy?: "off" | "auto" | "always"
+  /** PR-6: Config loader options (cwd, globalPath, applyEnv). */
+  configOptions?: LoadConfigOptions
+  /** PR-6: AuthStore instance (defaults to FileAuthStore). */
+  authStore?: AuthStore
 }
 
 export interface Runtime {
@@ -186,6 +194,10 @@ export interface Runtime {
   modelRouter: ModelRouter
   registry: ProviderRegistry
   modelOverride: string
+  /** PR-6: 加载的 OrcanaConfig，供 TUI /connect /models 使用 */
+  config: OrcanaConfig
+  /** PR-6: AuthStore 实例，供 TUI /connect 保存 API key */
+  authStore: AuthStore
 
   // Tools
   mcpResult: MCPBridgeResult
@@ -235,31 +247,85 @@ export interface Runtime {
 
 export async function createRuntime(options: RuntimeBootstrapOptions = {}): Promise<Runtime> {
   const projectRoot = options.projectRoot ?? process.cwd()
-  const dsApiKey = options.dsApiKey ?? process.env.DEEPSEEK_API_KEY ?? ""
-  const anthApiKey = options.anthApiKey ?? process.env.ANTHROPIC_API_KEY ?? ""
-  const openaiApiKey = options.openaiApiKey ?? process.env.OPENAI_API_KEY ?? ""
-  const modelOverride = options.modelOverride ?? process.env.DEEPSEEK_MODEL_OVERRIDE ?? "deepseek-v4-pro"
   const enableMCP = options.enableMCP ?? true
   const enableLSP = options.enableLSP ?? true
   const gateTelemetryFile = options.gateTelemetryFile ?? ".wolf/gate-telemetry.json"
   const contextMapPolicy = options.contextMapPolicy ?? "auto"
   const version = VERSION
 
+  // ── 0. Load config + auth store (PR-6) ──
+  const config = loadConfig({ cwd: projectRoot, ...options.configOptions })
+  const authStore = options.authStore ?? getDefaultAuthStore()
+
+  // 解析 API keys：options → auth store → env
+  // DeepSeek key 优先级：显式传入 > auth store > 环境变量
+  let dsApiKey = options.dsApiKey ?? process.env.DEEPSEEK_API_KEY ?? ""
+  if (!dsApiKey) {
+    dsApiKey = (await authStore.get("deepseek")) ?? ""
+  }
+
+  let anthApiKey = options.anthApiKey ?? process.env.ANTHROPIC_API_KEY ?? ""
+  if (!anthApiKey) {
+    anthApiKey = (await authStore.get("anthropic")) ?? ""
+  }
+
+  let openaiApiKey = options.openaiApiKey ?? process.env.OPENAI_API_KEY ?? ""
+  if (!openaiApiKey) {
+    openaiApiKey = (await authStore.get("openai")) ?? ""
+  }
+
+  // 默认模型来自 config（env 覆盖已在 loadConfig 中处理）
+  const modelOverride = options.modelOverride
+    ?? resolveModelForRole("default", config)
+
   // ── 1. Provider registry ──
-  if (!dsApiKey) throw new Error("DEEPSEEK_API_KEY not set (required for default provider)")
+  if (!dsApiKey && config.defaultProvider === "deepseek") {
+    throw new Error(
+      "DeepSeek API key not found. Set DEEPSEEK_API_KEY env var or run /connect in TUI to save key.",
+    )
+  }
 
   const registry = new ProviderRegistry()
-  registry.register({ id: "deepseek", provider: new DeepSeekProvider(dsApiKey), defaultModel: "deepseek-v4-pro" })
 
+  // 注册 DeepSeek provider（默认）
+  if (dsApiKey) {
+    registry.register({
+      id: "deepseek",
+      provider: new DeepSeekProvider(dsApiKey),
+      defaultModel: resolveModelForRole("default", config),
+    })
+  }
+
+  // 注册 Anthropic provider
   if (anthApiKey) {
-    registry.register({ id: "anthropic", provider: new AnthropicProvider(anthApiKey), defaultModel: "claude-sonnet-4-6" })
+    registry.register({
+      id: "anthropic",
+      provider: new AnthropicProvider(anthApiKey),
+      defaultModel: "claude-sonnet-4-6",
+    })
   }
 
+  // 注册 OpenAI provider
   if (openaiApiKey) {
-    registry.register({ id: "openai", provider: new OpenAIProvider(openaiApiKey), defaultModel: "gpt-5" })
+    registry.register({
+      id: "openai",
+      provider: new OpenAIProvider(openaiApiKey),
+      defaultModel: "gpt-5",
+    })
   }
 
+  // 注册内置模型元数据（保持向后兼容）
   registry.registerBuiltinModels()
+
+  // PR-6: 从 config 注册用户自定义模型（覆盖内置同名模型）
+  for (const [providerId, providerConfig] of Object.entries(config.providers ?? {})) {
+    for (const [modelId, modelConfig] of Object.entries(providerConfig.models)) {
+      // 只为已注册的 provider 注册模型（避免 registerModel 抛错）
+      if (registry.getProvider(providerId) !== undefined) {
+        registry.registerModel(toModelSpec(modelId, providerId, modelConfig, providerConfig))
+      }
+    }
+  }
 
   const multiProvider = new MultiProvider({ registry, defaultModel: modelOverride })
   const modelRouter = new ModelRouter(registry, multiProvider)
@@ -395,6 +461,8 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     modelRouter,
     registry,
     modelOverride,
+    config,
+    authStore,
 
     mcpResult,
     mcpToolDefs,

@@ -3,7 +3,8 @@
  *  职责：
  *    - 多行编辑（Enter 发送，Shift+Enter 换行 —— TextArea 默认行为）
  *    - 大粘贴 placeholder 系统（diff 检测 → 替换为 PASTE:N token → 可展开/折叠）
- *    - 命令面板（/ 开头时禁用 TextArea 的 Enter/方向键，由 wrapper 处理）
+ *    - 命令面板（/ 开头时禁用 TextArea 方向键导航，由 wrapper 的 onFirstLineUp/onLastLineDown 处理）
+ *      Enter 始终由 TextArea 触发 onSubmit → handleSubmit 中做命令选择
  *    - 历史导航（onFirstLineUp/onLastLineDown → history 或 scroll）
  *    - 修复"英文说明吞掉正文"问题（TextArea 有自己的 viewport，不靠 displayWindow 切片）
  *
@@ -138,7 +139,7 @@ export interface OrcanaComposerProps {
   focused?: boolean
   onScrollUp?: () => void
   onScrollDown?: () => void
-  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number }) => void
+  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number; textRows: number }) => void
 }
 
 export function OrcanaComposer({
@@ -171,11 +172,13 @@ export function OrcanaComposer({
   const commandMatches = commands.filter(cmd => cmd.name.startsWith(slashQuery)).slice(0, 3)
   const selectedCommand = commandMatches[Math.min(commandIdx, Math.max(0, commandMatches.length - 1))]
   const pasteCount = pasteBlocks.filter(block => value.includes(block.token)).length
+  // TextArea 当前行数（1-3），用于让 parent 动态计算 footerHeight
+  const textRows = Math.min(3, Math.max(1, value ? value.split("\n").length : 1))
 
   // ── 通知 parent chrome 状态 ──
   useEffect(() => {
-    onChromeChange?.({ commandOpen: showCommands, pasteCount })
-  }, [onChromeChange, pasteCount, showCommands])
+    onChromeChange?.({ commandOpen: showCommands, pasteCount, textRows })
+  }, [onChromeChange, pasteCount, showCommands, textRows])
 
   // ── onChange：处理 paste 检测 ──
   const handleChange = useCallback(
@@ -234,10 +237,19 @@ export function OrcanaComposer({
       setHistoryIdx(-1)
       setCommandIdx(0)
 
-      onSubmit(finalValue)
+      // Bug 修复：先清空输入框，再调用 onSubmit。
+      // 之前顺序：onSubmit → setValue，若 onSubmit 同步抛错则输入框不清空，
+      // 且错误冒泡到 react-ink-textarea 的 useInput handler 可能导致 TUI 异常。
+      // 先清空确保用户输入不丢失（history 已保存），且 onSubmit 抛错不影响 UI 状态。
       setValue("")
       setCursor([0, 0])
       setPasteBlocks([])
+      try {
+        onSubmit(finalValue)
+      } catch {
+        // onSubmit 错误由 runAgent 的 try-catch 处理（dispatch error_line + assistant.final）
+        // 这里静默捕获，防止错误冒泡到 useInput handler 导致 TUI 渲染崩溃
+      }
     },
     [pasteBlocks, showCommands, selectedCommand, onSubmit],
   )
@@ -333,7 +345,9 @@ export function OrcanaComposer({
         </Box>
       )}
 
-      {/* TextArea：多行输入核心 */}
+      {/* TextArea：多行输入核心
+          不再禁用 Enter —— handleSubmit 已有命令面板选择逻辑，
+          禁用 Enter 会导致用户在命令面板打开时无法提交。 */}
       <TextArea
         focus={focused && !disabled}
         value={value}
@@ -346,7 +360,6 @@ export function OrcanaComposer({
         onLastLineDown={handleLastLineDown}
         placeholder={placeholder || "Message DeepSeek Code... (Enter send · Shift+Enter newline)"}
         disableArrowNavigation={showCommands}
-        keybindings={showCommands ? { Enter: false } : undefined}
         viewportLines={3}
         initialLineCount={1}
         cursorInterval={500}

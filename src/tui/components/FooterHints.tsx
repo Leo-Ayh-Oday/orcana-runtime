@@ -27,7 +27,7 @@ export const FooterHints = React.memo(function FooterHints({ busy, clarifying, w
     { key: "Enter", desc: "send" },
     { key: "Shift+Enter", desc: "newline" },
     { key: "/", desc: "commands" },
-    { key: "Esc", desc: "clear" },
+    { key: "Ctrl+C", desc: "exit" },
   ]
 
   if (busy) {

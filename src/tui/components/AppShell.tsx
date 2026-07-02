@@ -101,6 +101,8 @@ function ClarificationPanel({ wizard, width, tick }: { wizard: ClarificationWiza
 export interface InputChromeState {
   commandOpen: boolean
   pasteCount: number
+  /** TextArea 当前行数（1-3），用于动态计算 footerHeight */
+  textRows: number
 }
 
 export interface AppShellProps {
@@ -153,8 +155,14 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
   const taskRows = task ? (task.phase === "planning" ? 3 : Math.min(5, 1 + Math.min(3, task.steps.length))) : 0
   const panelRows = clarificationRows || taskRows
   const showDash = hasDash && cols >= 110
-  const inputRows = inputChrome.commandOpen ? 5 : (isWorking || inputChrome.pasteCount > 0 ? 2 : 1)
-  const footerHeight = Math.max(1, Math.min(rows - 8, panelRows + inputRows))
+  // OrcanaComposer 多行布局：TextArea(textRows 行) + 状态行(1行) + 可能的粘贴指示(1行)
+  // 命令面板打开时占 5 行（3 条候选 + 标题 + 空行）
+  // FooterHints 占 1 行，footerHeight 需额外 +1
+  const textRows = inputChrome.textRows > 0 ? inputChrome.textRows : 1
+  const inputRows = inputChrome.commandOpen
+    ? 5
+    : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
+  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1))
   const bodyHeight = Math.max(10, rows - footerHeight - 3)
   return { hasDash, showDash, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight }
 }

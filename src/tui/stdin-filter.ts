@@ -69,7 +69,7 @@ export function installStdinFilter(): void {
 
   installed = true
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  originalEmit = process.stdin.emit.bind(process.stdin) as any
+  originalEmit = process.stdin.emit as any
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   process.stdin.emit = function (event: string | symbol, ...args: any[]): boolean {
@@ -86,12 +86,12 @@ export function installStdinFilter(): void {
           // 用过滤后的数据替换第一个参数
           const newChunk =
             typeof chunk === "string" ? filtered : Buffer.from(filtered, "utf8")
-          return originalEmit!(event, newChunk, ...args.slice(1))
+          return originalEmit!.call(process.stdin, event, newChunk, ...args.slice(1))
         }
       }
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return originalEmit!(event as string, ...args as any[])
+    return originalEmit!.call(process.stdin, event as string, ...args as any[])
   } as typeof process.stdin.emit
 }
 

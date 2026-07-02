@@ -4,6 +4,7 @@
   "description": "Terminal coding agent with model-backed runtime, TUI, and workflow gates.",
   "type": "module",
   "license": "MIT",
+  "packageManager": "bun@1.3.14",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Leo-Ayh-Oday/deepseek-orcana.git"
@@ -45,7 +46,7 @@
     "dev": "bun run src/index.ts",
     "start": "bun run src/index.ts",
     "clean": "node scripts/clean-dist.cjs",
-    "build": "bun run clean && tsc -p tsconfig.build.json",
+    "build": "bun run clean && tsc -p tsconfig.build.json && node scripts/fix-dist-imports.cjs",
     "prepack": "bun run build",
     "pack:check": "npm pack --dry-run",
     "release": "npm publish --registry https://registry.npmjs.org/",
@@ -57,7 +58,7 @@
     "test:watch": "node scripts/run-tests.cjs --watch"
   },
   "engines": {
-    "bun": ">=1.3.0"
+    "node": ">=20"
   },
   "author": "Oday Leo <leooday814@gmail.com>",
   "dependencies": {

@@ -15,7 +15,7 @@ import { readFileSync, existsSync, mkdirSync, renameSync, unlinkSync, readdirSyn
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
-import { SessionStore, SessionCorruptedError, type Session, type SessionMessage } from "./sqlite-session"
+import { isSessionSqliteAvailable, SessionStore, SessionCorruptedError, type Session, type SessionMessage } from "./sqlite-session"
 
 export { SessionCorruptedError }
 export type { Session, SessionMessage }
@@ -62,8 +62,9 @@ export class SessionManager {
 
     store.close()
 
-    // Remove old JSON if it exists (migration already handled)
-    if (existsSync(jsonPath)) {
+    // Remove old JSON if SQLite is active (migration already handled). In Node's
+    // SQLite-less fallback, SessionStore itself writes this JSON file.
+    if (isSessionSqliteAvailable() && existsSync(jsonPath)) {
       try { renameSync(jsonPath, jsonPath + ".bak") } catch { /* best effort */ }
     }
   }

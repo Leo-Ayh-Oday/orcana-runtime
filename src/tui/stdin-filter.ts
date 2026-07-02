@@ -33,25 +33,41 @@ export const mouseEvents = new EventEmitter()
 
 // SGR 鼠标序列：\x1B[<button;col;rowM 或 m
 const SGR_MOUSE_REGEX = /\x1B\[<(\d+);\d+;\d+[mM]/g
+const DEC1000_MOUSE_REGEX = /\x1B\[M([^\x1B])([^\x1B])([^\x1B])/g
 
 /** 防御性正则：匹配没有 ESC 前缀的孤立鼠标序列体。
  *  当 \x1B 已被消费但序列体 [<button;col;rowM 仍残留在输入流中时，
  *  作为最后安全网。图案 [<\d+;\d+;\d+[mM] 在正常用户输入中不存在。 */
 const ORPHAN_SGR_BODY_REGEX = /\[<(\d+);\d+;\d+[mM]/g
+const ORPHAN_DEC1000_BODY_REGEX = /\[M([\x20-\x23\x60-\x61])([^\x1B])([^\x1B])/g
+
+function isPlausibleDec1000MouseBody(buttonChar: string, colChar: string, rowChar: string): boolean {
+  const button = buttonChar.charCodeAt(0) - 32
+  const col = colChar.charCodeAt(0) - 32
+  const row = rowChar.charCodeAt(0) - 32
+  const maxCols = (process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 160) + 2
+  const maxRows = (process.stdout.rows && process.stdout.rows > 0 ? process.stdout.rows : 60) + 2
+  const knownButton = (button >= 0 && button <= 35) || (button >= 64 && button <= 95)
+  return knownButton && col >= 1 && row >= 1 && col <= maxCols && row <= maxRows
+}
 
 /** 从字符串中移除孤立鼠标序列体（无 ESC 前缀）。 */
 function stripOrphanMouseBodies(data: string): string {
-  return data.replace(ORPHAN_SGR_BODY_REGEX, "")
+  return data
+    .replace(ORPHAN_SGR_BODY_REGEX, "")
+    .replace(ORPHAN_DEC1000_BODY_REGEX, (match, button: string, col: string, row: string) =>
+      isPlausibleDec1000MouseBody(button, col, row) ? "" : match,
+    )
 }
 
 /** 从原始数据中提取滚轮事件并发出 scroll 事件。
  *  先用完整 SGR 正则匹配；若无匹配，fallback 到孤立序列体正则以防 ESC 丢失。 */
 function extractScrollEvents(data: string): void {
-  const tryRegex = (regex: RegExp): boolean => {
+  const tryRegex = (regex: RegExp, source = data): boolean => {
     regex.lastIndex = 0
     let found = false
     let match: RegExpExecArray | null
-    while ((match = regex.exec(data)) !== null) {
+    while ((match = regex.exec(source)) !== null) {
       found = true
       const rawButton = match[1]
       if (!rawButton) continue
@@ -65,9 +81,34 @@ function extractScrollEvents(data: string): void {
     return found
   }
 
-  if (!tryRegex(SGR_MOUSE_REGEX)) {
-    tryRegex(ORPHAN_SGR_BODY_REGEX)
+  const tryDec1000Regex = (regex: RegExp, source = data): boolean => {
+    regex.lastIndex = 0
+    let found = false
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(source)) !== null) {
+      found = true
+      const rawButton = match[1]?.charCodeAt(0)
+      const col = match[2]
+      const row = match[3]
+      if (rawButton === undefined || !col || !row || !isPlausibleDec1000MouseBody(match[1]!, col, row)) continue
+      const button = rawButton - 32
+      if (button === 64 || button === 68) {
+        mouseEvents.emit("scroll", -1, button === 68)
+      } else if (button === 65 || button === 69) {
+        mouseEvents.emit("scroll", 1, button === 69)
+      }
+    }
+    return found
   }
+
+  tryRegex(SGR_MOUSE_REGEX)
+  tryDec1000Regex(DEC1000_MOUSE_REGEX)
+
+  const orphanSource = data
+    .replace(SGR_MOUSE_REGEX, "")
+    .replace(DEC1000_MOUSE_REGEX, "")
+  tryRegex(ORPHAN_SGR_BODY_REGEX, orphanSource)
+  tryDec1000Regex(ORPHAN_DEC1000_BODY_REGEX, orphanSource)
 }
 
 // ── 鼠标序列检测 ──
@@ -133,6 +174,9 @@ export function disableMouseMode(): void {
  * 会被 ORPHAN_SGR_BODY_REGEX 作为安全网 strip。
  */
 const INCOMPLETE_MOUSE_PREFIX_REGEX = /\x1B\[(?:<(?:\d+;(?:\d+;(?:\d+)?)?)?)?$/
+const INCOMPLETE_ORPHAN_SGR_BODY_REGEX = /\[<\d*(?:;\d*){0,2}$/
+const INCOMPLETE_DEC1000_MOUSE_REGEX = /\x1B\[M[^\x1B]{0,2}$/
+const INCOMPLETE_ORPHAN_DEC1000_BODY_REGEX = /\[M(?:[\x20-\x23\x60-\x61][^\x1B]{0,1})?$/
 
 // ── 安装 / 卸载 ──
 
@@ -171,7 +215,7 @@ export function installStdinFilter(): void {
         pendingBuffer = ""
 
         // 提取滚轮事件（在 strip 之前解析）
-        if (raw.includes("[<")) {
+        if (raw.includes("[<") || raw.includes("\x1B[M") || raw.includes("[M")) {
           extractScrollEvents(raw)
         }
 
@@ -181,6 +225,9 @@ export function installStdinFilter(): void {
         // 检查末尾是否有不完整的鼠标序列前缀（跨 chunk 边界）
         // 如果有，保留在 pendingBuffer 中，等下一个 chunk 合并处理
         const incompleteMatch = filtered.match(INCOMPLETE_MOUSE_PREFIX_REGEX)
+          ?? filtered.match(INCOMPLETE_ORPHAN_SGR_BODY_REGEX)
+          ?? filtered.match(INCOMPLETE_DEC1000_MOUSE_REGEX)
+          ?? filtered.match(INCOMPLETE_ORPHAN_DEC1000_BODY_REGEX)
         if (incompleteMatch) {
           pendingBuffer = incompleteMatch[0]
           filtered = filtered.slice(0, incompleteMatch.index)

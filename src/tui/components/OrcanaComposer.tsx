@@ -397,15 +397,10 @@ export function OrcanaComposer({
         typingPause={450}
       />
 
-      {/* 状态行 */}
+      {/* 状态行 (Visual Step 5: rightStatus 移至 StatusBar) */}
       {status && !showCommands && (
         <Box flexDirection="row">
           <Text color={C.dim}> {status}</Text>
-          {rightStatus && (
-            <Box flexGrow={1} justifyContent="flex-end">
-              <Text color={C.dim}>{rightStatus}</Text>
-            </Box>
-          )}
         </Box>
       )}
     </Box>

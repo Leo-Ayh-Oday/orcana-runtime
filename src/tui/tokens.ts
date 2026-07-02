@@ -24,6 +24,16 @@ export const tuiTokens = {
     startupMs: Number(process.env.DEEPSEEK_TUI_STARTUP_MS ?? "700"),
     frameMs: Number(process.env.DEEPSEEK_TUI_FRAME_MS ?? "96"),
     streamFlushMs: Number(process.env.DEEPSEEK_TUI_STREAM_FLUSH_MS ?? "40"),
+    /** Spinner characters for pending animation (10-frame braille). */
+    spinnerChars: "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
+    /** Sonar line character sets */
+    sonar: {
+      idle: "─",
+      active: "~",
+      pulse: "=",
+      stop: "!",
+      dot: "·",
+    },
   },
   spacing: {
     pageX: 1,

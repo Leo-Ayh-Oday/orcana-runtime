@@ -28,6 +28,18 @@ function clarificationCtx(overrides: Partial<KeyResolveContext> = {}): KeyResolv
   return { context: "Clarification", bodyHeight: 30, scrollStep: 3, ...overrides }
 }
 
+function confirmCtx(overrides: Partial<KeyResolveContext> = {}): KeyResolveContext {
+  return { context: "Confirm", bodyHeight: 30, scrollStep: 3, ...overrides }
+}
+
+function rewindListCtx(overrides: Partial<KeyResolveContext> = {}): KeyResolveContext {
+  return { context: "RewindList", bodyHeight: 30, scrollStep: 3, ...overrides }
+}
+
+function rewindConfirmCtx(overrides: Partial<KeyResolveContext> = {}): KeyResolveContext {
+  return { context: "RewindConfirm", bodyHeight: 30, scrollStep: 3, ...overrides }
+}
+
 // ── resolveActiveContext ──
 
 describe("resolveActiveContext", () => {
@@ -132,9 +144,83 @@ describe("Context priority: Clarification > Scrollback", () => {
   })
 })
 
-describe("CONTEXT_PRIORITY ordering", () => {
-  test("Clarification has highest priority among Phase 2 contexts", () => {
+describe("resolveKeyAction: Confirm context", () => {
+  test("y/Y → confirm.approve", () => {
+    expect(resolveKeyAction("y", k(), confirmCtx())).toEqual({ type: "confirm.approve" })
+    expect(resolveKeyAction("Y", k(), confirmCtx())).toEqual({ type: "confirm.approve" })
+  })
+
+  test("n/N → confirm.deny", () => {
+    expect(resolveKeyAction("n", k(), confirmCtx())).toEqual({ type: "confirm.deny" })
+    expect(resolveKeyAction("N", k(), confirmCtx())).toEqual({ type: "confirm.deny" })
+  })
+
+  test("a/A → confirm.denyAll", () => {
+    expect(resolveKeyAction("a", k(), confirmCtx())).toEqual({ type: "confirm.denyAll" })
+    expect(resolveKeyAction("A", k(), confirmCtx())).toEqual({ type: "confirm.denyAll" })
+  })
+
+  test("escape → confirm.dismiss", () => {
+    expect(resolveKeyAction("", k({ escape: true }), confirmCtx())).toEqual({ type: "confirm.dismiss" })
+  })
+
+  test("unknown keys return null (no accidental confirm/deny)", () => {
+    expect(resolveKeyAction("x", k(), confirmCtx())).toBeNull()
+    expect(resolveKeyAction("", k({ return: true }), confirmCtx())).toBeNull()
+  })
+})
+
+describe("resolveKeyAction: RewindList context", () => {
+  test("j/down → rewind.down", () => {
+    expect(resolveKeyAction("j", k(), rewindListCtx())).toEqual({ type: "rewind.down" })
+    expect(resolveKeyAction("", k({ downArrow: true }), rewindListCtx())).toEqual({ type: "rewind.down" })
+  })
+
+  test("k/up → rewind.up", () => {
+    expect(resolveKeyAction("k", k(), rewindListCtx())).toEqual({ type: "rewind.up" })
+    expect(resolveKeyAction("", k({ upArrow: true }), rewindListCtx())).toEqual({ type: "rewind.up" })
+  })
+
+  test("return → rewind.select", () => {
+    expect(resolveKeyAction("", k({ return: true }), rewindListCtx())).toEqual({ type: "rewind.select" })
+  })
+
+  test("escape → rewind.cancel", () => {
+    expect(resolveKeyAction("", k({ escape: true }), rewindListCtx())).toEqual({ type: "rewind.cancel" })
+  })
+})
+
+describe("resolveKeyAction: RewindConfirm context", () => {
+  test("y/Y → rewind.select (confirm)", () => {
+    expect(resolveKeyAction("y", k(), rewindConfirmCtx())).toEqual({ type: "rewind.select" })
+    expect(resolveKeyAction("Y", k(), rewindConfirmCtx())).toEqual({ type: "rewind.select" })
+  })
+
+  test("n/N → rewind.cancel", () => {
+    expect(resolveKeyAction("n", k(), rewindConfirmCtx())).toEqual({ type: "rewind.cancel" })
+    expect(resolveKeyAction("N", k(), rewindConfirmCtx())).toEqual({ type: "rewind.cancel" })
+  })
+
+  test("escape → rewind.cancel", () => {
+    expect(resolveKeyAction("", k({ escape: true }), rewindConfirmCtx())).toEqual({ type: "rewind.cancel" })
+  })
+})
+
+describe("CONTEXT_PRIORITY ordering (Phase 5)", () => {
+  test("Confirm has highest priority", () => {
     const { CONTEXT_PRIORITY } = require("../../src/tui/input/types")
+    expect(CONTEXT_PRIORITY.Confirm).toBeGreaterThan(CONTEXT_PRIORITY.RewindConfirm)
+    expect(CONTEXT_PRIORITY.Confirm).toBeGreaterThan(CONTEXT_PRIORITY.Clarification)
+  })
+
+  test("RewindConfirm > RewindList", () => {
+    const { CONTEXT_PRIORITY } = require("../../src/tui/input/types")
+    expect(CONTEXT_PRIORITY.RewindConfirm).toBeGreaterThan(CONTEXT_PRIORITY.RewindList)
+  })
+
+  test("Modal contexts > Clarification > Scrollback > Global", () => {
+    const { CONTEXT_PRIORITY } = require("../../src/tui/input/types")
+    expect(CONTEXT_PRIORITY.Confirm).toBeGreaterThan(CONTEXT_PRIORITY.Clarification)
     expect(CONTEXT_PRIORITY.Clarification).toBeGreaterThan(CONTEXT_PRIORITY.Scrollback)
     expect(CONTEXT_PRIORITY.Scrollback).toBeGreaterThan(CONTEXT_PRIORITY.Global)
   })

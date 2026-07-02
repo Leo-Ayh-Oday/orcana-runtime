@@ -20,8 +20,26 @@ import { dispatchTuiCommand } from "./commands/dispatcher"
 import { resolveActiveContext } from "./input/types"
 import { resolveKeyAction } from "./input/keymap"
 import { mouseEvents } from "./stdin-filter"
+import type { ConfirmRequest } from "./confirm-stubs"
+import type { RewindModalState } from "./components/RewindModal"
 
 type ModelHistoryRole = "user" | "assistant"
+
+// ── Phase 5: Modal state ──
+
+interface TuiModalState {
+  confirm: { request: ConfirmRequest; position: string } | null
+  rewind: RewindModalState | null
+}
+
+function emptyModalState(): TuiModalState {
+  return { confirm: null, rewind: null }
+}
+
+/** 是否有任何 modal 激活 → composer disabled */
+function isModalActive(modal: TuiModalState): boolean {
+  return modal.confirm !== null || modal.rewind !== null
+}
 
 import { tuiTokens } from "./tokens"
 
@@ -302,20 +320,22 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
     return runAgent(prompt)
   }, [prompt, runAgent])
 
-  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification }
+  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store }
 }
 
 export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime }) {
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout.rows ?? 32)
   const cols = stdout.columns ?? 96
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification } = useAgentStream(runtime, prompt)
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store } = useAgentStream(runtime, prompt)
   const [tick, setTick] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
   const [autoFollow, setAutoFollow] = useState(true)
   const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1 })
   const [showStartup, setShowStartup] = useState(process.env.DEEPSEEK_TUI_SPLASH !== "off")
+  // Phase 5: Modal state (confirm + rewind)
+  const [modal, setModal] = useState<TuiModalState>(emptyModalState)
   // TuiState.task 是 unknown（reducer 不感知 TaskProgressState 形状），这里做一次类型收窄
   const task = state.task as TaskProgressState | undefined
   const isWorking = !state.done && !state.errorLine
@@ -374,9 +394,13 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     return () => clearTimeout(timer)
   }, [showStartup])
 
-  // Phase 2: 键位上下文分发 — resolveKeyAction 按 InputContext 优先级解析键位，
-  // 高优先级 context（Clarification）处理过的键不放行到低优先级（Scrollback）。
-  const activeKeyContext = resolveActiveContext({ clarificationActive: !!clarification })
+  // Phase 5: 键位上下文分发 — 扩大到 Confirm/RewindList/RewindConfirm
+  const activeKeyContext = resolveActiveContext({
+    clarificationActive: !!clarification,
+    confirmActive: modal.confirm !== null,
+    rewindListActive: modal.rewind?.phase === "list",
+    rewindConfirmActive: modal.rewind?.phase === "confirm",
+  })
 
   useInput((_input, key) => {
     if (showStartup) return
@@ -388,6 +412,68 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     if (!action) return // pass through to composer
 
     switch (action.type) {
+      // ── Confirm modal ──
+      case "confirm.approve":
+        store.dispatch({ type: "ui.event_message", kind: "activity", text: `✓ confirmed ${modal.confirm?.request.toolName ?? ""}` })
+        setModal(emptyModalState())
+        break
+      case "confirm.deny":
+        store.dispatch({ type: "ui.event_message", kind: "error", text: `✗ denied ${modal.confirm?.request.toolName ?? ""}` })
+        setModal(emptyModalState())
+        break
+      case "confirm.denyAll":
+        store.dispatch({ type: "ui.event_message", kind: "error", text: "✗ denied all pending confirmations" })
+        setModal(emptyModalState())
+        break
+      case "confirm.dismiss":
+        setModal(emptyModalState())
+        break
+      // ── Rewind modal ──
+      case "rewind.up":
+        setModal(m => {
+          if (!m.rewind || m.rewind.phase !== "list") return m
+          const s = m.rewind.state
+          return { ...m, rewind: { ...m.rewind, state: { ...s, selectedIndex: Math.max(0, s.selectedIndex - 1) } } }
+        })
+        break
+      case "rewind.down":
+        setModal(m => {
+          if (!m.rewind || m.rewind.phase !== "list") return m
+          const s = m.rewind.state
+          return { ...m, rewind: { ...m.rewind, state: { ...s, selectedIndex: Math.min(s.entries.length - 1, s.selectedIndex + 1) } } }
+        })
+        break
+      case "rewind.select":
+        setModal(m => {
+          if (!m.rewind) return m
+          if (m.rewind.phase === "list") {
+            // Move to confirm phase
+            const entry = m.rewind.state.entries[m.rewind.state.selectedIndex]
+            return {
+              ...m,
+              rewind: {
+                phase: "confirm" as const,
+                state: {
+                  visible: true,
+                  targetRound: entry?.round ?? 0,
+                  mode: "code" as const,
+                  previewFiles: [],
+                },
+              },
+            }
+          }
+          if (m.rewind.phase === "confirm") {
+            // Execute rewind — move to progress (stub)
+            store.dispatch({ type: "ui.event_message", kind: "activity", text: `rewind to round ${m.rewind.state.targetRound} (stub — backend not yet wired)` })
+            return emptyModalState()
+          }
+          return m
+        })
+        break
+      case "rewind.cancel":
+        setModal(emptyModalState())
+        break
+      // ── Clarification ──
       case "clarification.up":
         moveClarificationSelection(-1)
         break
@@ -404,6 +490,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       case "clarification.cancel":
         cancelClarification()
         break
+      // ── Scrollback ──
       case "scroll.up":
         scrollUp(action.amount)
         break
@@ -461,6 +548,8 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
         scrollUp={scrollUp}
         scrollDown={scrollDown}
         setInputChrome={setInputChrome}
+        confirmModal={modal.confirm}
+        rewindModal={modal.rewind}
       />
     </>
   )

@@ -1,21 +1,20 @@
-/** HeaderBar — 顶部身份栏（Visual Step 2）。
+/** HeaderBar — 顶部单行状态条（Visual Step 2 → Phase 4a 重设计）。
  *
- *  Visual Step 2: 一行稳定身份 + 短脉冲 sonar 条。
- *  "Orcana  mode:<mode>  provider/model  state:<state>  q:<n>"
+ *  Phase 4a: 单行紧凑状态条，替代旧的两行 Header + Sonar 布局。
+ *  格式: Orcana  <mode>  <model>  <state>  ctx <pct>%  cache <pct>%  r<n>
  *
- *  Sonar 行为:
- *    - idle: 静态细线 "─"
- *    - running: 低频 pulse (~•~)
- *    - blocked/error: "!" red stop marker
- *    - done: 静止，不动画
+ *  状态行为:
+ *    - idle/done: 静态 "done" / "idle"
+ *    - running: 轻量 pulse 动画 "thinking [..  ]" (4-frame)
+ *    - error/blocked: "!" 标记
+ *    - queue > 0: 追加 "q:n"
  */
 
 import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { TuiMode } from "../state/types"
-import { ModeBadge } from "./ModeContract"
-import { tuiTokens } from "../tokens"
+import { getGlyphTheme } from "../tokens"
 
 export interface HeaderBarProps {
   modelName: string
@@ -27,38 +26,67 @@ export interface HeaderBarProps {
   tick: number
   cols: number
   isWorking: boolean
+  /** Phase 4a: 新增 — round number, context %, cache % */
+  round: number
+  ctxPct: number
+  cachePct: number
 }
 
-/** 状态词简化为单字：done / running / error / idle */
-function stateWord(done: boolean, error: string, isWorking: boolean): string {
-  if (error) return "error"
-  if (done) return "done"
-  if (isWorking) return "running"
-  return "idle"
-}
-
-function stateColor(done: boolean, error: string, isWorking: boolean): string {
-  if (error) return C.red
-  if (done) return C.green
-  if (isWorking) return C.cyan
-  return C.dim
-}
-
-/** Short pulse bar — 20 chars wide, not spanning entire terminal. */
-function SonarPulse({ tick, active, blocked }: { tick: number; active: boolean; blocked: boolean }) {
-  const S = tuiTokens.motion.sonar
-  const width = 20
-  if (blocked) {
-    const bar = S.stop + S.dot.repeat(width - 1)
-    return <Text color={C.red}>{bar}</Text>
+/** 模式名简化：lowercase, 不加 icon */
+function modeLabel(mode: TuiMode): string {
+  switch (mode) {
+    case "discussion": return "discussion"
+    case "readonly": return "readonly"
+    case "narrow_edit": return "narrow-edit"
+    case "long_task": return "long-task"
+    case "planner": return "planner"
+    case "executor": return "executor"
   }
-  if (!active) {
-    return <Text color={C.border}>{S.idle.repeat(width)}</Text>
+}
+
+function modeColor(mode: TuiMode): string {
+  switch (mode) {
+    case "discussion": return C.green
+    case "readonly": return C.green
+    case "narrow_edit": return C.yellow
+    case "long_task": return C.blue
+    case "planner": return C.cyan
+    case "executor": return C.blue
   }
-  // Running: pulse that moves
-  const pos = tick % width
-  const bar = S.idle.repeat(pos) + S.pulse + S.idle.repeat(Math.max(0, width - pos - 1))
-  return <Text color={C.cyan}>{bar}</Text>
+}
+
+/**
+ * Lightweight pulse animation — 4-frame thinking indicator.
+ *   thinking [..  ] → thinking [... ] → thinking [ ...] → thinking [  ..]
+ */
+function ThinkingPulse({ tick, label }: { tick: number; label: string }) {
+  const frames = [
+    "[..  ]",
+    "[... ]",
+    "[ ...]",
+    "[  ..]",
+  ]
+  const frame = frames[tick % 4] ?? "[....]"
+  return (
+    <Text color={C.cyan}>
+      {label} {frame}
+    </Text>
+  )
+}
+
+/** 根据 running 状态和 status 文本决定短动态标签。 */
+function activityPulse(isWorking: boolean, tick: number, status: string): React.ReactNode {
+  if (!isWorking) return null
+  const s = status.toLowerCase()
+
+  let label = "working"
+  if (s.includes("read") || s.includes("scan") || s.includes("search") || s.includes("grep")) label = "reading"
+  else if (s.includes("think") || s.includes("context") || s.includes("rout") || s.includes("prepare")) label = "thinking"
+  else if (s.includes("verif") || s.includes("check") || s.includes("typecheck") || s.includes("test")) label = "verifying"
+  else if (s.includes("edit") || s.includes("write") || s.includes("patch")) label = "editing"
+  else if (s.includes("block") || s.includes("denied")) label = "blocked"
+
+  return <ThinkingPulse tick={tick} label={label} />
 }
 
 export const HeaderBar = React.memo(function HeaderBar({
@@ -71,28 +99,72 @@ export const HeaderBar = React.memo(function HeaderBar({
   tick,
   cols,
   isWorking,
+  round,
+  ctxPct,
+  cachePct,
 }: HeaderBarProps) {
-  const st = stateWord(done, errorLine, isWorking)
-  const stColor = stateColor(done, errorLine, isWorking)
-  const blocked = st === "error"
+  const g = getGlyphTheme()
+  const blocked = errorLine.length > 0
+  const modelDisplay = provider ? `${provider}/${modelName}` : modelName
+
+  // Narrow: drop cache% and round when cols < 80
+  const narrow = cols < 80
 
   return (
-    <Box height={2} flexDirection="column">
-      <Box flexDirection="row">
-        <Text bold color={C.cyan}>Orcana</Text>
-        <Text color={C.dim}>  mode:</Text>
-        <ModeBadge mode={mode} />
-        <Text color={C.dim}>  {provider ? `${provider}/` : ""}{modelName}</Text>
-        <Text color={C.dim}>  state:</Text>
-        <Text color={stColor}>{st}</Text>
-        {queueCount > 0 && (
-          <>
-            <Text color={C.dim}>  q:</Text>
-            <Text color={C.cyan}>{queueCount}</Text>
-          </>
-        )}
-      </Box>
-      <SonarPulse tick={tick} active={isWorking && !blocked} blocked={blocked} />
+    <Box flexDirection="row" height={1}>
+      {/* Brand */}
+      <Text bold color={C.cyan}>Orcana</Text>
+
+      {/* Mode */}
+      <Text color={C.dim}>  </Text>
+      <Text color={modeColor(mode)}>{modeLabel(mode)}</Text>
+
+      {/* Model */}
+      <Text color={C.dim}>  {modelDisplay}</Text>
+
+      {/* State */}
+      <Text color={C.dim}>  </Text>
+      {blocked ? (
+        <Text color={C.red}>{g.warningIcon} {errorLine.slice(0, 30)}</Text>
+      ) : done ? (
+        <Text color={C.green}>done</Text>
+      ) : isWorking ? (
+        activityPulse(isWorking, tick, "")
+      ) : (
+        <Text color={C.dim}>idle</Text>
+      )}
+
+      {/* Context % */}
+      {!narrow && (
+        <>
+          <Text color={C.dim}>  ctx </Text>
+          <Text color={ctxPct > 50 ? C.red : ctxPct > 30 ? C.yellow : C.green}>{ctxPct}%</Text>
+        </>
+      )}
+
+      {/* Cache % */}
+      {!narrow && (
+        <>
+          <Text color={C.dim}>  cache </Text>
+          <Text color={cachePct > 80 ? C.green : C.yellow}>{cachePct}%</Text>
+        </>
+      )}
+
+      {/* Round */}
+      {round > 0 && (
+        <>
+          <Text color={C.dim}>  r</Text>
+          <Text color={C.cyan}>{round}</Text>
+        </>
+      )}
+
+      {/* Queue */}
+      {queueCount > 0 && (
+        <>
+          <Text color={C.dim}>  q:</Text>
+          <Text color={C.cyan}>{queueCount}</Text>
+        </>
+      )}
     </Box>
   )
 })

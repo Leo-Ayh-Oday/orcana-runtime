@@ -19,7 +19,9 @@ import type { TaskProgressState } from "./components/PlanPanel"
 import { dispatchTuiCommand } from "./commands/dispatcher"
 import { resolveActiveContext } from "./input/types"
 import { resolveKeyAction } from "./input/keymap"
-import { mouseEvents } from "./stdin-filter"
+import { cleanupTerminal, mouseEvents } from "./stdin-filter"
+import { createStreamTrace, traceStartRound, traceDeltaChunk, traceFinalAccumulated, traceEndRound } from "./stream-trace"
+import type { StreamTraceState } from "./stream-trace"
 import type { ConfirmRequest } from "./confirm-stubs"
 import type { RewindModalState } from "./components/RewindModal"
 
@@ -91,6 +93,9 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
     adapterRef.current = new StreamEventAdapter()
   }
   const adapter = adapterRef.current
+
+  // Phase 2: Stream trace (DEEPSEEK_TUI_TRACE_STREAM=1)
+  const traceRef = useRef<StreamTraceState>(createStreamTrace())
 
   // Subscribe to TuiStore — re-renders on every dispatch/dispatchMany
   const state = useSyncExternalStore(
@@ -164,8 +169,12 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
       const chunk = textBuf
       textBuf = ""
       lastFlush = Date.now()
+      traceDeltaChunk(traceRef.current, chunk)
       store.dispatch({ type: "assistant.delta", text: chunk })
     }
+
+    // Phase 2: trace round start
+    traceStartRound(traceRef.current, state.round + 1)
 
     ;(async () => {
       for await (const ev of agentLoop(p, opts)) {
@@ -214,6 +223,10 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
 
       // Agent loop completed normally
       flush()
+      // Phase 2: trace final accumulated text
+      const finalText = assistantText.trim()
+      traceFinalAccumulated(traceRef.current, finalText.length, false)
+      traceEndRound(traceRef.current, finalText.length, finalText.length, false)
       historyRef.current = [
         ...historySnapshot,
         { role: "user", content: p },
@@ -227,6 +240,8 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
     })().catch(error => {
       const message = error instanceof Error ? error.message : String(error)
       flush()
+      traceFinalAccumulated(traceRef.current, message.length, true)
+      traceEndRound(traceRef.current, assistantText.length, message.length, false)
       store.dispatch({ type: "ui.error_line", text: message })
       store.dispatch({ type: "ui.done", done: true })
       store.dispatch({ type: "assistant.final", text: message })
@@ -288,9 +303,8 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
       addSystemMessage,
       isRunning: () => runningRef.current,
       exit: () => {
-        process.stdout.write("\x1B[?25h")
-        process.stdout.write("\x1B]0;\x07")
-        process.stdout.write("\x1B[?1000l\x1B[?1006l")
+        cleanupTerminal()
+        runtime.dispose()
         process.exit(0)
       },
     })
@@ -570,7 +584,7 @@ export async function startInkTUI(prompt?: string) {
   // react-ink-textarea 的 useKeyboardInput fallback 分支会插入任何非空 input，
   // 包括 SGR 鼠标序列（\x1B[<0;40;10M），导致滚轮在输入框产生乱码。
   // 必须在 render 之前安装，确保过滤后的数据才到达 Ink。
-  const { installStdinFilter, uninstallStdinFilter, enableMouseMode, disableMouseMode, mouseEvents } = await import("./stdin-filter")
+  const { installStdinFilter, enableMouseMode } = await import("./stdin-filter")
   installStdinFilter()
   enableMouseMode()
 
@@ -581,10 +595,7 @@ export async function startInkTUI(prompt?: string) {
   // SIGINT/Ctrl+C 优雅退出：恢复终端状态后退出。
   // process.exit 不触发 finally 块，必须手动清理。
   const sigintHandler = () => {
-    process.stdout.write("\x1B[?25h")
-    process.stdout.write("\x1B]0;\x07")
-    disableMouseMode()
-    uninstallStdinFilter()
+    cleanupTerminal()
     runtime.dispose()
     process.exit(130)
   }
@@ -599,10 +610,7 @@ export async function startInkTUI(prompt?: string) {
     return await waitUntilExit()
   } finally {
     process.off("SIGINT", sigintHandler)
-    process.stdout.write("\x1B[?25h")
-    process.stdout.write("\x1B]0;\x07")
-    disableMouseMode()
-    uninstallStdinFilter()
+    cleanupTerminal()
     runtime.dispose()
   }
 }

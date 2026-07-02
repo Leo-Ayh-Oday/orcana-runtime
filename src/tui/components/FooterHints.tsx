@@ -1,7 +1,7 @@
-/** FooterHints — 底部键位提示（Visual Step 5）。
+/** FooterHints — 底部键位提示（Phase 4d）。
  *
- *  Visual Step 5: 从 active context 派生，简化文案。
- *    - Composer: Enter send · Shift+Enter newline · / commands · Ctrl+C exit
+ *  Phase 4d: 从 active context 派生，强化命令感 + Ctrl+R。
+ *    - Composer: Enter send · Shift+Enter newline · / commands · Ctrl+R rewind · Ctrl+C exit
  *    - Busy:     Enter queue · wheel scroll
  *    - Confirm:  y approve · n deny · a deny all · Esc dismiss
  *    - Rewind:   ↑↓ select · Enter confirm · Esc close
@@ -63,6 +63,7 @@ export const FooterHints = React.memo(function FooterHints({ busy, activeContext
       <Text color={C.cyan}>Enter</Text><Text color={C.dim}> send  </Text>
       <Text color={C.cyan}>Shift+Enter</Text><Text color={C.dim}> newline  </Text>
       <Text color={C.cyan}>/</Text><Text color={C.dim}> commands  </Text>
+      <Text color={C.cyan}>Ctrl+R</Text><Text color={C.dim}> rewind  </Text>
       <Text color={C.cyan}>Ctrl+C</Text><Text color={C.dim}> exit</Text>
     </Box>
   )

@@ -16,22 +16,24 @@
 import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
+import { getGlyphTheme } from "../tokens"
 import type { TuiMode } from "../state/types"
 
-// ── 模式元数据 ──
+// ── 模式元数据（图标使用主题 glyph，延迟解析避免硬编码 Unicode） ──
 
 interface ModeMeta {
-  icon: string
   label: string
   description: string
   color: string
   allows: string
   restricts: string
+  /** 图标 key — 运行时从 glyph theme 解析 */
+  iconKey: "circleEmpty" | "readonly" | "circleHalf" | "circleFill"
 }
 
 const MODE_META: Record<TuiMode, ModeMeta> = {
   discussion: {
-    icon: "○",
+    iconKey: "circleEmpty",
     label: "Discussion",
     description: "Read-only analysis + discussion",
     color: C.green,
@@ -39,7 +41,7 @@ const MODE_META: Record<TuiMode, ModeMeta> = {
     restricts: "no writes, no mutations",
   },
   readonly: {
-    icon: "⦿",
+    iconKey: "readonly",
     label: "Read Only",
     description: "Pure read-only, zero changes",
     color: C.green,
@@ -47,7 +49,7 @@ const MODE_META: Record<TuiMode, ModeMeta> = {
     restricts: "no writes, no edits, no executions",
   },
   narrow_edit: {
-    icon: "◉",
+    iconKey: "circleHalf",
     label: "Narrow Edit",
     description: "Scoped editing (single file/function)",
     color: C.yellow,
@@ -55,7 +57,7 @@ const MODE_META: Record<TuiMode, ModeMeta> = {
     restricts: "mutations limited to target scope",
   },
   long_task: {
-    icon: "◎",
+    iconKey: "circleHalf",
     label: "Long Task",
     description: "Extended task, cross-file changes allowed",
     color: C.blue,
@@ -63,7 +65,7 @@ const MODE_META: Record<TuiMode, ModeMeta> = {
     restricts: "none (gated by policy)",
   },
   planner: {
-    icon: "◌",
+    iconKey: "circleEmpty",
     label: "Planner",
     description: "Output plan only, no execution",
     color: C.cyan,
@@ -71,13 +73,23 @@ const MODE_META: Record<TuiMode, ModeMeta> = {
     restricts: "no writes, no tool execution",
   },
   executor: {
-    icon: "●",
+    iconKey: "circleFill",
     label: "Executor",
     description: "Execute approved plan step-by-step",
     color: C.blue,
     allows: "write, execute (scoped to plan)",
     restricts: "deviation requires re-plan",
   },
+}
+
+function modeIcon(key: ModeMeta["iconKey"]): string {
+  const g = getGlyphTheme()
+  switch (key) {
+    case "circleEmpty": return g.circleEmpty
+    case "readonly": return g.readonlyIcon
+    case "circleHalf": return g.circleHalf
+    case "circleFill": return g.circleFill
+  }
 }
 
 // ── ModeContract 组件 ──
@@ -91,12 +103,12 @@ export const ModeContract = React.memo(function ModeContract({ mode, width }: Mo
   const meta = MODE_META[mode]
   if (!meta) return null
 
-  const w = width ?? 38
+  const icon = modeIcon(meta.iconKey)
 
   return (
     <Box flexDirection="column">
       <Box flexDirection="row">
-        <Text color={meta.color}>{meta.icon} </Text>
+        <Text color={meta.color}>{icon} </Text>
         <Text bold color={meta.color}>{meta.label}</Text>
       </Box>
       <Text color={C.dim}>  {meta.description}</Text>
@@ -118,7 +130,8 @@ export const ModeContract = React.memo(function ModeContract({ mode, width }: Mo
 export function ModeBadge({ mode }: { mode: TuiMode }) {
   const meta = MODE_META[mode]
   if (!meta) return <Text color={C.dim}>mode ?</Text>
+  const icon = modeIcon(meta.iconKey)
   return (
-    <Text color={meta.color}>{meta.icon} {meta.label}</Text>
+    <Text color={meta.color}>{icon} {meta.label}</Text>
   )
 }

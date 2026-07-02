@@ -5,8 +5,95 @@
  *    - 环境变量只在 tokens.ts 读一次，提供 override 入口
  *    - 新增布局参数统一加到这里，不在组件里写死
  *
- *  对标报告建议的 breakpoints + rail + scroll + motion 令牌系统。
+ *  Phase 3: 新增 glyphs 双主题（ascii / unicode）。
+ *    - DEEPSEEK_TUI_UNICODE=1 使用 unicode 主题（完整 Braille/Block/几何字符）
+ *    - 默认使用 ascii 主题（ASCII-safe，Windows Terminal 所有字体兼容）
  */
+
+// ── Glyph 主题 ──
+
+export interface GlyphTheme {
+  spinnerChars: string
+  spinnerLen: number
+  verifyWave: string
+  verifyWaveLen: number
+  editingGlow: string
+  editingGlowLen: number
+  progressFill: string
+  progressEmpty: string
+  checkMark: string
+  crossMark: string
+  readonlyIcon: string
+  sineWave: string
+  rewindIcon: string
+  warningIcon: string
+  circleFill: string
+  circleEmpty: string
+  circleHalf: string
+  diamondIcon: string
+  arrowUp: string
+  arrowDown: string
+  dot: string
+  separator: string
+}
+
+const ASCII_GLYPHS: GlyphTheme = {
+  spinnerChars: "-\\|/-\\|/-\\|/",
+  spinnerLen: 10,
+  verifyWave: ".-=+*#@#*+=-.",
+  verifyWaveLen: 14,
+  editingGlow: "><><><><><",
+  editingGlowLen: 10,
+  progressFill: "#",
+  progressEmpty: "-",
+  checkMark: "v",
+  crossMark: "x",
+  readonlyIcon: "(R)",
+  sineWave: "~",
+  rewindIcon: "<<",
+  warningIcon: "!",
+  circleFill: "*",
+  circleEmpty: "o",
+  circleHalf: "@",
+  diamondIcon: "<>",
+  arrowUp: "^",
+  arrowDown: "v",
+  dot: ".",
+  separator: "-",
+}
+
+const UNICODE_GLYPHS: GlyphTheme = {
+  spinnerChars: "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
+  spinnerLen: 10,
+  verifyWave: "▁▂▃▄▅▆▇█▇▆▅▄▃▂",
+  verifyWaveLen: 14,
+  editingGlow: "›‹›‹›‹›‹›‹",
+  editingGlowLen: 10,
+  progressFill: "▓",
+  progressEmpty: "░",
+  checkMark: "✓",
+  crossMark: "✗",
+  readonlyIcon: "⦿",
+  sineWave: "∿",
+  rewindIcon: "⟲",
+  warningIcon: "⚠",
+  circleFill: "●",
+  circleEmpty: "○",
+  circleHalf: "◉",
+  diamondIcon: "◆",
+  arrowUp: "↑",
+  arrowDown: "↓",
+  dot: "·",
+  separator: "·",
+}
+
+/** 根据环境变量选择 glyph 主题。默认 ASCII-safe。 */
+export function getGlyphTheme(): GlyphTheme {
+  return process.env.DEEPSEEK_TUI_UNICODE === "1" ? UNICODE_GLYPHS : ASCII_GLYPHS
+}
+
+// ── 主要令牌 ──
+
 export const tuiTokens = {
   layout: {
     /** 窄屏断点：低于此值隐藏右栏、只显示单栏。 */
@@ -24,15 +111,12 @@ export const tuiTokens = {
     startupMs: Number(process.env.DEEPSEEK_TUI_STARTUP_MS ?? "700"),
     frameMs: Number(process.env.DEEPSEEK_TUI_FRAME_MS ?? "96"),
     streamFlushMs: Number(process.env.DEEPSEEK_TUI_STREAM_FLUSH_MS ?? "40"),
-    /** Spinner characters for pending animation (10-frame braille). */
-    spinnerChars: "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
     /** Sonar line character sets */
     sonar: {
       idle: "─",
       active: "~",
       pulse: "=",
       stop: "!",
-      dot: "·",
     },
   },
   spacing: {

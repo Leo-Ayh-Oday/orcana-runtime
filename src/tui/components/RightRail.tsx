@@ -19,24 +19,27 @@ import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { RightRailData } from "../state/selectors"
 import { RuntimePanel } from "./RuntimePanel"
+import { getGlyphTheme } from "../tokens"
 
 function ProgressBar({ value, max, width = 20, color = C.cyan }: { value: number; max: number; width?: number; color?: string }) {
+  const g = getGlyphTheme()
   const pct = Math.min(1, Math.max(0, max > 0 ? value / max : 0))
   const filled = Math.round(pct * width)
   return (
     <Box flexDirection="row">
-      <Text color={color}>{"▓".repeat(filled)}{"░".repeat(width - filled)}</Text>
+      <Text color={color}>{g.progressFill.repeat(filled)}{g.progressEmpty.repeat(width - filled)}</Text>
       <Text color={C.dim}> {Math.round(pct * 100)}%</Text>
     </Box>
   )
 }
 
 function toolStatusIcon(status: string): string {
+  const g = getGlyphTheme()
   if (status === "running") return ">"
-  if (status === "done") return "✓"
-  if (status === "blocked") return "!"
-  if (status === "error") return "✗"
-  return "·"
+  if (status === "done") return g.checkMark
+  if (status === "blocked") return g.warningIcon
+  if (status === "error") return g.crossMark
+  return g.dot
 }
 
 function toolStatusColor(status: string): string {
@@ -60,11 +63,12 @@ export const RightRail = React.memo(function RightRail(props: RightRailProps) {
   const ctxColor = ctxPct > 50 ? C.red : ctxPct > 30 ? C.yellow : C.green
 
   return (
-    <Box flexDirection="column" borderStyle="single" borderColor={C.border} paddingX={1} width={width}>
+    <Box flexDirection="column" paddingLeft={1} width={width}>
       {/* 1. Runtime identity */}
       <Box flexDirection="row">
         <Text color={C.cyan} bold>runtime</Text>
         {round > 0 && <Text color={C.dim}>  r{round}</Text>}
+        {round === 0 && runtime.ripplePhase === "idle" && runtime.gateSummary.total === 0 && <Text color={C.dim}>  idle</Text>}
       </Box>
 
       {/* 2. Ripple phase (if active or has findings) */}

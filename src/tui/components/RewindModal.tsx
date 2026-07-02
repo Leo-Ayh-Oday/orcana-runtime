@@ -10,6 +10,7 @@
 import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
+import { getGlyphTheme } from "../tokens"
 import type { TuiRewindEntry, TuiRewindListState, TuiRewindConfirmState, TuiRewindProgressState } from "../rewind-stubs"
 import type { RewindMode } from "../../agent/rewind"
 
@@ -26,7 +27,7 @@ export const RewindList = React.memo(function RewindList({ state, width }: Rewin
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={C.cyan} paddingX={1}>
       <Box flexDirection="row">
-        <Text bold color={C.cyan}>⟲ Rewind</Text>
+        <Text bold color={C.cyan}>{getGlyphTheme().rewindIcon} Rewind</Text>
         <Text color={C.dim}> checkpoint timeline</Text>
       </Box>
 
@@ -129,7 +130,8 @@ export const RewindProgress = React.memo(function RewindProgress({ state, tick }
   const barLen = 28
   const filled = Math.round((pct / 100) * barLen)
   const bar = "█".repeat(filled) + "░".repeat(barLen - filled)
-  const spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[tick % 10] ?? "?"
+  const g = getGlyphTheme()
+  const spinner = g.spinnerChars[tick % g.spinnerLen] ?? "?"
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={C.cyan} paddingX={1}>

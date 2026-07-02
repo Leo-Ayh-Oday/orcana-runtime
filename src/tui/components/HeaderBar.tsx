@@ -22,6 +22,7 @@ export interface HeaderBarProps {
   mode: TuiMode
   done: boolean
   errorLine: string
+  status: string
   queueCount: number
   tick: number
   cols: number
@@ -95,6 +96,7 @@ export const HeaderBar = React.memo(function HeaderBar({
   mode,
   done,
   errorLine,
+  status,
   queueCount,
   tick,
   cols,
@@ -129,7 +131,7 @@ export const HeaderBar = React.memo(function HeaderBar({
       ) : done ? (
         <Text color={C.green}>done</Text>
       ) : isWorking ? (
-        activityPulse(isWorking, tick, "")
+        activityPulse(isWorking, tick, status)
       ) : (
         <Text color={C.dim}>idle</Text>
       )}

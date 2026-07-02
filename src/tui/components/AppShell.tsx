@@ -252,6 +252,7 @@ export function AppShell(props: AppShellProps) {
         mode={state.mode}
         done={state.done}
         errorLine={state.errorLine}
+        status={state.status}
         queueCount={state.queueCount}
         tick={tick}
         cols={cols}

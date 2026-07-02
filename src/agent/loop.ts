@@ -835,6 +835,14 @@ export async function* agentLoop(
     const roundMs = Date.now() - roundStart
 
     const finalText = textChunks.join("")
+    options.runTrace?.record("round_output", {
+      round,
+      finalTextChars: finalText.length,
+      textChunkCount: textChunks.length,
+      completedToolCalls: completedToolCalls.length,
+      streamError: streamError || undefined,
+      bufferReadonlyText,
+    })
     const providerRoundInputTokens = providerUsage
       ? (providerUsage.cacheReadInputTokens ?? 0) + (providerUsage.cacheMissInputTokens ?? providerUsage.inputTokens ?? 0)
       : undefined

@@ -101,6 +101,7 @@ export class DeepSeekProvider implements LLMProvider {
     const toolBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
     const thinkingBlocks: Array<{ thinking: string; signature: string }> = []
     const stream = this.client.messages.stream(params) as ClosableAsyncIterable
+    let stopReason = ""
 
     for await (const event of stream) {
       if (options.abortSignal?.aborted) {
@@ -186,6 +187,13 @@ export class DeepSeekProvider implements LLMProvider {
           }
           break
         }
+        case "message_delta": {
+          const delta = event.delta
+          if (isRecord(delta) && typeof delta.stop_reason === "string") {
+            stopReason = delta.stop_reason
+          }
+          break
+        }
       }
     }
 
@@ -203,6 +211,7 @@ export class DeepSeekProvider implements LLMProvider {
       thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
       yield { type: "thinking_blocks", data: thinkingBlocks }
     }
+    if (stopReason) yield { type: "status", data: `provider-stop: ${stopReason}` }
 
     const finalText = textChunks.join("")
     if (finalText && toolBlocks.length === 0) yield { type: "done", data: finalText }

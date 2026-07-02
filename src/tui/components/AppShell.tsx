@@ -30,6 +30,9 @@ import { FooterHints } from "./FooterHints"
 import { fitText } from "./MessageItem"
 import { resolveActiveContext } from "../input/types"
 import { ModeContract } from "./ModeContract"
+import { ConfirmModal } from "./ConfirmModal"
+import { RewindModal, type RewindModalState } from "./RewindModal"
+import type { ConfirmRequest } from "../confirm-stubs"
 
 // ── 常量 ──
 
@@ -126,6 +129,10 @@ export interface AppShellProps {
   scrollUp: (amount?: number) => void
   scrollDown: (amount?: number) => void
   setInputChrome: (chrome: InputChromeState) => void
+  /** Phase 5: Confirm modal state */
+  confirmModal: { request: ConfirmRequest; position: string } | null
+  /** Phase 5: Rewind modal state */
+  rewindModal: RewindModalState | null
 }
 
 // ── 布局计算（纯函数，便于测试） ──
@@ -171,7 +178,7 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
 }
 
 export function AppShell(props: AppShellProps) {
-  const { state, runtime, prompt, tick, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome } = props
+  const { state, runtime, prompt, tick, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, confirmModal, rewindModal } = props
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout?.rows ?? 32)
   const cols = stdout?.columns ?? 96
@@ -183,8 +190,9 @@ export function AppShell(props: AppShellProps) {
   const gates = selectGateSummary(state)
   const isWorking = !state.done && !state.errorLine
   const hasDash = rightRail.round > 0 || rightRail.toolHistory.length > 0
+  const modalActive = confirmModal !== null || rewindModal !== null
 
-  // 布局计算
+  // 布局计算（Phase 5: modal 占用 4-6 行 panel 空间）
   const layout = computeAppShellLayout({ rows, cols, hasDash, isWorking, clarification, task, inputChrome })
 
   // Phase 3: 运行态控制台数据
@@ -230,8 +238,13 @@ export function AppShell(props: AppShellProps) {
 
   const empty = state.messages.length === 0 && state.done && !prompt?.trim()
 
-  // Phase 2: 当前键盘上下文（Clarification 激活时独占键位）
-  const activeKeyContext = resolveActiveContext({ clarificationActive: !!clarification })
+  // Phase 5: 当前键盘上下文（modal > clarification > scrollback）
+  const activeKeyContext = resolveActiveContext({
+    clarificationActive: !!clarification,
+    confirmActive: confirmModal !== null,
+    rewindListActive: rewindModal?.phase === "list",
+    rewindConfirmActive: rewindModal?.phase === "confirm",
+  })
 
   return (
     <Box flexDirection="column" height={rows} paddingX={1}>
@@ -272,8 +285,20 @@ export function AppShell(props: AppShellProps) {
         patchRolledBack={patchSummary.rolledBack}
       />
 
+      {/* Phase 5: Modal overlays (between StatusBar and Body) */}
+      {confirmModal && (
+        <Box marginBottom={1}>
+          <ConfirmModal request={confirmModal.request} position={confirmModal.position} width={cols - 4} />
+        </Box>
+      )}
+      {rewindModal && (
+        <Box marginBottom={1}>
+          <RewindModal modal={rewindModal} tick={tick} width={cols - 4} />
+        </Box>
+      )}
+
       {/* Body: Scrollback + RightRail */}
-      <Box flexDirection="row" height={layout.bodyHeight} flexGrow={1}>
+      <Box flexDirection="row" height={modalActive ? Math.max(10, layout.bodyHeight - 6) : layout.bodyHeight} flexGrow={1}>
         <Box flexDirection="column" flexGrow={1} marginRight={1}>
           <Box flexDirection="column" flexGrow={1}>
             {empty ? (
@@ -312,12 +337,17 @@ export function AppShell(props: AppShellProps) {
         )}
         <OrcanaComposer
           onSubmit={props.submit}
-          disabled={showStartup || !!clarification}
-          placeholder={clarification ? "按上方选项确认..." : isWorking ? "输入后续消息，Enter 排队..." : "Message Orcana..."}
+          disabled={showStartup || !!clarification || modalActive}
+          placeholder={
+            modalActive ? "modal active — use keyboard shortcuts shown below" :
+            clarification ? "按上方选项确认..." :
+            isWorking ? "输入后续消息，Enter 排队..." :
+            "Message Orcana..."
+          }
           status={isWorking ? `agent running · Enter queues next message${state.queueCount > 0 ? ` · queued ${state.queueCount}` : ""}` : state.status}
           rightStatus={footerTelemetry}
           commands={SLASH_COMMANDS}
-          focused={!showStartup}
+          focused={!showStartup && !modalActive}
           onChromeChange={props.setInputChrome}
         />
         <FooterHints busy={isWorking} activeContext={activeKeyContext} width={cols} />

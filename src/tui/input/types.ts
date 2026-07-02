@@ -16,14 +16,18 @@
  *    - CommandPalette、Confirm、Rewind
  */
 
-/** 键盘输入上下文。优先级从高到低排列。 */
-export type InputContext = "Clarification" | "Scrollback" | "Composer" | "Global"
+/** 键盘输入上下文。优先级从高到低排列。
+ *  Phase 5: 新增 Confirm、RewindList、RewindConfirm 上下文。 */
+export type InputContext = "Confirm" | "RewindConfirm" | "RewindList" | "Clarification" | "Scrollback" | "Composer" | "Global"
 
 /**
  * 上下文优先级数值。越大越优先。
  * 高优先级 context 处理键位后立即返回，阻止低优先级 context 看到该键。
  */
 export const CONTEXT_PRIORITY: Record<InputContext, number> = {
+  Confirm: 5,
+  RewindConfirm: 4,
+  RewindList: 3,
   Clarification: 3,
   Scrollback: 1,
   Composer: 0,
@@ -33,8 +37,13 @@ export const CONTEXT_PRIORITY: Record<InputContext, number> = {
 /** 确定当前激活的最高优先级 context。 */
 export function resolveActiveContext(opts: {
   clarificationActive: boolean
+  confirmActive?: boolean
+  rewindListActive?: boolean
+  rewindConfirmActive?: boolean
 }): InputContext {
+  if (opts.confirmActive) return "Confirm"
+  if (opts.rewindConfirmActive) return "RewindConfirm"
+  if (opts.rewindListActive) return "RewindList"
   if (opts.clarificationActive) return "Clarification"
-  // 空闲状态：Scrollback 活跃（翻页/滚轮），但 Composer 始终接收文本输入
   return "Scrollback"
 }

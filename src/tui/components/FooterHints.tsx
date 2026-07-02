@@ -17,7 +17,41 @@ export interface FooterHintsProps {
 }
 
 export const FooterHints = React.memo(function FooterHints({ busy, activeContext, width }: FooterHintsProps) {
-  // Phase 2: Clarification context 独占键位提示
+  // Phase 5: modal contexts have their own hints
+  if (activeContext === "Confirm") {
+    return (
+      <Box>
+        <Text color={C.green}>y</Text><Text color={C.dim}> approve  </Text>
+        <Text color={C.red}>n</Text><Text color={C.dim}> deny  </Text>
+        <Text color={C.yellow}>a</Text><Text color={C.dim}> deny all  </Text>
+        <Text color={C.dim}>Esc dismiss</Text>
+      </Box>
+    )
+  }
+
+  if (activeContext === "RewindList") {
+    return (
+      <Box>
+        <Text color={C.dim}>↑↓ select  </Text>
+        <Text color={C.green}>Enter</Text>
+        <Text color={C.dim}> confirm  </Text>
+        <Text color={C.dim}>Esc close</Text>
+      </Box>
+    )
+  }
+
+  if (activeContext === "RewindConfirm") {
+    return (
+      <Box>
+        <Text color={C.green}>y</Text>
+        <Text color={C.dim}> confirm rewind  </Text>
+        <Text color={C.red}>n</Text>
+        <Text color={C.dim}> / Esc cancel</Text>
+      </Box>
+    )
+  }
+
+  // Phase 2: Clarification context
   if (activeContext === "Clarification") {
     return (
       <Box>

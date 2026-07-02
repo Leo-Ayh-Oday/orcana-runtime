@@ -1,8 +1,7 @@
 /** input/keymap — 键位 → 动作映射 + 上下文分发。
  *
- *  Phase 2 只覆盖 Scrollback 和 Clarification 两个 context。
- *  每个 context 的处理器返回 true 表示"已处理，不放行"。
- */
+ *  Phase 5: 新增 Confirm / RewindList / RewindConfirm 上下文。
+ *  每个 context 的处理器返回非 null 表示"已处理，不放行"。 */
 
 import type { Key } from "ink"
 import type { InputContext } from "./types"
@@ -21,7 +20,19 @@ export type ClarificationAction =
   | { type: "clarification.select" }
   | { type: "clarification.cancel" }
 
-export type KeyAction = ScrollAction | ClarificationAction
+export type ConfirmAction =
+  | { type: "confirm.approve" }
+  | { type: "confirm.deny" }
+  | { type: "confirm.denyAll" }
+  | { type: "confirm.dismiss" }
+
+export type RewindAction =
+  | { type: "rewind.up" }
+  | { type: "rewind.down" }
+  | { type: "rewind.select" }
+  | { type: "rewind.cancel" }
+
+export type KeyAction = ScrollAction | ClarificationAction | ConfirmAction | RewindAction
 
 // ── 分发上下文 ──
 
@@ -41,6 +52,12 @@ export function resolveKeyAction(
   ctx: KeyResolveContext,
 ): KeyAction | null {
   switch (ctx.context) {
+    case "Confirm":
+      return resolveConfirm(input, key)
+    case "RewindConfirm":
+      return resolveRewindConfirm(input, key)
+    case "RewindList":
+      return resolveRewindList(input, key)
     case "Clarification":
       return resolveClarification(input, key)
     case "Scrollback":
@@ -48,6 +65,34 @@ export function resolveKeyAction(
     default:
       return null
   }
+}
+
+// ── Confirm context ──
+
+function resolveConfirm(input: string, key: Key): KeyAction | null {
+  if (input === "y" || input === "Y") return { type: "confirm.approve" }
+  if (input === "n" || input === "N") return { type: "confirm.deny" }
+  if (input === "a" || input === "A") return { type: "confirm.denyAll" }
+  if (key.escape) return { type: "confirm.dismiss" }
+  return null
+}
+
+// ── RewindList context ──
+
+function resolveRewindList(input: string, key: Key): KeyAction | null {
+  if (key.upArrow || input === "k") return { type: "rewind.up" }
+  if (key.downArrow || input === "j") return { type: "rewind.down" }
+  if (key.return) return { type: "rewind.select" }
+  if (key.escape) return { type: "rewind.cancel" }
+  return null
+}
+
+// ── RewindConfirm context ──
+
+function resolveRewindConfirm(input: string, key: Key): KeyAction | null {
+  if (input === "y" || input === "Y") return { type: "rewind.select" }
+  if (input === "n" || input === "N" || key.escape) return { type: "rewind.cancel" }
+  return null
 }
 
 // ── Clarification context ──

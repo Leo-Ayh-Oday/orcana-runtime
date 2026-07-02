@@ -79,7 +79,7 @@ describe("component: renderMessageLines", () => {
       text: "hello world",
       createdAt: 0,
     }
-    const lines = renderMessageLines(message, 40, 0, "")
+    const lines = renderMessageLines(message, 40, "")
     expect(lines.length).toBeGreaterThan(0)
     expect(lines[0]!.marker).toBe(">")
     expect(lines[0]!.color).toBe(C.cyan)
@@ -92,7 +92,7 @@ describe("component: renderMessageLines", () => {
       text: "I can help with that",
       createdAt: 0,
     }
-    const lines = renderMessageLines(message, 40, 0, "")
+    const lines = renderMessageLines(message, 40, "")
     expect(lines.length).toBeGreaterThan(0)
     expect(lines[0]!.marker).toBe("|")
     expect(lines[0]!.color).toBe(C.blue)
@@ -106,13 +106,13 @@ describe("component: renderMessageLines", () => {
       kind: "tool",
       createdAt: 0,
     }
-    const lines = renderMessageLines(message, 40, 0, "")
+    const lines = renderMessageLines(message, 40, "")
     expect(lines.length).toBeGreaterThan(0)
     expect(lines[0]!.marker).toBe("$") // tool marker
     expect(lines[0]!.color).toBe(C.green) // tool color
   })
 
-  test("pending assistant with no text: shows thinking animation", () => {
+  test("pending assistant with no text: returns static spinner placeholder (Phase 4)", () => {
     const message: TuiMessage = {
       id: "m1",
       role: "assistant",
@@ -120,12 +120,13 @@ describe("component: renderMessageLines", () => {
       pending: true,
       createdAt: 0,
     }
-    const lines = renderMessageLines(message, 40, 0, "working")
-    // Single-line braille spinner: "⠋ thinking · working"
+    const lines = renderMessageLines(message, 40, "working")
+    // Phase 4: static line with pendingAnim="spinner" — animation applied by Scrollback layer
     expect(lines.length).toBe(1)
-    expect(lines[0]!.text).toContain("working")
-    expect(lines[0]!.text).toContain("⠋")     // braille spinner char
+    expect(lines[0]!.pendingAnim).toBe("spinner")
+    expect(lines[0]!.pendingStatus).toBe("working")
     expect(lines[0]!.color).toBe(C.blue)
+    // Text is empty — spinner char + verb added by applyPendingAnimation() in Scrollback
   })
 
   test("empty assistant message (no text, no pending): returns empty array", () => {
@@ -135,7 +136,7 @@ describe("component: renderMessageLines", () => {
       text: "",
       createdAt: 0,
     }
-    const lines = renderMessageLines(message, 40, 0, "")
+    const lines = renderMessageLines(message, 40, "")
     expect(lines).toEqual([])
   })
 
@@ -146,7 +147,7 @@ describe("component: renderMessageLines", () => {
       text: "line1\nline2\nline3",
       createdAt: 0,
     }
-    const lines = renderMessageLines(message, 40, 0, "")
+    const lines = renderMessageLines(message, 40, "")
     expect(lines.length).toBe(3)
     expect(lines[0]!.marker).toBe(">")
     expect(lines[1]!.marker).toBe(" ")
@@ -161,11 +162,11 @@ describe("component: renderMessageLines", () => {
       createdAt: 0,
     }
     // Very narrow width — should still produce output
-    const lines = renderMessageLines(message, 10, 0, "")
+    const lines = renderMessageLines(message, 10, "")
     expect(lines.length).toBeGreaterThan(0)
   })
 
-  test("tick affects pending animation verb", () => {
+  test("pending message returns spinner marker (Phase 4: static, animation applied later)", () => {
     const message: TuiMessage = {
       id: "m1",
       role: "assistant",
@@ -173,11 +174,13 @@ describe("component: renderMessageLines", () => {
       pending: true,
       createdAt: 0,
     }
-    const verbs = ["thinking", "routing", "reading", "checking"]
-    for (let tick = 0; tick < 4; tick++) {
-      const text = renderMessageLines(message, 40, tick, "")[0]?.text ?? ""
-      expect(text).toContain(verbs[tick]!)
-    }
+    // Phase 4: renderMessageLines no longer takes tick — returns static line with pendingAnim flag
+    const lines = renderMessageLines(message, 40, "working")
+    expect(lines.length).toBe(1)
+    expect(lines[0]!.pendingAnim).toBe("spinner")
+    expect(lines[0]!.pendingStatus).toBe("working")
+    // Static text is empty — animation chars (spinner + verb) are applied by Scrollback layer
+    expect(lines[0]!.text).toBe("")
   })
 })
 

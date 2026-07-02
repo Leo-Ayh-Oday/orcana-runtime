@@ -8,9 +8,9 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.2.x   | ✅ Yes    |
-| 0.1.x   | ✅ Critical fixes only |
-| < 0.1.0 | ❌ No     |
+| 0.3.x   | ✅ Yes    |
+| 0.2.x   | ✅ Critical fixes only |
+| < 0.2.0 | ❌ No     |
 
 ## Security Model
 

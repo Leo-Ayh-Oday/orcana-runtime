@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { render, useInput, useStdin, useStdout } from "ink"
+import { render, useInput, useStdout } from "ink"
 import { agentLoop } from "../agent/loop"
 import type { AgentOptions } from "../agent/loop-types"
 import type { Runtime } from "../runtime/bootstrap"
@@ -13,6 +13,7 @@ import {
   synthesizeClarificationAnswer,
 } from "./state/adapter-helpers"
 import { AppShell, type ClarificationWizardState, type InputChromeState } from "./components/AppShell"
+import { ErrorBoundary } from "./components/ErrorBoundary"
 import type { ScrollbackScrollState } from "./components/Scrollback"
 import type { TaskProgressState } from "./components/PlanPanel"
 import { formatHelpText, isSafeConcurrent, commandExists } from "./commands/registry"
@@ -26,54 +27,15 @@ const TUI_FRAME_MS = Number(process.env.DEEPSEEK_TUI_FRAME_MS ?? "320")
 const TUI_SCROLL_STEP = Number(process.env.DEEPSEEK_TUI_SCROLL_STEP ?? "3")
 
 function TuiInputGuard() {
+  // 保持 stdin 在 raw mode，并过滤鼠标/转义序列，防止泄漏到 TextArea。
+  // Ink 的 useInput 没有 stopPropagation，所有 handler 都会收到所有输入，
+  // 因此这里虽不能阻止 TextArea 收到鼠标序列，但可以在 mouse mode 关闭时
+  // 确保不产生鼠标序列（useMouseWheelScroll 已移除）。
   useInput(() => {
     // Keep stdin in raw mode for the whole TUI so the host shell never echoes
     // typed characters below the Ink-rendered input box.
   })
   return null
-}
-
-function useMouseWheelScroll(active: boolean, onScrollUp: () => void, onScrollDown: () => void) {
-  const { stdin } = useStdin()
-  const { stdout } = useStdout()
-
-  useEffect(() => {
-    if (!active || !stdin?.on || !stdout?.write || stdout.isTTY === false) return
-
-    // SGR mouse mode + normal tracking. Do not enable 1002/1003 here: they can
-    // flood the TUI with motion events and make Ink feel laggy.
-    const enableMouse = "\x1b[?1000h\x1b[?1006h"
-    const disableMouse = "\x1b[?1006l\x1b[?1000l"
-
-    stdout.write(enableMouse)
-
-    const handleWheel = (code: number) => {
-      if (code === 64) onScrollUp()
-      if (code === 65) onScrollDown()
-    }
-
-    const handleData = (data: Buffer | string) => {
-      const text = data.toString("utf8")
-
-      // Modern xterm / Windows Terminal / VS Code terminal: ESC [ < code ; x ; y M
-      for (const match of text.matchAll(/\x1b\[<(\d+);\d+;\d+[mM]/g)) {
-        handleWheel(Number(match[1]))
-      }
-
-      // Legacy X10 mouse sequence: ESC [ M Cb Cx Cy
-      for (let index = 0; index <= text.length - 6; index += 1) {
-        if (text.charCodeAt(index) === 0x1b && text[index + 1] === "[" && text[index + 2] === "M") {
-          handleWheel(text.charCodeAt(index + 3) - 32)
-        }
-      }
-    }
-
-    stdin.on("data", handleData)
-    return () => {
-      stdin.off?.("data", handleData)
-      stdout.write(disableMouse)
-    }
-  }, [active, stdin, stdout, onScrollUp, onScrollDown])
 }
 
 function summarizeQueuedPromptForTranscript(text: string): string {
@@ -132,29 +94,48 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
     runningRef.current = true
     store.dispatch({ type: "ui.queue_count", count: queuedPromptsRef.current.length })
     const historySnapshot = historyRef.current.slice()
-    const opts: AgentOptions = runtime.buildAgentOptions({
-      model: runtime.modelRouter.selectForPurpose("agent_main"),
-      tools: runtime.tools,
-      maxRounds: 30,
-      conversationHistory: historySnapshot,
-      gateTelemetryFile: ".wolf/gate-telemetry.json",
-    })
 
     let cancelled = false
     let textBuf = ""
     let assistantText = ""
     let lastFlush = 0
     const finishRun = () => {
-      runningRef.current = false
       const nextPrompt = queuedPromptsRef.current.shift()
       store.dispatch({ type: "ui.queue_count", count: queuedPromptsRef.current.length })
       if (nextPrompt) {
+        // 保持 runningRef = true，防止 setTimeout(0) 窗口期内新消息绕过队列。
+        // 之前先设 false 再 setTimeout，存在竞态：用户在窗口期提交的消息
+        // 会直接调 runAgent 而非排队，导致两个 agent 并发。
         setTimeout(() => runAgentRef.current(nextPrompt), 0)
+      } else {
+        runningRef.current = false
       }
     }
 
-    // user.message creates user & pending assistant messages and resets run state
+    // Bug 修复：user.message 必须在 buildAgentOptions 之前 dispatch，
+    // 确保 user message 总是显示（即使 buildAgentOptions 抛错）。
+    // 之前顺序：buildAgentOptions → user.message，若前者抛错则用户消息不可见。
     store.dispatch({ type: "user.message", text: p })
+
+    // 构建 AgentOptions，若失败则显示错误并结束本轮（不启动 async agentLoop）
+    let opts: AgentOptions
+    try {
+      opts = runtime.buildAgentOptions({
+        model: runtime.modelRouter.selectForPurpose("agent_main"),
+        tools: runtime.tools,
+        maxRounds: 30,
+        conversationHistory: historySnapshot,
+        gateTelemetryFile: ".wolf/gate-telemetry.json",
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      store.dispatch({ type: "ui.error_line", text: message })
+      store.dispatch({ type: "assistant.final", text: `Failed to start agent: ${message}` })
+      store.dispatch({ type: "ui.done", done: true })
+      store.dispatch({ type: "ui.status", text: "error" })
+      finishRun()
+      return () => { cancelled = true }
+    }
 
     const flush = () => {
       if (!textBuf) return
@@ -292,6 +273,9 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
 
         // ── 系统命令 ──
         if (name === "exit" || name === "quit") {
+          // 恢复终端状态后退出（process.exit 不触发 finally 块）
+          process.stdout.write("\x1B[?25h")
+          process.stdout.write("\x1B]0;\x07")
           process.exit(0)
         }
         if (name === "help") {
@@ -366,14 +350,70 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
         }
         if (name === "models") {
           const s = store.getState()
-          addSystemMessage(
-            [
-              `model ${s.modelName}`,
-              `provider ${s.session.provider ?? "default"}`,
-              `session ${s.session.sessionId ?? "—"}`,
-              `branch ${s.session.branch ?? "—"}`,
-            ].join("  ·  "),
-          )
+          const currentModel = s.modelName
+          const argProvider = command.slice(1).split(/\s+/)[1]?.trim()
+          const allModels = runtime.registry.allModels
+          const providers = argProvider
+            ? [...new Set(allModels.filter(m => m.providerId === argProvider).map(m => m.providerId))]
+            : [...new Set(allModels.map(m => m.providerId))].sort()
+          const lines: string[] = [
+            `Current: ${currentModel}`,
+            `Provider: ${s.session.provider ?? runtime.registry.listProviders()[0] ?? "none"}`,
+            "",
+          ]
+          for (const pid of providers) {
+            const models = allModels.filter(m => m.providerId === pid)
+            if (models.length === 0) continue
+            lines.push(`  [${pid}]`)
+            for (const m of models) {
+              const mark = m.id === currentModel ? " *" : "  "
+              const tier = m.pricingTier ?? "?"
+              const think = m.thinking?.supported ? "think" : ""
+              lines.push(`${mark} ${m.id}  (${tier}${think ? ` · ${think}` : ""})  — ${m.displayName}`)
+            }
+            lines.push("")
+          }
+          if (providers.length === 0) {
+            lines.push("No models registered. Use /connect to set up a provider.")
+          }
+          lines.push("Tip: Set DEEPSEEK_MODEL_OVERRIDE=<model-id> to switch model (restart required).")
+          addSystemMessage(lines.join("\n"))
+          return
+        }
+        if (name === "connect") {
+          const argProvider = command.slice(1).split(/\s+/)[1]?.trim()
+          const registered = runtime.registry.listProviders()
+          const knownProviders = ["deepseek", "anthropic", "openai"]
+          const targets = argProvider ? [argProvider] : knownProviders
+          const envVarMap: Record<string, string> = {
+            deepseek: "DEEPSEEK_API_KEY",
+            anthropic: "ANTHROPIC_API_KEY",
+            openai: "OPENAI_API_KEY",
+          }
+          const lines: string[] = ["Provider connection status:"]
+          for (const pid of targets) {
+            const connected = (registered as readonly string[]).includes(pid)
+            const envVar = envVarMap[pid]
+            const hasEnv = envVar ? Boolean(process.env[envVar]) : false
+            const status = connected ? "connected" : hasEnv ? "env-only" : "not configured"
+            lines.push(`  ${pid}: ${status}`)
+          }
+          lines.push("")
+          lines.push("Setup methods (pick one):")
+          lines.push("  1. Environment variable (recommended for CI):")
+          for (const pid of targets) {
+            const envVar = envVarMap[pid]
+            if (envVar) lines.push(`     export ${envVar}=<your-key>`)
+          }
+          lines.push("  2. Auth file (~/.deepseek-code/auth.json, mode 0600):")
+          lines.push('     {"deepseek": "sk-xxx", "anthropic": "sk-ant-xxx"}')
+          lines.push("  3. Config file (orcana.jsonc) — see /help")
+          lines.push("")
+          lines.push("After setting a key, restart the TUI to activate the provider.")
+          if (argProvider && !knownProviders.includes(argProvider)) {
+            lines.unshift(`Unknown provider '${argProvider}'. Known: ${knownProviders.join(", ")}`)
+          }
+          addSystemMessage(lines.join("\n"))
           return
         }
         if (name === "status") {
@@ -419,7 +459,7 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
     }
 
     runAgent(newPrompt)
-  }, [addSystemMessage, runAgent, store, adapter])
+  }, [addSystemMessage, runAgent, store, adapter, runtime])
 
   useEffect(() => {
     if (!prompt?.trim()) return
@@ -438,20 +478,25 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
   const [autoFollow, setAutoFollow] = useState(true)
-  const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0 })
+  const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1 })
   const [showStartup, setShowStartup] = useState(process.env.DEEPSEEK_TUI_SPLASH !== "off")
-  const mouseScrollEnabled = process.env.DEEPSEEK_TUI_MOUSE !== "off"
   // TuiState.task 是 unknown（reducer 不感知 TaskProgressState 形状），这里做一次类型收窄
   const task = state.task as TaskProgressState | undefined
   const isWorking = !state.done && !state.errorLine
 
-  // 布局计算（与 AppShell 保持一致：useInput 的 PageUp/PageDown 需要 bodyHeight）
+  // 布局计算（与 AppShell computeAppShellLayout 保持一致）
+  // OrcanaComposer 多行布局：TextArea(textRows 行) + 状态行(1行) + 可能的粘贴指示(1行)
+  // 命令面板打开时占 5 行（3 条候选 + 标题 + 空行）
+  // FooterHints 占 1 行，footerHeight 需额外 +1
   const question = clarification?.questions[clarification.index]
   const clarificationRows = clarification ? Math.min(10, 4 + (question?.options.length ?? 0)) : 0
   const taskRows = task ? (task.phase === "planning" ? 3 : Math.min(5, 1 + Math.min(3, task.steps.length))) : 0
   const panelRows = clarificationRows || taskRows
-  const inputRows = inputChrome.commandOpen ? 5 : (isWorking || inputChrome.pasteCount > 0 ? 2 : 1)
-  const footerHeight = Math.max(1, Math.min(rows - 8, panelRows + inputRows))
+  const textRows = inputChrome.textRows > 0 ? inputChrome.textRows : 1
+  const inputRows = inputChrome.commandOpen
+    ? 5
+    : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
+  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1))
   const bodyHeight = Math.max(10, rows - footerHeight - 3)
 
   const scrollUp = useCallback((amount = TUI_SCROLL_STEP) => {
@@ -492,8 +537,6 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     const timer = setTimeout(() => setShowStartup(false), TUI_STARTUP_MS)
     return () => clearTimeout(timer)
   }, [showStartup])
-
-  useMouseWheelScroll(mouseScrollEnabled && !showStartup, () => scrollUp(TUI_SCROLL_STEP), () => scrollDown(TUI_SCROLL_STEP))
 
   useInput((_input, key) => {
     if (showStartup) return
@@ -570,11 +613,8 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
 }
 
 export async function startInkTUI(prompt?: string) {
-  const apiKey = process.env.DEEPSEEK_API_KEY
-  if (!apiKey) {
-    console.error("DEEPSEEK_API_KEY not set")
-    process.exit(1)
-  }
+  // PR-6: API key 可来自 env、auth store 或 config，由 createRuntime 统一解析。
+  // 这里不再硬编码检查 DEEPSEEK_API_KEY，让 bootstrap 抛出更有用的错误信息。
   // Lazy-import to avoid circular dependency at module load time
   const { createRuntime } = await import("../runtime/bootstrap")
   const runtime = await createRuntime({
@@ -582,10 +622,41 @@ export async function startInkTUI(prompt?: string) {
     enableMCP: true,
     enableLSP: true,
   })
-  const { waitUntilExit } = render(<ChatApp prompt={prompt} runtime={runtime} />)
+
+  // Bug 修复：安装 stdin 过滤器拦截鼠标序列。
+  // react-ink-textarea 的 useKeyboardInput fallback 分支会插入任何非空 input，
+  // 包括 SGR 鼠标序列（\x1B[<0;40;10M），导致滚轮在输入框产生乱码。
+  // 必须在 render 之前安装，确保过滤后的数据才到达 Ink。
+  const { installStdinFilter, uninstallStdinFilter } = await import("./stdin-filter")
+  installStdinFilter()
+
+  // 设置终端标题（生产级 TUI 标配）
+  const projectDir = process.cwd().split(/[/\\]/).pop() ?? "deepseek-code"
+  process.stdout.write(`\x1B]0;DeepSeek Code — ${projectDir}\x07`)
+
+  // SIGINT/Ctrl+C 优雅退出：恢复终端状态后退出。
+  // process.exit 不触发 finally 块，必须手动清理。
+  const sigintHandler = () => {
+    process.stdout.write("\x1B[?25h")
+    process.stdout.write("\x1B]0;\x07")
+    uninstallStdinFilter()
+    runtime.dispose()
+    process.exit(130)
+  }
+  process.on("SIGINT", sigintHandler)
+
+  const { waitUntilExit } = render(
+    <ErrorBoundary>
+      <ChatApp prompt={prompt} runtime={runtime} />
+    </ErrorBoundary>,
+  )
   try {
     return await waitUntilExit()
   } finally {
+    process.off("SIGINT", sigintHandler)
+    process.stdout.write("\x1B[?25h")
+    process.stdout.write("\x1B]0;\x07")
+    uninstallStdinFilter()
     runtime.dispose()
   }
 }

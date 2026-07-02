@@ -17,7 +17,7 @@ import type { ClarificationQuestion } from "../../src/agent/clarification"
 
 // ── Helpers ──
 
-const defaultInputChrome: InputChromeState = { commandOpen: false, pasteCount: 0 }
+const defaultInputChrome: InputChromeState = { commandOpen: false, pasteCount: 0, textRows: 1 }
 
 function buildClarification(optionCount = 3): ClarificationWizardState {
   const options = Array.from({ length: optionCount }, (_, i) => ({
@@ -69,6 +69,8 @@ describe("AppShell: SLASH_COMMANDS integrity", () => {
     expect(names).toContain("undo")
     expect(names).toContain("stats")
     expect(names).toContain("effort")
+    expect(names).toContain("connect")
+    expect(names).toContain("models")
     expect(names).toContain("exit")
   })
 
@@ -186,7 +188,7 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     expect(layout.footerHeight).toBeGreaterThanOrEqual(1)
   })
 
-  test("footerHeight = panelRows + inputRows in normal case", () => {
+  test("footerHeight = panelRows + inputRows + 1(FooterHints) in normal case", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
@@ -196,10 +198,10 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
       task: undefined,
       inputChrome: defaultInputChrome,
     })
-    // No panel, no task → panelRows=0, inputRows=1 → footerHeight=1
+    // No panel, no task → panelRows=0, textRows=1 → inputRows=1+1=2 → footerHeight=0+2+1=3
     expect(layout.panelRows).toBe(0)
-    expect(layout.inputRows).toBe(1)
-    expect(layout.footerHeight).toBe(1)
+    expect(layout.inputRows).toBe(2)
+    expect(layout.footerHeight).toBe(3)
   })
 
   test("bodyHeight + footerHeight + 3 ≈ rows (normal case)", () => {
@@ -320,7 +322,7 @@ describe("AppShell layout: inputChrome affects footer height", () => {
       isWorking: false,
       clarification: null,
       task: undefined,
-      inputChrome: { commandOpen: true, pasteCount: 0 },
+      inputChrome: { commandOpen: true, pasteCount: 0, textRows: 1 },
     })
     expect(layout.inputRows).toBe(5)
   })
@@ -338,7 +340,7 @@ describe("AppShell layout: inputChrome affects footer height", () => {
     expect(layout.inputRows).toBe(2)
   })
 
-  test("pasteCount > 0 → inputRows = 2", () => {
+  test("pasteCount > 0 → inputRows = textRows + 1 + 1(paste indicator)", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
@@ -346,12 +348,26 @@ describe("AppShell layout: inputChrome affects footer height", () => {
       isWorking: false,
       clarification: null,
       task: undefined,
-      inputChrome: { commandOpen: false, pasteCount: 3 },
+      inputChrome: { commandOpen: false, pasteCount: 3, textRows: 1 },
     })
-    expect(layout.inputRows).toBe(2)
+    // textRows=1 + status=1 + paste indicator=1 = 3
+    expect(layout.inputRows).toBe(3)
   })
 
-  test("idle, no paste, no command → inputRows = 1", () => {
+  test("textRows=3 (multi-line) → inputRows = 3+1 = 4", () => {
+    const layout = computeAppShellLayout({
+      rows: 40,
+      cols: 80,
+      hasDash: false,
+      isWorking: false,
+      clarification: null,
+      task: undefined,
+      inputChrome: { commandOpen: false, pasteCount: 0, textRows: 3 },
+    })
+    expect(layout.inputRows).toBe(4)
+  })
+
+  test("idle, no paste, no command → inputRows = textRows + 1 = 2", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
@@ -361,6 +377,6 @@ describe("AppShell layout: inputChrome affects footer height", () => {
       task: undefined,
       inputChrome: defaultInputChrome,
     })
-    expect(layout.inputRows).toBe(1)
+    expect(layout.inputRows).toBe(2)
   })
 })

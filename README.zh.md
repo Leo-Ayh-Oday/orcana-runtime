@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>不允许交付烂代码的编码智能体。</strong><br>
-  28 道安全门控按生命周期自动匹配 · 7 层变更影响分析 · 没证据不能 claim done
+  约束优先运行时——每次写入检查下游影响，每次完成交付需要证据支撑。
 </p>
 
 <p align="center">
@@ -19,127 +19,98 @@
 
 ---
 
-## Orcana 是什么？
-
-Orcana 是一个**约束优先的终端编码智能体**。它能读代码、写代码、推理架构——但和那些"把大模型接到 shell 上"的工具不同，Orcana 的每一次行动都穿过独立安全门控，每一次编辑都检查下游影响，完成交付需要可验证的证据。
-
-```
-你说："帮我加个退出登录按钮"
-Orcana：读文件 → 追踪调用方 → 写代码 → 跑 typecheck → 跑测试 → Flash Judge 验证 → 交付
-         ↑            ↑           ↑          ↑            ↑              ↑
-      权限门       涟漪引擎    沙箱守卫    证据账本     独立法官       完成门控
-```
-
-> **Orcana** = Orca（虎鲸）+ Arcana（奥术）+ NA（Native Agent）。像虎鲸穿行深海——感知暗流，把复杂工程变成可执行结果。
-
 ## 安装
 
 ```bash
 npm install -g deepseek-orcana
 ```
 
-配置 API Key：
+配置密钥：
 
-**macOS / Linux / Git Bash**
 ```bash
+# macOS / Linux / Git Bash
 export DEEPSEEK_API_KEY="sk-your-key-here"
-```
 
-**Windows PowerShell**
-```powershell
+# Windows PowerShell
 $env:DEEPSEEK_API_KEY="sk-your-key-here"
-```
 
-**Windows CMD**
-```cmd
+# Windows CMD
 set DEEPSEEK_API_KEY=sk-your-key-here
 ```
 
-然后启动：
-
 ```bash
-orcana
+orcana                          # 交互式 TUI
+orcana "修复失败的测试"          # 单次任务
+orcana list                     # 历史会话
 ```
 
 可用命令：`orcana`、`deepseek-orcana`、`deepseek-code`、`deepseek`。
 
-```bash
-orcana "重构认证模块"        # 单次任务
-orcana --cli                 # 经典 CLI 模式
-orcana list                  # 查看历史会话
-orcana last                  # 恢复最近会话
+---
+
+## 工作机制
+
+Orcana 不会对所有任务一视同仁。一个简单问题和一次复杂重构走的是完全不同的路径：
+
+```
+你问："这个文件是干什么的？"
+  ──► 读文件 ──► 回答
+       ↑
+    权限门（风险 0 级 — 自动放行）
+    只过 ~3 道门控。不写文件，不触发涟漪，不需要证据。
+
+你说："帮我加个退出登录按钮"
+  ──► 读文件 ──► 追踪调用方 ──► 写代码 ──► typecheck ──► 跑测试 ──► 验证 ──► 交付
+       ↑            ↑              ↑           ↑             ↑          ↑
+    权限门       涟漪引擎       沙箱守卫    证据账本      Flash     完成门控
+                                                         Judge
+    过 ~15 道门控。每次写入检查影响范围；完成交付要有证据。
 ```
 
-## 为什么选 Orcana
+**门控按风险自动匹配。** 只读任务快速通过。代码变更逐步加码——写入检查、涟漪分析、证据收集、独立验证。卡在循环里？溢出门控在连续 5 次拦截后硬停，请求人工介入。
 
-多数 coding agent 只有 3-5 个防护。Orcana 有 **28 道独立安全机制**——按生命周期分布在五个阶段。不信任任何单一机制。
+这就是"约束优先"的意思——不是每步都慢，而是运行时知道什么时候该松、什么时候该严。
 
-| 时机 | 机制 | 防止什么 |
-|------|------|---------|
-| **模型开口前** | Context Budget Gate | 静默超出上下文（524K WARN / 629K BLOCK） |
-| | Flash Triage | 任务分类错误（1 次调用替代 4 个关键词分类器） |
-| | Thinking Escalation | 固执重试——≥3 错误自动升级到 32K max thinking |
-| **工具执行前** | Permission Gate | 越权操作——按类别 + 项目级控制风险调用 |
-| | Ripple Block Gate | 写崩调用方——所有受影响调用点处理完才放行 |
-| | ContextReadiness Gate | 没读就改——项目上下文没获取够就禁止写入 |
-| | Rate Limiter | 工具滥刷——每轮每类有上限（shell=5, file=10, network=3） |
-| | Mode Contract | 角色越界——planner 不能写代码，reviewer 不能执行 |
-| **工具执行后** | Error Tracker | 无脑重试——重复 2 次触发强制搜索学习，4 次承认失败 |
-| | Parallel Readonly Execution | 信息收集慢——同轮所有只读调用通过 `Promise.all` 并发执行 |
-| | Shell Side-Effect Guard | 危险命令——18 种模式检测递归删除、强制推送、系统变更 |
-| | Write Guard | 未读即改——strict 模式禁止编辑未曾读取的文件 |
-| | Journal Veto | 铁律违规——元 Agent 一票否决写操作 |
-| **宣称"完成"前** | Ripple Exit Gate | 级联未解决——涟漪义务未清不能结束 |
-| | Task Tracker Gate | 任务未完成——清单项没勾完就阻止 |
-| | Quality Gate | 低质量交付——置信度不足时阻止完成 |
-| | Flash Judge | 虚假完成——独立 Flash 模型验证声称的完成 |
-| | Evidence Gate | 无证据声称——没跑过 typecheck/test/build 就不能 `canClaimDone()` |
-| | Truthfulness Gate | 验证撒谎——交叉检查最终文本和证据账本 |
-| **紧急** | Gate Overflow | 无限循环——3 次拦截→策略提示，5 次→硬 BLOCKED |
+→ [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 28-gate 回路解剖。
 
-门控按生命周期自动匹配，不是每轮全量触发：~7 道每轮必过，其余按阶段目标激活（流恢复 1、完成判定 6、工具执行 7、周期维护 7）。
+---
 
-→ [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 28-gate 回路解剖和 DeepSeek V4 机制深潜。
+## 核心能力
 
-> **沙箱说明**：macOS/Linux 上沙箱运行在降级模式——PathGuard 是事后审计（检测+记录），不是实时拦截。只有 Windows 有内核级 Job Object 隔离。README 表格描述的是*设计意图*；平台差异详见 [SECURITY.md](./SECURITY.md)。
+**Ripple Engine（涟漪引擎）** — 每次写入文件前，Orcana 追问：*谁在调用它？* 通过 7 层追踪 TypeScript 依赖链，从 API 差异到语义引用，在所有受影响调用方处理完之前阻断写入。212 个测试。→ [docs/ripple-engine.md](./docs/ripple-engine.md)
+
+**Evidence Ledger（证据账本）** — 完成不是一个声称，是一份记录。Typecheck 过了？测试绿了？构建成功了？账本记录每项验证结果，并与最终输出交叉比对。如果模型说"测试全过"但账本显示根本没跑，Truthfulness Gate 直接拦截。
+
+**Flash Judge（独立法官）** — 用更便宜的独立模型重新评估完成声明。主模型自信宣布完成但法官判定 NOT_SATISFIED？任务继续。每任务最多 3 次评估即熔断——不会沉默接受未验证的交付。
+
+> **沙箱说明**：macOS/Linux 运行在降级模式（仅环境过滤 + 超时 + 事后审计）。仅 Windows 有内核级 Job Object 隔离。平台差异详见 [SECURITY.md](./SECURITY.md)。
+
+---
 
 ## 已知限制
 
 真实取舍，不隐藏：
 
-- **Thinking Compaction** 每会话只触发一次（40% 上下文时）。在极长任务上，上下文仍会增长到 60% Budget Gate 阻断，中间没有第二次 compaction。
-- **Flash Judge** 每任务最多 3 次评估即熔断。如果 3 次后仍是 NOT_SATISFIED，会话阻断——不会沉默接受无验证的完成。
+- **Thinking Compaction** 每会话仅触发一次（上下文 40% 时）。极长任务下，上下文仍会涨到 60% Budget Gate 阻断，中间没有第二次压缩。
+- **Flash Judge** 每任务最多 3 次评估即熔断。仍为 NOT_SATISFIED 则会话阻断——不会沉默接受坏结果。
+- **macOS/Linux 沙箱** 仅为环境过滤 + 超时。无内核级隔离。生产环境建议放在容器里跑。
 - **双配置路径**：`settings.json` 的 `loop.maxSteps` 优先于 `DEEPSEEK_MAX_ROUNDS` 环境变量。同时设置时 JSON 值生效。
 
-## Ripple Engine 2.0 — 代码变更影响分析
-
-**每次文件写入前，Orcana 都会问："谁在调用它？"** Ripple Engine 通过 7 层追踪 TypeScript 依赖——从 API 差异到语义引用解析到义务门控——在所有受影响调用方更新完之前阻断写入。
-
-```
-API 变更 ──► L1 Diff（8 种变更类型）──► L2 TypeChecker.findReferences ──► L3 用法分类（14 种）
-                                                │
-                                                ▼
-                                    L4 测试发现 ──► L5 义务门控
-                                                │
-                                    L7 AstGrep（补充）
-                                                │
-                                                ▼
-                                        allow / warn / block
-```
-
-212 tests。自评 8.5/10。→ [docs/ripple-engine.md](docs/ripple-engine.md)
+---
 
 ## 项目状态
 
-**v0.3.x** — 单 Agent 运行时骨架已完整，部分能力还在打磨。不虚标，不画饼。
+**v0.3.x** — 单 Agent 运行时骨架完整。部分能力还在打磨，不虚标。
 
 | 状态 | 含义 |
 |------|------|
 | 🟢 Stable | 已接入主流程，日常任务可靠 |
-| 🟡 Partial | 已实现但有限制——平台差异、交互糙、或覆盖窄 |
-| 🔵 Planned | 在路线图上，还没做 |
+| 🟡 Partial | 已实现但有限制——平台差异、交互糙、覆盖窄 |
+| 🔵 Planned | 路线图上，还没做 |
 
-详见 [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md)——10 Phase 路线图到 v1.0。
+→ [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) — 10 Phase 到 v1.0。
+
+---
 
 ## 卸载
 
@@ -147,17 +118,18 @@ API 变更 ──► L1 Diff（8 种变更类型）──► L2 TypeChecker.find
 npm uninstall -g deepseek-orcana
 ```
 
-## 文档导航
+---
 
-**刚来？** 先读设计哲学，再看架构。
+## 文档导航
 
 | 文档 | 你会了解到 |
 |------|-----------|
 | [docs/design-philosophy.md](./docs/design-philosophy.md) | 为什么约束优先——从工具循环到证据账本 |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 完整 28-gate 回路、DeepSeek V4 机制、反循环模式 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 完整 28-gate 回路、DeepSeek V4 机制 |
 | [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10 Phase 路线图、P0/P1/P2 优先级 |
 | [docs/ripple-engine.md](./docs/ripple-engine.md) | 7 层变更影响分析深度解析 |
 | [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | 每个 gate、每个场景、验证行为 |
+| [docs/skill-template/](./docs/skill-template/) | 黄金标准 Skill 模板——面向人类、AI、Orcana Runtime |
 | [SECURITY.md](./SECURITY.md) | 沙箱能力、漏洞报告 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 环境搭建、代码规范、PR 流程 |
 

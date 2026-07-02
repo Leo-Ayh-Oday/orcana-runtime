@@ -75,7 +75,15 @@ export const COMMANDS: CommandDef[] = [
   // ── 运行时控制 ──
   {
     name: "models",
-    description: "Show current model and provider",
+    description: "List available models and show current selection",
+    usage: "[provider]",
+    category: "runtime",
+    safeConcurrent: true,
+  },
+  {
+    name: "connect",
+    description: "Show provider connection status and setup guide",
+    usage: "[provider]",
     category: "runtime",
     safeConcurrent: true,
   },

@@ -30,7 +30,7 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 | PatchTransaction | 🟡 partial | Phase 1 complete, Phase 2 atomics pending |
 | EvidenceLedger | 🟡 partial | Phase 1, dual-write with legacy verification |
 | Completion Gates | 🟡 partial | Gates inline in loop, not single-path yet |
-| HookSystem | 🟡 partial | PreTool/PostTool only, lifecycle events planned |
+| HookSystem | 🟢 stable | SessionStart, PromptSubmit, PreToolUse, PostToolUse, Stop — all 5 lifecycle events wired (PR-7.2) |
 | Checkpoint / Rewind | 🟡 partial | SHA + SQLite base, missing CLI /rewind UX |
 | MCP Bridge | 🟡 partial | Tools only, resources/prompts deferred |
 | Skills Registry | 🟡 partial | Trigger-based prompt append, no lifecycle stats |

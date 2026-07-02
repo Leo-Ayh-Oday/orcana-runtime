@@ -2,6 +2,8 @@
 import { describe, expect, test } from "bun:test"
 import { ProviderRegistry } from "../src/provider/registry"
 import type { ModelCapabilities, LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
+import { toModelSpec, toModelCapabilities, toThinkingCapability } from "../src/provider/capabilities"
+import type { ProviderCapabilities, ModelConfig, ProviderConfig } from "../src/config/config-schema"
 
 // ── Mock provider for testing ──
 
@@ -217,5 +219,149 @@ describe("capability presets consistency", () => {
     for (const spec of r.allModels) {
       expect(spec.capabilities.maxContextWindow).toBe(spec.contextWindow)
     }
+  })
+})
+
+// ── toModelCapabilities ──
+describe("toModelCapabilities", () => {
+  test("returns defaults for undefined caps", () => {
+    const cap = toModelCapabilities(undefined)
+    expect(cap.toolUse).toBe(false)
+    expect(cap.streaming).toBe(true)  // default true
+    expect(cap.thinking).toBe(false)
+    expect(cap.fim).toBe(false)
+    expect(cap.maxContextWindow).toBe(128_000)
+  })
+
+  test("maps supports* fields correctly", () => {
+    const caps: Partial<ProviderCapabilities> = {
+      supportsToolCalls: true,
+      supportsStreaming: false,
+      supportsJsonMode: true,
+      supportsThinking: true,
+      supportsFim: true,
+      supportsPrefixCache: true,
+      supportsVision: true,
+      maxContextTokens: 200_000,
+    }
+    const cap = toModelCapabilities(caps)
+    expect(cap.toolUse).toBe(true)
+    expect(cap.streaming).toBe(false)
+    expect(cap.structuredOutput).toBe(true)
+    expect(cap.thinking).toBe(true)
+    expect(cap.fim).toBe(true)
+    expect(cap.contextCaching).toBe(true)
+    expect(cap.vision).toBe(true)
+    expect(cap.maxContextWindow).toBe(200_000)
+  })
+})
+
+// ── toThinkingCapability ──
+describe("toThinkingCapability", () => {
+  test("unsupported thinking returns supported=false and empty effortLevels", () => {
+    const tc = toThinkingCapability({ supportsThinking: false })
+    expect(tc.supported).toBe(false)
+    expect(tc.effortLevels).toEqual([])
+  })
+
+  test("supportsThinking without reasoningEffort returns [high]", () => {
+    const tc = toThinkingCapability({ supportsThinking: true, supportsReasoningEffort: false })
+    expect(tc.supported).toBe(true)
+    expect(tc.effortLevels).toEqual(["high"])
+  })
+
+  test("supportsThinking with reasoningEffort returns [high, max]", () => {
+    const tc = toThinkingCapability({ supportsThinking: true, supportsReasoningEffort: true })
+    expect(tc.supported).toBe(true)
+    expect(tc.effortLevels).toEqual(["high", "max"])
+  })
+
+  test("undefined caps returns unsupported", () => {
+    const tc = toThinkingCapability(undefined)
+    expect(tc.supported).toBe(false)
+  })
+})
+
+// ── toModelSpec ──
+describe("toModelSpec", () => {
+  // helper to build a minimal ProviderConfig
+  function makeProviderConfig(type: ProviderConfig["type"]): ProviderConfig {
+    return { type, models: {} }
+  }
+
+  test("builds ModelSpec with correct id and providerId", () => {
+    const providerConfig = makeProviderConfig("deepseek")
+    const modelConfig: ModelConfig = { displayName: "Test Model" }
+    const spec = toModelSpec("test-model", "deepseek", modelConfig, providerConfig)
+    expect(spec.id).toBe("test-model")
+    expect(spec.providerId).toBe("deepseek")
+    expect(spec.displayName).toBe("Test Model")
+    expect(spec.isDefault).toBe(false)
+  })
+
+  test("falls back to modelId when displayName is not set", () => {
+    const providerConfig = makeProviderConfig("deepseek")
+    const modelConfig: ModelConfig = {}
+    const spec = toModelSpec("my-model", "deepseek", modelConfig, providerConfig)
+    expect(spec.displayName).toBe("my-model")
+  })
+
+  test("infers pricingTier from provider type (ollama → free)", () => {
+    const providerConfig = makeProviderConfig("ollama")
+    const spec = toModelSpec("llama3", "ollama", {}, providerConfig)
+    expect(spec.pricingTier).toBe("free")
+  })
+
+  test("infers pricingTier from provider type (deepseek → cheap)", () => {
+    const providerConfig = makeProviderConfig("deepseek")
+    const spec = toModelSpec("ds-chat", "deepseek", {}, providerConfig)
+    expect(spec.pricingTier).toBe("cheap")
+  })
+
+  test("infers pricingTier from provider type (openrouter → standard)", () => {
+    const providerConfig = makeProviderConfig("openrouter")
+    const spec = toModelSpec("or-model", "openrouter", {}, providerConfig)
+    expect(spec.pricingTier).toBe("standard")
+  })
+
+  test("uses contextWindow from ModelConfig when provided", () => {
+    const providerConfig = makeProviderConfig("deepseek")
+    const modelConfig: ModelConfig = { contextWindow: 64_000 }
+    const spec = toModelSpec("m", "deepseek", modelConfig, providerConfig)
+    expect(spec.contextWindow).toBe(64_000)
+  })
+
+  test("falls back to maxContextTokens from capabilities when contextWindow not set", () => {
+    const providerConfig = makeProviderConfig("deepseek")
+    const modelConfig: ModelConfig = {
+      capabilities: { maxContextTokens: 256_000 } as Partial<ProviderCapabilities>,
+    }
+    const spec = toModelSpec("m", "deepseek", modelConfig, providerConfig)
+    expect(spec.contextWindow).toBe(256_000)
+  })
+
+  test("infers tags from capabilities", () => {
+    const providerConfig = makeProviderConfig("deepseek")
+    const modelConfig: ModelConfig = {
+      capabilities: {
+        supportsThinking: true,
+        supportsFim: true,
+        supportsToolCalls: true,
+      } as Partial<ProviderCapabilities>,
+    }
+    const spec = toModelSpec("m", "deepseek", modelConfig, providerConfig)
+    expect(spec.tags).toContain("thinking")
+    expect(spec.tags).toContain("reasoning")
+    expect(spec.tags).toContain("fim")
+    expect(spec.tags).toContain("coding")
+    expect(spec.tags).toContain("tools")
+    expect(spec.tags).toContain("agent")
+  })
+
+  test("adds general tag when no capabilities match", () => {
+    const providerConfig = makeProviderConfig("ollama")
+    const spec = toModelSpec("m", "ollama", {}, providerConfig)
+    expect(spec.tags).toContain("general")
+    expect(spec.tags.length).toBe(1)
   })
 })

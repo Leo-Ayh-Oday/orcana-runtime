@@ -127,10 +127,11 @@ describe("getCommandsByCategory", () => {
     expect(names).toContain("undo")
   })
 
-  test("runtime category has models and effort", () => {
+  test("runtime category has models, connect, and effort", () => {
     const runtime = getCommandsByCategory("runtime")
     const names = runtime.map(cmd => cmd.name)
     expect(names).toContain("models")
+    expect(names).toContain("connect")
     expect(names).toContain("effort")
   })
 
@@ -207,6 +208,7 @@ describe("formatHelpText", () => {
     expect(helpText).toContain("/evidence")
     expect(helpText).toContain("/patches")
     expect(helpText).toContain("/models")
+    expect(helpText).toContain("/connect")
     expect(helpText).toContain("/status")
     expect(helpText).toContain("/clear")
     expect(helpText).toContain("/exit")
@@ -241,6 +243,7 @@ describe("isSafeConcurrent", () => {
     expect(isSafeConcurrent("status")).toBe(true)
     expect(isSafeConcurrent("stats")).toBe(true)
     expect(isSafeConcurrent("models")).toBe(true)
+    expect(isSafeConcurrent("connect")).toBe(true)
   })
 
   test("returns true for help", () => {

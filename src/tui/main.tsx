@@ -16,8 +16,7 @@ import { AppShell, type ClarificationWizardState, type InputChromeState } from "
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import type { ScrollbackScrollState } from "./components/Scrollback"
 import type { TaskProgressState } from "./components/PlanPanel"
-import { formatHelpText, isSafeConcurrent, commandExists } from "./commands/registry"
-import { selectGateSummary, selectEvidenceSummary } from "./state/selectors"
+import { dispatchTuiCommand } from "./commands/dispatcher"
 import { mouseEvents } from "./stdin-filter"
 
 type ModelHistoryRole = "user" | "assistant"
@@ -260,192 +259,23 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
   }, [runAgent])
 
   const submit = useCallback((newPrompt: string) => {
-    const command = newPrompt.trim()
-
-    // ── 斜杠命令分发 ──
-    if (command.startsWith("/")) {
-      const [name = ""] = command.slice(1).split(/\s+/, 1)
-
-      // 已知命令：检查安全并发性
-      if (commandExists(name)) {
-        // agent 忙碌时，非安全命令直接拒绝（不静默排队）
-        if (runningRef.current && !isSafeConcurrent(name)) {
-          addSystemMessage(`Command /${name} is not available while the agent is running. Wait for it to finish or use /status to check progress.`)
-          return
-        }
-
-        // ── 系统命令 ──
-        if (name === "exit" || name === "quit") {
-          // 恢复终端状态后退出（process.exit 不触发 finally 块）
-          process.stdout.write("\x1B[?25h")
-          process.stdout.write("\x1B]0;\x07")
-          process.stdout.write("\x1B[?1000l\x1B[?1006l")
-          process.exit(0)
-        }
-        if (name === "help") {
-          addSystemMessage(formatHelpText())
-          return
-        }
-
-        // ── 会话命令 ──
-        if (name === "clear") {
-          historyRef.current = []
-          setClarification(null)
-          adapter.reset()
-          store.reset()
-          return
-        }
-        if (name === "stats") {
-          const s = store.getState()
-          addSystemMessage(
-            [
-              `messages ${historyRef.current.length}`,
-              `model ${s.modelName}`,
-              `tokens in ${s.tokens.inputTokens} / out ${s.tokens.outputTokens} / max ${s.tokens.contextMax}`,
-              `cache hit ${s.tokens.cacheHitRate ?? 0}%`,
-              `round ${s.round}`,
-            ].join("  ·  "),
-          )
-          return
-        }
-
-        // ── Orcana 引擎数据命令 ──
-        if (name === "ripple") {
-          const s = store.getState()
-          if (s.rippleFindings.length === 0) {
-            addSystemMessage("No ripple findings yet. Run a task to trigger ripple scan.")
-          } else {
-            const lines = s.rippleFindings.map(f => `  ${f.file} [${f.severity}] ${f.reason}`)
-            addSystemMessage(`Ripple findings (${s.rippleFindings.length}):\n${lines.join("\n")}`)
-          }
-          return
-        }
-        if (name === "gates") {
-          const s = store.getState()
-          const summary = selectGateSummary(s)
-          if (summary.total === 0) {
-            addSystemMessage("No gates recorded yet.")
-          } else {
-            const lines = s.gates.map(g => `  ${g.gate}: ${g.status}${g.reason ? ` — ${g.reason}` : ""}`)
-            addSystemMessage(`Gates (${summary.total}: ${summary.pass} pass / ${summary.block} block / ${summary.skip} skip):\n${lines.join("\n")}`)
-          }
-          return
-        }
-        if (name === "evidence") {
-          const s = store.getState()
-          const summary = selectEvidenceSummary(s)
-          if (summary.total === 0) {
-            addSystemMessage("No evidence recorded yet.")
-          } else {
-            const lines = s.evidence.map(e => `  ${e.kind}: ${e.status} — ${e.summary}`)
-            addSystemMessage(`Evidence (${summary.total}: ${summary.passed} passed / ${summary.failed} failed / ${summary.skipped} skipped):\n${lines.join("\n")}`)
-          }
-          return
-        }
-        if (name === "patches") {
-          const s = store.getState()
-          if (s.patches.length === 0) {
-            addSystemMessage("No patch transactions yet.")
-          } else {
-            const lines = s.patches.map(p => `  ${p.txId}: ${p.status} — ${p.files.length} files${p.summary ? ` — ${p.summary}` : ""}`)
-            addSystemMessage(`Patches (${s.patches.length}):\n${lines.join("\n")}`)
-          }
-          return
-        }
-        if (name === "models") {
-          const s = store.getState()
-          const currentModel = s.modelName
-          const argProvider = command.slice(1).split(/\s+/)[1]?.trim()
-          const allModels = runtime.registry.allModels
-          const providers = argProvider
-            ? [...new Set(allModels.filter(m => m.providerId === argProvider).map(m => m.providerId))]
-            : [...new Set(allModels.map(m => m.providerId))].sort()
-          const lines: string[] = [
-            `Current: ${currentModel}`,
-            `Provider: ${s.session.provider ?? runtime.registry.listProviders()[0] ?? "none"}`,
-            "",
-          ]
-          for (const pid of providers) {
-            const models = allModels.filter(m => m.providerId === pid)
-            if (models.length === 0) continue
-            lines.push(`  [${pid}]`)
-            for (const m of models) {
-              const mark = m.id === currentModel ? " *" : "  "
-              const tier = m.pricingTier ?? "?"
-              const think = m.thinking?.supported ? "think" : ""
-              lines.push(`${mark} ${m.id}  (${tier}${think ? ` · ${think}` : ""})  — ${m.displayName}`)
-            }
-            lines.push("")
-          }
-          if (providers.length === 0) {
-            lines.push("No models registered. Use /connect to set up a provider.")
-          }
-          lines.push("Tip: Set DEEPSEEK_MODEL_OVERRIDE=<model-id> to switch model (restart required).")
-          addSystemMessage(lines.join("\n"))
-          return
-        }
-        if (name === "connect") {
-          const argProvider = command.slice(1).split(/\s+/)[1]?.trim()
-          const registered = runtime.registry.listProviders()
-          const knownProviders = ["deepseek", "anthropic", "openai"]
-          const targets = argProvider ? [argProvider] : knownProviders
-          const envVarMap: Record<string, string> = {
-            deepseek: "DEEPSEEK_API_KEY",
-            anthropic: "ANTHROPIC_API_KEY",
-            openai: "OPENAI_API_KEY",
-          }
-          const lines: string[] = ["Provider connection status:"]
-          for (const pid of targets) {
-            const connected = (registered as readonly string[]).includes(pid)
-            const envVar = envVarMap[pid]
-            const hasEnv = envVar ? Boolean(process.env[envVar]) : false
-            const status = connected ? "connected" : hasEnv ? "env-only" : "not configured"
-            lines.push(`  ${pid}: ${status}`)
-          }
-          lines.push("")
-          lines.push("Setup methods (pick one):")
-          lines.push("  1. Environment variable (recommended for CI):")
-          for (const pid of targets) {
-            const envVar = envVarMap[pid]
-            if (envVar) lines.push(`     export ${envVar}=<your-key>`)
-          }
-          lines.push("  2. Auth file (~/.deepseek-code/auth.json, mode 0600):")
-          lines.push('     {"deepseek": "sk-xxx", "anthropic": "sk-ant-xxx"}')
-          lines.push("  3. Config file (orcana.jsonc) — see /help")
-          lines.push("")
-          lines.push("After setting a key, restart the TUI to activate the provider.")
-          if (argProvider && !knownProviders.includes(argProvider)) {
-            lines.unshift(`Unknown provider '${argProvider}'. Known: ${knownProviders.join(", ")}`)
-          }
-          addSystemMessage(lines.join("\n"))
-          return
-        }
-        if (name === "status") {
-          const s = store.getState()
-          const gateSummary = selectGateSummary(s)
-          const evidenceSummary = selectEvidenceSummary(s)
-          addSystemMessage(
-            [
-              `Status: ${s.status}`,
-              `Model: ${s.modelName}`,
-              `Mode: ${s.mode}`,
-              `Round: ${s.round}`,
-              `Done: ${s.done ? "yes" : "no"}`,
-              `Queue: ${s.queueCount}`,
-              `Tokens: ${s.tokens.inputTokens} in / ${s.tokens.outputTokens} out / ${s.tokens.contextMax} max`,
-              `Cache: ${s.tokens.cacheHitRate ?? 0}%`,
-              `Gates: ${gateSummary.pass}p/${gateSummary.block}b/${gateSummary.skip}s`,
-              `Evidence: ${evidenceSummary.passed}p/${evidenceSummary.failed}f/${evidenceSummary.skipped}s`,
-              `Tools: ${s.tools.length}`,
-              `Patches: ${s.patches.length}`,
-            ].join("\n"),
-          )
-          return
-        }
-
-        // 未实现处理的已知命令（save/compact/sessions/search/undo/effort）
-        // 落到 agent 执行，让 agent 处理
-      }
+    const commandResult = dispatchTuiCommand(newPrompt, {
+      runtime,
+      store,
+      adapter,
+      historyRef,
+      setClarification,
+      addSystemMessage,
+      isRunning: () => runningRef.current,
+      exit: () => {
+        process.stdout.write("\x1B[?25h")
+        process.stdout.write("\x1B]0;\x07")
+        process.stdout.write("\x1B[?1000l\x1B[?1006l")
+        process.exit(0)
+      },
+    })
+    if (commandResult === "handled") {
+      return
     }
 
     // ── agent 忙碌时排队用户消息 ──
@@ -598,7 +428,9 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       else scrollDown(amount)
     }
     mouseEvents.on("scroll", handler)
-    return () => mouseEvents.off("scroll", handler)
+    return () => {
+      mouseEvents.off("scroll", handler)
+    }
   }, [scrollUp, scrollDown])
 
   return (

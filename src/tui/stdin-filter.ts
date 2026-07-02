@@ -53,7 +53,9 @@ function extractScrollEvents(data: string): void {
     let match: RegExpExecArray | null
     while ((match = regex.exec(data)) !== null) {
       found = true
-      const button = parseInt(match[1], 10)
+      const rawButton = match[1]
+      if (!rawButton) continue
+      const button = parseInt(rawButton, 10)
       if (button === 64 || button === 68) {
         mouseEvents.emit("scroll", -1, button === 68)
       } else if (button === 65 || button === 69) {

@@ -319,21 +319,20 @@ describe("cross-chunk mouse sequence handling", () => {
   test("incomplete SGR prefix at chunk end is buffered, not emitted", () => {
     const received: string[] = []
     const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
     try {
       installStdinFilter()
-      // Capture what gets through to the real emit
-      const filteredEmit = process.stdin.emit
-      process.stdin.emit = ((event: string | symbol, ...args: unknown[]) => {
-        if (event === "data" && typeof args[0] === "string") received.push(args[0])
-        return filteredEmit.call(process.stdin, event, ...args)
-      }) as typeof process.stdin.emit
+      // Register data listener to capture FILTERED output
+      // (wrapping process.stdin.emit would intercept raw pre-filter input)
+      process.stdin.on("data", onData)
 
-      // Send incomplete prefix: \x1B[<64;40; (missing row and terminator)
-      process.stdin.emit("data", "hello\x1B[<64;40;")
+      // send via emit → enters installStdinFilter → calls stock emit with filtered data
+      process.stdin.emit("data", Buffer.from("hello\x1B[<64;40;", "utf8"))
       // "hello" should be emitted, but \x1B[<64;40; should be buffered
       expect(received).toEqual(["hello"])
       expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
     } finally {
+      process.stdin.off("data", onData)
       process.stdin.emit = origEmit
       uninstallStdinFilter()
     }
@@ -344,30 +343,25 @@ describe("cross-chunk mouse sequence handling", () => {
     const handler = (direction: number) => events.push(direction)
     const received: string[] = []
     const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
     mouseEvents.on("scroll", handler)
     try {
       installStdinFilter()
-      const filteredEmit = process.stdin.emit
-      process.stdin.emit = ((event: string | symbol, ...args: unknown[]) => {
-        if (event === "data" && typeof args[0] === "string") received.push(args[0])
-        return filteredEmit.call(process.stdin, event, ...args)
-      }) as typeof process.stdin.emit
+      process.stdin.on("data", onData)
 
-      // Chunk 1: incomplete prefix
-      process.stdin.emit("data", "\x1B[<64;40;")
+      // Chunk 1: incomplete prefix — nothing emitted (buffered)
+      process.stdin.emit("data", Buffer.from("\x1B[<64;40;", "utf8"))
       expect(received).toHaveLength(0)
       expect(_getPendingBuffer()).toBe("\x1B[<64;40;")
 
-      // Chunk 2: completion (10M = row 10, terminator M)
-      process.stdin.emit("data", "10M")
-      // No data should be emitted (complete mouse sequence stripped)
+      // Chunk 2: completion (10M = row 10, terminator M) — complete sequence stripped
+      process.stdin.emit("data", Buffer.from("10M", "utf8"))
       expect(received).toHaveLength(0)
-      // Scroll event should be extracted (button 64 = scroll up)
       expect(events).toHaveLength(1)
-      expect(events[0]).toBe(-1)
-      // pendingBuffer should be empty
+      expect(events[0]).toBe(-1) // button 64 = scroll up
       expect(_getPendingBuffer()).toBe("")
     } finally {
+      process.stdin.off("data", onData)
       process.stdin.emit = origEmit
       uninstallStdinFilter()
       mouseEvents.off("scroll", handler)
@@ -379,17 +373,14 @@ describe("cross-chunk mouse sequence handling", () => {
     const handler = (direction: number) => events.push(direction)
     const received: string[] = []
     const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
     mouseEvents.on("scroll", handler)
     try {
       installStdinFilter()
-      const filteredEmit = process.stdin.emit
-      process.stdin.emit = ((event: string | symbol, ...args: unknown[]) => {
-        if (event === "data" && typeof args[0] === "string") received.push(args[0])
-        return filteredEmit.call(process.stdin, event, ...args)
-      }) as typeof process.stdin.emit
+      process.stdin.on("data", onData)
 
       // Chunk 1: two complete sequences + incomplete prefix
-      process.stdin.emit("data", "\x1B[<64;40;10M\x1B[<65;41;11M\x1B[<64;")
+      process.stdin.emit("data", Buffer.from("\x1B[<64;40;10M\x1B[<65;41;11M\x1B[<64;", "utf8"))
       // No data emitted (all mouse sequences or incomplete prefix)
       expect(received).toHaveLength(0)
       // Two scroll events extracted
@@ -398,11 +389,12 @@ describe("cross-chunk mouse sequence handling", () => {
       expect(events[1]).toBe(1)  // button 65 = down
 
       // Chunk 2: completion of third sequence
-      process.stdin.emit("data", "42;12M")
+      process.stdin.emit("data", Buffer.from("42;12M", "utf8"))
       expect(received).toHaveLength(0)
       expect(events).toHaveLength(3)
       expect(events[2]).toBe(-1) // button 64 = up
     } finally {
+      process.stdin.off("data", onData)
       process.stdin.emit = origEmit
       uninstallStdinFilter()
       mouseEvents.off("scroll", handler)
@@ -412,19 +404,17 @@ describe("cross-chunk mouse sequence handling", () => {
   test("ESC key alone is NOT buffered (preserves Esc functionality)", () => {
     const received: string[] = []
     const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
     try {
       installStdinFilter()
-      const filteredEmit = process.stdin.emit
-      process.stdin.emit = ((event: string | symbol, ...args: unknown[]) => {
-        if (event === "data" && typeof args[0] === "string") received.push(args[0])
-        return filteredEmit.call(process.stdin, event, ...args)
-      }) as typeof process.stdin.emit
+      process.stdin.on("data", onData)
 
       // Single ESC character should pass through immediately
-      process.stdin.emit("data", "\x1B")
+      process.stdin.emit("data", Buffer.from("\x1B", "utf8"))
       expect(received).toEqual(["\x1B"])
       expect(_getPendingBuffer()).toBe("")
     } finally {
+      process.stdin.off("data", onData)
       process.stdin.emit = origEmit
       uninstallStdinFilter()
     }
@@ -433,24 +423,22 @@ describe("cross-chunk mouse sequence handling", () => {
   test("non-mouse text after buffered prefix is emitted correctly", () => {
     const received: string[] = []
     const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
     try {
       installStdinFilter()
-      const filteredEmit = process.stdin.emit
-      process.stdin.emit = ((event: string | symbol, ...args: unknown[]) => {
-        if (event === "data" && typeof args[0] === "string") received.push(args[0])
-        return filteredEmit.call(process.stdin, event, ...args)
-      }) as typeof process.stdin.emit
+      process.stdin.on("data", onData)
 
-      // Chunk 1: incomplete prefix
-      process.stdin.emit("data", "\x1B[<64;40;")
+      // Chunk 1: incomplete prefix — buffered
+      process.stdin.emit("data", Buffer.from("\x1B[<64;40;", "utf8"))
       expect(received).toHaveLength(0)
 
       // Chunk 2: completion + normal text
-      process.stdin.emit("data", "10Mhello")
+      process.stdin.emit("data", Buffer.from("10Mhello", "utf8"))
       // "hello" should be emitted (mouse sequence stripped)
       expect(received).toEqual(["hello"])
       expect(_getPendingBuffer()).toBe("")
     } finally {
+      process.stdin.off("data", onData)
       process.stdin.emit = origEmit
       uninstallStdinFilter()
     }

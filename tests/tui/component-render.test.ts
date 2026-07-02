@@ -121,12 +121,11 @@ describe("component: renderMessageLines", () => {
       createdAt: 0,
     }
     const lines = renderMessageLines(message, 40, 0, "working")
-    expect(lines.length).toBeGreaterThanOrEqual(2)
-    // First line: status text with verb
+    // Single-line braille spinner: "⠋ thinking · working"
+    expect(lines.length).toBe(1)
     expect(lines[0]!.text).toContain("working")
-    // Second line: animation line
-    expect(lines[1]!.text.length).toBeGreaterThan(0)
-    expect(lines[1]!.color).toBe(C.cyan)
+    expect(lines[0]!.text).toContain("⠋")     // braille spinner char
+    expect(lines[0]!.color).toBe(C.blue)
   })
 
   test("empty assistant message (no text, no pending): returns empty array", () => {

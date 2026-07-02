@@ -8,7 +8,7 @@ export type {
   TuiRipplePhase,
 } from "./state/types"
 
-export type TuiEventKind = "tool" | "task" | "plan" | "error"
+export type TuiEventKind = "tool" | "task" | "plan" | "activity" | "error"
 
 export type TuiEvidenceStatus = "passed" | "failed" | "blocked" | "running" | "skipped"
 export type TuiGateStatus = "pass" | "block" | "warn" | "skip"

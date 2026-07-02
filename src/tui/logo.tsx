@@ -1,4 +1,4 @@
-/** DeepSeek Code logo variants — 深海虎鲸 / Sonar Orca theme */
+/** Orcana logo variants — 深海虎鲸 / Sonar Orca theme */
 import React from "react"
 import { Box, Text } from "ink"
 import { VERSION_LABEL } from "../version"
@@ -18,7 +18,7 @@ export function GeometricFin() {
       <Text color={Blue}>{`    ██▀▀▀▀▀▀▀▀██`}</Text>
       <Text color={Blue}>{`   ██    ▄▄   ██`}</Text>
       <Text color={Cyan}>{`   ██   ████  ██     🐋 Hraness`}</Text>
-      <Text color={Cyan}>{`    ██▄▄▄▄▄▄▄▄██     DeepSeek Code ${VERSION_LABEL}`}</Text>
+      <Text color={Cyan}>{`    ██▄▄▄▄▄▄▄▄██     Orcana ${VERSION_LABEL}`}</Text>
       <Text color={Dim}>{`      ▀▀▀▀▀▀▀▀`}</Text>
     </Box>
   )
@@ -32,7 +32,7 @@ export function SonarPulse() {
       <Text color={Dim}>{`           ░░▒▒▒▒▒▒▒▒░░`}</Text>
       <Text color={Blue}>{`         ░▒▓▓▓▓▓▓▓▓▓▓▒░`}</Text>
       <Text color={Cyan}>{`       ░▒▓▓▓▓████▓▓▓▓▒░       ░▒▓▓▓▓████▓▓▓▓▒░       Hraness`}</Text>
-      <Text color={Cyan}>{`        ░▒▓▓▓▓▓▓▓▓▓▓▒░        DeepSeek Code ${VERSION_LABEL}`}</Text>
+      <Text color={Cyan}>{`        ░▒▓▓▓▓▓▓▓▓▓▓▒░        Orcana ${VERSION_LABEL}`}</Text>
       <Text color={Blue}>{`          ░▒▒▒▒▒▒▒▒░`}</Text>
       <Text color={Dim}>{`            ░░░░░░`}</Text>
     </Box>
@@ -73,7 +73,7 @@ export function TailFin() {
       <Text color={White}>{`  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀`}</Text>
       <Text color={Dim}>{`  ░░░░░░░░░░░░░░░░░░░░░░  深海之下，声呐先行`}</Text>
       <Text> </Text>
-      <Text color={Cyan}>{`  🐋 DeepSeek Code ${VERSION_LABEL}`}</Text>
+      <Text color={Cyan}>{`  🐋 Orcana ${VERSION_LABEL}`}</Text>
       <Text color={Dim}>{`  Sonar Pulse · Swarm Concurrency · Cold Memory`}</Text>
     </Box>
   )
@@ -84,7 +84,7 @@ export function MinimalSonar() {
   return (
     <Box flexDirection="column">
       <Text color={Dim}>{`         ╭─ ◦ ◌ ○ ◎ ○ ◌ ◦ ─╮`}</Text>
-      <Text color={Blue}>{`        ╭┤  🐋 DeepSeek Code  ├╮`}</Text>
+      <Text color={Blue}>{`        ╭┤  🐋 Orcana  ├╮`}</Text>
       <Text color={Cyan}>{`       ╭┤   ${VERSION_LABEL} · hraness  ├╮`}</Text>
       <Text color={Cyan}>{`      ╭┤    sonar · swarm      ├╮`}</Text>
       <Text color={Blue}>{`      ╰─────────────────────────╯`}</Text>

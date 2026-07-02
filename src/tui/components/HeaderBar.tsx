@@ -1,5 +1,5 @@
 /** HeaderBar — 顶部状态栏。
- *  显示：DeepSeek Code | model | StatusMark | status | queue count
+ *  显示：Orcana | model | StatusMark | status | queue count
  *  外加 SonarLine 动画指示 agent 是否在运行。 */
 
 import React from "react"
@@ -49,7 +49,7 @@ export const HeaderBar = React.memo(function HeaderBar({
   return (
     <Box height={2} flexDirection="column">
       <Box flexDirection="row">
-        <Text color={C.cyan} bold>DeepSeek Code</Text>
+        <Text color={C.cyan} bold>Orcana</Text>
         <Text color={C.dim}> / harness / </Text>
         <Text color={C.blue}>model {modelName}</Text>
         <Text color={C.dim}> / </Text>

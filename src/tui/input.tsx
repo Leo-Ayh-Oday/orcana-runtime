@@ -472,9 +472,9 @@ export function InputLine({
         <Text color={showCommands || pasteCount > 0 ? C.cyan : C.border}>|</Text>
         <Text color={C.cyan}> › </Text>
         {disabled ? (
-          <Text color={C.dim}>{placeholder || "DeepSeek Code is working..."}</Text>
+          <Text color={C.dim}>{placeholder || "Orcana is working..."}</Text>
         ) : typeof renderedInput === "string" ? (
-          <Text color={renderedInput ? C.fg : C.dim}>{renderedInput || (placeholder || "Message DeepSeek Code...")}</Text>
+          <Text color={renderedInput ? C.fg : C.dim}>{renderedInput || (placeholder || "Message Orcana...")}</Text>
         ) : (
           <Text>
             <Text color={C.fg}>{renderedInput.before}</Text>

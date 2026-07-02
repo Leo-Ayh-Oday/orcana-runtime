@@ -57,7 +57,7 @@ export const RightRail = React.memo(function RightRail(props: RightRailProps) {
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={C.border} paddingX={1} width={width}>
-      <Text bold color={C.cyan}>DeepSeek Code</Text>
+      <Text bold color={C.cyan}>Orcana</Text>
       <Text color={C.dim}>
         round {round} / ctx <Text color={ctxColor}>{ctxPct}%</Text> / cache <Text color={cacheHitRate > 80 ? C.green : C.yellow}>{cacheHitRate}%</Text>
       </Text>

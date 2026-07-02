@@ -348,7 +348,7 @@ export function OrcanaComposer({
         onTab={handleTab}
         onFirstLineUp={handleFirstLineUp}
         onLastLineDown={handleLastLineDown}
-        placeholder={placeholder || "Message DeepSeek Code... (Enter send · Shift+Enter newline)"}
+        placeholder={placeholder || "Message Orcana... (Enter send · Shift+Enter newline)"}
         disableArrowNavigation={showCommands}
         viewportLines={3}
         initialLineCount={1}

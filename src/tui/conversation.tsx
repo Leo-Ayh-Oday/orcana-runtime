@@ -48,7 +48,7 @@ export function ConversationView({ messages, streamingText, toolEvents, status, 
     <Box flexDirection="column">
       {/* Status bar */}
       <Box flexDirection="row" height={1}>
-        <Text color={Cyan}>🐋 DeepSeek Code v0.4</Text>
+        <Text color={Cyan}>🐋 Orcana v0.4</Text>
         <Text color={Dim}>{"  │  "}</Text>
         <Text color={Blue}>{status.model}</Text>
         <Text color={Dim}>{"  │  "}</Text>

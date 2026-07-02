@@ -252,7 +252,7 @@ describe("selectors: selectGateSummary", () => {
   test("empty gates: all zeros", () => {
     const state = buildState(() => {})
     const result = selectGateSummary(state)
-    expect(result).toEqual({ total: 0, pass: 0, block: 0, skip: 0 })
+    expect(result).toEqual({ total: 0, pass: 0, block: 0, warn: 0, skip: 0 })
   })
 
   test("counts each gate status correctly", () => {
@@ -269,8 +269,8 @@ describe("selectors: selectGateSummary", () => {
     expect(result.total).toBe(5)
     expect(result.pass).toBe(2)
     expect(result.block).toBe(1)
-    // warn and skip both count as "skip" (anything not pass/block)
-    expect(result.skip).toBe(2)
+    expect(result.warn).toBe(1)
+    expect(result.skip).toBe(1)
   })
 })
 

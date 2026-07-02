@@ -1,13 +1,20 @@
-/** HeaderBar — 顶部状态栏。
- *  显示：Orcana | model | StatusMark | status | queue count
+/** HeaderBar — 顶部状态栏（Phase 3 增强）。
+ *
+ *  显示：Orcana | mode | model/provider | StatusMark | status | ctx/cache/rN | queue
  *  外加 SonarLine 动画指示 agent 是否在运行。 */
 
 import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
+import type { TuiMode } from "../state/types"
+import { ModeBadge } from "./ModeContract"
 
 export interface HeaderBarProps {
   modelName: string
+  /** Provider ID (deepseek/anthropic/openai) */
+  provider?: string
+  /** Active mode (discussion/readonly/narrow_edit/long_task/planner/executor) */
+  mode: TuiMode
   status: string
   done: boolean
   errorLine: string
@@ -15,6 +22,8 @@ export interface HeaderBarProps {
   tick: number
   cols: number
   isWorking: boolean
+  /** Compact runtime summary: ctx% / cache% / round */
+  runtimeSummary: string
 }
 
 function StatusMark({ done, error, tick }: { done: boolean; error: string; tick: number }) {
@@ -38,6 +47,8 @@ function SonarLine({ tick, width, active }: { tick: number; width: number; activ
 
 export const HeaderBar = React.memo(function HeaderBar({
   modelName,
+  provider,
+  mode,
   status,
   done,
   errorLine,
@@ -45,16 +56,25 @@ export const HeaderBar = React.memo(function HeaderBar({
   tick,
   cols,
   isWorking,
+  runtimeSummary,
 }: HeaderBarProps) {
   return (
     <Box height={2} flexDirection="column">
       <Box flexDirection="row">
         <Text color={C.cyan} bold>Orcana</Text>
-        <Text color={C.dim}> / harness / </Text>
-        <Text color={C.blue}>model {modelName}</Text>
+        {/* Phase 3: active mode badge */}
+        <Text color={C.dim}> / </Text>
+        <ModeBadge mode={mode} />
+        {/* Phase 3: provider + model */}
+        <Text color={C.dim}>
+          {provider ? ` / ${provider}` : ""} / model {modelName}
+        </Text>
         <Text color={C.dim}> / </Text>
         <StatusMark done={done} error={errorLine} tick={tick} />
-        <Text color={C.dim}>{status ? ` / ${status}` : ""}{queueCount > 0 ? ` / queued ${queueCount}` : ""}</Text>
+        <Text color={C.dim}>{status ? ` / ${status}` : ""}</Text>
+        {/* Phase 3: compact runtime summary */}
+        <Text color={C.dim}> / {runtimeSummary}</Text>
+        {queueCount > 0 && <Text color={C.cyan}> / queued {queueCount}</Text>}
       </Box>
       <SonarLine tick={tick} width={cols} active={isWorking} />
     </Box>

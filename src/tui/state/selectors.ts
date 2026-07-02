@@ -124,6 +124,7 @@ export interface GateSummary {
   total: number
   pass: number
   block: number
+  warn: number
   skip: number
 }
 
@@ -131,13 +132,15 @@ export interface GateSummary {
 export function selectGateSummary(state: TuiState): GateSummary {
   let pass = 0
   let block = 0
+  let warn = 0
   let skip = 0
   for (const g of state.gates) {
     if (g.status === "pass") pass++
     else if (g.status === "block") block++
+    else if (g.status === "warn") warn++
     else skip++
   }
-  return { total: state.gates.length, pass, block, skip }
+  return { total: state.gates.length, pass, block, warn, skip }
 }
 
 // ── selectHeaderStatus ──

@@ -28,6 +28,7 @@ import { RightRail } from "./RightRail"
 import { PlanPanel, FlowLine, type TaskProgressState } from "./PlanPanel"
 import { FooterHints } from "./FooterHints"
 import { fitText } from "./MessageItem"
+import { resolveActiveContext } from "../input/types"
 
 // ── 常量 ──
 
@@ -214,6 +215,9 @@ export function AppShell(props: AppShellProps) {
 
   const empty = state.messages.length === 0 && state.done && !prompt?.trim()
 
+  // Phase 2: 当前键盘上下文（Clarification 激活时独占键位）
+  const activeKeyContext = resolveActiveContext({ clarificationActive: !!clarification })
+
   return (
     <Box flexDirection="column" height={rows} paddingX={1}>
       {/* HeaderBar */}
@@ -289,7 +293,7 @@ export function AppShell(props: AppShellProps) {
           focused={!showStartup}
           onChromeChange={props.setInputChrome}
         />
-        <FooterHints busy={isWorking} clarifying={!!clarification} width={cols} />
+        <FooterHints busy={isWorking} activeContext={activeKeyContext} width={cols} />
       </Box>
     </Box>
   )

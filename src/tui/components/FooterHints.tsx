@@ -1,24 +1,27 @@
 /** FooterHints — 底部键位提示行。
- *  显示当前可用的快捷键，帮助用户发现操作方式。 */
+ *  从 active InputContext 派生可用快捷键，帮助用户发现操作方式。
+ *  Phase 2: 用 InputContext 替代 clarifying boolean，使提示与键位上下文一致。 */
 
 import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
+import type { InputContext } from "../input/types"
 
 export interface FooterHintsProps {
   /** 是否处于 agent 运行中（busy 时提示排队功能） */
   busy: boolean
-  /** 是否处于 clarification 模式 */
-  clarifying: boolean
+  /** 当前激活的键盘上下文（决定显示哪些键位提示） */
+  activeContext: InputContext
   /** 终端宽度 */
   width: number
 }
 
-export const FooterHints = React.memo(function FooterHints({ busy, clarifying, width }: FooterHintsProps) {
-  if (clarifying) {
+export const FooterHints = React.memo(function FooterHints({ busy, activeContext, width }: FooterHintsProps) {
+  // Phase 2: Clarification context 独占键位提示
+  if (activeContext === "Clarification") {
     return (
       <Box>
-        <Text color={C.dim}>Up/Down or j/k select  Enter confirm  Esc cancel</Text>
+        <Text color={C.dim}>↑/↓ or j/k select  Enter confirm  Esc cancel</Text>
       </Box>
     )
   }

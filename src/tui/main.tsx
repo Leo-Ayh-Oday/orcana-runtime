@@ -17,6 +17,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary"
 import type { ScrollbackScrollState } from "./components/Scrollback"
 import type { TaskProgressState } from "./components/PlanPanel"
 import { dispatchTuiCommand } from "./commands/dispatcher"
+import { resolveActiveContext } from "./input/types"
+import { resolveKeyAction } from "./input/keymap"
 import { mouseEvents } from "./stdin-filter"
 
 type ModelHistoryRole = "user" | "assistant"
@@ -372,43 +374,48 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     return () => clearTimeout(timer)
   }, [showStartup])
 
+  // Phase 2: 键位上下文分发 — resolveKeyAction 按 InputContext 优先级解析键位，
+  // 高优先级 context（Clarification）处理过的键不放行到低优先级（Scrollback）。
+  const activeKeyContext = resolveActiveContext({ clarificationActive: !!clarification })
+
   useInput((_input, key) => {
     if (showStartup) return
-    if (clarification) {
-      const question = clarification.questions[clarification.index]
-      if ((_input === "k" || key.upArrow) && question) {
+    const action = resolveKeyAction(_input, key, {
+      context: activeKeyContext,
+      bodyHeight,
+      scrollStep: TUI_SCROLL_STEP,
+    })
+    if (!action) return // pass through to composer
+
+    switch (action.type) {
+      case "clarification.up":
         moveClarificationSelection(-1)
-        return
-      }
-      if ((_input === "j" || key.downArrow) && question) {
+        break
+      case "clarification.down":
         moveClarificationSelection(1)
-        return
+        break
+      case "clarification.select": {
+        const q = clarification?.questions[clarification.index]
+        if (!q) break
+        const opt = q.options[clarification.selected]
+        if (opt) answerClarification({ question: q.title, key: opt.key, label: opt.label })
+        break
       }
-      if (key.return && question) {
-        const option = question.options[clarification.selected]
-        if (option) answerClarification({ question: question.title, key: option.key, label: option.label })
-        return
-      }
-      if (key.escape) {
+      case "clarification.cancel":
         cancelClarification()
-        return
-      }
-      return
-    }
-    if (key.pageUp) {
-      scrollUp(Math.max(3, bodyHeight - 4))
-      return
-    }
-    if (key.pageDown) {
-      scrollDown(Math.max(3, bodyHeight - 4))
-      return
-    }
-    if (key.ctrl && key.upArrow) {
-      scrollUp(TUI_SCROLL_STEP)
-      return
-    }
-    if (key.ctrl && key.downArrow) {
-      scrollDown(TUI_SCROLL_STEP)
+        break
+      case "scroll.up":
+        scrollUp(action.amount)
+        break
+      case "scroll.down":
+        scrollDown(action.amount)
+        break
+      case "scroll.pageUp":
+        scrollUp(action.amount)
+        break
+      case "scroll.pageDown":
+        scrollDown(action.amount)
+        break
     }
   }, { isActive: !showStartup })
 

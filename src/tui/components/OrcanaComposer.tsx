@@ -128,6 +128,29 @@ export function flatToRowCol(text: string, pos: number): [number, number] {
   return [row, col < 0 ? 0 : col]
 }
 
+// ── 历史项（结构化存储，修复大粘贴历史丢失问题） ──
+
+interface ComposerHistoryItem {
+  /** 用户输入的原始 draft（含 paste token） */
+  draft: string
+  /** 展开 paste token 后的完整文本 */
+  expanded: string
+  /** 粘贴块快照（深拷贝，避免引用污染） */
+  pasteBlocks: PasteBlock[]
+  /** 预览文本（用于可能的未来历史面板） */
+  preview: string
+}
+
+function buildHistoryItem(rawValue: string, pasteBlocks: PasteBlock[]): ComposerHistoryItem {
+  const expanded = expandDraft(rawValue, pasteBlocks)
+  return {
+    draft: rawValue,
+    expanded,
+    pasteBlocks: pasteBlocks.map(b => ({ ...b })),
+    preview: displayDraft(rawValue, pasteBlocks).trim().slice(0, 240),
+  }
+}
+
 // ── OrcanaComposer ──
 
 export interface OrcanaComposerProps {
@@ -154,11 +177,13 @@ export function OrcanaComposer({
   // ── 状态 ──
   const [value, setValue] = useState("")
   const [cursor, setCursor] = useState<[number, number]>([0, 0])
-  const [history, setHistory] = useState<string[]>([])
+  const [history, setHistory] = useState<ComposerHistoryItem[]>([])
   const [historyIdx, setHistoryIdx] = useState(-1)
   const [commandIdx, setCommandIdx] = useState(0)
   const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>([])
   const [nextPasteId, setNextPasteId] = useState(1)
+  // 当用户浏览历史时，保存当前未发送的草稿（用于回到 "现在" 时恢复）
+  const savedDraftRef = useRef<{ value: string; cursor: [number, number]; pasteBlocks: PasteBlock[] } | null>(null)
 
   // ── 派生数据 ──
   const visibleDraft = useMemo(() => displayDraft(value, pasteBlocks), [pasteBlocks, value])
@@ -228,11 +253,12 @@ export function OrcanaComposer({
       const finalValue =
         showCommands && selectedCommand && !hasCommandArgs ? `/${selectedCommand.name}` : trimmed
 
-      // 保存历史
-      const historyLabel = displayDraft(rawValue, pasteBlocks).trim()
-      setHistory(h => [...h.slice(-50), historyLabel || finalValue.slice(0, 240)])
+      // 保存历史（结构化 → 回溯时恢复原始 draft + pasteBlocks）
+      const historyItem = buildHistoryItem(rawValue, pasteBlocks)
+      setHistory(h => [...h.slice(-50), historyItem])
       setHistoryIdx(-1)
       setCommandIdx(0)
+      savedDraftRef.current = null
 
       // Bug 修复：先清空输入框，再调用 onSubmit。
       // 之前顺序：onSubmit → setValue，若 onSubmit 同步抛错则输入框不清空，
@@ -265,7 +291,6 @@ export function OrcanaComposer({
   )
 
   // ── onFirstLineUp：第一行按 Up → 命令面板或历史导航 ──
-  // 不再做滚动 — 滚动由鼠标滚轮、PageUp/PageDown、Ctrl+Up/Ctrl+Down 负责
   const handleFirstLineUp = useCallback(() => {
     if (showCommands && commandMatches.length > 0) {
       setCommandIdx(idx => (idx <= 0 ? commandMatches.length - 1 : idx - 1))
@@ -273,12 +298,18 @@ export function OrcanaComposer({
     }
     if (history.length > 0) {
       const newIdx = historyIdx === -1 ? history.length - 1 : Math.max(0, historyIdx - 1)
+      // 首次进入历史时保存当前草稿，以便回到 "现在" 时恢复
+      if (historyIdx === -1) {
+        savedDraftRef.current = { value, cursor, pasteBlocks: pasteBlocks.map(b => ({ ...b })) }
+      }
+      const item = history[newIdx]!
       setHistoryIdx(newIdx)
-      setPasteBlocks([])
-      setValue(history[newIdx]!)
-      setCursor([0, history[newIdx]!.length])
+      setValue(item.draft)
+      setCursor(flatToRowCol(item.draft, item.draft.length))
+      setPasteBlocks(item.pasteBlocks.map(b => ({ ...b })))
+      setCommandIdx(0)
     }
-  }, [showCommands, commandMatches.length, history, historyIdx])
+  }, [showCommands, commandMatches.length, history, historyIdx, value, cursor, pasteBlocks])
 
   // ── onLastLineDown：最后一行按 Down → 命令面板或历史导航 ──
   const handleLastLineDown = useCallback(() => {
@@ -289,15 +320,25 @@ export function OrcanaComposer({
     if (historyIdx >= 0) {
       const newIdx = historyIdx + 1
       if (newIdx >= history.length) {
+        // 回到 "现在"：恢复进入历史前保存的草稿
         setHistoryIdx(-1)
-        setValue("")
-        setCursor([0, 0])
-        setPasteBlocks([])
+        const saved = savedDraftRef.current
+        if (saved) {
+          setValue(saved.value)
+          setCursor(saved.cursor)
+          setPasteBlocks(saved.pasteBlocks.map(b => ({ ...b })))
+        } else {
+          setValue("")
+          setCursor([0, 0])
+          setPasteBlocks([])
+        }
+        savedDraftRef.current = null
       } else {
+        const item = history[newIdx]!
         setHistoryIdx(newIdx)
-        setPasteBlocks([])
-        setValue(history[newIdx]!)
-        setCursor([0, history[newIdx]!.length])
+        setValue(item.draft)
+        setCursor(flatToRowCol(item.draft, item.draft.length))
+        setPasteBlocks(item.pasteBlocks.map(b => ({ ...b })))
       }
     }
   }, [showCommands, commandMatches.length, history, historyIdx])

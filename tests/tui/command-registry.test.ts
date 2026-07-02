@@ -217,7 +217,7 @@ describe("formatHelpText", () => {
   test("contains descriptions", () => {
     expect(helpText).toContain("Show ripple scan findings")
     expect(helpText).toContain("Show gate status summary")
-    expect(helpText).toContain("Exit DeepSeek Code")
+    expect(helpText).toContain("Exit Orcana")
   })
 
   test("contains tip at end", () => {

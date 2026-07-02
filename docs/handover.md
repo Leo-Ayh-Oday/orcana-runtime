@@ -84,27 +84,27 @@
 ## 6. 运行与开发
 
 ```bash
-# 安装
-bun install
+# 全局安装
+npm install -g deepseek-orcana
 
 # 交互模式
-bun start
+orcana
 
 # 单次提问
-bun start "你的问题"
+orcana "你的问题"
 
 # 恢复会话
-bun start last
-bun start <session-id>
+orcana last
+orcana <session-id>
 
 # 列出会话
-bun start list
+orcana list
 
-# 测试
+# 源码开发
+bun install
 bun test
-
-# TypeScript 检查
 bun run typecheck
+bun run build
 ```
 
 ## 7. 环境变量

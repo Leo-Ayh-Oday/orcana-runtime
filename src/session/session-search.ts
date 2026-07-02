@@ -7,10 +7,25 @@
  *  Powers the /search CLI command and the "上次怎么修的" use case.
  */
 
-import { Database } from "bun:sqlite"
 import { join } from "node:path"
 import { homedir } from "node:os"
-import { listSessionIds, type SessionSearchHit } from "./sqlite-session"
+import { isSessionSqliteAvailable, listSessionIds, type SessionSearchHit } from "./sqlite-session"
+
+type SqliteDatabase = {
+  run: (sql: string) => unknown
+  query: (sql: string) => {
+    get: (...args: unknown[]) => unknown
+    all: (...args: unknown[]) => unknown[]
+  }
+  close: () => void
+}
+
+let DatabaseCtor: (new (path: string, options?: { readonly?: boolean }) => SqliteDatabase) | null = null
+try {
+  DatabaseCtor = (await import("bun:sqlite")).Database as new (path: string, options?: { readonly?: boolean }) => SqliteDatabase
+} catch {
+  // Node.js runtime: cross-session FTS is unavailable; callers get empty results.
+}
 
 export interface CrossSessionHit {
   sessionId: string
@@ -32,6 +47,8 @@ export function searchAllSessions(
     maxSessions?: number
   } = {},
 ): CrossSessionHit[] {
+  if (!isSessionSqliteAvailable() || !DatabaseCtor) return []
+
   const dir = options.storeDir ?? join(homedir(), ".deepseek-code", "sessions")
   const limit = options.limit ?? 10
   const maxSessions = options.maxSessions ?? 50
@@ -50,9 +67,9 @@ export function searchAllSessions(
 
   for (const sid of sessionIds) {
     const path = join(dir, `${sid}.db`)
-    let db: Database | null = null
+    let db: SqliteDatabase | null = null
     try {
-      db = new Database(path, { readonly: true })
+      db = new DatabaseCtor(path, { readonly: true })
       db.run("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL")
 
       // Try FTS5 first
@@ -120,6 +137,8 @@ export function searchAllSessions(
 export function listAllSessions(
   options: { storeDir?: string; limit?: number } = {},
 ): Array<{ id: string; createdAt: number; messageCount: number; topic?: string }> {
+  if (!isSessionSqliteAvailable() || !DatabaseCtor) return []
+
   const dir = options.storeDir ?? join(homedir(), ".deepseek-code", "sessions")
   const limit = options.limit ?? 20
 
@@ -127,9 +146,9 @@ export function listAllSessions(
     .slice(0, limit)
     .map(sid => {
       const path = join(dir, `${sid}.db`)
-      let db: Database | null = null
+      let db: SqliteDatabase | null = null
       try {
-        db = new Database(path, { readonly: true })
+        db = new DatabaseCtor(path, { readonly: true })
         const meta = db.query("SELECT value FROM session_meta WHERE key = 'created_at' OR key = 'topic'").all() as Array<{ key: string; value: string }>
         const count = (db.query("SELECT COUNT(*) as c FROM messages").get() as { c: number })?.c ?? 0
 

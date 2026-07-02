@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -54,11 +54,11 @@ describe("MemoryAuthStore", () => {
 describe("FileAuthStore", () => {
   let tempDir: string
 
-  test.before(() => {
+  beforeAll(() => {
     tempDir = mkdtempSync(join(tmpdir(), "auth-store-test-"))
   })
 
-  test.after(() => {
+  afterAll(() => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 

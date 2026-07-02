@@ -655,7 +655,8 @@ These are hard-won lessons from development, recorded to prevent regression:
 
 | Layer | Technology |
 |-------|-----------|
-| Runtime | Bun ≥1.3 |
+| Runtime | Node.js ≥20 |
+| Dev tooling | Bun (package manager, test runner) |
 | TUI | Ink 7 (React for terminal) |
 | Provider | Anthropic SDK (DeepSeek-compatible endpoint) |
 | MCP | Custom bridge → `~/.deepseek-code/mcp.json` |

@@ -10,7 +10,7 @@ Its core direction is constraint-first coding workflow: task triage, planning ga
 
 ## 1. Install Orcana
 
-Orcana requires Node.js 18+ or Bun.
+Orcana requires Node.js 20+.
 
 Install via npm:
 
@@ -199,7 +199,7 @@ Orcana is an experimental Coding Agent runtime. Some capabilities are still evol
 
 For high-risk operations, inspect the plan, changes, and verification output before accepting results. Do not use auto-approve mode in production repositories unless you fully understand the tool permissions and rollback behavior.
 
-Current version: v0.3.0. Target: v1.0 (10 phases, 32 PR groups, 17 verifiable acceptance criteria).
+Current version: v0.3.4. Target: v1.0 (10 phases, 32 PR groups, 17 verifiable acceptance criteria).
 
 ## 10. Troubleshooting
 

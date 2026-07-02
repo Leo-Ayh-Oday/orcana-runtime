@@ -115,15 +115,16 @@ export function findInsertedText(
 
 /** 将 flat string position 转换为 [row, col] tuple（TextArea 的 cursorPosition 格式）。 */
 export function flatToRowCol(text: string, pos: number): [number, number] {
+  const clampedPos = Math.max(0, Math.min(pos, text.length))
   let row = 0
   let lastNewline = -1
-  for (let i = 0; i < pos && i < text.length; i++) {
+  for (let i = 0; i < clampedPos; i++) {
     if (text[i] === "\n") {
       row++
       lastNewline = i
     }
   }
-  const col = pos - lastNewline - 1
+  const col = clampedPos - lastNewline - 1
   return [row, col < 0 ? 0 : col]
 }
 

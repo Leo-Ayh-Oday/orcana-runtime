@@ -65,7 +65,7 @@ export const Scrollback = React.memo(function Scrollback({
 
   return (
     <Box flexDirection="column">
-      {hiddenAbove && <Text color={C.dim}>  ... earlier messages (Up/PageUp)</Text>}
+      {hiddenAbove && <Text color={C.dim}>  ↑ earlier messages (scroll wheel / Up / PageUp)</Text>}
       {visibleLines.slice(
         hiddenAbove ? 1 : 0,
         hiddenBelow ? Math.max(0, visibleLines.length - 1) : visibleLines.length,
@@ -77,7 +77,7 @@ export const Scrollback = React.memo(function Scrollback({
           <Text color={line.color === C.red ? C.red : C.white}>{line.text}</Text>
         </Box>
       ))}
-      {hiddenBelow && <Text color={C.dim}>  ... newer messages (Down/PageDown)</Text>}
+      {hiddenBelow && <Text color={C.dim}>  ↓ newer messages (scroll wheel / Down / PageDown)</Text>}
     </Box>
   )
 })

@@ -79,10 +79,14 @@ function printHelp() {
 function printDoctor() {
   const nodeOk = Number(process.versions.node.split(".")[0] ?? 0) >= 20
   const apiKeyOk = Boolean(process.env.DEEPSEEK_API_KEY)
+  const sessionStore = process.versions.bun
+    ? "SQLite/FTS available"
+    : "JSON fallback; SQLite/FTS unavailable without Bun"
   console.log([
     `Orcana ${VERSION_LABEL}`,
     `Node.js ${process.versions.node} ${nodeOk ? "ok" : "requires >=20"}`,
     `Bun ${process.versions.bun ?? "not required for npm users"}`,
+    `Session store ${sessionStore}`,
     `DEEPSEEK_API_KEY ${apiKeyOk ? "set" : "missing"}`,
   ].join("\n"))
 }

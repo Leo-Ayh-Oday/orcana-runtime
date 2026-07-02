@@ -286,8 +286,6 @@ export function AppShell(props: AppShellProps) {
           rightStatus={footerTelemetry}
           commands={SLASH_COMMANDS}
           focused={!showStartup}
-          onScrollUp={() => props.scrollUp(3)}
-          onScrollDown={() => props.scrollDown(3)}
           onChromeChange={props.setInputChrome}
         />
         <FooterHints busy={isWorking} clarifying={!!clarification} width={cols} />

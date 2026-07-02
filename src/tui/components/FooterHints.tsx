@@ -26,6 +26,7 @@ export const FooterHints = React.memo(function FooterHints({ busy, clarifying, w
   const hints: Array<{ key: string; desc: string }> = [
     { key: "Enter", desc: "send" },
     { key: "Shift+Enter", desc: "newline" },
+    { key: "wheel", desc: "scroll" },
     { key: "/", desc: "commands" },
     { key: "Ctrl+C", desc: "exit" },
   ]
@@ -35,7 +36,7 @@ export const FooterHints = React.memo(function FooterHints({ busy, clarifying, w
   }
 
   // 窄屏时减少提示数量
-  const maxHints = width < 60 ? 2 : width < 80 ? 3 : hints.length
+  const maxHints = width < 60 ? 2 : width < 80 ? 4 : hints.length
   const visible = hints.slice(0, maxHints)
 
   return (

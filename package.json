@@ -49,6 +49,7 @@
     "build": "bun run clean && tsc -p tsconfig.build.json && node scripts/fix-dist-imports.cjs",
     "prepack": "bun run build",
     "pack:check": "npm pack --dry-run",
+    "smoke:release": "node scripts/release-smoke.cjs",
     "release": "npm publish --registry https://registry.npmjs.org/",
     "test": "node scripts/run-tests.cjs",
     "test:all": "bun test",

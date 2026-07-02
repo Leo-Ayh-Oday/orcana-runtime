@@ -18,6 +18,7 @@ import type { ScrollbackScrollState } from "./components/Scrollback"
 import type { TaskProgressState } from "./components/PlanPanel"
 import { formatHelpText, isSafeConcurrent, commandExists } from "./commands/registry"
 import { selectGateSummary, selectEvidenceSummary } from "./state/selectors"
+import { mouseEvents } from "./stdin-filter"
 
 type ModelHistoryRole = "user" | "assistant"
 
@@ -276,6 +277,7 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
           // 恢复终端状态后退出（process.exit 不触发 finally 块）
           process.stdout.write("\x1B[?25h")
           process.stdout.write("\x1B]0;\x07")
+          process.stdout.write("\x1B[?1000l\x1B[?1006l")
           process.exit(0)
         }
         if (name === "help") {
@@ -586,6 +588,17 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     setScrollOffset(offset => Math.min(offset, scrollState.maxOffset))
   }, [scrollState.maxOffset])
 
+  // 鼠标滚轮滚动：stdin-filter 解析 SGR 滚轮事件并通过 EventEmitter 分发
+  useEffect(() => {
+    const handler = (direction: number, isCtrl: boolean) => {
+      const amount = isCtrl ? 1 : 3
+      if (direction < 0) scrollUp(amount)
+      else scrollDown(amount)
+    }
+    mouseEvents.on("scroll", handler)
+    return () => mouseEvents.off("scroll", handler)
+  }, [scrollUp, scrollDown])
+
   return (
     <>
       <TuiInputGuard />
@@ -627,8 +640,9 @@ export async function startInkTUI(prompt?: string) {
   // react-ink-textarea 的 useKeyboardInput fallback 分支会插入任何非空 input，
   // 包括 SGR 鼠标序列（\x1B[<0;40;10M），导致滚轮在输入框产生乱码。
   // 必须在 render 之前安装，确保过滤后的数据才到达 Ink。
-  const { installStdinFilter, uninstallStdinFilter } = await import("./stdin-filter")
+  const { installStdinFilter, uninstallStdinFilter, enableMouseMode, disableMouseMode, mouseEvents } = await import("./stdin-filter")
   installStdinFilter()
+  enableMouseMode()
 
   // 设置终端标题（生产级 TUI 标配）
   const projectDir = process.cwd().split(/[/\\]/).pop() ?? "deepseek-code"
@@ -639,6 +653,7 @@ export async function startInkTUI(prompt?: string) {
   const sigintHandler = () => {
     process.stdout.write("\x1B[?25h")
     process.stdout.write("\x1B]0;\x07")
+    disableMouseMode()
     uninstallStdinFilter()
     runtime.dispose()
     process.exit(130)
@@ -656,6 +671,7 @@ export async function startInkTUI(prompt?: string) {
     process.off("SIGINT", sigintHandler)
     process.stdout.write("\x1B[?25h")
     process.stdout.write("\x1B]0;\x07")
+    disableMouseMode()
     uninstallStdinFilter()
     runtime.dispose()
   }

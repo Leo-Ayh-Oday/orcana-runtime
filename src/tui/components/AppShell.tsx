@@ -189,7 +189,15 @@ export function AppShell(props: AppShellProps) {
   const evidence = selectEvidenceSummary(state)
   const gates = selectGateSummary(state)
   const isWorking = !state.done && !state.errorLine
-  const hasDash = rightRail.round > 0 || rightRail.toolHistory.length > 0
+  const hasRuntimeSignal =
+    rightRail.round > 0
+    || rightRail.toolHistory.length > 0
+    || rightRail.rippleFindings.length > 0
+    || rightRail.runtime.gateSummary.total > 0
+    || rightRail.runtime.evidenceSummary.total > 0
+    || rightRail.runtime.patchSummary.total > 0
+    || rightRail.runtime.activeTools > 0
+  const hasDash = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
   const modalActive = confirmModal !== null || rewindModal !== null
 
   // 布局计算（Phase 5: modal 占用 4-6 行 panel 空间）

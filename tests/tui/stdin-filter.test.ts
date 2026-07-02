@@ -22,6 +22,10 @@ import {
   _getPendingBuffer,
 } from "../../src/tui/stdin-filter"
 
+function dec1000(button: number, col = 40, row = 10): string {
+  return String.fromCharCode(button + 32, col + 32, row + 32)
+}
+
 // ── containsMouseSequence ──
 
 describe("containsMouseSequence", () => {
@@ -398,6 +402,161 @@ describe("cross-chunk mouse sequence handling", () => {
       process.stdin.emit = origEmit
       uninstallStdinFilter()
       mouseEvents.off("scroll", handler)
+    }
+  })
+
+  test("orphan SGR mouse bodies without ESC are stripped and still emit scroll", () => {
+    const events: number[] = []
+    const handler = (direction: number) => events.push(direction)
+    const received: string[] = []
+    const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+    mouseEvents.on("scroll", handler)
+    try {
+      installStdinFilter()
+      process.stdin.on("data", onData)
+
+      process.stdin.emit("data", Buffer.from("[<65;27;29M[<65;26;29M", "utf8"))
+      expect(received).toHaveLength(0)
+      expect(events).toEqual([1, 1])
+      expect(_getPendingBuffer()).toBe("")
+    } finally {
+      process.stdin.off("data", onData)
+      process.stdin.emit = origEmit
+      uninstallStdinFilter()
+      mouseEvents.off("scroll", handler)
+    }
+  })
+
+  test("orphan SGR mouse body split across chunks is buffered", () => {
+    const events: number[] = []
+    const handler = (direction: number) => events.push(direction)
+    const received: string[] = []
+    const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+    mouseEvents.on("scroll", handler)
+    try {
+      installStdinFilter()
+      process.stdin.on("data", onData)
+
+      process.stdin.emit("data", Buffer.from("[<65;27;", "utf8"))
+      expect(received).toHaveLength(0)
+      expect(_getPendingBuffer()).toBe("[<65;27;")
+
+      process.stdin.emit("data", Buffer.from("29M", "utf8"))
+      expect(received).toHaveLength(0)
+      expect(events).toEqual([1])
+      expect(_getPendingBuffer()).toBe("")
+    } finally {
+      process.stdin.off("data", onData)
+      process.stdin.emit = origEmit
+      uninstallStdinFilter()
+      mouseEvents.off("scroll", handler)
+    }
+  })
+
+  test("DEC1000 click and release sequences are stripped before TextArea", () => {
+    const received: string[] = []
+    const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+    try {
+      installStdinFilter()
+      process.stdin.on("data", onData)
+
+      process.stdin.emit("data", Buffer.from(
+        `\x1B[M${dec1000(0)}\x1B[M${dec1000(2)}\x1B[M${dec1000(3)}`,
+        "utf8",
+      ))
+      expect(received).toHaveLength(0)
+      expect(_getPendingBuffer()).toBe("")
+    } finally {
+      process.stdin.off("data", onData)
+      process.stdin.emit = origEmit
+      uninstallStdinFilter()
+    }
+  })
+
+  test("orphan DEC1000 click and release bodies are stripped before TextArea", () => {
+    const received: string[] = []
+    const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+    try {
+      installStdinFilter()
+      process.stdin.on("data", onData)
+
+      process.stdin.emit("data", Buffer.from(
+        `[M${dec1000(0)}[M${dec1000(2)}[M${dec1000(3)}`,
+        "utf8",
+      ))
+      expect(received).toHaveLength(0)
+      expect(_getPendingBuffer()).toBe("")
+    } finally {
+      process.stdin.off("data", onData)
+      process.stdin.emit = origEmit
+      uninstallStdinFilter()
+    }
+  })
+
+  test("ordinary text that looks like an orphan DEC1000 prefix is preserved", () => {
+    const received: string[] = []
+    const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+    try {
+      installStdinFilter()
+      process.stdin.on("data", onData)
+
+      process.stdin.emit("data", Buffer.from("[Maybe] keep this text", "utf8"))
+      expect(received).toEqual(["[Maybe] keep this text"])
+      expect(_getPendingBuffer()).toBe("")
+    } finally {
+      process.stdin.off("data", onData)
+      process.stdin.emit = origEmit
+      uninstallStdinFilter()
+    }
+  })
+
+  test("DEC1000 scroll emits scroll events and is stripped", () => {
+    const events: number[] = []
+    const handler = (direction: number) => events.push(direction)
+    const received: string[] = []
+    const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+    mouseEvents.on("scroll", handler)
+    try {
+      installStdinFilter()
+      process.stdin.on("data", onData)
+
+      process.stdin.emit("data", Buffer.from(`\x1B[M${dec1000(64)}[M${dec1000(65)}`, "utf8"))
+      expect(received).toHaveLength(0)
+      expect(events).toEqual([-1, 1])
+      expect(_getPendingBuffer()).toBe("")
+    } finally {
+      process.stdin.off("data", onData)
+      process.stdin.emit = origEmit
+      uninstallStdinFilter()
+      mouseEvents.off("scroll", handler)
+    }
+  })
+
+  test("orphan DEC1000 mouse body split across chunks is buffered", () => {
+    const received: string[] = []
+    const origEmit = process.stdin.emit
+    const onData = (data: Buffer) => { received.push(data.toString("utf8")) }
+    try {
+      installStdinFilter()
+      process.stdin.on("data", onData)
+
+      process.stdin.emit("data", Buffer.from(`[M${dec1000(0).slice(0, 1)}`, "utf8"))
+      expect(received).toHaveLength(0)
+      expect(_getPendingBuffer()).toBe(`[M${dec1000(0).slice(0, 1)}`)
+
+      process.stdin.emit("data", Buffer.from(dec1000(0).slice(1), "utf8"))
+      expect(received).toHaveLength(0)
+      expect(_getPendingBuffer()).toBe("")
+    } finally {
+      process.stdin.off("data", onData)
+      process.stdin.emit = origEmit
+      uninstallStdinFilter()
     }
   })
 

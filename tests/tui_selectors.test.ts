@@ -44,7 +44,7 @@ describe("TUI state selectors", () => {
     state = reduceTuiEvent(state, { type: "gate.result", gate: "budget", status: "skip" }, 600)
 
     expect(selectEvidenceSummary(state)).toEqual({ total: 3, passed: 1, failed: 1, skipped: 1 })
-    expect(selectGateSummary(state)).toEqual({ total: 3, pass: 1, block: 1, skip: 1 })
+    expect(selectGateSummary(state)).toEqual({ total: 3, pass: 1, block: 1, warn: 0, skip: 1 })
   })
 
   test("header and right rail selectors project dashboard data", () => {

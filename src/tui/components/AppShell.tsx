@@ -19,7 +19,7 @@ import type { SlashCommandHint } from "../input"
 import { OrcanaComposer } from "./OrcanaComposer"
 import { getCommandHints } from "../commands/registry"
 import type { ClarificationQuestion } from "../../agent/clarification"
-import { selectRightRail, selectEvidenceSummary, selectGateSummary } from "../state/selectors"
+import { selectRightRail, selectEvidenceSummary, selectGateSummary, selectRuntimePanel } from "../state/selectors"
 import type { TuiState } from "../state/types"
 import { HeaderBar } from "./HeaderBar"
 import { StatusBar } from "./StatusBar"
@@ -29,6 +29,7 @@ import { PlanPanel, FlowLine, type TaskProgressState } from "./PlanPanel"
 import { FooterHints } from "./FooterHints"
 import { fitText } from "./MessageItem"
 import { resolveActiveContext } from "../input/types"
+import { ModeContract } from "./ModeContract"
 
 // ── 常量 ──
 
@@ -186,9 +187,23 @@ export function AppShell(props: AppShellProps) {
   // 布局计算
   const layout = computeAppShellLayout({ rows, cols, hasDash, isWorking, clarification, task, inputChrome })
 
-  // footerTelemetry
+  // Phase 3: 运行态控制台数据
+  const runtimePanel = selectRuntimePanel(state)
+  const activeTools = runtimePanel.activeTools
+  const ctxPct = Math.round(
+    state.tokens.contextMax > 0
+      ? (state.tokens.inputTokens / state.tokens.contextMax) * 100
+      : 0,
+  )
+  const cachePct = state.tokens.cacheHitRate ?? 0
+  const runtimeSummary = `ctx ${ctxPct}% / cache ${cachePct}% / r${state.round}`
+  const provider = state.session.provider
+  // 补丁数据从 runtimePanel 获取，用于 StatusBar 窄屏计数器
+  const patchSummary = runtimePanel.patchSummary
+
+  // footerTelemetry（保留原有兼容）
   const footerTelemetry = fitText(
-    (state.telemetry || `ctx 0% / cache 0% / r0`)
+    (state.telemetry || runtimeSummary)
       .replace(`model ${state.modelName} / `, "")
       .replace(`${state.modelName} / `, "")
       .replace(/^model\s+/i, "")
@@ -220,9 +235,11 @@ export function AppShell(props: AppShellProps) {
 
   return (
     <Box flexDirection="column" height={rows} paddingX={1}>
-      {/* HeaderBar */}
+      {/* HeaderBar (Phase 3: +mode +provider +runtimeSummary) */}
       <HeaderBar
         modelName={state.modelName}
+        provider={provider}
+        mode={state.mode}
         status={state.status}
         done={state.done}
         errorLine={state.errorLine}
@@ -230,10 +247,12 @@ export function AppShell(props: AppShellProps) {
         tick={tick}
         cols={cols}
         isWorking={isWorking}
+        runtimeSummary={runtimeSummary}
       />
 
-      {/* StatusBar */}
+      {/* StatusBar (Phase 3: +round +gateWarn +activeTools +patch*) */}
       <StatusBar
+        round={state.round}
         messagesCount={state.messages.length}
         scrollOffset={scrollState.normalizedOffset}
         scrollMax={scrollState.maxOffset}
@@ -242,10 +261,15 @@ export function AppShell(props: AppShellProps) {
         taskPhase={task?.phase ?? ""}
         gatePass={gates.pass}
         gateBlock={gates.block}
+        gateWarn={gates.warn}
         gateSkip={gates.skip}
         evidencePassed={evidence.passed}
         evidenceFailed={evidence.failed}
         evidenceRunning={0}
+        activeTools={activeTools}
+        patchProposed={patchSummary.proposed}
+        patchCommitted={patchSummary.committed}
+        patchRolledBack={patchSummary.rolledBack}
       />
 
       {/* Body: Scrollback + RightRail */}
@@ -270,7 +294,10 @@ export function AppShell(props: AppShellProps) {
         </Box>
 
         {layout.showDash && (
-          <Box width={Math.min(tuiTokens.layout.rail.max, Math.max(tuiTokens.layout.rail.min, Math.floor(cols * 0.28)))}>
+          <Box width={Math.min(tuiTokens.layout.rail.max, Math.max(tuiTokens.layout.rail.min, Math.floor(cols * 0.28)))} flexDirection="column">
+            {/* Phase 3: ModeContract at top of rail */}
+            <ModeContract mode={state.mode} width={Math.max(24, Math.floor(cols * 0.26))} />
+            <Box height={1} />
             <RightRail {...rightRail} tick={tick} />
           </Box>
         )}

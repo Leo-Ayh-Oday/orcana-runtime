@@ -1,15 +1,17 @@
-/** selectThinkingDock — 从 TuiState 派生 ThinkingDock 视图模型（PR-1）。
+/** selectThinkingDock — 从 TuiState 派生 ThinkingDock 视图模型（PR-1 + PR-1.6）。
  *
  *  纯函数 selector：输入 TuiState，输出 ThinkingDockModel。
  *  不修改 state，不产生副作用。
  *
- *  分类规则：
- *    state.errorLine 存在      → error
- *    active running tools      → tooling
- *    state.status 含 planning  → thinking
- *    state.status 含 evidence  → reviewing
- *    agent running 无工具      → composing
- *    idle (done=true)          → hidden
+ *  分类规则（优先级从高到低）：
+ *    state.errorLine 存在           → error
+ *    confirmActive=true (PR-1.6)    → waiting_permission
+ *    task.phase === "planning"      → planning (PR-1.6)
+ *    active running tools           → tooling
+ *    state.status 含 planning       → thinking
+ *    state.status 含 evidence       → reviewing
+ *    agent running 无工具           → composing
+ *    idle (done=true)               → hidden
  */
 
 import type { TuiState } from "../state/types"
@@ -22,10 +24,12 @@ export type ThinkingPhase =
   | "idle"
   | "routing"
   | "thinking"
+  | "planning"
   | "reading"
   | "tooling"
   | "reviewing"
   | "composing"
+  | "waiting_permission"
   | "error"
 
 export interface ThinkingDockModel {
@@ -44,10 +48,12 @@ const PHASE_LABELS: Record<ThinkingPhase, string> = {
   idle: "",
   routing: "Routing...",
   thinking: "Thinking...",
+  planning: "Planning...",
   reading: "Reading context...",
   tooling: "Running tools...",
   reviewing: "Reviewing evidence...",
   composing: "Composing...",
+  waiting_permission: "Waiting for permission...",
   error: "Error",
 }
 
@@ -79,16 +85,41 @@ function aggregateTools(tools: Array<{ tool: string; status: string }>): Array<{
     .sort((a, b) => b.count - a.count)
 }
 
-/** 从 TuiState 派生 ThinkingDock 视图模型。 */
-export function selectThinkingDock(state: TuiState): ThinkingDockModel {
-  // ── Error 优先 ──
+/** selectThinkingDock 选项（PR-1.6）。 */
+export interface SelectThinkingDockOptions {
+  /** ConfirmModal 是否打开 — 触发 waiting_permission phase。 */
+  confirmActive?: boolean
+}
+
+/** 从 TuiState 派生 ThinkingDock 视图模型。
+ *
+ *  PR-1.6 新增：
+ *    - options.confirmActive → waiting_permission（优先级仅次于 error）
+ *    - task.phase === "planning" → planning（优先级在 tooling 之前） */
+export function selectThinkingDock(
+  state: TuiState,
+  options?: SelectThinkingDockOptions,
+): ThinkingDockModel {
+  // ── Error 优先（最高优先级）──
   if (state.errorLine) {
     return { visible: true, phase: "error", label: state.errorLine }
+  }
+
+  // ── waiting_permission（PR-1.6: ConfirmModal 打开）──
+  if (options?.confirmActive) {
+    return { visible: true, phase: "waiting_permission", label: PHASE_LABELS.waiting_permission }
   }
 
   // ── Idle ──
   if (state.done) {
     return { visible: false, phase: "idle", label: "" }
+  }
+
+  // ── planning phase（PR-1.6: task.phase === "planning"）──
+  // state.task 是 unknown，安全 cast 为 { phase?: string }
+  const task = state.task as { phase?: string } | undefined
+  if (task?.phase === "planning") {
+    return { visible: true, phase: "planning", label: PHASE_LABELS.planning }
   }
 
   // ── 活跃工具 → tooling ──

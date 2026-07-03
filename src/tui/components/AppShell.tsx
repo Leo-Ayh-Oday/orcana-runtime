@@ -228,8 +228,8 @@ export function AppShell(props: AppShellProps) {
   const hasContent = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
   const modalActive = confirmModal !== null || rewindModal !== null
 
-  // PR-1: ThinkingDock 视图模型
-  const thinkingDock = selectThinkingDock(state)
+  // PR-1: ThinkingDock 视图模型（PR-1.6: 传入 confirmActive 触发 waiting_permission phase）
+  const thinkingDock = selectThinkingDock(state, { confirmActive: confirmModal !== null })
 
   // Phase 2: 布局计算 — 四档模式 (tiny/narrow/standard/comfortable)
   const layout = computeAppShellLayout({ rows, cols, hasContent, isWorking, clarification, task, inputChrome, thinkingDockRows: thinkingDock.visible ? 1 : 0 })

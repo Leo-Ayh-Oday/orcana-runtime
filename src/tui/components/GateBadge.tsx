@@ -1,9 +1,10 @@
 /** GateBadge — 渲染门禁状态徽章。
- *  显示：PlanningGate pass / PatchTransaction block / EvidenceGate pending */
+ *  显示：PlanningGate pass / PatchTransaction block / EvidenceGate pending
+ *  Phase 1: 门禁状态使用独立语义色 (gatePass/gateBlock/gatePending/gateSkip) */
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
+import { theme } from "../theme/theme"
 import type { TuiGateEvent } from "../state/types"
 import type { GateSummary } from "../state/selectors"
 
@@ -16,10 +17,10 @@ export interface GateBadgeProps {
 
 export function gateStatusColor(status: TuiGateEvent["status"]): string {
   switch (status) {
-    case "pass": return C.green
-    case "block": return C.red
-    case "warn": return C.yellow
-    case "skip": return C.dim
+    case "pass": return theme.gatePass
+    case "block": return theme.gateBlock
+    case "warn": return theme.gatePending
+    case "skip": return theme.gateSkip
   }
 }
 
@@ -39,7 +40,7 @@ export function GateEntry({ gate }: { gate: TuiGateEvent }) {
     <Box flexDirection="row">
       <Text color={color}>{gate.gate}</Text>
       <Text color={color}> {gateStatusLabel(gate.status)}</Text>
-      {gate.reason && <Text color={C.dim}>  {gate.reason}</Text>}
+      {gate.reason && <Text color={theme.textFaint}>  {gate.reason}</Text>}
     </Box>
   )
 }
@@ -47,7 +48,7 @@ export function GateEntry({ gate }: { gate: TuiGateEvent }) {
 /** 渲染门禁汇总。 */
 export function GateSummaryBadge({ summary }: { summary: GateSummary }) {
   if (summary.total === 0) return null
-  const color = summary.block > 0 ? C.red : summary.pass > 0 ? C.green : C.yellow
+  const color = summary.block > 0 ? theme.gateBlock : summary.pass > 0 ? theme.gatePass : theme.gatePending
   const label = summary.block > 0
     ? `${summary.block} block`
     : summary.pass > 0
@@ -55,10 +56,10 @@ export function GateSummaryBadge({ summary }: { summary: GateSummary }) {
       : "pending"
   return (
     <Box flexDirection="row">
-      <Text color={C.dim}>Gate: </Text>
+      <Text color={theme.textFaint}>Gate: </Text>
       <Text color={color}>{label}</Text>
       {summary.pass > 0 && summary.block === 0 && (
-        <Text color={C.dim}> ({summary.pass}/${summary.total})</Text>
+        <Text color={theme.textFaint}> ({summary.pass}/{summary.total})</Text>
       )}
     </Box>
   )

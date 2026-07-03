@@ -11,7 +11,7 @@
 
 import React from "react"
 import { Box, Text, useStdout } from "ink"
-import { C } from "../theme/theme"
+import { theme } from "../theme/theme"
 import { tuiTokens } from "../tokens"
 import type { Runtime } from "../../runtime/bootstrap"
 import { InkStartupScreen } from "../../ui/ink-startup"
@@ -34,6 +34,7 @@ import { ConfirmModal } from "./ConfirmModal"
 import { RewindModal, type RewindModalState } from "./RewindModal"
 import type { ConfirmRequest } from "../confirm-stubs"
 import { extractRuntimeCounters, formatRuntimeCounters } from "../format-runtime"
+import { useClock } from "../clock"
 
 // ── 常量 ──
 
@@ -59,25 +60,26 @@ function EmptySurface({ mode, modelName }: { mode: TuiMode; modelName: string })
   return (
     <Box flexDirection="column">
       <Box flexDirection="row">
-        <Text color={C.cyan} bold>Orcana</Text>
-        <Text color={C.dim}>  mode:</Text>
+        <Text color={theme.brand} bold>Orcana</Text>
+        <Text color={theme.textDim}>  mode:</Text>
         <ModeBadge mode={mode} />
-        <Text color={C.dim}>  {modelName}</Text>
+        <Text color={theme.textDim}>  {modelName}</Text>
       </Box>
       <Box height={1} />
-      <Text color={C.dim}>Try:</Text>
+      <Text color={theme.textDim}>Try:</Text>
       <Box flexDirection="row">
-        <Text color={C.cyan}>  /status</Text>
-        <Text color={C.dim}>  ·  /gates  ·  /evidence  ·  /models</Text>
+        <Text color={theme.brand}>  /status</Text>
+        <Text color={theme.textDim}>  ·  /gates  ·  /evidence  ·  /models</Text>
       </Box>
-      <Text color={C.dim}>  /help  — all commands</Text>
+      <Text color={theme.textDim}>  /help  — all commands</Text>
       <Box height={1} />
-      <Text color={C.dim}>Type your request or / for commands.</Text>
+      <Text color={theme.textDim}>Type your request or / for commands.</Text>
     </Box>
   )
 }
 
-function ClarificationPanel({ wizard, width, tick }: { wizard: ClarificationWizardState; width: number; tick: number }) {
+function ClarificationPanel({ wizard, width }: { wizard: ClarificationWizardState; width: number }) {
+  const { tick } = useClock()
   const question = wizard.questions[wizard.index]
   if (!question) return null
   const flowWidth = Math.max(18, Math.min(width - 4, 72))
@@ -85,30 +87,30 @@ function ClarificationPanel({ wizard, width, tick }: { wizard: ClarificationWiza
   return (
     <Box flexDirection="column" paddingX={1} marginBottom={1}>
       <Box flexDirection="row">
-        <Text color={C.cyan}>clarify </Text>
-        <Text color={C.dim}>{wizard.index + 1}/{wizard.questions.length}</Text>
-        <Text color={C.dim}> / choose one</Text>
+        <Text color={theme.brand}>clarify </Text>
+        <Text color={theme.textDim}>{wizard.index + 1}/{wizard.questions.length}</Text>
+        <Text color={theme.textDim}> / choose one</Text>
       </Box>
-      <Text color={C.white}>{fitText(question.title, Math.max(18, width - 4))}</Text>
+      <Text color={theme.text}>{fitText(question.title, Math.max(18, width - 4))}</Text>
       {question.options.map((option, index) => {
         const selected = index === wizard.selected
         return (
           <Box key={`${question.id}-${option.key}`} flexDirection="row">
             <Box width={3}>
-              <Text color={selected ? C.cyan : C.dim}>{selected ? ">" : " "}</Text>
+              <Text color={selected ? theme.brand : theme.textFaint}>{selected ? ">" : " "}</Text>
             </Box>
             <Box width={4}>
-              <Text color={selected ? C.cyan : C.blue}>{option.key}.</Text>
+              <Text color={selected ? theme.brand : theme.info}>{option.key}.</Text>
             </Box>
-            <Text color={selected ? C.white : C.dim}>
+            <Text color={selected ? theme.text : theme.textDim}>
               {fitText(option.label, Math.max(18, width - 12))}
               {option.recommended ? " [recommended]" : ""}
             </Text>
           </Box>
         )
       })}
-      <FlowLine tick={tick} width={flowWidth} active />
-      <Text color={C.dim}>Up/Down or j/k select  Enter confirm  Esc cancel</Text>
+      <FlowLine width={flowWidth} active />
+      <Text color={theme.textFaint}>Up/Down or j/k select  Enter confirm  Esc cancel</Text>
     </Box>
   )
 }
@@ -126,7 +128,6 @@ export interface AppShellProps {
   state: TuiState
   runtime: Runtime
   prompt?: string
-  tick: number
   scrollOffset: number
   scrollState: ScrollbackScrollState
   onScrollState: (state: ScrollbackScrollState) => void
@@ -151,16 +152,20 @@ export interface AppShellProps {
 export interface AppShellLayoutInput {
   rows: number
   cols: number
-  hasDash: boolean
+  /** 是否有 runtime 信号（需要显示 dash/rail 内容） */
+  hasContent: boolean
   isWorking: boolean
   clarification: ClarificationWizardState | null
   task: TaskProgressState | undefined
   inputChrome: InputChromeState
 }
 
+/** Phase 2: 布局模式 */
+export type LayoutMode = "tiny" | "narrow" | "standard" | "comfortable"
+
 export interface AppShellLayout {
-  hasDash: boolean
   showDash: boolean
+  mode: LayoutMode
   clarificationRows: number
   taskRows: number
   panelRows: number
@@ -169,27 +174,37 @@ export interface AppShellLayout {
   bodyHeight: number
 }
 
+export function computeEffectiveBodyHeight(layout: Pick<AppShellLayout, "bodyHeight">, modalActive: boolean): number {
+  return modalActive ? Math.max(10, layout.bodyHeight - 6) : layout.bodyHeight
+}
+
 export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayout {
-  const { rows, cols, hasDash, isWorking, clarification, task, inputChrome } = input
+  const { rows, cols, hasContent, isWorking, clarification, task, inputChrome } = input
   const question = clarification?.questions[clarification.index]
   const clarificationRows = clarification ? Math.min(10, 4 + (question?.options.length ?? 0)) : 0
   const taskRows = task ? (task.phase === "planning" ? 3 : Math.min(5, 1 + Math.min(3, task.steps.length))) : 0
   const panelRows = clarificationRows || taskRows
-  const showDash = hasDash && cols >= tuiTokens.layout.breakpointCompact
-  // OrcanaComposer 多行布局：TextArea(textRows 行) + 状态行(1行) + 可能的粘贴指示(1行)
-  // 命令面板打开时占 5 行（3 条候选 + 标题 + 空行）
-  // FooterHints 占 1 行，footerHeight 需额外 +1
+
+  // Phase 2: 四档布局模式
+  let mode: LayoutMode
+  if (cols < 60) mode = "tiny"
+  else if (cols < 96) mode = "narrow"
+  else if (cols < 120) mode = "standard"
+  else mode = "comfortable"
+
+  // RightRail 仅在 standard/comfortable 且有 runtime 内容时显示
+  const showDash = hasContent && (mode === "standard" || mode === "comfortable")
   const textRows = inputChrome.textRows > 0 ? inputChrome.textRows : 1
   const inputRows = inputChrome.commandOpen
     ? 5
     : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
   const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1))
   const bodyHeight = Math.max(10, rows - footerHeight - 3)
-  return { hasDash, showDash, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight }
+  return { showDash, mode, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight }
 }
 
 export function AppShell(props: AppShellProps) {
-  const { state, runtime, prompt, tick, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, confirmModal, rewindModal } = props
+  const { state, runtime, prompt, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, confirmModal, rewindModal } = props
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout?.rows ?? 32)
   const cols = stdout?.columns ?? 96
@@ -206,11 +221,12 @@ export function AppShell(props: AppShellProps) {
     || rightRail.runtime.evidenceSummary.total > 0
     || rightRail.runtime.patchSummary.total > 0
     || rightRail.runtime.activeTools > 0
-  const hasDash = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
+  const hasContent = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
   const modalActive = confirmModal !== null || rewindModal !== null
 
-  // 布局计算（Phase 5: modal 占用 4-6 行 panel 空间）
-  const layout = computeAppShellLayout({ rows, cols, hasDash, isWorking, clarification, task, inputChrome })
+  // Phase 2: 布局计算 — 四档模式 (tiny/narrow/standard/comfortable)
+  const layout = computeAppShellLayout({ rows, cols, hasContent, isWorking, clarification, task, inputChrome })
+  const effectiveBodyHeight = computeEffectiveBodyHeight(layout, modalActive)
 
   // Visual Step 2: 统一计数器
   const counters = extractRuntimeCounters(state)
@@ -254,7 +270,6 @@ export function AppShell(props: AppShellProps) {
         errorLine={state.errorLine}
         status={state.status}
         queueCount={state.queueCount}
-        tick={tick}
         cols={cols}
         isWorking={isWorking}
         round={counters.round}
@@ -262,8 +277,13 @@ export function AppShell(props: AppShellProps) {
         cachePct={counters.cachePct}
       />
 
-      {/* StatusBar (Visual Step 2: single counters object) */}
-      <StatusBar counters={counters} cols={cols} />
+      {/* StatusBar (Phase 2: narrow mode absorbs RightRail runtime info) */}
+      <StatusBar
+        counters={counters}
+        cols={cols}
+        ripplePhase={rightRail.runtime.ripplePhase}
+        narrow={layout.mode === "tiny" || layout.mode === "narrow"}
+      />
 
       {/* Phase 5: Modal overlays (between StatusBar and Body) */}
       {confirmModal && (
@@ -273,12 +293,12 @@ export function AppShell(props: AppShellProps) {
       )}
       {rewindModal && (
         <Box marginBottom={1}>
-          <RewindModal modal={rewindModal} tick={tick} width={cols - 4} />
+          <RewindModal modal={rewindModal} width={cols - 4} />
         </Box>
       )}
 
       {/* Body: Scrollback + RightRail */}
-      <Box flexDirection="row" height={modalActive ? Math.max(10, layout.bodyHeight - 6) : layout.bodyHeight} flexGrow={1}>
+      <Box flexDirection="row" height={effectiveBodyHeight} flexGrow={1}>
         <Box flexDirection="column" flexGrow={1} marginRight={1}>
           <Box flexDirection="column" flexGrow={1}>
             {empty ? (
@@ -287,25 +307,25 @@ export function AppShell(props: AppShellProps) {
               <Scrollback
                 messages={state.messages}
                 width={cols - (layout.showDash ? tuiTokens.layout.rail.max : 2)}
-                height={Math.max(4, layout.bodyHeight - 1)}
-                tick={tick}
+                height={Math.max(4, effectiveBodyHeight - 1)}
                 status={state.status}
                 round={state.round}
                 scrollOffset={scrollOffset}
                 onScrollState={onScrollState}
+                hasActiveTools={state.tools.some(t => t.status === "running")}
               />
             )}
           </Box>
-          {state.errorLine && <Text color={C.red}>{state.errorLine}</Text>}
+          {state.errorLine && <Text color={theme.error}>{state.errorLine}</Text>}
         </Box>
 
         {layout.showDash && (
           <Box flexDirection="row">
-            <Text color={C.border}>│</Text>
-            <Box width={Math.min(tuiTokens.layout.rail.max, Math.max(tuiTokens.layout.rail.min, Math.floor(cols * 0.28)))} flexDirection="column" paddingLeft={1}>
-              <ModeContract mode={state.mode} width={Math.max(24, Math.floor(cols * 0.26))} />
+            <Text color={theme.border}>│</Text>
+            <Box width={layout.mode === "comfortable" ? tuiTokens.layout.rail.ideal : tuiTokens.layout.rail.min} flexDirection="column" paddingLeft={1}>
+              <ModeContract mode={state.mode} width={Math.max(24, tuiTokens.layout.rail.min - 4)} />
               <Box height={1} />
-              <RightRail {...rightRail} tick={tick} />
+              <RightRail {...rightRail} />
             </Box>
           </Box>
         )}
@@ -314,9 +334,9 @@ export function AppShell(props: AppShellProps) {
       {/* Footer: PlanPanel/ClarificationPanel + InputLine + FooterHints */}
       <Box flexDirection="column" height={layout.footerHeight}>
         {clarification ? (
-          <ClarificationPanel wizard={clarification} width={cols} tick={tick} />
+          <ClarificationPanel wizard={clarification} width={cols} />
         ) : (
-          <PlanPanel task={task} width={cols} tick={tick} />
+          <PlanPanel task={task} width={cols} />
         )}
         <OrcanaComposer
           onSubmit={props.submit}

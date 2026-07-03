@@ -8,6 +8,12 @@
  *  Phase 3: 新增 glyphs 双主题（ascii / unicode）。
  *    - DEEPSEEK_TUI_UNICODE=1 使用 unicode 主题（完整 Braille/Block/几何字符）
  *    - 默认使用 ascii 主题（ASCII-safe，Windows Terminal 所有字体兼容）
+ *
+ *  Phase 5: 每类 pending activity 独立 glyph 序列。
+ *    - routing: 波浪扫描 (~-~=~-~=)
+ *    - reading: 眼动扫描 (.oO@Oo.)
+ *    - streaming: 专用 spinner
+ *    - DEEPSEEK_TUI_REDUCED_MOTION=1 关闭所有动画 glyph
  */
 
 // ── Glyph 主题 ──
@@ -19,6 +25,14 @@ export interface GlyphTheme {
   verifyWaveLen: number
   editingGlow: string
   editingGlowLen: number
+  /** Phase 5: per-activity glyph sequences */
+  routingGlyphs: string
+  routingGlyphsLen: number
+  readingGlyphs: string
+  readingGlyphsLen: number
+  streamingGlyphs: string
+  streamingGlyphsLen: number
+  stalledGlyph: string
   progressFill: string
   progressEmpty: string
   checkMark: string
@@ -44,6 +58,14 @@ const ASCII_GLYPHS: GlyphTheme = {
   verifyWaveLen: 14,
   editingGlow: "><><><><><",
   editingGlowLen: 10,
+  // Phase 5: per-activity glyph sequences — visually distinct ASCII animations
+  routingGlyphs: "~-~=~-~=~-~",
+  routingGlyphsLen: 12,
+  readingGlyphs: ".oO@Oo.oO@Oo.",
+  readingGlyphsLen: 12,
+  streamingGlyphs: "-\\|/-\\|/-\\|/",
+  streamingGlyphsLen: 10,
+  stalledGlyph: "Z",
   progressFill: "#",
   progressEmpty: "-",
   checkMark: "v",
@@ -69,6 +91,14 @@ const UNICODE_GLYPHS: GlyphTheme = {
   verifyWaveLen: 14,
   editingGlow: "›‹›‹›‹›‹›‹",
   editingGlowLen: 10,
+  // Phase 5: per-activity glyph sequences — Unicode variants
+  routingGlyphs: "⤴⤵⤴⤵⤴⤵⤴⤵",
+  routingGlyphsLen: 8,
+  readingGlyphs: "◌◉◎●◎◉◌○",
+  readingGlyphsLen: 8,
+  streamingGlyphs: "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
+  streamingGlyphsLen: 10,
+  stalledGlyph: "☡",
   progressFill: "▓",
   progressEmpty: "░",
   checkMark: "✓",

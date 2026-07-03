@@ -27,7 +27,7 @@ import {
   gateStatusLabel,
 } from "../../src/tui/components/GateBadge"
 import type { TuiMessage } from "../../src/tui/state/types"
-import { C } from "../../src/tui/theme/theme"
+import { C, theme } from "../../src/tui/theme/theme"
 
 // ── fitText (PR-2 acceptance #1: HeaderBar long model name) ──
 
@@ -82,7 +82,7 @@ describe("component: renderMessageLines", () => {
     const lines = renderMessageLines(message, 40, "")
     expect(lines.length).toBeGreaterThan(0)
     expect(lines[0]!.marker).toBe(">")
-    expect(lines[0]!.color).toBe(C.cyan)
+    expect(lines[0]!.color).toBe(theme.userMessage)
   })
 
   test("assistant message: marker | and blue color", () => {
@@ -95,7 +95,7 @@ describe("component: renderMessageLines", () => {
     const lines = renderMessageLines(message, 40, "")
     expect(lines.length).toBeGreaterThan(0)
     expect(lines[0]!.marker).toBe("|")
-    expect(lines[0]!.color).toBe(C.blue)
+    expect(lines[0]!.color).toBe(theme.assistantMessage)
   })
 
   test("event message: marker from eventMarker, color from eventColor", () => {
@@ -109,7 +109,8 @@ describe("component: renderMessageLines", () => {
     const lines = renderMessageLines(message, 40, "")
     expect(lines.length).toBeGreaterThan(0)
     expect(lines[0]!.marker).toBe("$") // tool marker
-    expect(lines[0]!.color).toBe(C.green) // tool color
+    // Phase 1: tool event now uses jade (eventTool) not legacy green
+    expect(lines[0]!.color).toBe(theme.eventTool)
   })
 
   test("pending assistant with no text: returns static spinner placeholder (Phase 4)", () => {
@@ -125,7 +126,7 @@ describe("component: renderMessageLines", () => {
     expect(lines.length).toBe(1)
     expect(lines[0]!.pendingAnim).toBe("spinner")
     expect(lines[0]!.pendingStatus).toBe("working")
-    expect(lines[0]!.color).toBe(C.blue)
+    expect(lines[0]!.color).toBe(theme.assistantMessage)
     // Text is empty — spinner char + verb added by applyPendingAnimation() in Scrollback
   })
 
@@ -207,47 +208,71 @@ describe("component: eventMarker and eventColor", () => {
     expect(eventMarker(undefined)).toBe("-")
   })
 
-  test("eventColor returns green for tool", () => {
-    expect(eventColor("tool")).toBe(C.green)
+  // Phase 1: eventColor 现在返回独立语义色 (jade/teal/abyss/coral/gate/evidence/patch)
+  test("eventColor returns jade for tool", () => {
+    expect(eventColor("tool")).toBe(theme.eventTool)
   })
 
-  test("eventColor returns blue for task", () => {
-    expect(eventColor("task")).toBe(C.blue)
+  test("eventColor returns teal for task", () => {
+    expect(eventColor("task")).toBe(theme.eventTask)
   })
 
-  test("eventColor returns cyan for plan", () => {
-    expect(eventColor("plan")).toBe(C.cyan)
+  test("eventColor returns abyss for plan", () => {
+    expect(eventColor("plan")).toBe(theme.eventPlan)
   })
 
-  test("eventColor returns red for error", () => {
-    expect(eventColor("error")).toBe(C.red)
+  test("eventColor returns coral for error", () => {
+    expect(eventColor("error")).toBe(theme.eventError)
   })
 
-  test("eventColor returns dim for undefined", () => {
-    expect(eventColor(undefined)).toBe(C.dim)
+  test("eventColor returns textFaint for undefined", () => {
+    expect(eventColor(undefined)).toBe(theme.textFaint)
+  })
+
+  // Phase 1: gate/evidence/patch 不再共用 green/blue/yellow
+  test("eventColor uses distinct gate color (not shared with warning or eventTask)", () => {
+    const gateColor = eventColor("gate")
+    expect(gateColor).toBe(theme.eventGate)
+    expect(gateColor).not.toBe(theme.eventEvidence)
+    expect(gateColor).not.toBe(theme.eventPatch)
+  })
+
+  test("eventColor uses distinct evidence color", () => {
+    const evidenceColor = eventColor("evidence")
+    expect(evidenceColor).toBe(theme.eventEvidence)
+    expect(evidenceColor).not.toBe(theme.eventGate)
+    expect(evidenceColor).not.toBe(theme.eventPatch)
+  })
+
+  test("eventColor uses distinct patch color", () => {
+    const patchColor = eventColor("patch")
+    expect(patchColor).toBe(theme.eventPatch)
+    expect(patchColor).not.toBe(theme.eventGate)
+    expect(patchColor).not.toBe(theme.eventEvidence)
   })
 })
 
 // ── GateBadge helpers (PR-2 acceptance #5: pass/block/skip) ──
 
 describe("component: gateStatusColor and gateStatusLabel", () => {
-  test("pass → green + 'pass'", () => {
-    expect(gateStatusColor("pass")).toBe(C.green)
+  // Phase 1: gate status 颜色映射到独立语义色 (gatePass/gateBlock/gatePending/gateSkip)
+  test("pass → jade + 'pass'", () => {
+    expect(gateStatusColor("pass")).toBe(theme.gatePass)
     expect(gateStatusLabel("pass")).toBe("pass")
   })
 
-  test("block → red + 'block'", () => {
-    expect(gateStatusColor("block")).toBe(C.red)
+  test("block → coral + 'block'", () => {
+    expect(gateStatusColor("block")).toBe(theme.gateBlock)
     expect(gateStatusLabel("block")).toBe("block")
   })
 
-  test("warn → yellow + 'warn'", () => {
-    expect(gateStatusColor("warn")).toBe(C.yellow)
+  test("warn → amber + 'warn'", () => {
+    expect(gateStatusColor("warn")).toBe(theme.gatePending)
     expect(gateStatusLabel("warn")).toBe("warn")
   })
 
-  test("skip → dim + 'skip'", () => {
-    expect(gateStatusColor("skip")).toBe(C.dim)
+  test("skip → fog + 'skip'", () => {
+    expect(gateStatusColor("skip")).toBe(theme.gateSkip)
     expect(gateStatusLabel("skip")).toBe("skip")
   })
 })
@@ -255,27 +280,27 @@ describe("component: gateStatusColor and gateStatusLabel", () => {
 // ── ToolCard helpers (PR-2 acceptance #6: large output → summary only) ──
 
 describe("component: toolStatusIcon/Color/Label", () => {
-  test("running → ● / cyan / 'running'", () => {
+  test("running → ● / info / 'running'", () => {
     expect(toolStatusIcon("running")).toBe("●")
-    expect(toolStatusColor("running")).toBe(C.cyan)
+    expect(toolStatusColor("running")).toBe(theme.info)
     expect(toolStatusLabel("running")).toBe("running")
   })
 
-  test("passed → ● / green / 'passed'", () => {
+  test("passed → ● / success / 'passed'", () => {
     expect(toolStatusIcon("passed")).toBe("●")
-    expect(toolStatusColor("passed")).toBe(C.green)
+    expect(toolStatusColor("passed")).toBe(theme.success)
     expect(toolStatusLabel("passed")).toBe("passed")
   })
 
-  test("failed → ✕ / red / 'failed'", () => {
+  test("failed → ✕ / error / 'failed'", () => {
     expect(toolStatusIcon("failed")).toBe("✕")
-    expect(toolStatusColor("failed")).toBe(C.red)
+    expect(toolStatusColor("failed")).toBe(theme.error)
     expect(toolStatusLabel("failed")).toBe("failed")
   })
 
-  test("orphan → ? / yellow / 'orphan'", () => {
+  test("orphan → ? / warning / 'orphan'", () => {
     expect(toolStatusIcon("orphan")).toBe("?")
-    expect(toolStatusColor("orphan")).toBe(C.yellow)
+    expect(toolStatusColor("orphan")).toBe(theme.warning)
     expect(toolStatusLabel("orphan")).toBe("orphan")
   })
 })
@@ -343,16 +368,17 @@ describe("trimForViewport (Phase 2)", () => {
   test("text over maxChars shows truncated marker", () => {
     const text = "beginning part\n" + "x".repeat(3000) + "\nending part"
     const result = trimForViewport(text, 200)
-    // Should contain the "hidden above" notice
-    expect(result).toContain("hidden above")
+    // Phase 3: 反转 — 保留头部，尾部提示 "hidden below"
+    expect(result).toContain("hidden below")
     expect(result).not.toBe(text)
   })
 
-  test("truncated text keeps the tail, discards the head", () => {
+  test("truncated text keeps the head, discards the tail (Phase 3 reversal)", () => {
     const text = "HEAD_CONTENT_" + "x".repeat(500) + "_TAIL_CONTENT"
     const result = trimForViewport(text, 300)
-    expect(result).toContain("_TAIL_CONTENT")
-    expect(result).not.toContain("HEAD_CONTENT_")
+    // Phase 3: 反转 — 保留头部
+    expect(result).toContain("HEAD_CONTENT_")
+    expect(result).not.toContain("_TAIL_CONTENT")
   })
 
   test("empty string returns empty", () => {
@@ -361,8 +387,9 @@ describe("trimForViewport (Phase 2)", () => {
 
   test("maxChars=0 always triggers truncation", () => {
     const result = trimForViewport("hello", 0)
-    expect(result).toContain("hidden above")
-    expect(result).toContain("hello")
+    // Phase 3: head preservation with maxChars=0 — nothing fits, only indicator
+    expect(result).toContain("hidden below")
+    expect(result).toContain("5 chars") // correct count
   })
 })
 
@@ -379,10 +406,11 @@ describe("renderMessageLines truncation (Phase 2)", () => {
     expect(lines.length).toBeGreaterThan(0)
     const allText = lines.map(l => l.text).join("\n")
     expect(allText).toContain("Short response")
-    expect(allText).not.toContain("hidden above")
+    // Phase 3: 截断标记文案从 "hidden above" → "hidden below"
+    expect(allText).not.toContain("hidden below")
   })
 
-  test("assistant text > width*80 shows truncation marker", () => {
+  test("assistant text > width*80 shows truncation marker (Phase 3: hidden below)", () => {
     const long = "a".repeat(5000)
     const message: TuiMessage = {
       id: "m1",
@@ -394,8 +422,8 @@ describe("renderMessageLines truncation (Phase 2)", () => {
     const lines = renderMessageLines(message, 30, "")
     expect(lines.length).toBeGreaterThan(0)
     const allText = lines.map(l => l.text).join("\n")
-    // Should contain truncation notice
-    expect(allText).toContain("hidden above")
+    // Phase 3: reversed from "hidden above" to "hidden below" (pure text, no code fence)
+    expect(allText).toContain("hidden below")
   })
 
   test("pending message is not truncated by trimForViewport", () => {

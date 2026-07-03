@@ -30,6 +30,10 @@ export interface StreamTraceRound {
   viewportTrimmed: boolean | null
   /** final 时被替换的文本次数（assistant.final 非空 text） */
   finalReplaced: boolean
+  /** provider 返回的 stop_reason（end_turn / max_tokens / tool_use / stop_sequence / refusal） */
+  stopReason: string | null
+  /** agent loop 层的 stream error（provider 不可重试错误或异常） */
+  streamError: string | null
   endTime: string | null
 }
 
@@ -41,6 +45,8 @@ export interface StreamTraceState {
   totalDeltaChars: number
   finalAccumulatedChars: number
   finalReplaced: boolean
+  stopReason: string | null
+  streamError: string | null
 }
 
 // ── 工厂 ──
@@ -56,6 +62,8 @@ export function createStreamTrace(dir = ".deepseek-code"): StreamTraceState {
     totalDeltaChars: 0,
     finalAccumulatedChars: 0,
     finalReplaced: false,
+    stopReason: null,
+    streamError: null,
   }
 }
 
@@ -68,6 +76,8 @@ export function traceStartRound(ts: StreamTraceState, round: number): void {
   ts.totalDeltaChars = 0
   ts.finalAccumulatedChars = 0
   ts.finalReplaced = false
+  ts.stopReason = null
+  ts.streamError = null
 }
 
 export function traceDeltaChunk(ts: StreamTraceState, chunk: string): void {
@@ -80,6 +90,18 @@ export function traceFinalAccumulated(ts: StreamTraceState, chars: number, repla
   if (!ts.enabled) return
   ts.finalAccumulatedChars = chars
   ts.finalReplaced = replaced
+}
+
+/** 记录 provider 返回的 stop_reason（从 status 事件 "provider-stop: ..." 解析）。 */
+export function traceSetStopReason(ts: StreamTraceState, stopReason: string): void {
+  if (!ts.enabled) return
+  ts.stopReason = stopReason
+}
+
+/** 记录 agent loop 层的 stream error。 */
+export function traceSetStreamError(ts: StreamTraceState, error: string): void {
+  if (!ts.enabled) return
+  ts.streamError = error
 }
 
 /** 避免频繁 fs write — 每个 chunk 只更新内存，只在 round 结束时 flush。 */
@@ -101,6 +123,8 @@ export function traceEndRound(
     renderDisplayChars,
     viewportTrimmed,
     finalReplaced: ts.finalReplaced,
+    stopReason: ts.stopReason,
+    streamError: ts.streamError,
     endTime: new Date().toISOString(),
   }
 

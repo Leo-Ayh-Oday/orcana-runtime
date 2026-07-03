@@ -1,20 +1,21 @@
-/** ConfirmModal — 高风险工具确认面板（Phase 5）。
+/** ConfirmModal — 高风险工具确认面板（Phase 7 migration）。
  *
+ *  Phase 7: C.* → theme.* 全量迁移。
  *  显示当前等待确认的工具请求，列示风险和关键参数。
  *  键盘由 InputContext.Confirm 处理（通过 Phase 2 keymap），组件本身纯渲染。
  */
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
+import { theme } from "../theme/theme"
 import type { ConfirmRequest } from "../confirm-stubs"
 
 // ── 风险级别颜色 ──
 
 function riskColor(level: number): string {
-  if (level >= 4) return C.red
-  if (level >= 3) return C.yellow
-  return C.cyan
+  if (level >= 4) return theme.error
+  if (level >= 3) return theme.warning
+  return theme.info
 }
 
 function riskLabel(level: number): string {
@@ -48,39 +49,39 @@ export const ConfirmModal = React.memo(function ConfirmModal({ request, position
     <Box flexDirection="column" borderStyle="single" borderColor={rColor} paddingX={1}>
       {/* Header */}
       <Box flexDirection="row">
-        <Text bold color={rColor}>⚠ Confirm [{rLabel}]</Text>
-        <Text color={C.dim}> {position}</Text>
+        <Text bold color={rColor}>! Confirm [{rLabel}]</Text>
+        <Text color={theme.textFaint}> {position}</Text>
       </Box>
 
       {/* Tool + Risk */}
       <Box flexDirection="row">
-        <Text color={C.cyan}>tool </Text>
-        <Text color={C.white}>{request.toolName}</Text>
-        <Text color={C.dim}> — </Text>
+        <Text color={theme.info}>tool </Text>
+        <Text color={theme.text}>{request.toolName}</Text>
+        <Text color={theme.textFaint}> — </Text>
         <Text color={rColor}>{request.riskDescription}</Text>
       </Box>
 
       {/* Source gate */}
       <Box flexDirection="row">
-        <Text color={C.dim}>source </Text>
-        <Text color={C.dim}>{request.source}</Text>
+        <Text color={theme.textFaint}>source </Text>
+        <Text color={theme.textFaint}>{request.source}</Text>
       </Box>
 
       {/* Params (truncated) */}
       <Box flexDirection="row">
-        <Text color={C.dim}>params </Text>
-        <Text color={C.white}>{truncateParams(request.params)}</Text>
+        <Text color={theme.textFaint}>params </Text>
+        <Text color={theme.text}>{truncateParams(request.params)}</Text>
       </Box>
 
       {/* Actions */}
       <Box flexDirection="row" marginTop={1}>
-        <Text color={C.green}>y</Text>
-        <Text color={C.dim}> approve  </Text>
-        <Text color={C.red}>n</Text>
-        <Text color={C.dim}> deny  </Text>
-        <Text color={C.yellow}>a</Text>
-        <Text color={C.dim}> deny all  </Text>
-        <Text color={C.dim}>Esc dismiss</Text>
+        <Text color={theme.success}>y</Text>
+        <Text color={theme.textFaint}> approve  </Text>
+        <Text color={theme.error}>n</Text>
+        <Text color={theme.textFaint}> deny  </Text>
+        <Text color={theme.warning}>a</Text>
+        <Text color={theme.textFaint}> deny all  </Text>
+        <Text color={theme.textFaint}>Esc dismiss</Text>
       </Box>
     </Box>
   )
@@ -90,9 +91,9 @@ export const ConfirmModal = React.memo(function ConfirmModal({ request, position
 
 export function formatConfirmDecision(action: "approved" | "denied" | "denied_all" | "dismissed", toolName: string): string {
   switch (action) {
-    case "approved": return `✓ approved ${toolName}`
-    case "denied": return `✗ denied ${toolName}`
-    case "denied_all": return `✗ denied all (${toolName} and subsequent)`
+    case "approved": return `v approved ${toolName}`
+    case "denied": return `x denied ${toolName}`
+    case "denied_all": return `x denied all (${toolName} and subsequent)`
     case "dismissed": return `- dismissed ${toolName} confirmation`
   }
 }

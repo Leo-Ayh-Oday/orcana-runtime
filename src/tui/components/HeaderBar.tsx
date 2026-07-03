@@ -1,20 +1,26 @@
-/** HeaderBar — 顶部单行状态条（Visual Step 2 → Phase 4a 重设计）。
+/** HeaderBar — 顶部单行状态条（Phase 2 重设计）。
  *
- *  Phase 4a: 单行紧凑状态条，替代旧的两行 Header + Sonar 布局。
- *  格式: Orcana  <mode>  <model>  <state>  ctx <pct>%  cache <pct>%  r<n>
+ *  格式: Orcana · <mode> · <state> · <model-short> · ctx <n>% · cache <n>% · r<n> · q:<n>
  *
- *  状态行为:
- *    - idle/done: 静态 "done" / "idle"
- *    - running: 轻量 pulse 动画 "thinking [..  ]" (4-frame)
- *    - error/blocked: "!" 标记
- *    - queue > 0: 追加 "q:n"
- */
+ *  截断优先级（窄屏时按此顺序裁减）:
+ *    1. cache %        (cols<96 裁)
+ *    2. round          (round===0 或 cols<80 裁)
+ *    3. model-short    (用 fitText 截断，保留前段)
+ *    4. ctx %          (cols<60 裁)
+ *    5-8. brand/mode/state/blocked/queue 永不裁
+ *
+ *  state 统一派生:
+ *    - blocked → "! <reason>" (error 色，全宽度优先)
+ *    - done → "done" (success 色)
+ *    - running → activityPulse (brand 色，4-frame)
+ *    - idle → "idle" (textFaint 色) */
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
+import { theme } from "../theme/theme"
 import type { TuiMode } from "../state/types"
-import { getGlyphTheme } from "../tokens"
+import { fitText } from "./MessageItem"
+import { useClock } from "../clock"
 
 export interface HeaderBarProps {
   modelName: string
@@ -24,16 +30,15 @@ export interface HeaderBarProps {
   errorLine: string
   status: string
   queueCount: number
-  tick: number
   cols: number
   isWorking: boolean
-  /** Phase 4a: 新增 — round number, context %, cache % */
   round: number
   ctxPct: number
   cachePct: number
 }
 
-/** 模式名简化：lowercase, 不加 icon */
+// ── 辅助函数 ──
+
 function modeLabel(mode: TuiMode): string {
   switch (mode) {
     case "discussion": return "discussion"
@@ -47,48 +52,51 @@ function modeLabel(mode: TuiMode): string {
 
 function modeColor(mode: TuiMode): string {
   switch (mode) {
-    case "discussion": return C.green
-    case "readonly": return C.green
-    case "narrow_edit": return C.yellow
-    case "long_task": return C.blue
-    case "planner": return C.cyan
-    case "executor": return C.blue
+    case "discussion": return theme.success
+    case "readonly": return theme.success
+    case "narrow_edit": return theme.warning
+    case "long_task": return theme.info
+    case "planner": return theme.brand
+    case "executor": return theme.info
   }
 }
 
-/**
- * Lightweight pulse animation — 4-frame thinking indicator.
- *   thinking [..  ] → thinking [... ] → thinking [ ...] → thinking [  ..]
- */
-function ThinkingPulse({ tick, label }: { tick: number; label: string }) {
-  const frames = [
-    "[..  ]",
-    "[... ]",
-    "[ ...]",
-    "[  ..]",
-  ]
-  const frame = frames[tick % 4] ?? "[....]"
-  return (
-    <Text color={C.cyan}>
-      {label} {frame}
-    </Text>
-  )
+/** 缩短模型名: "deepseek-v4-pro-experimental" → "deepseek-v4-p..." */
+function shortModel(full: string, maxLen = 24): string {
+  if (full.length <= maxLen) return full
+  return full.slice(0, maxLen - 3) + "..."
 }
 
-/** 根据 running 状态和 status 文本决定短动态标签。 */
-function activityPulse(isWorking: boolean, tick: number, status: string): React.ReactNode {
+// ── 状态组件 ──
+
+/** 4-frame 轻量 pulse: "working [..  ]" → "working [... ]" → "working [ ...]" → "working [  ..]" */
+function ActivityPulse({ label, color }: { label: string; color: string }) {
+  const { tick } = useClock()
+  const frames = ["[..  ]", "[... ]", "[ ...]", "[  ..]"]
+  const frame = frames[tick % 4] ?? "[....]"
+  return <Text color={color}>{label} {frame}</Text>
+}
+
+/** 从 status 文本派生短标签。 */
+function stateLabel(isWorking: boolean, status: string): React.ReactNode {
   if (!isWorking) return null
   const s = status.toLowerCase()
-
   let label = "working"
   if (s.includes("read") || s.includes("scan") || s.includes("search") || s.includes("grep")) label = "reading"
   else if (s.includes("think") || s.includes("context") || s.includes("rout") || s.includes("prepare")) label = "thinking"
   else if (s.includes("verif") || s.includes("check") || s.includes("typecheck") || s.includes("test")) label = "verifying"
   else if (s.includes("edit") || s.includes("write") || s.includes("patch")) label = "editing"
   else if (s.includes("block") || s.includes("denied")) label = "blocked"
-
-  return <ThinkingPulse tick={tick} label={label} />
+  return <ActivityPulse label={label} color={theme.brand} />
 }
+
+// ── 分隔符 ──
+
+function Sep() {
+  return <Text color={theme.textFaint}>  </Text>
+}
+
+// ── 主组件 ──
 
 export const HeaderBar = React.memo(function HeaderBar({
   modelName,
@@ -98,73 +106,86 @@ export const HeaderBar = React.memo(function HeaderBar({
   errorLine,
   status,
   queueCount,
-  tick,
   cols,
   isWorking,
   round,
   ctxPct,
   cachePct,
 }: HeaderBarProps) {
-  const g = getGlyphTheme()
   const blocked = errorLine.length > 0
   const modelDisplay = provider ? `${provider}/${modelName}` : modelName
 
-  // Narrow: drop cache% and round when cols < 80
-  const narrow = cols < 80
+  // 截断决策
+  const showCache = cols >= 96
+  const showRound = round > 0 && cols >= 80
+  const showCtx = cols >= 60
+
+  // model 可用宽度 = 总宽 - 已占字段。固定字段约 48 字符 (brand 6 + mode 12 + state 12 + sep 8 + ctx 7 + cache 9 + round 4 + queue 5)
+  // 简化: 给 model 分配 cols - 60（保证 mode/state/ctx 不被挤出）
+  const modelMax = Math.max(8, cols - 60)
+  const modelShort = shortModel(modelDisplay, modelMax)
+
+  // ctx 颜色: >50 error, >30 warning, <=30 success
+  const ctxColor = ctxPct > 50 ? theme.error : ctxPct > 30 ? theme.warning : theme.success
 
   return (
-    <Box flexDirection="row" height={1}>
-      {/* Brand */}
-      <Text bold color={C.cyan}>Orcana</Text>
+    <Box flexDirection="row" height={1} overflow="hidden">
+      {/* 1. Brand — 永不截断 */}
+      <Text bold color={theme.brand}>Orcana</Text>
+      <Sep />
 
-      {/* Mode */}
-      <Text color={C.dim}>  </Text>
+      {/* 2. Mode — 永不截断 */}
       <Text color={modeColor(mode)}>{modeLabel(mode)}</Text>
+      <Sep />
 
-      {/* Model */}
-      <Text color={C.dim}>  {modelDisplay}</Text>
-
-      {/* State */}
-      <Text color={C.dim}>  </Text>
+      {/* 3. State — 永不截断（blocked 优先、running 次之、done/idle 末之） */}
       {blocked ? (
-        <Text color={C.red}>{g.warningIcon} {errorLine.slice(0, 30)}</Text>
+        <Text color={theme.error}>{errorLine.slice(0, 30)}</Text>
       ) : done ? (
-        <Text color={C.green}>done</Text>
+        <Text color={theme.success}>done</Text>
       ) : isWorking ? (
-        activityPulse(isWorking, tick, status)
+        stateLabel(isWorking, status)
       ) : (
-        <Text color={C.dim}>idle</Text>
+        <Text color={theme.textFaint}>idle</Text>
       )}
+      <Sep />
 
-      {/* Context % */}
-      {!narrow && (
+      {/* 4. Model — 可截断 */}
+      <Text color={theme.textDim}>{modelShort}</Text>
+
+      {/* 5. ctx % — cols<60 裁 */}
+      {showCtx && (
         <>
-          <Text color={C.dim}>  ctx </Text>
-          <Text color={ctxPct > 50 ? C.red : ctxPct > 30 ? C.yellow : C.green}>{ctxPct}%</Text>
+          <Sep />
+          <Text color={theme.textFaint}>ctx </Text>
+          <Text color={ctxColor}>{ctxPct}%</Text>
         </>
       )}
 
-      {/* Cache % */}
-      {!narrow && (
+      {/* 6. cache % — cols<96 裁 */}
+      {showCache && (
         <>
-          <Text color={C.dim}>  cache </Text>
-          <Text color={cachePct > 80 ? C.green : C.yellow}>{cachePct}%</Text>
+          <Sep />
+          <Text color={theme.textFaint}>cache </Text>
+          <Text color={cachePct > 80 ? theme.success : theme.warning}>{cachePct}%</Text>
         </>
       )}
 
-      {/* Round */}
-      {round > 0 && (
+      {/* 7. Round — round>0 且 cols≥80 */}
+      {showRound && (
         <>
-          <Text color={C.dim}>  r</Text>
-          <Text color={C.cyan}>{round}</Text>
+          <Sep />
+          <Text color={theme.textFaint}>r</Text>
+          <Text color={theme.brand}>{round}</Text>
         </>
       )}
 
-      {/* Queue */}
+      {/* 8. Queue — 永不截断，仅 queue>0 时显示 */}
       {queueCount > 0 && (
         <>
-          <Text color={C.dim}>  q:</Text>
-          <Text color={C.cyan}>{queueCount}</Text>
+          <Sep />
+          <Text color={theme.textFaint}>q:</Text>
+          <Text color={theme.brand}>{queueCount}</Text>
         </>
       )}
     </Box>

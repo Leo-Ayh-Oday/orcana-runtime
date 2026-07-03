@@ -4,8 +4,8 @@
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
-import { cleanDisplayText, formatDisplayText, trimForViewport } from "../format"
+import { theme } from "../theme/theme"
+import { cleanDisplayText, formatDisplayText, trimForViewport, trimAssistantForViewport } from "../format"
 import { fitTerminalText } from "../format"
 import type { TuiMessage } from "../state/types"
 
@@ -24,15 +24,15 @@ export function eventMarker(kind?: ChatEventKind): string {
 }
 
 export function eventColor(kind?: ChatEventKind): string {
-  if (kind === "tool") return C.green
-  if (kind === "task") return C.blue
-  if (kind === "plan") return C.cyan
-  if (kind === "activity") return C.yellow
-  if (kind === "error") return C.red
-  if (kind === "gate") return C.yellow
-  if (kind === "evidence") return C.blue
-  if (kind === "patch") return C.green
-  return C.dim
+  if (kind === "tool") return theme.eventTool
+  if (kind === "task") return theme.eventTask
+  if (kind === "plan") return theme.eventPlan
+  if (kind === "activity") return theme.eventActivity
+  if (kind === "error") return theme.eventError
+  if (kind === "gate") return theme.eventGate
+  if (kind === "evidence") return theme.eventEvidence
+  if (kind === "patch") return theme.eventPatch
+  return theme.textFaint
 }
 
 /** 去掉 Delivery Report 标题头，只保留正文。 */
@@ -61,6 +61,10 @@ export interface RenderedLine {
   pendingAnim?: "tail" | "spinner"
   /** pendingAnim="spinner" 时使用的状态文本。 */
   pendingStatus?: string
+  /** Phase 3: 截断类型。由 render 层设置，不影响真实 message.text。
+   *  "above" — 头部被截（保留尾部）  "below" — 尾部被截（保留头部）
+   *  "middle" — 中间被截（双端保留） "viewport" — 视口裁剪（earlier/newer） */
+  trimKind?: "above" | "below" | "middle" | "viewport" | "none"
 }
 
 /** Phase 4: 纯函数 — 不含 tick。
@@ -74,39 +78,48 @@ export function renderMessageLines(
   const contentWidth = Math.max(12, width - 4)
   const marker = message.role === "user" ? ">" : message.role === "event" ? eventMarker(message.kind) : "|"
   const color = message.role === "user"
-    ? C.cyan
+    ? theme.userMessage
     : message.role === "event"
       ? eventColor(message.kind)
       : message.error
-        ? C.red
-        : C.blue
+        ? theme.eventError
+        : theme.assistantMessage
 
   if (message.role === "user") {
+    // Phase 3: 保留头部 — 用户更关心问题开头
     const userText = cleanDisplayText(trimForViewport(message.text, Math.max(240, width * 5)))
     return formatDisplayText(userText, contentWidth).map((line, index) => ({
       marker: index === 0 ? marker : " ",
       text: line,
       color,
+      trimKind: userText.includes("hidden below") ? ("below" as const) : ("none" as const),
     }))
   }
 
   if (message.role === "event") {
+    // Phase 3: 保留头部 — 防止日志刷屏
     const eventText = cleanDisplayText(trimForViewport(message.text, Math.max(360, Math.min(1800, width * 18))))
     return formatDisplayText(eventText, contentWidth).map((line, index) => ({
       marker: index === 0 ? marker : " ",
       text: line,
       color,
+      trimKind: eventText.includes("hidden below") ? ("below" as const) : ("none" as const),
     }))
   }
 
   if (message.text) {
     const assistantContent = stripCompletionReportForTranscript(message.text)
-    const truncated = trimForViewport(assistantContent, Math.max(2000, Math.min(12000, width * 80)))
+    // Phase 3: assistant 双端截断 — code fenced 保留头尾, 纯对话保留头
+    const truncated = trimAssistantForViewport(assistantContent, Math.max(2000, Math.min(12000, width * 80)))
     const assistantText = cleanDisplayText(truncated)
+    const trimKind: "above" | "below" | "middle" | "none" = truncated.includes("hidden middle")
+      ? "middle"
+      : truncated.includes("hidden below") ? "below" : "none"
     const formatted: RenderedLine[] = formatDisplayText(assistantText, contentWidth).map((line, index) => ({
       marker: index === 0 ? marker : " ",
       text: line,
       color,
+      trimKind,
     }))
 
     // Phase 4: 标记最后一行需要尾行动画（仅 pending 时）
@@ -144,7 +157,7 @@ export const MessageItem = React.memo(function MessageItem({ message, width, sta
           <Box width={3}>
             <Text color={line.color}>{line.marker}</Text>
           </Box>
-          <Text color={line.color === C.red ? C.red : C.white}>{line.text}</Text>
+          <Text color={line.color === theme.eventError ? theme.eventError : theme.text}>{line.text}</Text>
         </Box>
       ))}
     </>

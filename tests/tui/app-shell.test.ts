@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { SLASH_COMMANDS, computeAppShellLayout } from "../../src/tui/components/AppShell"
+import { SLASH_COMMANDS, computeAppShellLayout, computeEffectiveBodyHeight } from "../../src/tui/components/AppShell"
 import type { InputChromeState, ClarificationWizardState } from "../../src/tui/components/AppShell"
 import { tuiTokens } from "../../src/tui/tokens"
 import type { TaskProgressState } from "../../src/tui/components/PlanPanel"
@@ -94,11 +94,11 @@ describe("AppShell: SLASH_COMMANDS integrity", () => {
 // ── computeAppShellLayout: RightRail visibility ──
 
 describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
-  test("RightRail visible on wide screen (>=110 cols) when hasDash=true", () => {
+  test("RightRail visible on wide screen (>=110 cols) when hasContent=true", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 120,
-      hasDash: true,
+      hasContent: true,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -107,12 +107,12 @@ describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
     expect(layout.showDash).toBe(true)
   })
 
-  test("RightRail hidden on narrow screen (<breakpoint) even when hasDash=true", () => {
+  test("RightRail hidden on narrow screen (<breakpoint) even when hasContent=true", () => {
     const bp = tuiTokens.layout.breakpointCompact
     const layout = computeAppShellLayout({
       rows: 40,
       cols: bp - 16,
-      hasDash: true,
+      hasContent: true,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -121,11 +121,11 @@ describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
     expect(layout.showDash).toBe(false)
   })
 
-  test("RightRail hidden on wide screen when hasDash=false", () => {
+  test("RightRail hidden on wide screen when hasContent=false", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 120,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -139,7 +139,7 @@ describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: bp - 1,
-      hasDash: true,
+      hasContent: true,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -153,7 +153,7 @@ describe("AppShell layout: RightRail visibility (PR-2 acceptance #2)", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: bp,
-      hasDash: true,
+      hasContent: true,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -170,7 +170,7 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     const layout = computeAppShellLayout({
       rows: 15, // very small terminal
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -183,7 +183,7 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     const layout = computeAppShellLayout({
       rows: 10,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -196,7 +196,7 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -213,13 +213,27 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     const layout = computeAppShellLayout({
       rows,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
       inputChrome: defaultInputChrome,
     })
     expect(layout.bodyHeight + layout.footerHeight + 3).toBe(rows)
+  })
+
+  test("modal active reduces effective body height for Scrollback", () => {
+    const layout = computeAppShellLayout({
+      rows: 40,
+      cols: 100,
+      hasContent: true,
+      isWorking: false,
+      clarification: null,
+      task: undefined,
+      inputChrome: defaultInputChrome,
+    })
+    expect(computeEffectiveBodyHeight(layout, false)).toBe(layout.bodyHeight)
+    expect(computeEffectiveBodyHeight(layout, true)).toBe(Math.max(10, layout.bodyHeight - 6))
   })
 })
 
@@ -231,7 +245,7 @@ describe("AppShell layout: clarification panel", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification,
       task: undefined,
@@ -247,7 +261,7 @@ describe("AppShell layout: clarification panel", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification,
       task: undefined,
@@ -260,7 +274,7 @@ describe("AppShell layout: clarification panel", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -278,7 +292,7 @@ describe("AppShell layout: task panel", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task,
@@ -292,7 +306,7 @@ describe("AppShell layout: task panel", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task,
@@ -305,7 +319,7 @@ describe("AppShell layout: task panel", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -322,7 +336,7 @@ describe("AppShell layout: inputChrome affects footer height", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -335,7 +349,7 @@ describe("AppShell layout: inputChrome affects footer height", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: true,
       clarification: null,
       task: undefined,
@@ -348,7 +362,7 @@ describe("AppShell layout: inputChrome affects footer height", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -362,7 +376,7 @@ describe("AppShell layout: inputChrome affects footer height", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,
@@ -375,7 +389,7 @@ describe("AppShell layout: inputChrome affects footer height", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
-      hasDash: false,
+      hasContent: false,
       isWorking: false,
       clarification: null,
       task: undefined,

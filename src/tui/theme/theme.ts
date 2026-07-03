@@ -16,12 +16,16 @@ export const theme = {
 
   // ── 品牌 & 模式 ──
   brand: palette.abyss,
+  brandShimmer: palette.abyssShimmer, // PR-1: 涟漪 propagate 扫光
   mode: palette.abyss,
 
   // ── 状态 ──
   success: palette.jade,
+  successShimmer: palette.jadeShimmer, // PR-1: settled 相位扫光
   warning: palette.amber,
+  warningShimmer: palette.amberShimmer, // PR-1: verify 相位扫光
   error: palette.coral,
+  errorShimmer: palette.coralShimmer, // PR-1: stalled 渐变终点
   danger: palette.coral,        // alias — 语义上等同于 error
   info: palette.sonar,
   working: palette.abyss,
@@ -34,6 +38,7 @@ export const theme = {
   // ── 事件类型 ──
   eventTool: palette.jade,       // 工具调用 — 翡翠绿
   eventTask: palette.teal,       // 任务 — 暗流青（曾用 blue）
+  taskShimmer: palette.tealShimmer, // PR-1: task 扫光
   eventPlan: palette.abyss,      // 计划 — 品牌蓝（曾用 cyan）
   eventError: palette.coral,     // 错误 — 珊瑚红（曾用 red）
   eventActivity: palette.sonar,  // 活动 — 声呐蓝（曾用 yellow）

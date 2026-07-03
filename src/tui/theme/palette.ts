@@ -18,14 +18,24 @@ export const palette = {
   // ── Phase 1 新增语义色 ──
   /** Orcana 品牌蓝 — Header/Logo/mode/ripple */
   abyss: "#0EA5E9",
+  /** 深海蓝亮色 — 涟漪扫光用 */
+  abyssShimmer: "#7DD3FC",
   /** 暗流青 — task/plan */
   teal: "#2DD4BF",
+  /** 暗流青亮色 — task 扫光 */
+  tealShimmer: "#5EEAD4",
   /** 珊瑚红 — error/danger/blocked（比 red 柔和） */
   coral: "#FB7185",
+  /** 珊瑚红亮色 — error 扫光 / stalled 渐变终点 */
+  coralShimmer: "#FDA4AF",
   /** 琥珀黄 — warning/pending gate */
   amber: "#FBBF24",
+  /** 琥珀黄亮色 — warning 扫光 */
+  amberShimmer: "#FDE68A",
   /** 翡翠绿 — success/done */
   jade: "#34D399",
+  /** 翡翠绿亮色 — success 扫光 / settled 相位 */
+  jadeShimmer: "#6EE7B7",
   /** 紫罗兰 — evidence 专属 */
   evidence: "#A78BFA",
   /** 粉红 — gate 专属 */

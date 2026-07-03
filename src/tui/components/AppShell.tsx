@@ -24,7 +24,7 @@ import type { TuiState, TuiMode } from "../state/types"
 import { HeaderBar } from "./HeaderBar"
 import { StatusBar } from "./StatusBar"
 import { Scrollback, type ScrollbackScrollState } from "./Scrollback"
-import { RightRail } from "./RightRail"
+import { RightRail, classifyRailState } from "./RightRail"
 import { PlanPanel, FlowLine, type TaskProgressState } from "./PlanPanel"
 import { FooterHints } from "./FooterHints"
 import { ComposerFrame } from "./ComposerFrame"
@@ -294,6 +294,8 @@ export function AppShell(props: AppShellProps) {
         cols={cols}
         ripplePhase={rightRail.runtime.ripplePhase}
         narrow={layout.mode === "tiny" || layout.mode === "narrow"}
+        railState={classifyRailState(rightRail).state}
+        blockedReason={classifyRailState(rightRail).blockedReason}
       />
 
       {/* Phase 5: Modal overlays (between StatusBar and Body) */}

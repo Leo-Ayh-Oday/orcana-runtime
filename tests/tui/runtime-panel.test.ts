@@ -16,6 +16,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import {
   ripplePhaseLabel,
   ripplePhaseColor,
+  ripplePhaseShimmerColor,
   rippleWaveChar,
   isRuntimePanelEnabled,
   formatGateSummary,
@@ -25,7 +26,7 @@ import {
 import { selectRuntimePanel } from "../../src/tui/state/selectors"
 import { createInitialTuiState, reduceTuiEvent } from "../../src/tui/state/event-reducer"
 import type { TuiRipplePhase } from "../../src/tui/state/types"
-import { C } from "../../src/tui/theme/theme"
+import { C, theme } from "../../src/tui/theme/theme"
 
 // ── ripplePhaseLabel ──
 
@@ -50,20 +51,26 @@ describe("ripplePhaseLabel", () => {
   })
 })
 
-// ── ripplePhaseColor ──
+// ── ripplePhaseColor (PR-4: 升级用 theme.* 语义色) ──
 
 describe("ripplePhaseColor", () => {
-  test("idle → dim color", () => {
-    expect(ripplePhaseColor("idle")).toBe(C.dim)
+  test("idle → textFaint", () => {
+    expect(ripplePhaseColor("idle")).toBe(theme.textFaint)
   })
-  test("scan → cyan color", () => {
-    expect(ripplePhaseColor("scan")).toBe(C.cyan)
+  test("scan → info", () => {
+    expect(ripplePhaseColor("scan")).toBe(theme.info)
   })
-  test("blocked → red color", () => {
-    expect(ripplePhaseColor("blocked")).toBe(C.red)
+  test("propagate → brand", () => {
+    expect(ripplePhaseColor("propagate")).toBe(theme.brand)
   })
-  test("settled → green color", () => {
-    expect(ripplePhaseColor("settled")).toBe(C.green)
+  test("verify → warning", () => {
+    expect(ripplePhaseColor("verify")).toBe(theme.warning)
+  })
+  test("blocked → error", () => {
+    expect(ripplePhaseColor("blocked")).toBe(theme.error)
+  })
+  test("settled → success", () => {
+    expect(ripplePhaseColor("settled")).toBe(theme.success)
   })
   test("all phases return non-empty string", () => {
     const phases: TuiRipplePhase[] = ["idle", "scan", "propagate", "verify", "blocked", "settled"]
@@ -73,18 +80,40 @@ describe("ripplePhaseColor", () => {
   })
 })
 
-// ── rippleWaveChar ──
+// ── ripplePhaseShimmerColor (PR-4: glimmer 扫光色) ──
+
+describe("ripplePhaseShimmerColor (PR-4)", () => {
+  test("propagate → brandShimmer（正向扫光）", () => {
+    expect(ripplePhaseShimmerColor("propagate")).toBe(theme.brandShimmer)
+  })
+  test("verify → warningShimmer（反向扫光）", () => {
+    expect(ripplePhaseShimmerColor("verify")).toBe(theme.warningShimmer)
+  })
+  test("settled → successShimmer", () => {
+    expect(ripplePhaseShimmerColor("settled")).toBe(theme.successShimmer)
+  })
+  test("blocked → errorShimmer", () => {
+    expect(ripplePhaseShimmerColor("blocked")).toBe(theme.errorShimmer)
+  })
+  test("shimmer 与 base 色不同（active 相位）", () => {
+    expect(ripplePhaseShimmerColor("propagate")).not.toBe(ripplePhaseColor("propagate"))
+    expect(ripplePhaseShimmerColor("verify")).not.toBe(ripplePhaseColor("verify"))
+  })
+})
+
+// ── rippleWaveChar (PR-4: 走 glyph 主题双轨制，ASCII 模式默认) ──
 
 describe("rippleWaveChar", () => {
-  test("idle always returns '·'", () => {
-    expect(rippleWaveChar("idle", 0)).toBe("·")
-    expect(rippleWaveChar("idle", 10)).toBe("·")
-    expect(rippleWaveChar("idle", 100)).toBe("·")
+  // ASCII 模式（默认）：idle→".", settled→"v"
+  test("idle always returns '.' (ASCII)", () => {
+    expect(rippleWaveChar("idle", 0)).toBe(".")
+    expect(rippleWaveChar("idle", 10)).toBe(".")
+    expect(rippleWaveChar("idle", 100)).toBe(".")
   })
 
-  test("settled always returns '✓'", () => {
-    expect(rippleWaveChar("settled", 0)).toBe("✓")
-    expect(rippleWaveChar("settled", 10)).toBe("✓")
+  test("settled always returns 'v' (ASCII)", () => {
+    expect(rippleWaveChar("settled", 0)).toBe("v")
+    expect(rippleWaveChar("settled", 10)).toBe("v")
   })
 
   test("scan cycles through radar chars", () => {
@@ -102,7 +131,7 @@ describe("rippleWaveChar", () => {
     expect(frame4).toBe("!")
   })
 
-  test("propagate returns 3-char string", () => {
+  test("propagate returns 3-char string (ASCII: .../o../oo./ooo)", () => {
     const result = rippleWaveChar("propagate", 0)
     expect(result.length).toBe(3)
   })
@@ -119,6 +148,26 @@ describe("rippleWaveChar", () => {
     expect(rippleWaveChar("scan", 2)).toBe(rippleWaveChar("scan", 3))
     // tick=0 and tick=2 should be different frames
     expect(rippleWaveChar("scan", 0)).not.toBe(rippleWaveChar("scan", 2))
+  })
+
+  // PR-4: Unicode 模式下用 ○●▁▃✓ 等
+  test("Unicode 模式: idle → '·', settled → '✓'", () => {
+    const prev = process.env.DEEPSEEK_TUI_UNICODE
+    process.env.DEEPSEEK_TUI_UNICODE = "1"
+    try {
+      expect(rippleWaveChar("idle", 0)).toBe("·")
+      expect(rippleWaveChar("settled", 0)).toBe("✓")
+      expect(rippleWaveChar("propagate", 0)).toBe("○○○")
+    } finally {
+      process.env.DEEPSEEK_TUI_UNICODE = prev
+    }
+  })
+
+  test("propagate 正向扩散: ... → o.. → oo. → ooo (ASCII)", () => {
+    expect(rippleWaveChar("propagate", 0)).toBe("...")  // frame 0
+    expect(rippleWaveChar("propagate", 2)).toBe("o..")  // frame 1
+    expect(rippleWaveChar("propagate", 4)).toBe("oo.")  // frame 2
+    expect(rippleWaveChar("propagate", 6)).toBe("ooo")  // frame 3
   })
 })
 

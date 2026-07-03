@@ -22,7 +22,7 @@ import { Box, Text, useInput } from "ink"
 import { TextArea } from "react-ink-textarea"
 import { C } from "../theme/theme"
 import type { SlashCommandHint } from "../input"
-import { matchCommands } from "../commands/score"
+import { matchSlashCommands } from "../commands/score"
 import { CommandShelf } from "./CommandShelf"
 
 // ── Paste block 系统（从 input.tsx 适配） ──
@@ -197,9 +197,10 @@ export function OrcanaComposer({
   const slashQuery = value.trimStart().startsWith("/")
     ? (value.trimStart().slice(1).split(/\s+/)[0] ?? "")
     : ""
-  // PR-3: 用 fuzzy matchCommands 替换原 startsWith 前缀匹配，上限 5 条。
+  // PR-3+PR-4: 用 fuzzy matchSlashCommands 替换原 startsWith 前缀匹配，上限 5 条。
+  // matchSlashCommands 综合 name/aliases/description 评分。
   const scoredMatches = useMemo(
-    () => matchCommands(slashQuery, commands, c => c.name, 5),
+    () => matchSlashCommands(slashQuery, commands, 5),
     [slashQuery, commands],
   )
   const selectedCommand = scoredMatches.length > 0
@@ -275,9 +276,11 @@ export function OrcanaComposer({
       if (!trimmed) return
 
       // 命令面板选择
+      // PR-4: 禁用命令（enabled=false）不自动补全，由命令处理器拒绝执行。
       const hasCommandArgs = trimmed.startsWith("/") && /\s/.test(trimmed.slice(1))
+      const selectedEnabled = selectedCommand && selectedCommand.enabled !== false
       const finalValue =
-        showCommands && selectedCommand && !hasCommandArgs ? `/${selectedCommand.name}` : trimmed
+        showCommands && selectedEnabled && !hasCommandArgs ? `/${selectedCommand!.name}` : trimmed
 
       // 保存历史（结构化 → 回溯时恢复原始 draft + pasteBlocks）
       const historyItem = buildHistoryItem(rawValue, pasteBlocks)

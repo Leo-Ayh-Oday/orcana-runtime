@@ -192,7 +192,7 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     expect(layout.footerHeight).toBeGreaterThanOrEqual(1)
   })
 
-  test("footerHeight = panelRows + inputRows + 1(FooterHints) in normal case", () => {
+  test("footerHeight = panelRows + inputRows + 1(FooterHints) + 2(ComposerFrame dividers) in normal case", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
@@ -202,10 +202,11 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
       task: undefined,
       inputChrome: defaultInputChrome,
     })
-    // No panel, no task → panelRows=0, textRows=1 → inputRows=1+1=2 → footerHeight=0+2+1=3
+    // No panel, no task → panelRows=0, textRows=1 → inputRows=1+1=2
+    // PR-2: +2 for ComposerFrame top/bottom dividers → footerHeight=0+2+1+2=5
     expect(layout.panelRows).toBe(0)
     expect(layout.inputRows).toBe(2)
-    expect(layout.footerHeight).toBe(3)
+    expect(layout.footerHeight).toBe(5)
   })
 
   test("bodyHeight + footerHeight + 3 ≈ rows (normal case)", () => {

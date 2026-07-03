@@ -1,4 +1,4 @@
-/** RightRail — Orcana runtime rail（Visual Step 3）。
+/** RightRail — Orcana runtime rail（Visual Step 3 + PR-8 三态降级）。
  *
  *  固定顺序：
  *    1. ModeContract (outside, in AppShell)
@@ -10,8 +10,10 @@
  *    7. Tools: last 3-5
  *    8. Context: ctx/cache compact meter
  *
- *  idle 也显示 rail，但内容紧凑。
- *  blocked 优先展示原因。
+ *  PR-8 三态显示策略：
+ *    - idle: ripplePhase=idle && gates=0 && patches=0 → 折叠为单行 "Runtime: idle"
+ *    - running: ripplePhase≠idle || activeTools>0 → 完整显示 5 区块
+ *    - blocked: ripplePhase=blocked || gates.block>0 → 完整显示 + findings 前 2 条
  */
 
 import React from "react"
@@ -21,6 +23,44 @@ import type { RightRailData } from "../state/selectors"
 import { RuntimePanel } from "./RuntimePanel"
 import { getGlyphTheme } from "../tokens"
 import { useClock } from "../clock"
+
+// ── PR-8: 三态分类纯函数（导出供测试） ──
+
+export type RailState = "idle" | "running" | "blocked"
+
+export interface ClassifyRailStateResult {
+  state: RailState
+  /** blocked 状态下，第一条 finding 的原因（窄屏 StatusBar 用）。 */
+  blockedReason?: string
+}
+
+/** 根据 RightRail 数据判定 idle / running / blocked 三态。
+ *  - idle: ripplePhase=idle && gates=0 && patches=0 && activeTools=0
+ *  - blocked: ripplePhase=blocked || gates.block>0
+ *  - running: 其余（含 active tools / 非 idle ripple / 有 evidence） */
+export function classifyRailState(data: RightRailData): ClassifyRailStateResult {
+  const { runtime, rippleFindings } = data
+
+  // blocked 优先（即使有 active tools，blocked 也要凸显）
+  if (runtime.ripplePhase === "blocked" || runtime.gateSummary.block > 0) {
+    // 取第一条 block finding 的 reason 作为窄屏提示
+    const blockFinding = rippleFindings.find(f => f.severity === "block")
+    const reason = blockFinding?.reason?.slice(0, 24)
+    return { state: "blocked", blockedReason: reason }
+  }
+
+  // idle：完全无信号
+  if (
+    runtime.ripplePhase === "idle"
+    && runtime.gateSummary.total === 0
+    && runtime.patchSummary.total === 0
+    && runtime.activeTools === 0
+  ) {
+    return { state: "idle" }
+  }
+
+  return { state: "running" }
+}
 
 function ProgressBar({ value, max, width = 20, color = theme.info }: { value: number; max: number; width?: number; color?: string }) {
   const g = getGlyphTheme()
@@ -62,13 +102,34 @@ export const RightRail = React.memo(function RightRail(props: RightRailProps) {
   const ctxPct = Math.round(contextMax > 0 ? (contextTokens / contextMax) * 100 : 0)
   const ctxColor = ctxPct > 50 ? theme.error : ctxPct > 30 ? theme.warning : theme.success
 
+  // PR-8: 三态分类
+  const railState = classifyRailState(props)
+
+  // idle 折叠为单行 "Runtime: idle"
+  if (railState.state === "idle") {
+    return (
+      <Box flexDirection="column" paddingLeft={1} width={width}>
+        <Box flexDirection="row">
+          <Text color={theme.brand} bold>runtime</Text>
+          <Text color={theme.textDim}>  idle</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color={theme.textFaint}>idle · waiting for task</Text>
+        </Box>
+      </Box>
+    )
+  }
+
+  // blocked / running：完整显示
   return (
     <Box flexDirection="column" paddingLeft={1} width={width}>
       {/* 1. Runtime identity */}
       <Box flexDirection="row">
         <Text color={theme.brand} bold>runtime</Text>
         {round > 0 && <Text color={theme.textDim}>  r{round}</Text>}
-        {round === 0 && runtime.ripplePhase === "idle" && runtime.gateSummary.total === 0 && <Text color={theme.textDim}>  idle</Text>}
+        {railState.state === "blocked" && (
+          <Text color={theme.error} bold>  blocked</Text>
+        )}
       </Box>
 
       {/* 2. Ripple phase (if active or has findings) */}
@@ -144,8 +205,8 @@ export const RightRail = React.memo(function RightRail(props: RightRailProps) {
         <ProgressBar value={contextTokens} max={contextMax} width={24} color={ctxColor} />
       </Box>
 
-      {/* Ripple findings (if any, above context but after runtime panel) */}
-      {rippleFindings.length > 0 && (
+      {/* PR-8: blocked 状态优先展示 findings 前 2 条（即使 ripplePhase 已离开 blocked） */}
+      {railState.state === "blocked" && rippleFindings.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           {rippleFindings.slice(0, 2).map((f, idx) => (
             <Text key={idx} color={f.severity === "block" ? theme.error : theme.warning}>
@@ -153,13 +214,6 @@ export const RightRail = React.memo(function RightRail(props: RightRailProps) {
             </Text>
           ))}
           {rippleFindings.length > 2 && <Text color={theme.textFaint}>  +{rippleFindings.length - 2} more</Text>}
-        </Box>
-      )}
-
-      {/* Idle state still shows rail but compact */}
-      {runtime.ripplePhase === "idle" && runtime.gateSummary.total === 0 && runtime.patchSummary.total === 0 && runtime.activeTools === 0 && (
-        <Box marginTop={1}>
-          <Text color={theme.textFaint}>idle · waiting for task</Text>
         </Box>
       )}
     </Box>

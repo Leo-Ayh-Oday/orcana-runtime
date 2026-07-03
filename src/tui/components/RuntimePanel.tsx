@@ -15,10 +15,11 @@
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
+import { C, theme } from "../theme/theme"
 import type { TuiRipplePhase } from "../state/types"
 import type { RuntimePanelData } from "../state/selectors"
 import { useClock } from "../clock"
+import { getGlyphTheme } from "../tokens"
 
 // ── 纯函数（导出供测试） ──
 
@@ -34,47 +35,65 @@ export function ripplePhaseLabel(phase: TuiRipplePhase): string {
   }
 }
 
-/** 涟漪阶段对应的颜色。 */
+/** 涟漪阶段对应的颜色（PR-4: 升级用 theme.* 语义色）。 */
 export function ripplePhaseColor(phase: TuiRipplePhase): string {
   switch (phase) {
-    case "idle": return C.dim
-    case "scan": return C.cyan
-    case "propagate": return C.blue
-    case "verify": return C.yellow
-    case "blocked": return C.red
-    case "settled": return C.green
+    case "idle": return theme.textFaint
+    case "scan": return theme.info
+    case "propagate": return theme.brand
+    case "verify": return theme.warning
+    case "blocked": return theme.error
+    case "settled": return theme.success
+  }
+}
+
+/** PR-4: 涟漪阶段对应的 shimmer 扫光色（glimmer 高亮）。
+ *  propagate 正向扫光用 brandShimmer，verify 反向扫光用 warningShimmer，
+ *  settled 用 successShimmer，blocked 用 errorShimmer。 */
+export function ripplePhaseShimmerColor(phase: TuiRipplePhase): string {
+  switch (phase) {
+    case "idle": return theme.textFaint
+    case "scan": return theme.brandShimmer
+    case "propagate": return theme.brandShimmer
+    case "verify": return theme.warningShimmer
+    case "blocked": return theme.errorShimmer
+    case "settled": return theme.successShimmer
   }
 }
 
 /** 低帧动画帧字符（tick 驱动，~4fps @ 250ms tick）。
- *  每个阶段有不同的动画模式：
- *    scan: 雷达扫描 ░▒▓█▓▒░
- *    propagate: 涟漪扩散 ○○○ → ●○○ → ●●○ → ●●●
- *    verify: 验证脉冲 ▁▃▅▇▅▃▁
- *    blocked: 阻塞闪烁 ! ! ! !
- *    settled: 完成 ✓✓✓✓
- *    idle: 静止 ···· */
+ *  PR-4: 走 glyph 主题双轨制（ASCII fallback / Unicode 增强）。
+ *  glimmer 方向语义：
+ *    propagate: ○○○→●○○→●●○→●●● 正向左→右扩散
+ *    verify: ▁▃▅▇▅▃ 反向脉冲（右→左收敛） */
 export function rippleWaveChar(phase: TuiRipplePhase, tick: number): string {
+  const g = getGlyphTheme()
   const frame = Math.floor(tick / 2) // 降帧：每 2 tick 一帧
   switch (phase) {
-    case "idle": return "·"
+    case "idle": {
+      const frames = g.rippleIdleFrames
+      return frames[frame % frames.length] ?? frames[0]!
+    }
     case "scan": {
-      const chars = ["░", "▒", "▓", "█", "▓", "▒"]
-      return chars[frame % chars.length] ?? "░"
+      const frames = g.rippleScanFrames
+      return frames[frame % frames.length] ?? frames[0]!
     }
     case "propagate": {
-      const chars = ["○○○", "●○○", "●●○", "●●●"]
-      return chars[frame % chars.length] ?? "○○○"
+      const frames = g.ripplePropagateFrames
+      return frames[frame % frames.length] ?? frames[0]!
     }
     case "verify": {
-      const chars = ["▁", "▃", "▅", "▇", "▅", "▃"]
-      return chars[frame % chars.length] ?? "▁"
+      const frames = g.rippleVerifyFrames
+      return frames[frame % frames.length] ?? frames[0]!
     }
     case "blocked": {
-      const chars = ["!", " ", "!", " "]
-      return chars[frame % chars.length] ?? "!"
+      const frames = g.rippleBlockedFrames
+      return frames[frame % frames.length] ?? frames[0]!
     }
-    case "settled": return "✓"
+    case "settled": {
+      const frames = g.rippleSettledFrames
+      return frames[frame % frames.length] ?? frames[0]!
+    }
   }
 }
 
@@ -138,14 +157,15 @@ export const RuntimePanel = React.memo(function RuntimePanel(props: RuntimePanel
   }
 
   const phaseColor = ripplePhaseColor(ripplePhase)
+  const shimmerColor = ripplePhaseShimmerColor(ripplePhase)
   const waveChar = rippleWaveChar(ripplePhase, tick)
   const phaseLabel = ripplePhaseLabel(ripplePhase)
 
   return (
     <Box flexDirection="column" width={width}>
-      {/* Ripple Wave */}
+      {/* Ripple Wave — PR-4: waveChar 用 shimmer 扫光色，label 用 base 色 */}
       <Box flexDirection="row">
-        <Text color={phaseColor}>{waveChar}</Text>
+        <Text color={shimmerColor}>{waveChar}</Text>
         <Text> </Text>
         <Text color={phaseColor} bold>ripple</Text>
         <Text color={C.dim}> {phaseLabel}</Text>

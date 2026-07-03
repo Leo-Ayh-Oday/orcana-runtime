@@ -16,6 +16,7 @@ import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { TuiMessage } from "../state/types"
 import { renderMessageLines, type RenderedLine } from "./MessageItem"
+import { StreamingBlock } from "./StreamingBlock"
 import { useClock } from "../clock"
 
 export interface ScrollbackScrollState {
@@ -187,28 +188,58 @@ export const Scrollback = React.memo(function Scrollback({
   onScrollState,
 }: ScrollbackProps) {
   const { tick, reducedMotion } = useClock()
-  const hasPending = messages.some(m => m.pending)
   const cacheRef = useRef<FormattedLineCache>(new FormattedLineCache())
 
-  // ── Layer 1（重 → 轻）: 增量格式化行计算（Phase 6 cache）──
+  // PR-6: 拆分 committed 与 pending — pending 走 StreamingBlock 兄弟节点，
+  // delta 仅触发 StreamingBlock 重渲染，不触碰历史列表 reconciliation
+  const { committedMessages, pendingMessage } = useMemo(() => {
+    // 找到最后一个 pending message（流式输出中），其余为 committed
+    let pending: TuiMessage | null = null
+    const committed: TuiMessage[] = []
+    for (const m of messages) {
+      if (m.pending && pending === null) {
+        pending = m
+      } else {
+        committed.push(m)
+      }
+    }
+    return { committedMessages: committed, pendingMessage: pending }
+  }, [messages])
+
+  // ── Layer 1（重 → 轻）: 增量格式化行计算（Phase 6 cache，仅 committed）──
   const { allLines, capped } = useMemo(() => {
-    return cacheRef.current.buildAllLines(messages, width, status)
-  }, [messages, width, status])
+    return cacheRef.current.buildAllLines(committedMessages, width, status)
+  }, [committedMessages, width, status])
+
+  // PR-6: pending message 通过 StreamingBlock 渲染（stable-prefix 锁定）
+  // StreamingBlock 内部管理 stable/unstable 分割 + tail 动画
+  const streamingText = pendingMessage?.text ?? ""
+  const streamingLines = useMemo(() => {
+    if (!pendingMessage || streamingText.length === 0) return null
+    // 返回 StreamingBlock 的"虚拟行"用于视口裁剪计算
+    // 实际渲染由 StreamingBlock 组件完成
+    return streamingText
+  }, [pendingMessage, streamingText])
 
   // ── 视口裁剪 ──
-  const maxOffset = Math.max(0, allLines.length - height)
+  // 视口行数估算：streamingLines 按 \n 数 + 1 估算（粗略，实际渲染由 StreamingBlock 控制）
+  const streamingLineEstimate = streamingLines
+    ? Math.max(1, streamingLines.split("\n").length)
+    : 0
+  const totalLines = allLines.length + streamingLineEstimate
+  const maxOffset = Math.max(0, totalLines - height)
   const normalizedOffset = Math.min(scrollOffset, maxOffset)
-  const start = Math.max(0, allLines.length - height - normalizedOffset)
+  const start = Math.max(0, totalLines - height - normalizedOffset)
   const visibleStatic = allLines.slice(start, start + height)
   const hiddenAbove = capped || start > 0
-  const hiddenBelow = start + height < allLines.length
+  const hiddenBelow = start + height < totalLines
 
-  // ── Layer 2（轻）: pending 动画叠加（PR-1.5: 仅 tail 光标）──
-  const animatedTick = hasPending ? tick : 0
+  // ── Layer 2（轻）: pending 动画叠加 ──
+  // PR-6: committed 行不再有 pendingAnim（pending 已移出数组），applyPendingAnimation 退化为 no-op
   const visibleLines = useMemo(
-    () => applyPendingAnimation(visibleStatic, animatedTick, reducedMotion),
+    () => applyPendingAnimation(visibleStatic, tick, reducedMotion),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleStatic, animatedTick, reducedMotion],
+    [visibleStatic, tick, reducedMotion],
   )
 
   useEffect(() => {
@@ -216,6 +247,10 @@ export const Scrollback = React.memo(function Scrollback({
   }, [hiddenAbove, hiddenBelow, maxOffset, normalizedOffset, onScrollState])
 
   if (messages.length === 0) return null
+
+  // PR-6: pending 行渲染由 StreamingBlock 负责（在视口可见时）
+  // 简化策略：如果 streaming 存在，总在底部为它预留空间
+  const showStreaming = streamingLines !== null
 
   return (
     <Box flexDirection="column">
@@ -231,6 +266,13 @@ export const Scrollback = React.memo(function Scrollback({
           <Text color={line.color === C.red ? C.red : C.white}>{line.text}</Text>
         </Box>
       ))}
+      {showStreaming && (
+        <StreamingBlock
+          text={streamingText}
+          width={Math.max(12, width - 4)}
+          pending={true}
+        />
+      )}
       {hiddenBelow && <Text color={C.dim}>  ↓ newer</Text>}
     </Box>
   )

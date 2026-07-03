@@ -204,6 +204,47 @@ describe("component: eventMarker and eventColor", () => {
     expect(eventMarker(undefined)).toBe("-")
   })
 
+  // PR-5: Unicode marker 双轨制（DEEPSEEK_TUI_UNICODE=1 时用 ⏺⎿◈◆▸✎）
+  describe("eventMarker Unicode (PR-5)", () => {
+    test("Unicode: tool → ⎿, task → ◈, gate → ◆, evidence → ▸, patch → ✎", () => {
+      const prev = process.env.DEEPSEEK_TUI_UNICODE
+      process.env.DEEPSEEK_TUI_UNICODE = "1"
+      try {
+        expect(eventMarker("tool")).toBe("⎿")
+        expect(eventMarker("task")).toBe("◈")
+        expect(eventMarker("gate")).toBe("◆")
+        expect(eventMarker("evidence")).toBe("▸")
+        expect(eventMarker("patch")).toBe("✎")
+      } finally {
+        process.env.DEEPSEEK_TUI_UNICODE = prev
+      }
+    })
+
+    test("Unicode: plan → ◈, activity → ∘, error → !, default → ·", () => {
+      const prev = process.env.DEEPSEEK_TUI_UNICODE
+      process.env.DEEPSEEK_TUI_UNICODE = "1"
+      try {
+        expect(eventMarker("plan")).toBe("◈")
+        expect(eventMarker("activity")).toBe("∘")
+        expect(eventMarker("error")).toBe("!")
+        expect(eventMarker(undefined)).toBe("·")
+      } finally {
+        process.env.DEEPSEEK_TUI_UNICODE = prev
+      }
+    })
+
+    test("Unicode 与 ASCII marker 不同", () => {
+      process.env.DEEPSEEK_TUI_UNICODE = undefined
+      const asciiTool = eventMarker("tool")
+      process.env.DEEPSEEK_TUI_UNICODE = "1"
+      const unicodeTool = eventMarker("tool")
+      process.env.DEEPSEEK_TUI_UNICODE = undefined
+      expect(asciiTool).toBe("$")
+      expect(unicodeTool).toBe("⎿")
+      expect(asciiTool).not.toBe(unicodeTool)
+    })
+  })
+
   // Phase 1: eventColor 现在返回独立语义色 (jade/teal/abyss/coral/gate/evidence/patch)
   test("eventColor returns jade for tool", () => {
     expect(eventColor("tool")).toBe(theme.eventTool)

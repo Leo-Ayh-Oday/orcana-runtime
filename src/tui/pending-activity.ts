@@ -49,7 +49,18 @@ export function resetStalledDetection(): void {
   lastToolAt = 0
 }
 
-const STALL_THRESHOLD_MS = 3_000
+/** PR-10: 读取最近一次 token 时间戳（供 useStalledAnimation 使用）。 */
+export function getLastTokenAt(): number {
+  return lastTokenAt
+}
+
+/** PR-10: 读取最近一次 tool 时间戳（供 useStalledAnimation 使用）。 */
+export function getLastToolAt(): number {
+  return lastToolAt
+}
+
+/** PR-10: stalled 阈值（3s）暴露为常量，供 hook 复用。 */
+export const STALL_THRESHOLD_MS = 3_000
 
 /** 是否进入 stalled 状态：3s 无 token 且无活跃 tool。 */
 export function isStalled(now?: number): boolean {

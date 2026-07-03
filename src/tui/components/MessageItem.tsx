@@ -7,20 +7,24 @@ import { Box, Text } from "ink"
 import { theme } from "../theme/theme"
 import { cleanDisplayText, formatDisplayText, trimForViewport, trimAssistantForViewport } from "../format"
 import { fitTerminalText } from "../format"
+import { getGlyphTheme } from "../tokens"
 import type { TuiMessage } from "../state/types"
 
 export type ChatEventKind = "tool" | "task" | "plan" | "activity" | "error" | "gate" | "evidence" | "patch"
 
+/** PR-5: marker 走 glyph 主题双轨制（ASCII fallback / Unicode 增强）。
+ *  ASCII 模式保持 $/#/+/~/!/g/e/p，Unicode 模式用 ⏺⎿◈◆▸✎。 */
 export function eventMarker(kind?: ChatEventKind): string {
-  if (kind === "tool") return "$"
-  if (kind === "task") return "#"
-  if (kind === "plan") return "+"
-  if (kind === "activity") return "~"
-  if (kind === "error") return "!"
-  if (kind === "gate") return "g"
-  if (kind === "evidence") return "e"
-  if (kind === "patch") return "p"
-  return "-"
+  const g = getGlyphTheme()
+  if (kind === "tool") return g.markerTool
+  if (kind === "task") return g.markerTask
+  if (kind === "plan") return g.markerPlan
+  if (kind === "activity") return g.markerActivity
+  if (kind === "error") return g.markerError
+  if (kind === "gate") return g.markerGate
+  if (kind === "evidence") return g.markerEvidence
+  if (kind === "patch") return g.markerPatch
+  return g.markerDefault
 }
 
 export function eventColor(kind?: ChatEventKind): string {
@@ -76,7 +80,8 @@ export function renderMessageLines(
   status: string,
 ): RenderedLine[] {
   const contentWidth = Math.max(12, width - 4)
-  const marker = message.role === "user" ? ">" : message.role === "event" ? eventMarker(message.kind) : "|"
+  const g = getGlyphTheme()
+  const marker = message.role === "user" ? g.markerUser : message.role === "event" ? eventMarker(message.kind) : g.markerAssistant
   const color = message.role === "user"
     ? theme.userMessage
     : message.role === "event"

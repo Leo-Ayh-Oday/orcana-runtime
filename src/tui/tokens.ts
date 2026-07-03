@@ -52,6 +52,25 @@ export interface GlyphTheme {
   arrowDown: string
   dot: string
   separator: string
+  /** PR-5: 消息 marker — 8 种类型双轨制（ASCII fallback / Unicode 增强） */
+  markerUser: string
+  markerAssistant: string
+  markerTool: string
+  markerTask: string
+  markerPlan: string
+  markerActivity: string
+  markerError: string
+  markerGate: string
+  markerEvidence: string
+  markerPatch: string
+  markerDefault: string
+  /** PR-4: ripple 相位帧序列（双轨制，glimmer 扫光方向） */
+  rippleIdleFrames: string[]
+  rippleScanFrames: string[]
+  ripplePropagateFrames: string[]
+  rippleVerifyFrames: string[]
+  rippleBlockedFrames: string[]
+  rippleSettledFrames: string[]
 }
 
 const ASCII_GLYPHS: GlyphTheme = {
@@ -88,6 +107,25 @@ const ASCII_GLYPHS: GlyphTheme = {
   arrowDown: "v",
   dot: ".",
   separator: "-",
+  // PR-5: ASCII markers（保持现有视觉，避免破坏 gutter 对齐）
+  markerUser: ">",
+  markerAssistant: "|",
+  markerTool: "$",
+  markerTask: "#",
+  markerPlan: "+",
+  markerActivity: "~",
+  markerError: "!",
+  markerGate: "g",
+  markerEvidence: "e",
+  markerPatch: "p",
+  markerDefault: "-",
+  // PR-4: ASCII ripple 帧序列（glimmer 方向：propagate 正向扩散，verify 脉冲）
+  rippleIdleFrames: ["."],
+  rippleScanFrames: [".", "-", "+", "=", "+", "-"],
+  ripplePropagateFrames: ["...", "o..", "oo.", "ooo"], // 正向左→右扩散
+  rippleVerifyFrames: [".", "-", "^", "-", "."], // 脉冲
+  rippleBlockedFrames: ["!", " ", "!", " "],
+  rippleSettledFrames: ["v"],
 }
 
 const UNICODE_GLYPHS: GlyphTheme = {
@@ -124,6 +162,25 @@ const UNICODE_GLYPHS: GlyphTheme = {
   arrowDown: "↓",
   dot: "·",
   separator: "·",
+  // PR-5: Unicode markers（计划 D.1 视觉规范：⏺⎿◈◆▸✎）
+  markerUser: "›",
+  markerAssistant: "⏺",
+  markerTool: "⎿",
+  markerTask: "◈",
+  markerPlan: "◈",
+  markerActivity: "∘",
+  markerError: "!",
+  markerGate: "◆",
+  markerEvidence: "▸",
+  markerPatch: "✎",
+  markerDefault: "·",
+  // PR-4: Unicode ripple 帧序列（glimmer 方向：propagate 正向扩散，verify 反向脉冲）
+  rippleIdleFrames: ["·"],
+  rippleScanFrames: ["░", "▒", "▓", "█", "▓", "▒"],
+  ripplePropagateFrames: ["○○○", "●○○", "●●○", "●●●"], // 正向左→右扩散
+  rippleVerifyFrames: ["▁", "▃", "▅", "▇", "▅", "▃"], // 反向脉冲（右→左收敛）
+  rippleBlockedFrames: ["!", " ", "!", " "],
+  rippleSettledFrames: ["✓"],
 }
 
 /** 根据环境变量选择 glyph 主题。默认 ASCII-safe。 */

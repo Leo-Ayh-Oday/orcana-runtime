@@ -14,6 +14,7 @@ import { Box, Text } from "ink"
 import { theme } from "../theme/theme"
 import { SonarPulse } from "./SonarPulse"
 import type { ThinkingDockModel } from "./selectThinkingDock"
+import { getLastTokenAt } from "../pending-activity"
 
 export interface ThinkingDockProps {
   model: ThinkingDockModel
@@ -32,12 +33,20 @@ export function ThinkingDock({ model, width }: ThinkingDockProps) {
   // 极窄屏：只显示 phase label，省略工具详情
   const compact = width < 60
 
+  // PR-10: 透传 stalled 检测所需的 lastTokenAt 和 hasActiveTools 给 SonarPulse
+  // 仅在非 error/waiting_permission phase 下透传（这些 phase 不需要 stalled 信号）
+  const enableStalled = model.phase !== "error" && model.phase !== "waiting_permission"
+  const lastTokenAt = enableStalled ? getLastTokenAt() : undefined
+  const hasActiveTools = activeTools.length > 0
+
   return (
     <Box flexDirection="row" paddingX={2} height={1}>
       <Box marginRight={1}>
         <SonarPulse
           active={model.phase !== "idle" && model.phase !== "error" && model.phase !== "waiting_permission"}
           phase={model.phase}
+          lastTokenAt={lastTokenAt}
+          hasActiveTools={hasActiveTools}
         />
       </Box>
       <Text color={model.phase === "error" ? theme.error : theme.text}>

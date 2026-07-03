@@ -18,10 +18,12 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Box, Text } from "ink"
+import { Box, Text, useInput } from "ink"
 import { TextArea } from "react-ink-textarea"
 import { C } from "../theme/theme"
 import type { SlashCommandHint } from "../input"
+import { matchCommands } from "../commands/score"
+import { CommandShelf } from "./CommandShelf"
 
 // ── Paste block 系统（从 input.tsx 适配） ──
 
@@ -180,6 +182,9 @@ export function OrcanaComposer({
   const [history, setHistory] = useState<ComposerHistoryItem[]>([])
   const [historyIdx, setHistoryIdx] = useState(-1)
   const [commandIdx, setCommandIdx] = useState(0)
+  // PR-3: 用户按 Esc 关闭命令菜单后，不再渲染 CommandShelf，但保留 "/query" 文本。
+  // slashQuery 变化时自动重置（用户继续输入 → 菜单重新出现）。
+  const [commandsDismissed, setCommandsDismissed] = useState(false)
   const [pasteBlocks, setPasteBlocks] = useState<PasteBlock[]>([])
   const [nextPasteId, setNextPasteId] = useState(1)
   // 当用户浏览历史时，保存当前未发送的草稿（用于回到 "现在" 时恢复）
@@ -187,12 +192,19 @@ export function OrcanaComposer({
 
   // ── 派生数据 ──
   const visibleDraft = useMemo(() => displayDraft(value, pasteBlocks), [pasteBlocks, value])
-  const showCommands = !disabled && value.trimStart().startsWith("/")
+  // PR-3: commandsDismissed 让 Esc 能关闭菜单但保留 "/query" 文本。
+  const showCommands = !disabled && value.trimStart().startsWith("/") && !commandsDismissed
   const slashQuery = value.trimStart().startsWith("/")
     ? (value.trimStart().slice(1).split(/\s+/)[0] ?? "")
     : ""
-  const commandMatches = commands.filter(cmd => cmd.name.startsWith(slashQuery)).slice(0, 3)
-  const selectedCommand = commandMatches[Math.min(commandIdx, Math.max(0, commandMatches.length - 1))]
+  // PR-3: 用 fuzzy matchCommands 替换原 startsWith 前缀匹配，上限 5 条。
+  const scoredMatches = useMemo(
+    () => matchCommands(slashQuery, commands, c => c.name, 5),
+    [slashQuery, commands],
+  )
+  const selectedCommand = scoredMatches.length > 0
+    ? scoredMatches[Math.min(commandIdx, scoredMatches.length - 1)]!.command
+    : undefined
   const pasteCount = pasteBlocks.filter(block => value.includes(block.token)).length
   // TextArea 当前行数（1-3），用于让 parent 动态计算 footerHeight
   const textRows = Math.min(3, Math.max(1, value ? value.split("\n").length : 1))
@@ -201,6 +213,20 @@ export function OrcanaComposer({
   useEffect(() => {
     onChromeChange?.({ commandOpen: showCommands, pasteCount, textRows })
   }, [onChromeChange, pasteCount, showCommands, textRows])
+
+  // PR-3: slashQuery 变化时重置 commandsDismissed —— 用户继续输入则菜单重新出现。
+  // 覆盖场景：/hel → Esc → 退格 → /he（slashQuery 变化 → 菜单重现）。
+  useEffect(() => {
+    setCommandsDismissed(false)
+  }, [slashQuery])
+
+  // PR-3: Esc 关闭命令菜单但保留输入文本。useInput 仅在菜单可见时激活，
+  // 避免与 TextArea 的按键处理冲突。
+  useInput((_input, key) => {
+    if (key.escape) {
+      setCommandsDismissed(true)
+    }
+  }, { isActive: showCommands })
 
   // ── onChange：处理 paste 检测 ──
   const handleChange = useCallback(
@@ -280,20 +306,20 @@ export function OrcanaComposer({
   // ── onTab：命令面板导航 ──
   const handleTab = useCallback(
     (shift: boolean) => {
-      if (showCommands && commandMatches.length > 0) {
+      if (showCommands && scoredMatches.length > 0) {
         setCommandIdx(idx => {
           const delta = shift ? -1 : 1
-          return (idx + delta + commandMatches.length) % commandMatches.length
+          return (idx + delta + scoredMatches.length) % scoredMatches.length
         })
       }
     },
-    [showCommands, commandMatches.length],
+    [showCommands, scoredMatches.length],
   )
 
   // ── onFirstLineUp：第一行按 Up → 命令面板或历史导航 ──
   const handleFirstLineUp = useCallback(() => {
-    if (showCommands && commandMatches.length > 0) {
-      setCommandIdx(idx => (idx <= 0 ? commandMatches.length - 1 : idx - 1))
+    if (showCommands && scoredMatches.length > 0) {
+      setCommandIdx(idx => (idx <= 0 ? scoredMatches.length - 1 : idx - 1))
       return
     }
     if (history.length > 0) {
@@ -309,12 +335,12 @@ export function OrcanaComposer({
       setPasteBlocks(item.pasteBlocks.map(b => ({ ...b })))
       setCommandIdx(0)
     }
-  }, [showCommands, commandMatches.length, history, historyIdx, value, cursor, pasteBlocks])
+  }, [showCommands, scoredMatches.length, history, historyIdx, value, cursor, pasteBlocks])
 
   // ── onLastLineDown：最后一行按 Down → 命令面板或历史导航 ──
   const handleLastLineDown = useCallback(() => {
-    if (showCommands && commandMatches.length > 0) {
-      setCommandIdx(idx => (idx + 1) % commandMatches.length)
+    if (showCommands && scoredMatches.length > 0) {
+      setCommandIdx(idx => (idx + 1) % scoredMatches.length)
       return
     }
     if (historyIdx >= 0) {
@@ -341,7 +367,7 @@ export function OrcanaComposer({
         setPasteBlocks(item.pasteBlocks.map(b => ({ ...b })))
       }
     }
-  }, [showCommands, commandMatches.length, history, historyIdx])
+  }, [showCommands, scoredMatches.length, history, historyIdx])
 
   // ── 输入状态行 ──
   const compactInputStatus = disabled
@@ -354,19 +380,13 @@ export function OrcanaComposer({
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      {/* 命令面板 */}
+      {/* PR-3: 命令面板抽离为独立 CommandShelf 组件。
+          匹配/评分由 matchCommands 完成，键位由本组件驱动。 */}
       {showCommands && (
-        <Box flexDirection="column" marginBottom={1} marginLeft={2}>
-          {commandMatches.length === 0 ? (
-            <Text color={C.dim}>无匹配命令</Text>
-          ) : (
-            commandMatches.map((cmd, index) => (
-              <Text key={cmd.name} color={index === commandIdx ? C.cyan : C.dim}>
-                {index === commandIdx ? ">" : " "} /{cmd.name} <Text color={C.dim}>{cmd.description}</Text>
-              </Text>
-            ))
-          )}
-        </Box>
+        <CommandShelf
+          matches={scoredMatches}
+          selectedIndex={Math.min(commandIdx, Math.max(0, scoredMatches.length - 1))}
+        />
       )}
 
       {/* 粘贴内容指示器 */}

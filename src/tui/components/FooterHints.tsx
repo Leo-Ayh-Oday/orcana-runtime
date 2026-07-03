@@ -1,9 +1,13 @@
-/** FooterHints — 底部键位提示（Phase 4）。
+/** FooterHints — 底部键位提示（Phase 4 + PR-2 升级）。
  *
- *  从 active context 派生，不硬编码。
+ *  PR-2: 根据 context 切换三组 hint：
+ *    - normal:  Enter send · Shift+Enter newline · / commands · Ctrl+C exit
+ *    - command: ↑/↓ select · Enter run · Tab insert · Esc close
+ *    - running: Enter queue · Ctrl+C exit
+ *
+ *  早退优先级链: Confirm > Rewind* > Clarification > command > running > normal
+ *
  *  Phase 4: C.* → theme.* 迁移；窄屏砍非关键 hint。
- *
- *  早退优先级链: Confirm > Rewind* > Clarification > busy > idle
  */
 
 import React from "react"
@@ -15,6 +19,9 @@ export interface FooterHintsProps {
   busy: boolean
   activeContext: InputContext
   width: number
+  /** PR-2: 命令菜单打开时显示 command 模式 hints。
+   *  优先级高于 busy/normal，低于 modal contexts。 */
+  commandOpen?: boolean
 }
 
 function KeyHint({ shortcut, label, color = theme.brand }: { shortcut: string; label: string; color?: string }) {
@@ -26,7 +33,7 @@ function KeyHint({ shortcut, label, color = theme.brand }: { shortcut: string; l
   )
 }
 
-export const FooterHints = React.memo(function FooterHints({ busy, activeContext, width }: FooterHintsProps) {
+export const FooterHints = React.memo(function FooterHints({ busy, activeContext, width, commandOpen = false }: FooterHintsProps) {
   // ── Modal contexts: 早退，优先显示 modal 专属操作 ──
 
   if (activeContext === "Confirm") {
@@ -60,8 +67,28 @@ export const FooterHints = React.memo(function FooterHints({ busy, activeContext
     )
   }
 
-  // ── Composer contexts: adaptive to busy/idle/width ──
+  // ── PR-2: command 模式 — 命令菜单打开时 ──
+  if (commandOpen) {
+    if (width < 60) {
+      return (
+        <Box>
+          <Text color={theme.textFaint}>↑↓ select  </Text>
+          <KeyHint shortcut="Enter" label=" run" color={theme.brand} />
+          <Text color={theme.textFaint}>  Esc close</Text>
+        </Box>
+      )
+    }
+    return (
+      <Box>
+        <Text color={theme.textFaint}>↑/↓ select  </Text>
+        <KeyHint shortcut="Enter" label=" run  " color={theme.brand} />
+        <KeyHint shortcut="Tab" label=" insert  " color={theme.brand} />
+        <Text color={theme.textFaint}>Esc close</Text>
+      </Box>
+    )
+  }
 
+  // ── running 模式 ──
   if (busy) {
     // 极窄屏：只显示 Enter queue
     if (width < 60) {
@@ -80,7 +107,7 @@ export const FooterHints = React.memo(function FooterHints({ busy, activeContext
     )
   }
 
-  // 闲置状态
+  // ── normal 模式（闲置） ──
   if (width < 60) {
     return (
       <Box>

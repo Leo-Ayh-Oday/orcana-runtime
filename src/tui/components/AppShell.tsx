@@ -27,6 +27,7 @@ import { Scrollback, type ScrollbackScrollState } from "./Scrollback"
 import { RightRail } from "./RightRail"
 import { PlanPanel, FlowLine, type TaskProgressState } from "./PlanPanel"
 import { FooterHints } from "./FooterHints"
+import { ComposerFrame } from "./ComposerFrame"
 import { fitText } from "./MessageItem"
 import { resolveActiveContext } from "../input/types"
 import { ModeContract, ModeBadge } from "./ModeContract"
@@ -202,7 +203,8 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
     ? 5
     : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
   // PR-1: ThinkingDock 在 footer 中占 1 行
-  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1 + thinkingDockRows))
+  // PR-2: ComposerFrame 上下分隔线各占 1 行（+2）
+  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1 + thinkingDockRows + 2))
   const bodyHeight = Math.max(10, rows - footerHeight - 3)
   return { showDash, mode, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight }
 }
@@ -338,7 +340,7 @@ export function AppShell(props: AppShellProps) {
         )}
       </Box>
 
-      {/* Footer: PlanPanel/ClarificationPanel + ThinkingDock + InputLine + FooterHints */}
+      {/* Footer: PlanPanel/ClarificationPanel + ThinkingDock + ComposerFrame + FooterHints */}
       <Box flexDirection="column" height={layout.footerHeight}>
         {clarification ? (
           <ClarificationPanel wizard={clarification} width={cols} />
@@ -347,25 +349,33 @@ export function AppShell(props: AppShellProps) {
         )}
         {/* PR-1: ThinkingDock — 固定运行态显示，不进入 messages */}
         <ThinkingDock model={thinkingDock} width={cols - 4} />
-        <OrcanaComposer
-          onSubmit={props.submit}
-          disabled={showStartup || !!clarification || modalActive}
-          placeholder={
-            modalActive ? "modal active" :
-            clarification ? "confirm or cancel above" :
-            isWorking ? "Queue message..." :
-            "Message Orcana..."
-          }
-          status={
-            isWorking
-              ? `agent running · Enter queues${state.queueCount > 0 ? ` (queued ${state.queueCount})` : ""}`
-              : ""
-          }
-          commands={SLASH_COMMANDS}
-          focused={!showStartup && !modalActive}
-          onChromeChange={props.setInputChrome}
+        {/* PR-2: ComposerFrame — 固定输入框 frame，上下分隔线 */}
+        <ComposerFrame width={cols - 2}>
+          <OrcanaComposer
+            onSubmit={props.submit}
+            disabled={showStartup || !!clarification || modalActive}
+            placeholder={
+              modalActive ? "modal active" :
+              clarification ? "Choose an option above..." :
+              isWorking ? "Queue next message..." :
+              "Message Orcana..."
+            }
+            status={
+              isWorking
+                ? `agent running · Enter queues${state.queueCount > 0 ? ` (queued ${state.queueCount})` : ""}`
+                : ""
+            }
+            commands={SLASH_COMMANDS}
+            focused={!showStartup && !modalActive}
+            onChromeChange={props.setInputChrome}
+          />
+        </ComposerFrame>
+        <FooterHints
+          busy={isWorking}
+          activeContext={activeKeyContext}
+          width={cols}
+          commandOpen={inputChrome.commandOpen}
         />
-        <FooterHints busy={isWorking} activeContext={activeKeyContext} width={cols} />
       </Box>
     </Box>
   )

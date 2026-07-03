@@ -1,14 +1,19 @@
-/** Tests for pending animation (Phase 5 update).
+/** Tests for pending animation (Phase 5 + PR-1.5).
+ *
+ *  PR-1.5 变更:
+ *    - applyPendingAnimation 简化为只处理 tail 光标动画
+ *    - 删除 spinner 分支：空 pending message 不再渲染占位行
+ *    - 删除 stalled 在 applyPendingAnimation 中的逻辑（isStalled 函数保留供 ThinkingDock 未来使用）
  *
  *  Verifies:
  *    1. Static lines pass through unchanged
- *    2. pendingAnim="spinner" → classified activity glyph + stable label
- *    3. pendingAnim="tail" → tail dots appended to text
- *    4. tick rotation changes glyph but not label
- *    5. No pending → identity
- *    6. Per-activity distinct glyphs (Phase 5)
- *    7. Reduced motion: all glyphs static, tail dots empty (Phase 5)
- *    8. Stalled detection: 3s no token/tool → "stalled" (Phase 5)
+ *    2. pendingAnim="tail" → tail dots appended to text
+ *    3. No pending → identity
+ *    4. Per-activity distinct glyphs (Phase 5, activityGlyph 函数)
+ *    5. Reduced motion: tail dots empty (Phase 5)
+ *    6. Stalled detection: 3s no token/tool → "stalled" (Phase 5, isStalled 函数)
+ *    7. classifyPendingActivity 关键词映射 (Phase 5)
+ *    8. FormattedLineCache 缓存行为 (Phase 6)
  */
 
 import { describe, expect, test } from "bun:test"
@@ -28,88 +33,50 @@ function line(overrides: Partial<RenderedLine> = {}): RenderedLine {
   return { marker: "|", text: "hello", color: C.blue, ...overrides }
 }
 
-describe("applyPendingAnimation (Phase 5)", () => {
+describe("applyPendingAnimation (PR-1.5: tail only)", () => {
   test("static lines pass through unchanged", () => {
     const lines = [line({ text: "hello" }), line({ text: "world" })]
-    expect(applyPendingAnimation(lines, 0, "", 0, false, false)).toEqual(lines)
+    expect(applyPendingAnimation(lines, 0, false)).toEqual(lines)
   })
 
   test("empty lines array returns empty", () => {
-    expect(applyPendingAnimation([], 5, "", 0, false, false)).toEqual([])
-  })
-
-  test("spinner generates classified activity (not random verb)", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const, pendingStatus: "working" })]
-    const r = applyPendingAnimation(lines, 0, "working", 0, false, false)
-    expect(r.length).toBe(1)
-    // Glyph comes from glyph theme (ASCII or Unicode). Verify pattern: <glyph> working
-    expect(r[0]!.text).toMatch(/^. working$/)
-  })
-
-  test("glyph rotates with tick", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    const r0 = applyPendingAnimation(lines, 0, "working", 0, false, false)[0]!.text
-    const r1 = applyPendingAnimation(lines, 1, "working", 0, false, false)[0]!.text
-    const r2 = applyPendingAnimation(lines, 2, "working", 0, false, false)[0]!.text
-    // Labels are stable, glyphs differ
-    expect(r0).not.toBe(r1)
-    expect(r1).not.toBe(r2)
-  })
-
-  test("round shows in label when > 0", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    const r0 = applyPendingAnimation(lines, 0, "working", 3, false, false)[0]!.text
-    expect(r0).toContain("r3")
-  })
-
-  test("round not shown when 0", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    const r0 = applyPendingAnimation(lines, 0, "working", 0, false, false)[0]!.text
-    expect(r0).not.toContain("r0")
+    expect(applyPendingAnimation([], 5, false)).toEqual([])
   })
 
   test("tail dots appended to text", () => {
-    const lines = [line({ text: "streaming", pendingAnim: "tail" as const })]
-    expect(applyPendingAnimation(lines, 0, "", 0, false, false)[0]!.text).toBe("streaming")
-    expect(applyPendingAnimation(lines, 1, "", 0, false, false)[0]!.text).toBe("streaming.")
-    expect(applyPendingAnimation(lines, 2, "", 0, false, false)[0]!.text).toBe("streaming..")
-    expect(applyPendingAnimation(lines, 3, "", 0, false, false)[0]!.text).toBe("streaming...")
-    expect(applyPendingAnimation(lines, 4, "", 0, false, false)[0]!.text).toBe("streaming")
+    const lines = [line({ text: "streaming", pendingAnim: "tail" })]
+    expect(applyPendingAnimation(lines, 0, false)[0]!.text).toBe("streaming")
+    expect(applyPendingAnimation(lines, 1, false)[0]!.text).toBe("streaming.")
+    expect(applyPendingAnimation(lines, 2, false)[0]!.text).toBe("streaming..")
+    expect(applyPendingAnimation(lines, 3, false)[0]!.text).toBe("streaming...")
+    expect(applyPendingAnimation(lines, 4, false)[0]!.text).toBe("streaming")
   })
 
-  test("no pending → identity", () => {
+  test("no pending → identity (same reference)", () => {
     const lines = [line({ text: "hello" })]
-    expect(applyPendingAnimation(lines, 5, "", 0, false, false)).toBe(lines)
+    expect(applyPendingAnimation(lines, 5, false)).toBe(lines)
   })
 
-  test("routing status → 'preparing context' label", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    const r = applyPendingAnimation(lines, 0, "routing context", 1, false, false)[0]!.text
-    expect(r).toContain("preparing context")
-    expect(r).toContain("r1")
-  })
-
-  test("verifying status → 'verifying' label", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    const r = applyPendingAnimation(lines, 0, "typecheck running", 0, false, false)[0]!.text
-    expect(r).toContain("verifying")
-  })
-
-  test("blocked status → 'blocked' label", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    const r = applyPendingAnimation(lines, 0, "gate blocked", 0, false, false)[0]!.text
-    expect(r).toContain("blocked")
+  test("mixed tail and static lines: only tail lines get dots", () => {
+    const lines = [
+      line({ text: "first" }),
+      line({ text: "streaming", pendingAnim: "tail" }),
+      line({ text: "third" }),
+    ]
+    const r = applyPendingAnimation(lines, 3, false)
+    expect(r[0]!.text).toBe("first")
+    expect(r[1]!.text).toBe("streaming...")
+    expect(r[2]!.text).toBe("third")
   })
 })
 
 // ── Phase 5: per-activity distinct glyphs ──
+// activityGlyph 函数仍保留，供 ThinkingDock 内部使用
 
 describe("per-activity glyphs (Phase 5)", () => {
   test("routing uses routingGlyphs, not spinnerChars", () => {
-    // routing: "~-~=~-~=~-~" — verify tick 0 starts with '~'
     const g0 = activityGlyph("routing", 0)
     expect(g0).toBe("~")
-    // tick 1 should be '-' (different from spinner tick 1 which is '\')
     const g1 = activityGlyph("routing", 1)
     expect(g1).toBe("-")
   })
@@ -140,14 +107,13 @@ describe("per-activity glyphs (Phase 5)", () => {
   test("routing and reading have different glyph sequences", () => {
     const routingGlyphs = Array.from({ length: 5 }, (_, i) => activityGlyph("routing", i))
     const readingGlyphs = Array.from({ length: 5 }, (_, i) => activityGlyph("reading", i))
-    // They should not be identical
     expect(routingGlyphs.join("")).not.toBe(readingGlyphs.join(""))
   })
 
   test("streaming and working can share spinner (same glyph source)", () => {
     const s0 = activityGlyph("streaming", 0)
     const w0 = activityGlyph("working", 0)
-    expect(s0).toBe(w0) // both use spinner-like glyphs
+    expect(s0).toBe(w0)
   })
 })
 
@@ -155,24 +121,15 @@ describe("per-activity glyphs (Phase 5)", () => {
 
 describe("reduced motion (Phase 5)", () => {
   test("reducedMotion: tail dots always empty", () => {
-    const lines = [line({ text: "streaming", pendingAnim: "tail" as const })]
-    // With reducedMotion=true, all tail dots should be empty
-    expect(applyPendingAnimation(lines, 0, "", 0, true, false)[0]!.text).toBe("streaming")
-    expect(applyPendingAnimation(lines, 1, "", 0, true, false)[0]!.text).toBe("streaming")
-    expect(applyPendingAnimation(lines, 2, "", 0, true, false)[0]!.text).toBe("streaming")
-  })
-
-  test("reducedMotion: spinner glyph is static (first char)", () => {
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    const r0 = applyPendingAnimation(lines, 0, "working", 0, true, false)[0]!.text
-    const r5 = applyPendingAnimation(lines, 5, "working", 0, true, false)[0]!.text
-    // With reduced motion, the glyph should not change with tick
-    // Both should have the same first character from the glyph sequence
-    expect(r0).toBe(r5)
+    const lines = [line({ text: "streaming", pendingAnim: "tail" })]
+    expect(applyPendingAnimation(lines, 0, true)[0]!.text).toBe("streaming")
+    expect(applyPendingAnimation(lines, 1, true)[0]!.text).toBe("streaming")
+    expect(applyPendingAnimation(lines, 2, true)[0]!.text).toBe("streaming")
   })
 })
 
-// ── Phase 5: stalled detection ──
+// ── Phase 5: stalled detection (isStalled 函数) ──
+// applyPendingAnimation 不再使用 stalled，但 isStalled 函数保留供 ThinkingDock 未来使用
 
 describe("stalled detection (Phase 5)", () => {
   test("isStalled returns false when no timestamps recorded", () => {
@@ -194,14 +151,7 @@ describe("stalled detection (Phase 5)", () => {
 
   test("isStalled returns true after 3s with no activity", () => {
     resetStalledDetection()
-    const past = Date.now() - 4000
-    // Manually set lastTokenAt to 4s ago
     markTokenActivity()
-    // Override with a past timestamp — use isStalled with explicit now
-    const now = Date.now()
-    // We need to check that after 4s the stalled state triggers
-    // Since we can't easily mock Date.now in module-level state, test the threshold logic
-    // by using the explicit now parameter
     const futureTimestamp = Date.now() + 4000
     expect(isStalled(futureTimestamp)).toBe(true)
   })
@@ -210,28 +160,6 @@ describe("stalled detection (Phase 5)", () => {
     resetStalledDetection()
     markTokenActivity()
     expect(isStalled(Date.now())).toBe(false)
-  })
-
-  test("stalled overrides classified activity when no active tool", () => {
-    resetStalledDetection()
-    markTokenActivity()
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    // Within 3s → should NOT be stalled
-    const r = applyPendingAnimation(lines, 0, "streaming text", 0, false, false)
-    expect(r[0]!.text).toContain("streaming")
-  })
-
-  test("stalled suppressed when hasActiveTools=true (long tool execution)", () => {
-    resetStalledDetection()
-    markTokenActivity()
-    // Simulate tool was started 4s ago (via explicit timestamp check)
-    const lines = [line({ text: "", pendingAnim: "spinner" as const })]
-    // Even though isStalled would return true (both timestamps old),
-    // hasActiveTools=true prevents the override
-    // "reading file" → classifyPendingActivity → "reading" + hasActiveTools prevents stall
-    const r = applyPendingAnimation(lines, 0, "reading file", 0, false, true)
-    expect(r[0]!.text).toContain("reading")
-    expect(r[0]!.text).not.toContain("stalled")
   })
 
   test("resetStalledDetection clears both timestamps", () => {
@@ -295,7 +223,6 @@ describe("FormattedLineCache (Phase 6)", () => {
     const cache = new FormattedLineCache()
     const m = makeMsg("m1", "hello", false)
     const lines = cache.getOrCompute(m, 80, "idle")
-    // Should return at least the message line + spacer
     expect(lines.length).toBeGreaterThan(0)
     expect(lines[0]!.text).toBe("hello")
   })
@@ -305,7 +232,6 @@ describe("FormattedLineCache (Phase 6)", () => {
     const m = makeMsg("m1", "hello", false)
     const first = cache.getOrCompute(m, 80, "idle")
     const second = cache.getOrCompute(m, 80, "idle")
-    // Same reference → cache hit
     expect(first).toBe(second)
   })
 
@@ -315,7 +241,6 @@ describe("FormattedLineCache (Phase 6)", () => {
     const m2 = makeMsg("m1", "hello world", false)
     const first = cache.getOrCompute(m1, 80, "idle")
     const second = cache.getOrCompute(m2, 80, "idle")
-    // Different text → different ref
     expect(first).not.toBe(second)
   })
 
@@ -349,7 +274,6 @@ describe("FormattedLineCache (Phase 6)", () => {
     const cache = new FormattedLineCache()
     const msgs = [makeMsg("m1", "hello"), makeMsg("m2", "world")]
     const { allLines } = cache.buildAllLines(msgs, 80, "idle")
-    // Should have content from both messages
     const allText = allLines.filter(l => l.marker === "|").map(l => l.text).join(" ")
     expect(allText).toContain("hello")
     expect(allText).toContain("world")
@@ -361,13 +285,8 @@ describe("FormattedLineCache (Phase 6)", () => {
     cache.buildAllLines(msgs1, 80, "idle")
     expect(cache.stats().size).toBeGreaterThanOrEqual(2)
 
-    // Remove m2
     const msgs2 = [makeMsg("m1", "hello")]
     cache.buildAllLines(msgs2, 80, "idle")
-    // m2 should be evicted
-    const m2Key = formatLineCacheKey(makeMsg("m2", "world"), 80)
-    // We can't directly check internal state, but second build with m2 alone should be fast
-    // Verify stats show reduced size
     expect(cache.stats().size).toBeLessThan(3)
   })
 
@@ -378,10 +297,7 @@ describe("FormattedLineCache (Phase 6)", () => {
     const sizeAt80 = cache.stats().size
     expect(sizeAt80).toBeGreaterThan(0)
 
-    // Change width → cache cleared
     cache.buildAllLines(msgs, 120, "idle")
-    // After resize + eviction, only current messages remain
-    // But since getOrCompute repopulates... the cache is cleared then repopulated
     expect(cache.stats().size).toBeGreaterThan(0)
     expect(cache.stats().width).toBe(120)
   })
@@ -412,5 +328,44 @@ describe("viewport row cap (Phase 6)", () => {
     const { allLines, capped } = cache.buildAllLines(msgs, 80, "idle")
     expect(capped).toBe(false)
     expect(allLines.length).toBeLessThan(5000)
+  })
+})
+
+// ── PR-1.5: 空 pending message 不再渲染占位行 ──
+// 直接测试 renderMessageLines，避免 cache 追加 spacer 干扰断言
+
+import { renderMessageLines } from "../../src/tui/components/MessageItem"
+
+describe("PR-1.5: empty pending message renders no placeholder", () => {
+  test("pending assistant with empty text returns no lines", () => {
+    const m = makeMsg("m1", "", true)
+    const lines = renderMessageLines(m, 80, "working")
+    expect(lines).toEqual([])
+  })
+
+  test("pending assistant with text still renders content + tail marker", () => {
+    const m = makeMsg("m1", "hello world", true)
+    const lines = renderMessageLines(m, 80, "streaming")
+    expect(lines.length).toBeGreaterThan(0)
+    const last = lines[lines.length - 1]!
+    expect(last.pendingAnim).toBe("tail")
+    expect(last.text).toBe("hello world")
+  })
+
+  test("final assistant with text has no tail marker", () => {
+    const m = makeMsg("m1", "hello world", false)
+    const lines = renderMessageLines(m, 80, "done")
+    expect(lines.length).toBeGreaterThan(0)
+    for (const l of lines) {
+      expect(l.pendingAnim).toBeUndefined()
+    }
+  })
+
+  test("FormattedLineCache: empty pending message yields empty allLines (no spacer leak)", () => {
+    // 集成测试：空 pending 不应向 buildAllLines 注入 spacer 行
+    const cache = new FormattedLineCache()
+    const msgs = [makeMsg("m1", "", true)]
+    const { allLines } = cache.buildAllLines(msgs, 80, "working")
+    expect(allLines).toEqual([])
   })
 })

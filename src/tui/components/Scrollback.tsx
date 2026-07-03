@@ -1,22 +1,21 @@
-/** Scrollback — 消息视口渲染（Phase 6 性能升级）。
+/** Scrollback — 消息视口渲染（Phase 6 性能升级 + PR-1.5 拆双轨）。
  *
  *  Phase 6 变更:
  *    - FormattedLineCache: 按 msgId+textLen+width 缓存渲染行，流式输出时只重算最后一条消息
  *    - Viewport row cap: 5000 行硬上限，超出行从顶部裁剪
  *    - Resize cache invalidation: width 变化时清空缓存
  *
- *  Phase 5 变更:
- *    - tick 从 ClockContext 消费（useClock），不再 prop drill
- *    - reduced-motion 时 tail dots 始终为空
- *    - stalled detection：3s 无 token/工具 → activity 变为 "stalled"
- *    - 每类 activity 使用独立 glyph 序列 */
+ *  PR-1.5 变更:
+ *    - 废除 pending spinner 分支：空 pending message 不再渲染占位行
+ *    - 运行态信号（Composing/Reading/Running）由 ThinkingDock 单一职责接管
+ *    - 保留 tail 光标动画（流式输出的"正在打字"内容信号）
+ *    - stalled 检测从 Scrollback 移除，isStalled() 保留供 ThinkingDock 未来使用 */
 
 import React, { useEffect, useMemo, useRef } from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { TuiMessage } from "../state/types"
 import { renderMessageLines, type RenderedLine } from "./MessageItem"
-import { classifyPendingActivity, defaultActivity, formatPendingLine, isStalled } from "../pending-activity"
 import { useClock } from "../clock"
 
 export interface ScrollbackScrollState {
@@ -31,10 +30,13 @@ export interface ScrollbackProps {
   width: number
   height: number
   status: string
-  round: number
+  /** PR-1.5: round 保留为向后兼容字段，Scrollback 内部不再使用。
+   *  运行态信号由 ThinkingDock 单一职责接管。 */
+  round?: number
   scrollOffset: number
   onScrollState?: (state: ScrollbackScrollState) => void
-  /** Phase 5: 是否有活跃工具。防止 stalled 在长 shell 命令执行时误报。 */
+  /** PR-1.5: hasActiveTools 保留为向后兼容字段，Scrollback 内部不再使用。
+   *  stalled 检测已移至 ThinkingDock 域。 */
   hasActiveTools?: boolean
 }
 
@@ -87,10 +89,11 @@ export class FormattedLineCache {
     const hit = this.cache.get(key)
     if (hit) return hit.lines
 
-    const lines = [
-      ...renderMessageLines(msg, width, status),
-      { marker: " " as const, text: "", color: C.dim },
-    ]
+    const rendered = renderMessageLines(msg, width, status)
+    // PR-1.5: 空 pending message 返回 [] — 不追加 spacer，避免渲染空占位行
+    const lines = rendered.length > 0
+      ? [...rendered, { marker: " " as const, text: "", color: C.dim }]
+      : rendered
     this.cache.set(key, { lines })
     return lines
   }
@@ -141,18 +144,21 @@ export class FormattedLineCache {
   }
 }
 
-// ── 动画 (Phase 5: per-activity glyphs, reduced-motion, stalled detection) ──
+// ── 动画 (PR-1.5: 仅保留 tail 光标动画) ──
 
-/** Phase 5: 叠加 pending 动画到静态行。O(N) 但 N = 视口高度。
- *  使用 per-activity glyph 序列，reducedMotion 时静态。
- *  hasActiveTools: 防止 stalled 检测在长工具执行期间误报。 */
+/** PR-1.5: 叠加 pending 动画到静态行。O(N) 但 N = 视口高度。
+ *
+ *  原 Phase 5 的 spinner 分支已废除：空 pending message 不再渲染占位行，
+ *  运行态信号（Composing/Reading/Running 等）由 ThinkingDock 单一职责接管。
+ *  保留 tail 分支：流式输出尾行 "..." 光标动画，是"正在打字"的内容信号，
+ *  与 ThinkingDock 的状态标签不同维度。
+ *
+ *  stalled 检测逻辑移除：applyPendingAnimation 不再需要判断 stalled，
+ *  isStalled() 函数保留在 pending-activity.ts 供 ThinkingDock 未来使用。 */
 export function applyPendingAnimation(
   lines: RenderedLine[],
   tick: number,
-  status: string,
-  round: number,
   reducedMotion: boolean,
-  hasActiveTools: boolean,
 ): RenderedLine[] {
   let hasPending = false
   for (const line of lines) {
@@ -160,24 +166,11 @@ export function applyPendingAnimation(
   }
   if (!hasPending) return lines
 
-  let activity = status ? classifyPendingActivity(status) : defaultActivity()
-  // Phase 5: stalled detection — only when no token AND no active tool
-  // (active tool check prevents false stall during long-running shell commands)
-  if (isStalled() && !hasActiveTools) {
-    activity = "stalled"
-  }
-  // reducedMotion: freeze tick to 0 → all glyphs return first (static) character
-  const effectiveTick = reducedMotion ? 0 : tick
-  const pendingText = formatPendingLine(activity, effectiveTick, round)
+  // reducedMotion: 不追加 tail dots，保持文本静态
+  if (reducedMotion) return lines
 
   return lines.map(line => {
-    if (!line.pendingAnim) return line
-    if (line.pendingAnim === "spinner") {
-      return { ...line, text: pendingText }
-    }
-    // tail animation: append "...", "..", ".", "" to last streaming line
-    // reducedMotion: always empty
-    if (reducedMotion) return { ...line, text: line.text }
+    if (line.pendingAnim !== "tail") return line
     const tail = ["", ".", "..", "..."][tick % 4] ?? ""
     return { ...line, text: line.text + tail }
   })
@@ -190,10 +183,8 @@ export const Scrollback = React.memo(function Scrollback({
   width,
   height,
   status,
-  round,
   scrollOffset,
   onScrollState,
-  hasActiveTools = false,
 }: ScrollbackProps) {
   const { tick, reducedMotion } = useClock()
   const hasPending = messages.some(m => m.pending)
@@ -212,12 +203,12 @@ export const Scrollback = React.memo(function Scrollback({
   const hiddenAbove = capped || start > 0
   const hiddenBelow = start + height < allLines.length
 
-  // ── Layer 2（轻）: pending 动画叠加 ──
+  // ── Layer 2（轻）: pending 动画叠加（PR-1.5: 仅 tail 光标）──
   const animatedTick = hasPending ? tick : 0
   const visibleLines = useMemo(
-    () => applyPendingAnimation(visibleStatic, animatedTick, status, round, reducedMotion, hasActiveTools),
+    () => applyPendingAnimation(visibleStatic, animatedTick, reducedMotion),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleStatic, animatedTick, status, round, reducedMotion, hasActiveTools],
+    [visibleStatic, animatedTick, reducedMotion],
   )
 
   useEffect(() => {

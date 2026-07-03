@@ -113,7 +113,7 @@ describe("component: renderMessageLines", () => {
     expect(lines[0]!.color).toBe(theme.eventTool)
   })
 
-  test("pending assistant with no text: returns static spinner placeholder (Phase 4)", () => {
+  test("pending assistant with no text: returns empty array (PR-1.5: no spinner placeholder)", () => {
     const message: TuiMessage = {
       id: "m1",
       role: "assistant",
@@ -122,12 +122,9 @@ describe("component: renderMessageLines", () => {
       createdAt: 0,
     }
     const lines = renderMessageLines(message, 40, "working")
-    // Phase 4: static line with pendingAnim="spinner" — animation applied by Scrollback layer
-    expect(lines.length).toBe(1)
-    expect(lines[0]!.pendingAnim).toBe("spinner")
-    expect(lines[0]!.pendingStatus).toBe("working")
-    expect(lines[0]!.color).toBe(theme.assistantMessage)
-    // Text is empty — spinner char + verb added by applyPendingAnimation() in Scrollback
+    // PR-1.5: 空 pending message 不再渲染占位行
+    // 运行态信号由 ThinkingDock 单一职责接管
+    expect(lines).toEqual([])
   })
 
   test("empty assistant message (no text, no pending): returns empty array", () => {
@@ -167,21 +164,20 @@ describe("component: renderMessageLines", () => {
     expect(lines.length).toBeGreaterThan(0)
   })
 
-  test("pending message returns spinner marker (Phase 4: static, animation applied later)", () => {
+  test("pending assistant with text: returns content with tail marker (PR-1.5)", () => {
     const message: TuiMessage = {
       id: "m1",
       role: "assistant",
-      text: "",
+      text: "streaming content",
       pending: true,
       createdAt: 0,
     }
-    // Phase 4: renderMessageLines no longer takes tick — returns static line with pendingAnim flag
-    const lines = renderMessageLines(message, 40, "working")
-    expect(lines.length).toBe(1)
-    expect(lines[0]!.pendingAnim).toBe("spinner")
-    expect(lines[0]!.pendingStatus).toBe("working")
-    // Static text is empty — animation chars (spinner + verb) are applied by Scrollback layer
-    expect(lines[0]!.text).toBe("")
+    const lines = renderMessageLines(message, 40, "streaming")
+    expect(lines.length).toBeGreaterThan(0)
+    // PR-1.5: 有文本的 pending message 保留 tail 光标动画
+    const last = lines[lines.length - 1]!
+    expect(last.pendingAnim).toBe("tail")
+    expect(last.text).toBe("streaming content")
   })
 })
 

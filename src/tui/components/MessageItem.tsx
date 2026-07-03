@@ -55,12 +55,12 @@ export interface RenderedLine {
   marker: string
   text: string
   color: string
-  /** Phase 4: pending 动画类型。undefined = 静态行。
+  /** PR-1.5: pending 动画类型。undefined = 静态行。
    *  "tail" — 流式输出尾行动画（附加 "...", "..", ".", "" 到行末）
-   *  "spinner" — Braille spinner（⠋⠙⠹...）+ 动词 */
-  pendingAnim?: "tail" | "spinner"
-  /** pendingAnim="spinner" 时使用的状态文本。 */
-  pendingStatus?: string
+   *
+   *  原 "spinner" 分支已废除：空 pending message 不再渲染占位行，
+   *  运行态信号由 ThinkingDock 单一职责接管。 */
+  pendingAnim?: "tail"
   /** Phase 3: 截断类型。由 render 层设置，不影响真实 message.text。
    *  "above" — 头部被截（保留尾部）  "below" — 尾部被截（保留头部）
    *  "middle" — 中间被截（双端保留） "viewport" — 视口裁剪（earlier/newer） */
@@ -130,13 +130,9 @@ export function renderMessageLines(
     return formatted
   }
 
-  if (message.pending) {
-    // Phase 4: 返回静态占位行，pendingAnim="spinner" 标记由 Scrollback 叠加动画
-    return [
-      { marker, text: "", color, pendingAnim: "spinner", pendingStatus: status },
-    ]
-  }
-
+  // PR-1.5: 空 pending message 不再渲染占位行。
+  // 运行态信号（Composing/Reading/Running）由 ThinkingDock 单一职责接管，
+  // 不再写入 messages 也不在 Scrollback 渲染 spinner。
   return []
 }
 

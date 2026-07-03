@@ -249,10 +249,10 @@ describe("ThinkingDock component (PR-1)", () => {
     expect(model.label).toBeTruthy()
   })
 
-  test("all ThinkingPhase values are distinct", () => {
+  test("all ThinkingPhase values are distinct (PR-1.6: 10 phases)", () => {
     const phases: ThinkingPhase[] = [
-      "idle", "routing", "thinking", "reading",
-      "tooling", "reviewing", "composing", "error",
+      "idle", "routing", "thinking", "planning", "reading",
+      "tooling", "reviewing", "composing", "waiting_permission", "error",
     ]
     expect(new Set(phases).size).toBe(phases.length)
   })
@@ -268,5 +268,112 @@ describe("ThinkingDock component (PR-1)", () => {
     }))
     expect(model.activeTools).toBeDefined()
     expect(model.activeTools!.length).toBeLessThanOrEqual(3)
+  })
+})
+
+// ── PR-1.6: planning + waiting_permission phases ──
+
+describe("selectThinkingDock (PR-1.6: planning + waiting_permission)", () => {
+  test("confirmActive=true → waiting_permission phase", () => {
+    const model = selectThinkingDock(
+      baseState({ done: false, status: "generating response" }),
+      { confirmActive: true },
+    )
+    expect(model.visible).toBe(true)
+    expect(model.phase).toBe("waiting_permission")
+    expect(model.label).toBe("Waiting for permission...")
+  })
+
+  test("confirmActive=true overrides running tools", () => {
+    const model = selectThinkingDock(
+      baseState({
+        done: false,
+        tools: [{ id: "t1", tool: "read_file", status: "running", startedAt: 1 }],
+      }),
+      { confirmActive: true },
+    )
+    // waiting_permission 优先于 tooling
+    expect(model.phase).toBe("waiting_permission")
+    expect(model.activeTools).toBeUndefined()
+  })
+
+  test("confirmActive=true overrides planning task", () => {
+    const model = selectThinkingDock(
+      baseState({ done: false, task: { phase: "planning" } }),
+      { confirmActive: true },
+    )
+    // waiting_permission 优先于 planning
+    expect(model.phase).toBe("waiting_permission")
+  })
+
+  test("error overrides confirmActive", () => {
+    const model = selectThinkingDock(
+      baseState({ errorLine: "Critical failure" }),
+      { confirmActive: true },
+    )
+    // error 优先级最高
+    expect(model.phase).toBe("error")
+    expect(model.label).toBe("Critical failure")
+  })
+
+  test("task.phase=planning → planning phase", () => {
+    const model = selectThinkingDock(baseState({
+      done: false,
+      task: { phase: "planning", goal: "refactor TUI", done: 0, total: 5 },
+    }))
+    expect(model.visible).toBe(true)
+    expect(model.phase).toBe("planning")
+    expect(model.label).toBe("Planning...")
+  })
+
+  test("task.phase=building → NOT planning (falls through to other phases)", () => {
+    const model = selectThinkingDock(baseState({
+      done: false,
+      status: "generating response",
+      task: { phase: "building", goal: "refactor TUI", done: 2, total: 5 },
+    }))
+    // building 不触发 planning，fall through 到 composing
+    expect(model.phase).not.toBe("planning")
+    expect(model.phase).toBe("composing")
+  })
+
+  test("task.phase=complete → NOT planning (falls through)", () => {
+    const model = selectThinkingDock(baseState({
+      done: false,
+      status: "generating response",
+      task: { phase: "complete", goal: "refactor TUI", done: 5, total: 5 },
+    }))
+    expect(model.phase).not.toBe("planning")
+  })
+
+  test("planning phase overrides running tools", () => {
+    const model = selectThinkingDock(baseState({
+      done: false,
+      task: { phase: "planning" },
+      tools: [{ id: "t1", tool: "read_file", status: "running", startedAt: 1 }],
+    }))
+    // planning 优先于 tooling
+    expect(model.phase).toBe("planning")
+    expect(model.activeTools).toBeUndefined()
+  })
+
+  test("confirmActive=false (default) does not trigger waiting_permission", () => {
+    const model = selectThinkingDock(baseState({
+      done: false,
+      status: "generating response",
+    }))
+    expect(model.phase).not.toBe("waiting_permission")
+  })
+
+  test("waiting_permission overrides done=true (user must see permission prompt)", () => {
+    const model = selectThinkingDock(
+      baseState({ done: true }),
+      { confirmActive: true },
+    )
+    // PR-1.6 设计：waiting_permission 优先于 done
+    // 实际场景中 confirmModal 打开时 done 不会 true，但逻辑上 waiting_permission 应优先
+    // 因为用户需要看到"等待权限"提示
+    expect(model.phase).toBe("waiting_permission")
+    expect(model.visible).toBe(true)
   })
 })

@@ -22,10 +22,12 @@ function phaseColor(phase: ThinkingPhase): string {
   switch (phase) {
     case "routing":    return "#38BDF8"  // cyan
     case "thinking":   return "#A78BFA"  // purple
+    case "planning":   return "#C4B5FD"  // 浅紫 — planning 是 thinking 的子状态，用更浅的紫区分
     case "reading":    return "#60A5FA"  // blue
     case "tooling":    return "#34D399"  // green
     case "reviewing":  return "#FBBF24"  // amber
     case "composing":  return "#F472B6"  // pink
+    case "waiting_permission": return "#FB923C"  // 橙色 — 等待用户操作，阻塞态
     case "error":      return "#EF4444"  // red
     case "idle":
     default:           return "#64748B"  // dim

@@ -36,7 +36,7 @@ export function ThinkingDock({ model, width }: ThinkingDockProps) {
     <Box flexDirection="row" paddingX={2} height={1}>
       <Box marginRight={1}>
         <SonarPulse
-          active={model.phase !== "idle" && model.phase !== "error"}
+          active={model.phase !== "idle" && model.phase !== "error" && model.phase !== "waiting_permission"}
           phase={model.phase}
         />
       </Box>

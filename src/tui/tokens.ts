@@ -33,6 +33,9 @@ export interface GlyphTheme {
   streamingGlyphs: string
   streamingGlyphsLen: number
   stalledGlyph: string
+  /** PR-1: SonarPulse 帧序列 — Orcana 专属声呐动效 */
+  sonarFrames: string
+  sonarFramesLen: number
   progressFill: string
   progressEmpty: string
   checkMark: string
@@ -66,6 +69,9 @@ const ASCII_GLYPHS: GlyphTheme = {
   streamingGlyphs: "-\\|/-\\|/-\\|/",
   streamingGlyphsLen: 10,
   stalledGlyph: "Z",
+  // PR-1: SonarPulse ASCII fallback — growing dot
+  sonarFrames: ".oO0Oo",
+  sonarFramesLen: 6,
   progressFill: "#",
   progressEmpty: "-",
   checkMark: "v",
@@ -99,6 +105,9 @@ const UNICODE_GLYPHS: GlyphTheme = {
   streamingGlyphs: "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
   streamingGlyphsLen: 10,
   stalledGlyph: "☡",
+  // PR-1: SonarPulse Unicode — Orcana 声呐脉冲
+  sonarFrames: "◌◍◎◉◎◍",
+  sonarFramesLen: 6,
   progressFill: "▓",
   progressEmpty: "░",
   checkMark: "✓",

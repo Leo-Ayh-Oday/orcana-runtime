@@ -35,6 +35,7 @@ import { RewindModal, type RewindModalState } from "./RewindModal"
 import type { ConfirmRequest } from "../confirm-stubs"
 import { extractRuntimeCounters, formatRuntimeCounters } from "../format-runtime"
 import { useClock } from "../clock"
+import { ThinkingDock, selectThinkingDock } from "../thinking"
 
 // ── 常量 ──
 
@@ -158,6 +159,8 @@ export interface AppShellLayoutInput {
   clarification: ClarificationWizardState | null
   task: TaskProgressState | undefined
   inputChrome: InputChromeState
+  /** PR-1: ThinkingDock 可见时为 1，否则 0 */
+  thinkingDockRows?: number
 }
 
 /** Phase 2: 布局模式 */
@@ -179,7 +182,7 @@ export function computeEffectiveBodyHeight(layout: Pick<AppShellLayout, "bodyHei
 }
 
 export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayout {
-  const { rows, cols, hasContent, isWorking, clarification, task, inputChrome } = input
+  const { rows, cols, hasContent, isWorking, clarification, task, inputChrome, thinkingDockRows = 0 } = input
   const question = clarification?.questions[clarification.index]
   const clarificationRows = clarification ? Math.min(10, 4 + (question?.options.length ?? 0)) : 0
   const taskRows = task ? (task.phase === "planning" ? 3 : Math.min(5, 1 + Math.min(3, task.steps.length))) : 0
@@ -198,7 +201,8 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
   const inputRows = inputChrome.commandOpen
     ? 5
     : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
-  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1))
+  // PR-1: ThinkingDock 在 footer 中占 1 行
+  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1 + thinkingDockRows))
   const bodyHeight = Math.max(10, rows - footerHeight - 3)
   return { showDash, mode, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight }
 }
@@ -224,8 +228,11 @@ export function AppShell(props: AppShellProps) {
   const hasContent = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
   const modalActive = confirmModal !== null || rewindModal !== null
 
+  // PR-1: ThinkingDock 视图模型
+  const thinkingDock = selectThinkingDock(state)
+
   // Phase 2: 布局计算 — 四档模式 (tiny/narrow/standard/comfortable)
-  const layout = computeAppShellLayout({ rows, cols, hasContent, isWorking, clarification, task, inputChrome })
+  const layout = computeAppShellLayout({ rows, cols, hasContent, isWorking, clarification, task, inputChrome, thinkingDockRows: thinkingDock.visible ? 1 : 0 })
   const effectiveBodyHeight = computeEffectiveBodyHeight(layout, modalActive)
 
   // Visual Step 2: 统一计数器
@@ -331,13 +338,15 @@ export function AppShell(props: AppShellProps) {
         )}
       </Box>
 
-      {/* Footer: PlanPanel/ClarificationPanel + InputLine + FooterHints */}
+      {/* Footer: PlanPanel/ClarificationPanel + ThinkingDock + InputLine + FooterHints */}
       <Box flexDirection="column" height={layout.footerHeight}>
         {clarification ? (
           <ClarificationPanel wizard={clarification} width={cols} />
         ) : (
           <PlanPanel task={task} width={cols} />
         )}
+        {/* PR-1: ThinkingDock — 固定运行态显示，不进入 messages */}
+        <ThinkingDock model={thinkingDock} width={cols - 4} />
         <OrcanaComposer
           onSubmit={props.submit}
           disabled={showStartup || !!clarification || modalActive}

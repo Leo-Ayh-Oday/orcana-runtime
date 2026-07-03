@@ -9,8 +9,11 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { scoreCommand, matchCommands, type ScoredCommand } from "../../src/tui/commands/score"
-import type { SlashCommandHint } from "../../src/tui/input"
+import { scoreCommand, matchCommands, scoreSlashCommand, matchSlashCommands, type ScoredCommand } from "../../src/tui/commands/score"
+import { commandKindColor } from "../../src/tui/components/CommandShelf"
+import { getCommandHints, COMMANDS } from "../../src/tui/commands/registry"
+import type { SlashCommandHint, CommandKind } from "../../src/tui/input"
+import { palette } from "../../src/tui/theme/palette"
 
 // ── scoreCommand: 四级评分 ──
 
@@ -138,7 +141,8 @@ describe("matchCommands: filtering and sorting", () => {
   })
 
   test("空命令数组返回空", () => {
-    const matches = matchCommands("help", [], c => c.name)
+    const empty: SlashCommandHint[] = []
+    const matches = matchCommands("help", empty, c => c.name)
     expect(matches.length).toBe(0)
   })
 
@@ -290,5 +294,276 @@ describe("PR-3: fuzzy matching real scenarios", () => {
   test("完全无匹配返回空数组", () => {
     const matches = matchCommands("zzz", commands, c => c.name, 5)
     expect(matches.length).toBe(0)
+  })
+})
+
+// ── PR-4: commandKindColor 语义色 ──
+
+describe("PR-4: commandKindColor", () => {
+  test("system → cyan", () => {
+    expect(commandKindColor("system")).toBe(palette.cyan)
+  })
+
+  test("runtime → jade (低亮度绿)", () => {
+    expect(commandKindColor("runtime")).toBe(palette.jade)
+  })
+
+  test("model → blue", () => {
+    expect(commandKindColor("model")).toBe(palette.blue)
+  })
+
+  test("skill → evidence/lavender", () => {
+    expect(commandKindColor("skill")).toBe(palette.evidence)
+  })
+
+  test("debug → amber", () => {
+    expect(commandKindColor("debug")).toBe(palette.amber)
+  })
+
+  test("danger → coral/rose", () => {
+    expect(commandKindColor("danger")).toBe(palette.coral)
+  })
+
+  test("undefined → theme.text (默认)", () => {
+    expect(commandKindColor(undefined)).toBeDefined()
+    expect(commandKindColor(undefined)).not.toBe(palette.fog)
+  })
+
+  test("disabled (enabled=false) → fog (dim gray) 覆盖 kind", () => {
+    // 即使 kind=danger，disabled 时仍用 dim gray
+    expect(commandKindColor("danger", false)).toBe(palette.fog)
+    expect(commandKindColor("system", false)).toBe(palette.fog)
+    expect(commandKindColor("model", false)).toBe(palette.fog)
+  })
+
+  test("enabled=true (显式) → 按 kind 着色", () => {
+    expect(commandKindColor("danger", true)).toBe(palette.coral)
+    expect(commandKindColor("system", true)).toBe(palette.cyan)
+  })
+
+  test("6 种 CommandKind 互不相同", () => {
+    const kinds: CommandKind[] = ["system", "runtime", "model", "skill", "debug", "danger"]
+    const colors = kinds.map(k => commandKindColor(k))
+    expect(new Set(colors).size).toBe(kinds.length)
+  })
+})
+
+// ── PR-4: scoreSlashCommand (aliases + description + priority) ──
+
+describe("PR-4: scoreSlashCommand", () => {
+  test("空 query → priority（默认 0）", () => {
+    const cmd: SlashCommandHint = { name: "help", description: "Show help" }
+    expect(scoreSlashCommand("", cmd)).toBe(0)
+  })
+
+  test("空 query + priority=50 → 50", () => {
+    const cmd: SlashCommandHint = { name: "help", description: "Show help", priority: 50 }
+    expect(scoreSlashCommand("", cmd)).toBe(50)
+  })
+
+  test("name 完全匹配 = 1000", () => {
+    const cmd: SlashCommandHint = { name: "help", description: "Show help" }
+    expect(scoreSlashCommand("help", cmd)).toBe(1000)
+  })
+
+  test("aliases 前缀匹配 > description 子串匹配", () => {
+    const cmd: SlashCommandHint = {
+      name: "models",
+      description: "model inspection",
+      aliases: ["model"],
+    }
+    // "model" 是 alias "model" 的完全匹配 → 1000
+    const aliasScore = scoreSlashCommand("model", cmd)
+    // "model" 是 description "model inspection" 的前缀子串 → 200+
+    const descOnlyCmd: SlashCommandHint = {
+      name: "stats",
+      description: "model inspection",
+    }
+    const descScore = scoreSlashCommand("model", descOnlyCmd)
+    expect(aliasScore).toBeGreaterThan(descScore)
+    expect(aliasScore).toBe(1000)  // alias 完全匹配
+  })
+
+  test("description 子串匹配 > 无匹配", () => {
+    const cmd: SlashCommandHint = {
+      name: "status",
+      description: "Show full runtime status",
+    }
+    // "runtime" 在 description 中
+    const score = scoreSlashCommand("runtime", cmd)
+    expect(score).toBeGreaterThanOrEqual(200)
+    expect(score).toBeLessThan(300)  // description 低于 name 子串
+  })
+
+  test("name 匹配优先于 description 匹配", () => {
+    const cmd: SlashCommandHint = {
+      name: "runtime",
+      description: "runtime info",
+    }
+    // "runtime" 是 name 完全匹配 → 1000，也是 description 子串
+    const score = scoreSlashCommand("runtime", cmd)
+    expect(score).toBe(1000)  // name 完全匹配胜出
+  })
+
+  test("多别名取最高分", () => {
+    const cmd: SlashCommandHint = {
+      name: "models",
+      description: "List models",
+      aliases: ["model", "m"],
+    }
+    // "m" 是 alias "m" 的完全匹配 → 1000
+    expect(scoreSlashCommand("m", cmd)).toBe(1000)
+    // "model" 是 alias "model" 的完全匹配 → 1000
+    expect(scoreSlashCommand("model", cmd)).toBe(1000)
+  })
+
+  test("禁用命令仍参与评分（可见但不可执行）", () => {
+    const cmd: SlashCommandHint = {
+      name: "clear",
+      description: "Clear conversation",
+      enabled: false,
+      disabledReason: "Locked in readonly mode",
+    }
+    expect(scoreSlashCommand("clear", cmd)).toBe(1000)
+    expect(scoreSlashCommand("cle", cmd)).toBeGreaterThan(500)
+  })
+
+  test("完全无匹配 = -1", () => {
+    const cmd: SlashCommandHint = {
+      name: "help",
+      description: "Show help",
+      aliases: ["h"],
+    }
+    expect(scoreSlashCommand("zzz", cmd)).toBe(-1)
+  })
+})
+
+// ── PR-4: matchSlashCommands ──
+
+describe("PR-4: matchSlashCommands", () => {
+  const commands: SlashCommandHint[] = [
+    { name: "help", description: "Show help", kind: "system" },
+    { name: "models", description: "List models", kind: "model", aliases: ["model"] },
+    { name: "clear", description: "Clear conversation", kind: "danger" },
+    { name: "status", description: "Show runtime status", kind: "debug" },
+    { name: "stats", description: "Token and cache stats", kind: "debug" },
+  ]
+
+  test("alias 匹配: 'model' → models 命令（via alias）", () => {
+    const matches = matchSlashCommands("model", commands, 5)
+    const modelsMatch = matches.find(m => m.command.name === "models")
+    expect(modelsMatch).toBeDefined()
+    // "model" 是 alias "model" 完全匹配 → 1000
+    expect(modelsMatch!.score).toBe(1000)
+  })
+
+  test("description 匹配: 'runtime' → status 命令", () => {
+    const matches = matchSlashCommands("runtime", commands, 5)
+    const statusMatch = matches.find(m => m.command.name === "status")
+    expect(statusMatch).toBeDefined()
+    expect(statusMatch!.score).toBeGreaterThanOrEqual(200)
+  })
+
+  test("priority 影响空 query 排序", () => {
+    const withPriority: SlashCommandHint[] = [
+      { name: "low", description: "low pri", priority: 0 },
+      { name: "high", description: "high pri", priority: 100 },
+      { name: "mid", description: "mid pri", priority: 50 },
+    ]
+    const matches = matchSlashCommands("", withPriority, 5)
+    // priority 降序: high(100) > mid(50) > low(0)
+    expect(matches[0]!.command.name).toBe("high")
+    expect(matches[1]!.command.name).toBe("mid")
+    expect(matches[2]!.command.name).toBe("low")
+  })
+
+  test("禁用命令出现在结果中（可见）", () => {
+    const disabled: SlashCommandHint[] = [
+      { name: "clear", description: "Clear", enabled: false, disabledReason: "Locked" },
+      { name: "help", description: "Help" },
+    ]
+    const matches = matchSlashCommands("clear", disabled, 5)
+    expect(matches.length).toBe(1)
+    expect(matches[0]!.command.enabled).toBe(false)
+  })
+
+  test("5 条上限仍生效", () => {
+    const many: SlashCommandHint[] = Array.from({ length: 10 }, (_, i) => ({
+      name: `cmd${i}`,
+      description: `Command ${i}`,
+    }))
+    const matches = matchSlashCommands("", many)
+    expect(matches.length).toBe(5)
+  })
+})
+
+// ── PR-4: getCommandHints 输出 kind 字段 ──
+
+describe("PR-4: getCommandHints kind inference", () => {
+  const hints = getCommandHints()
+
+  test("所有 hint 都有 kind 字段", () => {
+    for (const hint of hints) {
+      expect(hint.kind).toBeDefined()
+    }
+  })
+
+  test("clear → danger (显式 kind)", () => {
+    const clear = hints.find(h => h.name === "clear")
+    expect(clear?.kind).toBe("danger")
+  })
+
+  test("undo → danger (显式 kind)", () => {
+    const undo = hints.find(h => h.name === "undo")
+    expect(undo?.kind).toBe("danger")
+  })
+
+  test("models → model (显式 kind + aliases)", () => {
+    const models = hints.find(h => h.name === "models")
+    expect(models?.kind).toBe("model")
+    expect(models?.aliases).toContain("model")
+  })
+
+  test("help → system (category 推断)", () => {
+    const help = hints.find(h => h.name === "help")
+    expect(help?.kind).toBe("system")
+  })
+
+  test("exit → system (category 推断)", () => {
+    const exit = hints.find(h => h.name === "exit")
+    expect(exit?.kind).toBe("system")
+  })
+
+  test("ripple → debug (orcana category 推断)", () => {
+    const ripple = hints.find(h => h.name === "ripple")
+    expect(ripple?.kind).toBe("debug")
+  })
+
+  test("status → debug (info category 推断)", () => {
+    const status = hints.find(h => h.name === "status")
+    expect(status?.kind).toBe("debug")
+  })
+
+  test("effort → runtime (category 推断)", () => {
+    const effort = hints.find(h => h.name === "effort")
+    expect(effort?.kind).toBe("runtime")
+  })
+
+  test("6 种 CommandKind 在 registry 中至少覆盖 4 种", () => {
+    const usedKinds = new Set(hints.map(h => h.kind))
+    // system, debug, runtime, model, danger 至少出现
+    expect(usedKinds.has("system")).toBe(true)
+    expect(usedKinds.has("debug")).toBe(true)
+    expect(usedKinds.has("runtime")).toBe(true)
+    expect(usedKinds.has("danger")).toBe(true)
+  })
+
+  test("CommandDef 中的 kind 与 getCommandHints 输出一致", () => {
+    for (const cmd of COMMANDS) {
+      const hint = hints.find(h => h.name === cmd.name)
+      expect(hint).toBeDefined()
+      // 显式 kind 或推断 kind 都应该有值
+      expect(hint!.kind).toBeDefined()
+    }
   })
 })

@@ -18,7 +18,7 @@
  *    info     — 信息查询（status、stats）
  */
 
-import type { SlashCommandHint } from "../input"
+import type { SlashCommandHint, CommandKind } from "../input"
 
 // ── 类型定义 ──
 
@@ -41,6 +41,29 @@ export interface CommandDef {
   /** 是否在 palette 中显示（默认 true）。
    *  某些内部命令可能不需要在 palette 出现。 */
   visible?: boolean
+  // ── PR-4: 语义类型与禁用支持 ──
+  /** 语义类型，决定 CommandShelf 颜色。未指定时由 inferKindFromCategory 推断。 */
+  kind?: CommandKind
+  /** 别名列表，scoreSlashCommand 会纳入前缀匹配。 */
+  aliases?: string[]
+  /** 是否启用（默认 true）。false 时 CommandShelf 显示 dim + disabledReason。 */
+  enabled?: boolean
+  /** 禁用原因。 */
+  disabledReason?: string
+  /** 空 query 时的优先级（默认 0）。 */
+  priority?: number
+}
+
+/** PR-4: category → kind 回退映射。
+ *  显式指定 kind 的命令优先用 kind；未指定的按 category 推断。 */
+function inferKindFromCategory(category: CommandCategory): CommandKind {
+  switch (category) {
+    case "system":  return "system"
+    case "runtime": return "runtime"
+    case "orcana":  return "debug"   // ripple/gates/evidence/patches 属于检查类
+    case "info":    return "debug"   // status/stats 属于检查类
+    case "session": return "system"  // 默认 session 命令为 system 色
+  }
 }
 
 // ── 命令定义 ──
@@ -79,6 +102,8 @@ export const COMMANDS: CommandDef[] = [
     usage: "[provider]",
     category: "runtime",
     safeConcurrent: true,
+    kind: "model",
+    aliases: ["model"],
   },
   {
     name: "connect",
@@ -99,6 +124,7 @@ export const COMMANDS: CommandDef[] = [
     name: "clear",
     description: "Clear current conversation",
     category: "session",
+    kind: "danger",
   },
   {
     name: "save",
@@ -130,6 +156,7 @@ export const COMMANDS: CommandDef[] = [
     name: "undo",
     description: "Undo last write",
     category: "session",
+    kind: "danger",
   },
 
   // ── 信息查询 ──
@@ -173,7 +200,7 @@ export function getCommandsByCategory(category: CommandCategory): CommandDef[] {
 }
 
 /** 获取所有可见命令的 palette 提示（SlashCommandHint 格式）。
- *  用于 OrcanaComposer 的命令面板。 */
+ *  用于 OrcanaComposer 的命令面板。PR-4: 输出 kind/aliases/priority 等语义字段。 */
 export function getCommandHints(): SlashCommandHint[] {
   return COMMANDS
     .filter(cmd => cmd.visible !== false)
@@ -181,6 +208,12 @@ export function getCommandHints(): SlashCommandHint[] {
       name: cmd.name,
       description: cmd.description,
       usage: cmd.usage,
+      // PR-4: 语义类型 — 显式 kind 优先，否则按 category 推断
+      kind: cmd.kind ?? inferKindFromCategory(cmd.category),
+      aliases: cmd.aliases,
+      enabled: cmd.enabled,
+      disabledReason: cmd.disabledReason,
+      priority: cmd.priority,
     }))
 }
 

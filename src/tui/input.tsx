@@ -10,10 +10,31 @@ const C = {
   yellow: "#F59E0B",
 }
 
+/** PR-4: 命令语义类型 — 决定 CommandShelf 中的颜色。
+ *  system=cyan, runtime=green(低亮度), model=blue, skill=lavender, debug=amber, danger=rose */
+export type CommandKind = "system" | "runtime" | "model" | "skill" | "debug" | "danger"
+
 export interface SlashCommandHint {
   name: string
   description: string
   usage?: string
+  // ── PR-4 扩展字段（全部可选，向后兼容） ──
+  /** 显示名（默认用 name）。用于带子命令的命令，如 "skill Development" */
+  displayName?: string
+  /** 参数提示，如 "<query>" 或 "[preview]" */
+  argumentHint?: string
+  /** 语义类型，决定颜色。未指定时由调用方按 category 推断 */
+  kind?: CommandKind
+  /** 别名，scoreSlashCommand 会纳入匹配 */
+  aliases?: string[]
+  /** 是否启用。false 时 CommandShelf 显示为 dim + disabledReason */
+  enabled?: boolean
+  /** 禁用原因，enabled=false 时显示 */
+  disabledReason?: string
+  /** 空 query 时的基础分（默认 0）。数值越高越靠前 */
+  priority?: number
+  /** 命令来源 — 未来区分 builtin/project/skill/plugin */
+  source?: "builtin" | "project" | "skill" | "plugin"
 }
 
 interface Props {

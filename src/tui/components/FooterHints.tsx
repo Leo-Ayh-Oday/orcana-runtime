@@ -1,11 +1,12 @@
-/** FooterHints — 底部键位提示（Phase 4 + PR-2 升级）。
+/** FooterHints — 底部键位提示（Phase 4 + PR-2 + PR-5 升级）。
  *
  *  PR-2: 根据 context 切换三组 hint：
  *    - normal:  Enter send · Shift+Enter newline · / commands · Ctrl+C exit
  *    - command: ↑/↓ select · Enter run · Tab insert · Esc close
  *    - running: Enter queue · Ctrl+C exit
  *
- *  早退优先级链: Confirm > Rewind* > Clarification > command > running > normal
+ *  PR-5: command 模式由 InputContext === "CommandShelf" 驱动（不再用独立 commandOpen prop）。
+ *  早退优先级链: Confirm > Rewind* > Clarification > CommandShelf > running > normal
  *
  *  Phase 4: C.* → theme.* 迁移；窄屏砍非关键 hint。
  */
@@ -19,9 +20,6 @@ export interface FooterHintsProps {
   busy: boolean
   activeContext: InputContext
   width: number
-  /** PR-2: 命令菜单打开时显示 command 模式 hints。
-   *  优先级高于 busy/normal，低于 modal contexts。 */
-  commandOpen?: boolean
 }
 
 function KeyHint({ shortcut, label, color = theme.brand }: { shortcut: string; label: string; color?: string }) {
@@ -33,7 +31,7 @@ function KeyHint({ shortcut, label, color = theme.brand }: { shortcut: string; l
   )
 }
 
-export const FooterHints = React.memo(function FooterHints({ busy, activeContext, width, commandOpen = false }: FooterHintsProps) {
+export const FooterHints = React.memo(function FooterHints({ busy, activeContext, width }: FooterHintsProps) {
   // ── Modal contexts: 早退，优先显示 modal 专属操作 ──
 
   if (activeContext === "Confirm") {
@@ -67,8 +65,8 @@ export const FooterHints = React.memo(function FooterHints({ busy, activeContext
     )
   }
 
-  // ── PR-2: command 模式 — 命令菜单打开时 ──
-  if (commandOpen) {
+  // ── PR-5: CommandShelf context — 命令菜单打开时 ──
+  if (activeContext === "CommandShelf") {
     if (width < 60) {
       return (
         <Box>

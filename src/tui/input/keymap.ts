@@ -1,6 +1,7 @@
 /** input/keymap — 键位 → 动作映射 + 上下文分发。
  *
  *  Phase 5: 新增 Confirm / RewindList / RewindConfirm 上下文。
+ *  PR-5: 新增 CommandShelf 上下文 — 所有键 pass-through，不抢键。
  *  每个 context 的处理器返回非 null 表示"已处理，不放行"。 */
 
 import type { Key } from "ink"
@@ -45,6 +46,9 @@ export interface KeyResolveContext {
 /**
  * 根据当前 context 解析键位输入。
  * 返回 null 表示该键未被当前 context 处理（放行到下游）。
+ *
+ * PR-5: CommandShelf context 返回 null（所有键 pass-through 到 OrcanaComposer）。
+ * 这确保 Scrollback 不抢键：Ctrl+Up/Down、PageUp/Down 在命令菜单打开时不滚动。
  */
 export function resolveKeyAction(
   input: string,
@@ -60,6 +64,11 @@ export function resolveKeyAction(
       return resolveRewindList(input, key)
     case "Clarification":
       return resolveClarification(input, key)
+    case "CommandShelf":
+      // PR-5: 命令菜单打开时，所有键 pass-through 到 TextArea/OrcanaComposer。
+      // 命令导航（↑↓/Tab/Enter/Esc）由 OrcanaComposer 内部处理。
+      // 关键：Scrollback 的 Ctrl+Up/Down、PageUp/Down 不再抢键。
+      return null
     case "Scrollback":
       return resolveScrollback(key, ctx)
     default:

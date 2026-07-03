@@ -448,11 +448,13 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   }, [showStartup])
 
   // Phase 5: 键位上下文分发 — 扩大到 Confirm/RewindList/RewindConfirm
+  // PR-5: 新增 CommandShelf context — 命令菜单打开时不让 Scrollback 抢键
   const activeKeyContext = resolveActiveContext({
     clarificationActive: !!clarification,
     confirmActive: modal.confirm !== null,
     rewindListActive: modal.rewind?.phase === "list",
     rewindConfirmActive: modal.rewind?.phase === "confirm",
+    commandOpen: inputChrome.commandOpen,
   })
 
   useInput((_input, key) => {

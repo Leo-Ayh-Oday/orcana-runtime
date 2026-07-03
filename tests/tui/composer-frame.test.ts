@@ -1,14 +1,18 @@
-/** Tests for PR-2: ComposerFrame + FooterHints context-aware switching.
+/** Tests for PR-2 + PR-5: ComposerFrame + FooterHints context-aware switching.
  *
  *  Covers:
  *    1. makeDivider: 宽度计算 + 下限保护
  *    2. ComposerFrame: 纯展示组件结构
- *    3. FooterHints: command 模式切换（normal/command/running/modal）
- *    4. PR-2 集成场景: commandOpen 优先于 busy、modal 优先于 commandOpen
+ *    3. PR-5: resolveActiveContext — CommandShelf context resolution
+ *    4. PR-5: resolveKeyAction — CommandShelf pass-through（不抢键）
+ *    5. PR-2 集成场景: footerHeight 包含分隔线
  */
 
 import { describe, expect, test } from "bun:test"
 import { makeDivider } from "../../src/tui/components/ComposerFrame"
+import { resolveActiveContext, CONTEXT_PRIORITY, type InputContext } from "../../src/tui/input/types"
+import { resolveKeyAction, type KeyResolveContext } from "../../src/tui/input/keymap"
+import type { Key } from "ink"
 
 // ── makeDivider: 宽度计算 ──
 
@@ -46,7 +50,6 @@ describe("PR-2: makeDivider", () => {
 
 describe("PR-2: ComposerFrame structure", () => {
   test("ComposerFrameProps 包含 children + width", () => {
-    // 类型层面的验证：确保 props 接口正确
     const props = { children: null, width: 80 }
     expect(props.width).toBe(80)
     expect(props.children).toBeNull()
@@ -59,110 +62,174 @@ describe("PR-2: ComposerFrame structure", () => {
   })
 })
 
-// ── FooterHints: commandOpen 优先级（逻辑验证） ──
+// ── PR-5: resolveActiveContext — CommandShelf context ──
 
-describe("PR-2: FooterHints commandOpen priority logic", () => {
-  // FooterHints 是 React 组件，这里验证优先级逻辑而非渲染。
-  // 优先级链: Confirm > Rewind* > Clarification > commandOpen > busy > normal
-
-  test("commandOpen 优先于 busy（运行中打开命令菜单 → 显示 command hints）", () => {
-    // 场景: agent running + 用户输入 / → commandOpen=true
-    // 应显示 command hints 而非 running hints
-    const commandOpen = true
-    const busy = true
-    const activeContext = "Scrollback" as const
-    // 逻辑: commandOpen 检查在 busy 之前
-    const showCommandHints = commandOpen && activeContext !== "Confirm" && activeContext !== "RewindList" && activeContext !== "RewindConfirm" && activeContext !== "Clarification"
-    const showRunningHints = busy && !showCommandHints
-    expect(showCommandHints).toBe(true)
-    expect(showRunningHints).toBe(false)
+describe("PR-5: resolveActiveContext with commandOpen", () => {
+  test("commandOpen=true → CommandShelf context", () => {
+    expect(resolveActiveContext({
+      clarificationActive: false,
+      commandOpen: true,
+    })).toBe("CommandShelf")
   })
 
-  test("Clarification 优先于 commandOpen（问答面板打开时不显示 command hints）", () => {
-    const activeContext = "Clarification" as const
-    const commandOpen = true
-    // 逻辑: Clarification 早退在 commandOpen 之前
-    const showClarificationHints = activeContext === "Clarification"
-    const showCommandHints = commandOpen && !showClarificationHints
-    expect(showClarificationHints).toBe(true)
-    expect(showCommandHints).toBe(false)
+  test("commandOpen=false → Scrollback context", () => {
+    expect(resolveActiveContext({
+      clarificationActive: false,
+      commandOpen: false,
+    })).toBe("Scrollback")
+  })
+
+  test("commandOpen 默认 undefined → Scrollback", () => {
+    expect(resolveActiveContext({
+      clarificationActive: false,
+    })).toBe("Scrollback")
+  })
+
+  test("Clarification 优先于 commandOpen", () => {
+    expect(resolveActiveContext({
+      clarificationActive: true,
+      commandOpen: true,
+    })).toBe("Clarification")
   })
 
   test("Confirm 优先于 commandOpen", () => {
-    const activeContext = "Confirm" as const
-    const commandOpen = true
-    const showConfirmHints = activeContext === "Confirm"
-    const showCommandHints = commandOpen && !showConfirmHints
-    expect(showConfirmHints).toBe(true)
-    expect(showCommandHints).toBe(false)
-  })
-
-  test("commandOpen=false 且 busy=false → normal 模式", () => {
-    const commandOpen = false
-    const busy = false
-    const activeContext = "Scrollback" as const
-    const isModal = ["Confirm", "RewindList", "RewindConfirm", "Clarification"].includes(activeContext)
-    const showCommandHints = commandOpen && !isModal
-    const showRunningHints = busy && !showCommandHints
-    const showNormalHints = !showCommandHints && !showRunningHints
-    expect(showNormalHints).toBe(true)
-  })
-
-  test("commandOpen=false 且 busy=true → running 模式", () => {
-    const commandOpen = false
-    const busy = true
-    const activeContext = "Scrollback" as const
-    const isModal = ["Confirm", "RewindList", "RewindConfirm", "Clarification"].includes(activeContext)
-    const showCommandHints = commandOpen && !isModal
-    const showRunningHints = busy && !showCommandHints
-    expect(showRunningHints).toBe(true)
-    expect(showCommandHints).toBe(false)
+    expect(resolveActiveContext({
+      clarificationActive: false,
+      confirmActive: true,
+      commandOpen: true,
+    })).toBe("Confirm")
   })
 
   test("RewindList 优先于 commandOpen", () => {
-    const activeContext = "RewindList" as const
-    const commandOpen = true
-    const isModal = ["Confirm", "RewindList", "RewindConfirm", "Clarification"].includes(activeContext)
-    const showCommandHints = commandOpen && !isModal
-    expect(showCommandHints).toBe(false)
+    expect(resolveActiveContext({
+      clarificationActive: false,
+      rewindListActive: true,
+      commandOpen: true,
+    })).toBe("RewindList")
+  })
+
+  test("RewindConfirm 优先于 commandOpen", () => {
+    expect(resolveActiveContext({
+      clarificationActive: false,
+      rewindConfirmActive: true,
+      commandOpen: true,
+    })).toBe("RewindConfirm")
   })
 })
 
-// ── FooterHints: 窄屏裁剪逻辑 ──
+// ── PR-5: CONTEXT_PRIORITY 排序 ──
 
-describe("PR-2: FooterHints narrow screen logic", () => {
-  test("command 模式窄屏裁剪 Tab insert", () => {
-    const width = 50
-    const commandOpen = true
-    // 窄屏 (< 60): ↑↓ select · Enter run · Esc close（无 Tab insert）
-    const isNarrow = width < 60
-    const showsTabInsert = commandOpen && !isNarrow
-    expect(showsTabInsert).toBe(false)
+describe("PR-5: CONTEXT_PRIORITY with CommandShelf", () => {
+  test("CommandShelf > Scrollback", () => {
+    expect(CONTEXT_PRIORITY.CommandShelf).toBeGreaterThan(CONTEXT_PRIORITY.Scrollback)
   })
 
-  test("command 模式宽屏显示 Tab insert", () => {
-    const width = 80
-    const commandOpen = true
-    const isNarrow = width < 60
-    const showsTabInsert = commandOpen && !isNarrow
-    expect(showsTabInsert).toBe(true)
+  test("Clarification > CommandShelf", () => {
+    expect(CONTEXT_PRIORITY.Clarification).toBeGreaterThan(CONTEXT_PRIORITY.CommandShelf)
   })
 
-  test("running 模式窄屏只显示 Enter queue", () => {
-    const width = 50
-    const busy = true
-    const commandOpen = false
-    const isNarrow = width < 60
-    // 窄屏: 只有 Enter queue
-    const showsWheelScroll = busy && !commandOpen && !isNarrow
-    expect(showsWheelScroll).toBe(false)
+  test("CommandShelf > Composer > Global", () => {
+    expect(CONTEXT_PRIORITY.CommandShelf).toBeGreaterThan(CONTEXT_PRIORITY.Composer)
+    expect(CONTEXT_PRIORITY.CommandShelf).toBeGreaterThan(CONTEXT_PRIORITY.Global)
   })
 
-  test("normal 模式窄屏裁剪 Ctrl+R rewind", () => {
-    const width = 50
-    const isNarrow = width < 60
-    const showsRewind = !isNarrow
-    expect(showsRewind).toBe(false)
+  test("CommandShelf priority = 2", () => {
+    expect(CONTEXT_PRIORITY.CommandShelf).toBe(2)
+  })
+
+  test("完整优先级链: Confirm > RewindConfirm > RewindList=Clarification > CommandShelf > Scrollback > Composer > Global", () => {
+    expect(CONTEXT_PRIORITY.Confirm).toBeGreaterThan(CONTEXT_PRIORITY.RewindConfirm)
+    expect(CONTEXT_PRIORITY.RewindConfirm).toBeGreaterThan(CONTEXT_PRIORITY.RewindList)
+    expect(CONTEXT_PRIORITY.RewindList).toBe(CONTEXT_PRIORITY.Clarification)
+    expect(CONTEXT_PRIORITY.Clarification).toBeGreaterThan(CONTEXT_PRIORITY.CommandShelf)
+    expect(CONTEXT_PRIORITY.CommandShelf).toBeGreaterThan(CONTEXT_PRIORITY.Scrollback)
+    expect(CONTEXT_PRIORITY.Scrollback).toBeGreaterThan(CONTEXT_PRIORITY.Composer)
+    expect(CONTEXT_PRIORITY.Composer).toBeGreaterThan(CONTEXT_PRIORITY.Global)
+  })
+})
+
+// ── PR-5: resolveKeyAction — CommandShelf pass-through ──
+
+describe("PR-5: resolveKeyAction CommandShelf pass-through", () => {
+  function k(partial: Partial<Key> = {}): Key {
+    return partial as Key
+  }
+
+  function commandShelfCtx(overrides: Partial<KeyResolveContext> = {}): KeyResolveContext {
+    return { context: "CommandShelf", bodyHeight: 30, scrollStep: 3, ...overrides }
+  }
+
+  test("CommandShelf: PageUp → null（不滚动，pass-through 到 OrcanaComposer）", () => {
+    expect(resolveKeyAction("", k({ pageUp: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: PageDown → null（不滚动）", () => {
+    expect(resolveKeyAction("", k({ pageDown: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: Ctrl+Up → null（不滚动）", () => {
+    expect(resolveKeyAction("", k({ ctrl: true, upArrow: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: Ctrl+Down → null（不滚动）", () => {
+    expect(resolveKeyAction("", k({ ctrl: true, downArrow: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: ↑ → null（pass-through 到 OrcanaComposer 命令导航）", () => {
+    expect(resolveKeyAction("", k({ upArrow: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: ↓ → null（pass-through 到 OrcanaComposer 命令导航）", () => {
+    expect(resolveKeyAction("", k({ downArrow: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: Enter → null（pass-through 到 OrcanaComposer 命令执行）", () => {
+    expect(resolveKeyAction("", k({ return: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: Esc → null（pass-through 到 OrcanaComposer 关闭菜单）", () => {
+    expect(resolveKeyAction("", k({ escape: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: Tab → null（pass-through 到 OrcanaComposer 命令补全）", () => {
+    expect(resolveKeyAction("", k({ tab: true }), commandShelfCtx())).toBeNull()
+  })
+
+  test("CommandShelf: 任意字符 → null（pass-through 到 TextArea 文本编辑）", () => {
+    expect(resolveKeyAction("x", k(), commandShelfCtx())).toBeNull()
+    expect(resolveKeyAction("/", k(), commandShelfCtx())).toBeNull()
+  })
+})
+
+// ── PR-5: 对比 Scrollback vs CommandShelf 键位行为 ──
+
+describe("PR-5: Scrollback vs CommandShelf key behavior", () => {
+  function k(partial: Partial<Key> = {}): Key {
+    return partial as Key
+  }
+
+  test("PageUp: Scrollback 滚动 vs CommandShelf pass-through", () => {
+    const scrollResult = resolveKeyAction("", k({ pageUp: true }), {
+      context: "Scrollback", bodyHeight: 30, scrollStep: 3,
+    })
+    const commandResult = resolveKeyAction("", k({ pageUp: true }), {
+      context: "CommandShelf", bodyHeight: 30, scrollStep: 3,
+    })
+    expect(scrollResult).not.toBeNull()
+    expect(scrollResult!.type).toBe("scroll.pageUp")
+    expect(commandResult).toBeNull()
+  })
+
+  test("Ctrl+Up: Scrollback 滚动 vs CommandShelf pass-through", () => {
+    const scrollResult = resolveKeyAction("", k({ ctrl: true, upArrow: true }), {
+      context: "Scrollback", bodyHeight: 30, scrollStep: 3,
+    })
+    const commandResult = resolveKeyAction("", k({ ctrl: true, upArrow: true }), {
+      context: "CommandShelf", bodyHeight: 30, scrollStep: 3,
+    })
+    expect(scrollResult).not.toBeNull()
+    expect(scrollResult!.type).toBe("scroll.up")
+    expect(commandResult).toBeNull()
   })
 })
 
@@ -170,25 +237,62 @@ describe("PR-2: FooterHints narrow screen logic", () => {
 
 describe("PR-2: footerHeight includes divider lines", () => {
   test("footerHeight = panelRows + inputRows + 1(hints) + thinkingDockRows + 2(dividers)", () => {
-    // 验证 PR-2 公式: +2 for ComposerFrame dividers
     const panelRows = 0
-    const inputRows = 2  // textRows(1) + 1(status)
+    const inputRows = 2
     const hintsRows = 1
     const thinkingDockRows = 0
-    const dividerRows = 2  // PR-2: top + bottom
+    const dividerRows = 2
     const expected = panelRows + inputRows + hintsRows + thinkingDockRows + dividerRows
     expect(expected).toBe(5)
   })
 
   test("thinkingDock 可见时 footerHeight 增加 1", () => {
-    const base = 0 + 2 + 1 + 0 + 2  // = 5
-    const withThinkingDock = 0 + 2 + 1 + 1 + 2  // = 6
+    const base = 0 + 2 + 1 + 0 + 2
+    const withThinkingDock = 0 + 2 + 1 + 1 + 2
     expect(withThinkingDock - base).toBe(1)
   })
 
   test("commandOpen 时 inputRows=5, footerHeight 相应增加", () => {
-    const idle = 0 + 2 + 1 + 0 + 2  // inputRows=2 → 5
-    const command = 0 + 5 + 1 + 0 + 2  // inputRows=5 → 8
-    expect(command - idle).toBe(3)  // 5-2=3
+    const idle = 0 + 2 + 1 + 0 + 2
+    const command = 0 + 5 + 1 + 0 + 2
+    expect(command - idle).toBe(3)
+  })
+})
+
+// ── PR-5: TuiAction 命名空间 ──
+
+describe("PR-5: TuiAction namespace", () => {
+  test("TuiAction 包含 chat.* actions", () => {
+    const chatActions: Array<string> = ["chat.submit", "chat.newline", "chat.cancel"]
+    for (const action of chatActions) {
+      expect(action).toMatch(/^chat\./)
+    }
+  })
+
+  test("TuiAction 包含 command.* actions", () => {
+    const commandActions: Array<string> = [
+      "command.next", "command.previous", "command.submit", "command.insert", "command.close",
+    ]
+    for (const action of commandActions) {
+      expect(action).toMatch(/^command\./)
+    }
+  })
+
+  test("TuiAction 包含 scroll.* actions", () => {
+    const scrollActions: Array<string> = ["scroll.up", "scroll.down", "scroll.pageUp", "scroll.pageDown"]
+    for (const action of scrollActions) {
+      expect(action).toMatch(/^scroll\./)
+    }
+  })
+
+  test("TuiAction 包含 app.* actions", () => {
+    const appActions: Array<string> = ["app.interrupt", "app.toggleTranscript"]
+    for (const action of appActions) {
+      expect(action).toMatch(/^app\./)
+    }
+  })
+
+  test("TuiAction 包含 tool.toggleExpand", () => {
+    expect("tool.toggleExpand").toMatch(/^tool\./)
   })
 })

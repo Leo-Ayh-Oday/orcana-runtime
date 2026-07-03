@@ -260,12 +260,14 @@ export function AppShell(props: AppShellProps) {
 
   const empty = state.messages.length === 0 && state.done && !prompt?.trim()
 
-  // Phase 5: 当前键盘上下文（modal > clarification > scrollback）
+  // Phase 5: 当前键盘上下文（modal > clarification > CommandShelf > scrollback）
+  // PR-5: 新增 commandOpen → CommandShelf context
   const activeKeyContext = resolveActiveContext({
     clarificationActive: !!clarification,
     confirmActive: confirmModal !== null,
     rewindListActive: rewindModal?.phase === "list",
     rewindConfirmActive: rewindModal?.phase === "confirm",
+    commandOpen: inputChrome.commandOpen,
   })
 
   return (
@@ -374,7 +376,6 @@ export function AppShell(props: AppShellProps) {
           busy={isWorking}
           activeContext={activeKeyContext}
           width={cols}
-          commandOpen={inputChrome.commandOpen}
         />
       </Box>
     </Box>

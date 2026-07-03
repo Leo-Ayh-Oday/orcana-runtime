@@ -21,7 +21,7 @@ import { dispatchTuiCommand } from "./commands/dispatcher"
 import { resolveActiveContext } from "./input/types"
 import { resolveKeyAction } from "./input/keymap"
 import { cleanupTerminal, mouseEvents } from "./stdin-filter"
-import { createStreamTrace, traceStartRound, traceDeltaChunk, traceFinalAccumulated, traceEndRound } from "./stream-trace"
+import { createStreamTrace, traceStartRound, traceDeltaChunk, traceFinalAccumulated, traceEndRound, traceSetStopReason, traceSetStreamError } from "./stream-trace"
 import type { StreamTraceState } from "./stream-trace"
 import type { ConfirmRequest } from "./confirm-stubs"
 import type { RewindModalState } from "./components/RewindModal"
@@ -45,6 +45,8 @@ function isModalActive(modal: TuiModalState): boolean {
 }
 
 import { tuiTokens } from "./tokens"
+import { ClockContext, REDUCED_MOTION, effectiveTick } from "./clock"
+import { markTokenActivity, markToolActivity, resetStalledDetection } from "./pending-activity"
 
 const TUI_STARTUP_MS = tuiTokens.motion.startupMs
 const TUI_STREAM_FLUSH_MS = tuiTokens.motion.streamFlushMs
@@ -139,6 +141,7 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
 
   const runAgent = useCallback((p: string) => {
     runningRef.current = true
+    resetStalledDetection() // Phase 5: reset stalled watchdog for new run
     store.dispatch({ type: "ui.queue_count", count: queuedPromptsRef.current.length })
     const historySnapshot = historyRef.current.slice()
 
@@ -231,6 +234,7 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
         if (ev.type === "text" && typeof ev.data === "string") {
           assistantText += ev.data
           textBuf += ev.data
+          markTokenActivity() // Phase 5: stalled detection
           if (Date.now() - lastFlush > TUI_STREAM_FLUSH_MS) flush()
           continue
         }
@@ -238,7 +242,20 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
         // All other events: translate via adapter and batch-dispatch
         const tuiEvents = adapter.adapt(ev)
         if (tuiEvents.length > 0) {
+          // Phase 5: stalled detection — tool events keep the watchdog alive
+          if (tuiEvents.some(e => e.type.startsWith("tool."))) {
+            markToolActivity()
+          }
           store.dispatchMany(tuiEvents)
+        }
+
+        // Phase 0: capture provider stop_reason + stream error in TUI trace
+        if (ev.type === "status" && typeof ev.data === "string") {
+          const stopMatch = ev.data.match(/^provider-stop:\s*(.+)/)
+          if (stopMatch) traceSetStopReason(traceRef.current, stopMatch[1]!)
+        }
+        if (ev.type === "error" && typeof ev.data === "string") {
+          traceSetStreamError(traceRef.current, ev.data)
         }
       }
 
@@ -417,6 +434,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   }, [stdout])
 
   useEffect(() => {
+    if (REDUCED_MOTION) return
     const animated = showStartup || isWorking || Boolean(clarification) || task?.phase === "planning"
     if (!animated) return
     const timer = setInterval(() => setTick(n => n + 1), isWorking ? TUI_FRAME_MS : Math.max(TUI_FRAME_MS, 500))
@@ -563,13 +581,12 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   }, [scrollUp, scrollDown])
 
   return (
-    <>
+    <ClockContext.Provider value={effectiveTick(tick)}>
       <TuiInputGuard />
       <AppShell
         state={state}
         runtime={runtime}
         prompt={prompt}
-        tick={tick}
         scrollOffset={scrollOffset}
         scrollState={scrollState}
         onScrollState={setScrollState}
@@ -586,7 +603,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
         confirmModal={modal.confirm}
         rewindModal={modal.rewind}
       />
-    </>
+    </ClockContext.Provider>
   )
 }
 

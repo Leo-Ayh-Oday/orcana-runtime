@@ -212,6 +212,11 @@ export class DeepSeekProvider implements LLMProvider {
       yield { type: "thinking_blocks", data: thinkingBlocks }
     }
     if (stopReason) yield { type: "status", data: `provider-stop: ${stopReason}` }
+    if (stopReason === "max_tokens") {
+      yield { type: "error", data: "provider stop_reason=max_tokens: response hit the output token limit before completion" }
+      // max_tokens 不是正常结束——不 emit done，让上层 agent loop 决定是否续接
+      return
+    }
 
     const finalText = textChunks.join("")
     if (finalText && toolBlocks.length === 0) yield { type: "done", data: finalText }

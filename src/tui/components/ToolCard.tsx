@@ -3,7 +3,7 @@
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
+import { theme } from "../theme/theme"
 import type { TuiToolEvent } from "../state/types"
 
 export interface ToolCardProps {
@@ -22,10 +22,10 @@ export function toolStatusIcon(status: TuiToolEvent["status"]): string {
 
 export function toolStatusColor(status: TuiToolEvent["status"]): string {
   switch (status) {
-    case "running": return C.cyan
-    case "passed": return C.green
-    case "failed": return C.red
-    case "orphan": return C.yellow
+    case "running": return theme.info
+    case "passed": return theme.success
+    case "failed": return theme.error
+    case "orphan": return theme.warning
   }
 }
 
@@ -55,16 +55,16 @@ export const ToolCard = React.memo(function ToolCard({ tool, width }: ToolCardPr
     <Box flexDirection="column">
       <Box flexDirection="row">
         <Text color={color}>{icon} </Text>
-        <Text color={C.white}>{tool.tool}</Text>
+        <Text color={theme.text}>{tool.tool}</Text>
         <Text color={color}> {label}</Text>
-        {duration && <Text color={C.dim}>  {duration}</Text>}
-        <Text color={C.dim}>{risk}</Text>
+        {duration && <Text color={theme.textFaint}>  {duration}</Text>}
+        <Text color={theme.textFaint}>{risk}</Text>
       </Box>
       {tool.summary && (
-        <Text color={C.dim}>  {tool.summary}</Text>
+        <Text color={theme.textFaint}>  {tool.summary}</Text>
       )}
       {tool.outputSummary && (
-        <Text color={C.dim}>  {tool.outputSummary}</Text>
+        <Text color={theme.textFaint}>  {tool.outputSummary}</Text>
       )}
     </Box>
   )

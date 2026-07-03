@@ -8,7 +8,7 @@
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
+import { theme } from "../theme/theme"
 
 interface ErrorBoundaryProps {
   children: React.ReactNode
@@ -46,16 +46,16 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     if (this.state.hasError) {
       return (
         <Box flexDirection="column" paddingX={1}>
-          <Text color={C.red} bold>TUI Render Error</Text>
-          <Text color={C.dim}> </Text>
-          <Text color={C.red}>{this.state.errorMessage}</Text>
+          <Text color={theme.error} bold>TUI Render Error</Text>
+          <Text color={theme.textFaint}> </Text>
+          <Text color={theme.error}>{this.state.errorMessage}</Text>
           {this.state.errorStack && (
             <Box marginTop={1}>
-              <Text color={C.dim}>{this.state.errorStack}</Text>
+              <Text color={theme.textFaint}>{this.state.errorStack}</Text>
             </Box>
           )}
-          <Text color={C.dim}> </Text>
-          <Text color={C.dim}>Press Ctrl+C to exit. The error has been logged to stderr.</Text>
+          <Text color={theme.textFaint}> </Text>
+          <Text color={theme.textFaint}>Press Ctrl+C to exit. The error has been logged to stderr.</Text>
         </Box>
       )
     }

@@ -1,6 +1,13 @@
+/** InkStartupScreen — Orcana 启动画面（Phase 8 rebrand）。
+ *
+ *  Phase 8: 硬编码 palette → theme.* 迁移。"DEEPSEEK" → "ORCANA" 品牌更新。
+ *  保留 BigText 字体 + SignalLine 动画 + Capsule 胶囊布局。
+ */
+
 import React, { useEffect, useState } from "react"
 import { Box, Text, render } from "ink"
 import BigText from "ink-big-text"
+import { theme } from "../tui/theme/theme"
 
 export interface InkStartupOptions {
   version: string
@@ -8,15 +15,6 @@ export interface InkStartupOptions {
   thinkingEffort: string
   modelName: string
   durationMs?: number
-}
-
-const palette = {
-  cyan: "#38BDF8",
-  blue: "#60A5FA",
-  green: "#22C55E",
-  yellow: "#EAB308",
-  dim: "#6B7280",
-  fg: "#E5E7EB",
 }
 
 function SignalLine({ tick }: { tick: number }) {
@@ -29,16 +27,16 @@ function SignalLine({ tick }: { tick: number }) {
     return "."
   }).join("")
 
-  return <Text color={palette.blue}>{chars}</Text>
+  return <Text color={theme.info}>{chars}</Text>
 }
 
 function Capsule({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <Box marginRight={2}>
-      <Text color={palette.dim}>[</Text>
+      <Text color={theme.textFaint}>[</Text>
       <Text color={color}>{label}</Text>
       <Text> {value}</Text>
-      <Text color={palette.dim}>]</Text>
+      <Text color={theme.textFaint}>]</Text>
     </Box>
   )
 }
@@ -54,37 +52,37 @@ export function InkStartupScreen({ version, toolsCount, thinkingEffort, modelNam
   return (
     <Box flexDirection="column" paddingX={2} paddingTop={1}>
       <Box>
-        <Text color={palette.cyan}>
-          <BigText text="DEEPSEEK" font="block" space={false} />
+        <Text color={theme.brand}>
+          <BigText text="ORCANA" font="block" space={false} />
         </Text>
       </Box>
 
       <Box marginTop={-1}>
-        <Text color={palette.fg} bold>DeepSeek Code </Text>
-        <Text color={palette.dim}>v{version} / </Text>
-        <Text color={palette.cyan}>Hraness runtime</Text>
+        <Text color={theme.text} bold>Orcana </Text>
+        <Text color={theme.textFaint}>v{version} / </Text>
+        <Text color={theme.brand}>Hraness runtime</Text>
       </Box>
 
       <Box marginTop={1} marginBottom={1}>
-        <Text color={palette.dim}>Sonar first. Ripple before writes. Evidence before done.</Text>
+        <Text color={theme.textFaint}>Sonar first. Ripple before writes. Evidence before done.</Text>
       </Box>
 
       <Box flexDirection="row" marginBottom={1}>
-        <Capsule label="model" value={modelName} color={palette.cyan} />
-        <Capsule label="fim" value="on" color={palette.green} />
-        <Capsule label="tools" value={String(toolsCount)} color={palette.yellow} />
-        <Capsule label="thinking" value={thinkingEffort} color={palette.blue} />
+        <Capsule label="model" value={modelName} color={theme.brand} />
+        <Capsule label="fim" value="on" color={theme.success} />
+        <Capsule label="tools" value={String(toolsCount)} color={theme.warning} />
+        <Capsule label="thinking" value={thinkingEffort} color={theme.info} />
       </Box>
 
       <SignalLine tick={tick} />
 
       <Box marginTop={1}>
-        <Text color={palette.cyan}>{["calibrating", "indexing", "routing", "readying"][tick % 4]}</Text>
-        <Text color={palette.dim}> context, tools, memory</Text>
+        <Text color={theme.brand}>{["calibrating", "indexing", "routing", "readying"][tick % 4]}</Text>
+        <Text color={theme.textFaint}> context, tools, memory</Text>
       </Box>
 
       <Box marginTop={1}>
-        <Text color={palette.dim}>/help commands  /sessions history  /compact memory  /stats telemetry</Text>
+        <Text color={theme.textFaint}>/help commands  /sessions history  /compact memory  /stats telemetry</Text>
       </Box>
     </Box>
   )

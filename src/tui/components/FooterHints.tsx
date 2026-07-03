@@ -1,16 +1,14 @@
-/** FooterHints — 底部键位提示（Phase 4d）。
+/** FooterHints — 底部键位提示（Phase 4）。
  *
- *  Phase 4d: 从 active context 派生，强化命令感 + Ctrl+R。
- *    - Composer: Enter send · Shift+Enter newline · / commands · Ctrl+R rewind · Ctrl+C exit
- *    - Busy:     Enter queue · wheel scroll
- *    - Confirm:  y approve · n deny · a deny all · Esc dismiss
- *    - Rewind:   ↑↓ select · Enter confirm · Esc close
- *    - Clarification: ↑↓ or j/k select · Enter confirm · Esc cancel
+ *  从 active context 派生，不硬编码。
+ *  Phase 4: C.* → theme.* 迁移；窄屏砍非关键 hint。
+ *
+ *  早退优先级链: Confirm > Rewind* > Clarification > busy > idle
  */
 
 import React from "react"
 import { Box, Text } from "ink"
-import { C } from "../theme/theme"
+import { theme } from "../theme/theme"
 import type { InputContext } from "../input/types"
 
 export interface FooterHintsProps {
@@ -19,52 +17,86 @@ export interface FooterHintsProps {
   width: number
 }
 
+function KeyHint({ shortcut, label, color = theme.brand }: { shortcut: string; label: string; color?: string }) {
+  return (
+    <>
+      <Text color={color}>{shortcut}</Text>
+      <Text color={theme.textFaint}>{label}</Text>
+    </>
+  )
+}
+
 export const FooterHints = React.memo(function FooterHints({ busy, activeContext, width }: FooterHintsProps) {
-  // Modal contexts
+  // ── Modal contexts: 早退，优先显示 modal 专属操作 ──
+
   if (activeContext === "Confirm") {
     return (
       <Box>
-        <Text color={C.green}>y</Text><Text color={C.dim}> approve  </Text>
-        <Text color={C.red}>n</Text><Text color={C.dim}> deny  </Text>
-        <Text color={C.yellow}>a</Text><Text color={C.dim}> deny all  </Text>
-        <Text color={C.dim}>Esc dismiss</Text>
-      </Box>
-    )
-  }
-  if (activeContext === "RewindList" || activeContext === "RewindConfirm") {
-    return (
-      <Box>
-        <Text color={C.dim}>↑↓ select  </Text>
-        <Text color={C.green}>Enter</Text><Text color={C.dim}> confirm  </Text>
-        <Text color={C.dim}>Esc close</Text>
-      </Box>
-    )
-  }
-  if (activeContext === "Clarification") {
-    return (
-      <Box>
-        <Text color={C.dim}>↑↓ or j/k select  </Text>
-        <Text color={C.green}>Enter</Text><Text color={C.dim}> confirm  </Text>
-        <Text color={C.dim}>Esc cancel</Text>
+        <KeyHint shortcut="y" label=" approve  " color={theme.success} />
+        <KeyHint shortcut="n" label=" deny  " color={theme.error} />
+        <KeyHint shortcut="a" label=" deny all  " color={theme.warning} />
+        <Text color={theme.textFaint}>Esc dismiss</Text>
       </Box>
     )
   }
 
-  // Composer hints — adaptive to busy/idle
+  if (activeContext === "RewindList" || activeContext === "RewindConfirm") {
+    return (
+      <Box>
+        <Text color={theme.textFaint}>↑↓ select  </Text>
+        <KeyHint shortcut="Enter" label=" confirm  " color={theme.success} />
+        <Text color={theme.textFaint}>Esc close</Text>
+      </Box>
+    )
+  }
+
+  if (activeContext === "Clarification") {
+    return (
+      <Box>
+        <Text color={theme.textFaint}>↑↓ or j/k select  </Text>
+        <KeyHint shortcut="Enter" label=" confirm  " color={theme.success} />
+        <Text color={theme.textFaint}>Esc cancel</Text>
+      </Box>
+    )
+  }
+
+  // ── Composer contexts: adaptive to busy/idle/width ──
+
   if (busy) {
-    const hints = width < 60
-      ? <><Text color={C.cyan}>Enter</Text><Text color={C.dim}> queue</Text></>
-      : <><Text color={C.cyan}>Enter</Text><Text color={C.dim}> queue  </Text><Text color={C.dim}>wheel scroll  </Text><Text color={C.cyan}>Ctrl+C</Text><Text color={C.dim}> exit</Text></>
-    return <Box>{hints}</Box>
+    // 极窄屏：只显示 Enter queue
+    if (width < 60) {
+      return (
+        <Box>
+          <KeyHint shortcut="Enter" label=" queue" color={theme.brand} />
+        </Box>
+      )
+    }
+    return (
+      <Box>
+        <KeyHint shortcut="Enter" label=" queue  " color={theme.brand} />
+        <Text color={theme.textFaint}>wheel scroll  </Text>
+        <KeyHint shortcut="Ctrl+C" label=" exit" color={theme.error} />
+      </Box>
+    )
+  }
+
+  // 闲置状态
+  if (width < 60) {
+    return (
+      <Box>
+        <KeyHint shortcut="/" label=" commands  " color={theme.brand} />
+        <KeyHint shortcut="Ctrl+C" label=" exit" color={theme.error} />
+      </Box>
+    )
   }
 
   return (
     <Box>
-      <Text color={C.cyan}>Enter</Text><Text color={C.dim}> send  </Text>
-      <Text color={C.cyan}>Shift+Enter</Text><Text color={C.dim}> newline  </Text>
-      <Text color={C.cyan}>/</Text><Text color={C.dim}> commands  </Text>
-      <Text color={C.cyan}>Ctrl+R</Text><Text color={C.dim}> rewind  </Text>
-      <Text color={C.cyan}>Ctrl+C</Text><Text color={C.dim}> exit</Text>
+      <KeyHint shortcut="Enter" label=" send  " color={theme.brand} />
+      <KeyHint shortcut="Shift+Enter" label=" newline  " color={theme.brand} />
+      <KeyHint shortcut="/" label=" commands  " color={theme.brand} />
+      <KeyHint shortcut="Ctrl+R" label=" rewind  " color={theme.brand} />
+      <KeyHint shortcut="Ctrl+C" label=" exit" color={theme.error} />
     </Box>
   )
 })

@@ -44,7 +44,7 @@ const DEEPSEEK_CAPABILITIES: ModelCapabilities = {
   fim: true,
   contextCaching: true,
   vision: false,
-  structuredOutput: false,
+  structuredOutput: true,
   toolUse: true,
   streaming: true,
   maxContextWindow: 1_048_576,
@@ -79,7 +79,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     providerId: "deepseek",
     displayName: "DeepSeek V4 Pro",
     contextWindow: 1_048_576,
-    maxOutputTokens: 32768,
+    maxOutputTokens: 393216,
     pricingTier: "standard",
     thinking: thinking(32768, 16384),
     capabilities: DEEPSEEK_CAPABILITIES,
@@ -91,11 +91,11 @@ const BUILTIN_MODELS: ModelSpec[] = [
     providerId: "deepseek",
     displayName: "DeepSeek V4 Flash",
     contextWindow: 1_048_576,
-    maxOutputTokens: 8192,
+    maxOutputTokens: 393216,
     pricingTier: "cheap",
-    thinking: NO_THINKING,
-    capabilities: { ...DEEPSEEK_CAPABILITIES, thinking: false },
-    tags: ["fast", "chat", "simple"],
+    thinking: thinking(32768, 8192),
+    capabilities: DEEPSEEK_CAPABILITIES,
+    tags: ["fast", "coding", "reasoning", "agent"],
     isDefault: true,
   },
   // ── Anthropic ──
@@ -164,6 +164,11 @@ export class ProviderRegistry {
     if (this.providers.has(reg.id)) {
       throw new Error(`ProviderRegistry: duplicate provider '${reg.id}'`)
     }
+    this.providers.set(reg.id, reg)
+  }
+
+  /** Register or replace a provider instance. Used by TUI auth setup after a key is saved. */
+  upsertProvider(reg: ProviderRegistration): void {
     this.providers.set(reg.id, reg)
   }
 

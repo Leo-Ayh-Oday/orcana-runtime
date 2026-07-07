@@ -13,13 +13,14 @@
 import { DeepSeekProvider } from "../provider/deepseek"
 import { AnthropicProvider } from "../provider/anthropic"
 import { OpenAIProvider } from "../provider/openai"
-import { MultiProvider } from "../provider/multi"
+import { MultiProvider, openaiToolAdapter } from "../provider/multi"
 import { ProviderRegistry } from "../provider/registry"
 import { ModelRouter } from "../provider/router"
 import { toModelSpec } from "../provider/capabilities"
-import { loadConfig, resolveModelForRole, type LoadConfigOptions } from "../config/config-loader"
-import type { OrcanaConfig } from "../config/config-schema"
+import { getProviderConfig, loadConfig, resolveModelForRole, updateGlobalConfig, type LoadConfigOptions } from "../config/config-loader"
+import type { ModelConfig, OrcanaConfig, ProviderConfig } from "../config/config-schema"
 import { getDefaultAuthStore, type AuthStore } from "../config/auth-store"
+import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../provider/types"
 import { buildTools, type ToolDef, type ToolDescriptor } from "../tools/registry"
 import { FILE_TOOLS } from "../tools/file"
 import { SHELL_TOOL } from "../tools/shell"
@@ -186,6 +187,10 @@ export interface RuntimeBootstrapOptions {
   configOptions?: LoadConfigOptions
   /** PR-6: AuthStore instance (defaults to FileAuthStore). */
   authStore?: AuthStore
+  /** TUI setup mode: start even when the selected provider has no key yet. */
+  allowMissingProviderAuth?: boolean
+  /** Read API keys from user/system env vars. Default follows config.runtime.allowEnvKeys, which defaults false. */
+  useEnvAuth?: boolean
 }
 
 export interface Runtime {
@@ -198,6 +203,12 @@ export interface Runtime {
   config: OrcanaConfig
   /** PR-6: AuthStore 实例，供 TUI /connect 保存 API key */
   authStore: AuthStore
+  /** Whether a provider currently has a real API key registered. */
+  isProviderConfigured: (providerId: string) => boolean
+  /** Save optional key, activate provider, and switch the session model immediately. */
+  configureModel: (input: { providerId: string; modelId: string; apiKey?: string; custom?: boolean; displayName?: string; baseUrl?: string }) => Promise<void>
+  /** Persist thinking effort in the global Orcana config. */
+  configureThinkingEffort: (effort: "auto" | "high" | "max") => void
 
   // Tools
   mcpResult: MCPBridgeResult
@@ -243,6 +254,61 @@ export interface Runtime {
   dispose: () => void
 }
 
+class MissingAuthProvider implements LLMProvider {
+  constructor(private readonly providerId: string) {}
+
+  async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    yield {
+      type: "error",
+      data: `还没有配置 ${this.providerId} 的 API key。请运行 /models，选择模型后输入 key。`,
+    }
+  }
+}
+
+function providerEnvKey(providerId: string, config: ProviderConfig | undefined): string | undefined {
+  return config?.apiKeyEnv ?? {
+    deepseek: "DEEPSEEK_API_KEY",
+    anthropic: "ANTHROPIC_API_KEY",
+    openai: "OPENAI_API_KEY",
+  }[providerId]
+}
+
+function createProviderInstance(providerId: string, providerConfig: ProviderConfig | undefined, apiKey: string): LLMProvider {
+  const type = providerConfig?.type ?? providerId
+  const baseUrl = providerConfig?.baseUrl
+  if (type === "deepseek") return new DeepSeekProvider(apiKey, baseUrl ?? "https://api.deepseek.com/anthropic")
+  if (type === "anthropic") return new AnthropicProvider(apiKey, baseUrl ? { baseURL: baseUrl } : {})
+  return new OpenAIProvider(apiKey, { baseURL: baseUrl })
+}
+
+function providerToolAdapter(providerConfig: ProviderConfig | undefined) {
+  const type = providerConfig?.type
+  return type === "openai" || type === "openai-compatible" || type === "openrouter" ? openaiToolAdapter : undefined
+}
+
+function createCustomModelConfig(modelId: string, displayName?: string): ModelConfig {
+  return {
+    displayName: displayName?.trim() || modelId,
+    contextWindow: 128_000,
+    maxOutputTokens: 32_768,
+    pricingTier: "standard",
+    tags: ["custom", "coding", "agent", "reasoning"],
+    capabilities: {
+      supportsToolCalls: true,
+      supportsStreaming: true,
+      supportsJsonMode: true,
+      supportsThinking: true,
+      supportsReasoningEffort: true,
+      supportsFim: false,
+      supportsPrefixCache: false,
+      supportsVision: false,
+      supportsEmbeddings: false,
+      maxContextTokens: 128_000,
+      maxOutputTokens: 32_768,
+    },
+  }
+}
+
 // ── Factory ──
 
 export async function createRuntime(options: RuntimeBootstrapOptions = {}): Promise<Runtime> {
@@ -252,26 +318,32 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   const gateTelemetryFile = options.gateTelemetryFile ?? ".wolf/gate-telemetry.json"
   const contextMapPolicy = options.contextMapPolicy ?? "auto"
   const version = VERSION
+  const globalConfigFile = options.configOptions?.globalPath
 
   // ── 0. Load config + auth store (PR-6) ──
-  const config = loadConfig({ cwd: projectRoot, ...options.configOptions })
+  const config = loadConfig({ cwd: projectRoot, applyEnv: false, ...options.configOptions })
   const authStore = options.authStore ?? getDefaultAuthStore()
+  const useEnvAuth = options.useEnvAuth ?? config.runtime?.allowEnvKeys ?? false
+  const configuredProviders = new Set<string>()
 
-  // 解析 API keys：options → auth store → env
-  // DeepSeek key 优先级：显式传入 > auth store > 环境变量
-  let dsApiKey = options.dsApiKey ?? process.env.DEEPSEEK_API_KEY ?? ""
-  if (!dsApiKey) {
-    dsApiKey = (await authStore.get("deepseek")) ?? ""
-  }
-
-  let anthApiKey = options.anthApiKey ?? process.env.ANTHROPIC_API_KEY ?? ""
-  if (!anthApiKey) {
-    anthApiKey = (await authStore.get("anthropic")) ?? ""
-  }
-
-  let openaiApiKey = options.openaiApiKey ?? process.env.OPENAI_API_KEY ?? ""
-  if (!openaiApiKey) {
-    openaiApiKey = (await authStore.get("openai")) ?? ""
+  const readProviderKey = async (providerId: string): Promise<string> => {
+    const providerConfig = getProviderConfig(config, providerId)
+    const credentialRef = providerConfig?.credentialRef ?? `${providerId}/default`
+    const explicit = providerId === "deepseek"
+      ? options.dsApiKey
+      : providerId === "anthropic"
+        ? options.anthApiKey
+        : providerId === "openai"
+          ? options.openaiApiKey
+          : undefined
+    if (explicit) return explicit
+    const fromStore = authStore.getCredential
+      ? (await authStore.getCredential(credentialRef))?.apiKey
+      : await authStore.get(providerId)
+    if (fromStore) return fromStore
+    if (!useEnvAuth) return ""
+    const envKey = providerEnvKey(providerId, providerConfig)
+    return envKey ? process.env[envKey] ?? "" : ""
   }
 
   // 默认模型来自 config（env 覆盖已在 loadConfig 中处理）
@@ -279,39 +351,35 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     ?? resolveModelForRole("default", config)
 
   // ── 1. Provider registry ──
-  if (!dsApiKey && config.defaultProvider === "deepseek") {
-    throw new Error(
-      "DeepSeek API key not found. Set DEEPSEEK_API_KEY env var or run /connect in TUI to save key.",
-    )
-  }
-
   const registry = new ProviderRegistry()
 
-  // 注册 DeepSeek provider（默认）
-  if (dsApiKey) {
-    registry.register({
-      id: "deepseek",
-      provider: new DeepSeekProvider(dsApiKey),
-      defaultModel: resolveModelForRole("default", config),
+  const registerProviderFromConfig = async (providerId: string, forceMissing = false): Promise<void> => {
+    const providerConfig = getProviderConfig(config, providerId)
+    const apiKey = forceMissing ? "" : await readProviderKey(providerId)
+    const provider = apiKey
+      ? createProviderInstance(providerId, providerConfig, apiKey)
+      : new MissingAuthProvider(providerId)
+    if (apiKey) configuredProviders.add(providerId)
+    const defaultModel = providerId === config.defaultProvider
+      ? resolveModelForRole("default", config)
+      : Object.keys(providerConfig?.models ?? {})[0] ?? resolveModelForRole("default", config)
+    registry.upsertProvider({
+      id: providerId,
+      provider,
+      defaultModel,
+      toolAdapter: providerToolAdapter(providerConfig),
     })
   }
 
-  // 注册 Anthropic provider
-  if (anthApiKey) {
-    registry.register({
-      id: "anthropic",
-      provider: new AnthropicProvider(anthApiKey),
-      defaultModel: "claude-sonnet-4-6",
-    })
+  for (const providerId of Object.keys(config.providers ?? {})) {
+    await registerProviderFromConfig(providerId)
   }
 
-  // 注册 OpenAI provider
-  if (openaiApiKey) {
-    registry.register({
-      id: "openai",
-      provider: new OpenAIProvider(openaiApiKey),
-      defaultModel: "gpt-5",
-    })
+  const defaultProvider = config.defaultProvider ?? "deepseek"
+  if (!configuredProviders.has(defaultProvider) && !options.allowMissingProviderAuth) {
+    throw new Error(
+      `${defaultProvider} 还没有配置 API key。请先运行 /models 选择模型并输入 key，或在 ~/.deepseek-code/auth.json 中保存 key。`,
+    )
   }
 
   // 注册内置模型元数据（保持向后兼容）
@@ -320,7 +388,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   // PR-6: 从 config 注册用户自定义模型（覆盖内置同名模型）
   for (const [providerId, providerConfig] of Object.entries(config.providers ?? {})) {
     for (const [modelId, modelConfig] of Object.entries(providerConfig.models)) {
-      // 只为已注册的 provider 注册模型（避免 registerModel 抛错）
+      // provider 可能是 MissingAuthProvider；这样 /models 可在无 key 时展示 catalog。
       if (registry.getProvider(providerId) !== undefined) {
         registry.registerModel(toModelSpec(modelId, providerId, modelConfig, providerConfig))
       }
@@ -424,6 +492,96 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     registerCheckpointStore(newId, new SessionStore(newId))
   }
 
+  const configureModel = async (input: { providerId: string; modelId: string; apiKey?: string; custom?: boolean; displayName?: string; baseUrl?: string }) => {
+    const currentProviderConfig = getProviderConfig(config, input.providerId)
+    if (!currentProviderConfig) {
+      throw new Error(`未知 provider：${input.providerId}`)
+    }
+    const providerConfig: ProviderConfig = {
+      ...currentProviderConfig,
+      ...(input.baseUrl?.trim() ? { baseUrl: input.baseUrl.trim() } : {}),
+      models: { ...currentProviderConfig.models },
+    }
+    if (!providerConfig.models[input.modelId] && input.custom) {
+      providerConfig.models[input.modelId] = createCustomModelConfig(input.modelId, input.displayName)
+    }
+    if (!providerConfig.models[input.modelId] && !registry.resolveModel(input.modelId)) {
+      throw new Error(`未知模型：${input.modelId}`)
+    }
+
+    const key = input.apiKey?.trim()
+    if (key) {
+      const ref = providerConfig.credentialRef ?? `${input.providerId}/default`
+      if (authStore.setCredential) {
+        await authStore.setCredential({
+          id: ref,
+          providerId: input.providerId,
+          label: ref.split("/")[1] || "default",
+          apiKey: key,
+          baseUrl: providerConfig.baseUrl,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      } else {
+        await authStore.set(input.providerId, key)
+      }
+    }
+    const apiKey = key || await readProviderKey(input.providerId)
+    if (!apiKey) {
+      throw new Error(`还没有配置 ${providerConfig.displayName ?? input.providerId} 的 API key。`)
+    }
+
+    registry.upsertProvider({
+      id: input.providerId,
+      provider: createProviderInstance(input.providerId, providerConfig, apiKey),
+      defaultModel: input.modelId,
+      toolAdapter: providerToolAdapter(providerConfig),
+    })
+    for (const [modelId, modelConfig] of Object.entries(providerConfig.models)) {
+      registry.registerModel(toModelSpec(modelId, input.providerId, modelConfig, providerConfig))
+    }
+    configuredProviders.add(input.providerId)
+    multiProvider.setModelOverride(input.modelId)
+    modelRouter.setSessionModel(input.modelId)
+    config.defaultProvider = input.providerId
+    config.models = {
+      ...config.models,
+      default: input.modelId,
+    }
+    config.providers = {
+      ...config.providers,
+      [input.providerId]: {
+        ...providerConfig,
+        ...(key ? { credentialRef: providerConfig.credentialRef ?? `${input.providerId}/default` } : {}),
+      },
+    }
+    updateGlobalConfig(current => ({
+      ...current,
+      defaultProvider: input.providerId,
+      models: {
+        ...current.models,
+        default: input.modelId,
+      },
+      providers: {
+        ...current.providers,
+        [input.providerId]: {
+          ...providerConfig,
+          ...(key ? { credentialRef: providerConfig.credentialRef ?? `${input.providerId}/default` } : {}),
+        },
+      },
+    }), globalConfigFile)
+  }
+
+  const configureThinkingEffort = (effort: "auto" | "high" | "max") => {
+    updateGlobalConfig(current => ({
+      ...current,
+      runtime: {
+        ...current.runtime,
+        thinkingEffort: effort,
+      },
+    }), globalConfigFile)
+  }
+
   // ── 11. AgentOptions builder ──
   const buildAgentOptions = (overrides?: Partial<AgentOptions>): AgentOptions => ({
     provider: multiProvider,
@@ -460,9 +618,14 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     provider: multiProvider,
     modelRouter,
     registry,
-    modelOverride,
+    get modelOverride() {
+      return multiProvider.currentModel
+    },
     config,
     authStore,
+    isProviderConfigured: (providerId: string) => configuredProviders.has(providerId),
+    configureModel,
+    configureThinkingEffort,
 
     mcpResult,
     mcpToolDefs,

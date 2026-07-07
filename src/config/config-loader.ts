@@ -3,13 +3,14 @@
  *  优先级（低 → 高）：
  *    1. built-in defaults (defaultConfig from config-schema)
  *    2. global config (~/.deepseek-code/orcana.jsonc)
- *    3. project config (./orcana.jsonc)
- *    4. env override (DEEPSEEK_API_KEY 等)
+ *    3. project config (默认关闭；ORCANA_ENABLE_PROJECT_CONFIG=1 时启用)
+ *    4. env override (TUI 默认关闭)
  *
  *  不处理 CLI flags — 那是 CLI 层的职责。
  */
 
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { dirname } from "node:path"
 import {
   defaultConfig,
   builtInProviders,
@@ -99,6 +100,25 @@ function readConfigFile(filePath: string): OrcanaConfig | null {
   }
 }
 
+export function readGlobalConfig(filePath: string = globalConfigPath()): OrcanaConfig | null {
+  return readConfigFile(filePath)
+}
+
+export function writeGlobalConfig(config: OrcanaConfig, filePath: string = globalConfigPath()): void {
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf-8")
+}
+
+export function updateGlobalConfig(
+  updater: (config: OrcanaConfig) => OrcanaConfig,
+  filePath: string = globalConfigPath(),
+): OrcanaConfig {
+  const current = readGlobalConfig(filePath) ?? {}
+  const next = updater(current)
+  writeGlobalConfig(next, filePath)
+  return next
+}
+
 // ── 配置合并 ──
 
 /** 深合并两个对象（后者覆盖前者，数组和基本类型直接替换）。 */
@@ -173,17 +193,20 @@ export interface LoadConfigOptions {
   globalPath?: string
   /** 是否应用环境变量覆盖（默认 true）。 */
   applyEnv?: boolean
+  /** 是否读取项目级 ./orcana.jsonc。默认 false；ORCANA_ENABLE_PROJECT_CONFIG=1 时启用。 */
+  loadProject?: boolean
 }
 
 /** 加载并合并配置。
  *
- *  优先级：defaultConfig → global → project → env
+ *  优先级：defaultConfig → global → project(可选) → env(可选)
  */
 export function loadConfig(options: LoadConfigOptions = {}): OrcanaConfig {
   const {
     cwd,
     globalPath = globalConfigPath(),
     applyEnv = true,
+    loadProject = process.env.ORCANA_ENABLE_PROJECT_CONFIG === "1",
   } = options
 
   // 1. 从默认配置开始
@@ -199,13 +222,15 @@ export function loadConfig(options: LoadConfigOptions = {}): OrcanaConfig {
     }
   }
 
-  // 3. 合并项目配置
-  const projectPath = projectConfigPath(cwd)
-  const projConfig = readConfigFile(projectPath)
-  if (projConfig) {
-    config = deepMerge(config, projConfig)
-    if (projConfig.providers) {
-      config.providers = mergeProviders(config.providers ?? builtInProviders, projConfig.providers)
+  // 3. 合并项目配置（默认关闭，Orcana 当前使用 global-only 配置中心）
+  if (loadProject) {
+    const projectPath = projectConfigPath(cwd)
+    const projConfig = readConfigFile(projectPath)
+    if (projConfig) {
+      config = deepMerge(config, projConfig)
+      if (projConfig.providers) {
+        config.providers = mergeProviders(config.providers ?? builtInProviders, projConfig.providers)
+      }
     }
   }
 
@@ -234,7 +259,7 @@ export function listModelIds(config: OrcanaConfig, providerId: string): string[]
   return Object.keys(config.providers?.[providerId]?.models ?? {})
 }
 
-/** 解析角色到具体模型，fallback：role → default → deepseek-chat。 */
+/** 解析角色到具体模型，fallback：role → default → deepseek-v4-pro。 */
 export function resolveModelForRole(
   role: keyof RoleModelConfig,
   config: OrcanaConfig,
@@ -243,7 +268,7 @@ export function resolveModelForRole(
   if (roleModel) return roleModel
   const defaultModel = config.models?.default
   if (defaultModel) return defaultModel
-  return "deepseek-chat"
+  return "deepseek-v4-pro"
 }
 
 /** 查找模型所属的 provider ID。 */

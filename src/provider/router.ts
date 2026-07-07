@@ -80,6 +80,12 @@ export class ModelRouter {
     return this.sessionModel
   }
 
+  /** Update the primary session model after /models changes selection. */
+  setSessionModel(modelId: string): void {
+    this.sessionModel = modelId
+    this._cheapModel = null
+  }
+
   /** Get the cheap model for non-essential sub-calls.
    *
    *  Prefers a "fast"-tagged cheap model from the same provider as the

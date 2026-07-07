@@ -62,6 +62,17 @@ describe("provider retry classification", () => {
     expect(providerRetryDelayMs(info, 0)).toBe(2000)
   })
 
+  test("classifies quota and billing failures as non-retryable", () => {
+    const info = classifyProviderError({
+      status: 429,
+      message: "insufficient_quota: You exceeded your current quota, please check your plan and billing details",
+    })
+
+    expect(info.kind).toBe("quota")
+    expect(info.retryable).toBe(false)
+    expect(info.status).toBe(429)
+  })
+
   test("classifies transient network failures as retryable", () => {
     const info = classifyProviderError(Object.assign(new Error("connection reset"), { code: "ECONNRESET" }))
 
@@ -103,6 +114,34 @@ describe("DeepSeekProvider retry behavior", () => {
     expect(sleeps).toEqual([1000])
     expect(events.some(event => event.type === "status" && String(event.data).includes("provider retry: rate_limit 429"))).toBe(true)
     expect(events.some(event => event.type === "text" && event.data === "ok")).toBe(true)
+  })
+
+  test("does not retry quota failures", async () => {
+    const sleeps: number[] = []
+    const client = new FakeAnthropicClient([
+      async function* () {
+        throw {
+          status: 429,
+          message: "insufficient_quota: Your account balance is too low",
+          response: { status: 429, body: { error: { code: "insufficient_quota", message: "Your account balance is too low" } } },
+        }
+      },
+      async function* () {
+        yield textDelta("should not happen")
+      },
+    ])
+    const provider = new DeepSeekProvider("test", {
+      client,
+      maxRetries: 2,
+      sleep: async (ms) => { sleeps.push(ms) },
+    })
+
+    const events = await collect(provider)
+
+    expect(client.calls).toBe(1)
+    expect(sleeps).toEqual([])
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider retry"))).toBe(false)
+    expect(events.some(event => event.type === "error" && String(event.data).startsWith("quota 429:"))).toBe(true)
   })
 
   test("does not retry after streamed text starts", async () => {

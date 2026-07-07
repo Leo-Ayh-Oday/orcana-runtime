@@ -194,7 +194,14 @@ export class OpenAIProvider implements LLMProvider {
 
     if (!response.ok) {
       const text = await response.text().catch(() => "")
-      throw new Error(`OpenAI ${response.status}${text ? " — see stderr for details" : ""}`)
+      const message = `OpenAI ${response.status}${text ? `: ${text.slice(0, 500)}` : ""}`
+      throw Object.assign(new Error(message), {
+        status: response.status,
+        response: {
+          status: response.status,
+          body: parseErrorBody(text),
+        },
+      })
     }
 
     const textChunks: string[] = []
@@ -291,4 +298,15 @@ export class OpenAIProvider implements LLMProvider {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function parseErrorBody(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+  try {
+    const parsed = JSON.parse(trimmed)
+    return isRecord(parsed) ? parsed : { message: trimmed.slice(0, 500) }
+  } catch {
+    return { message: trimmed.slice(0, 500) }
+  }
 }

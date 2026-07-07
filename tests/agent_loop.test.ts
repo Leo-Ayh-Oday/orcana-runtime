@@ -464,6 +464,15 @@ class NonRetryableStreamErrorProvider implements LLMProvider {
   }
 }
 
+class QuotaStreamErrorProvider implements LLMProvider {
+  rounds = 0
+
+  async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    this.rounds += 1
+    yield { type: "error", data: "quota 429: insufficient_quota: Your account balance is too low" }
+  }
+}
+
 class GenericThrowStreamErrorThenTextProvider implements LLMProvider {
   rounds = 0
   messages: ProviderCallOptions["messages"][] = []
@@ -1686,7 +1695,28 @@ describe("Agent loop greedy tool execution", () => {
     expect(provider.rounds).toBe(1)
     expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: blocked"))).toBe(true)
     expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(false)
+    expect(events.filter(event => event.type === "error" && String(event.data).includes("auth invalid api key"))).toHaveLength(1)
     expect(trace.events.some(event => event.type === "gate_decision" && JSON.stringify(event.data).includes("non_retryable"))).toBe(true)
+  })
+
+  test("quota provider stream failure blocks once instead of retrying", async () => {
+    const provider = new QuotaStreamErrorProvider()
+    const events: StreamEvent[] = []
+
+    for await (const event of agentLoop("Say hello briefly", {
+      provider,
+      model: "test",
+      tools: [],
+      maxRounds: 2,
+      flashTriagePolicy: "off",
+    })) {
+      events.push(event)
+    }
+
+    expect(provider.rounds).toBe(1)
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: blocked"))).toBe(true)
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(false)
+    expect(events.filter(event => event.type === "error" && String(event.data).includes("insufficient_quota"))).toHaveLength(1)
   })
 
   test("idle provider stream times out and reaches recovery gate", async () => {

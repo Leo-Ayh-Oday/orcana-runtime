@@ -55,6 +55,15 @@ export class MultiProvider implements LLMProvider {
     this.costMode = currentCostMode()
   }
 
+  /** Switch the session model without rebuilding the provider stack. */
+  setModelOverride(modelId: string): void {
+    this.modelOverride = modelId
+  }
+
+  get currentModel(): string {
+    return this.modelOverride ?? this.defaultModel
+  }
+
   /** Resolve the model to use for a given call. */
   resolveForCall(purpose?: string): ResolvedModel {
     // 1. User override wins

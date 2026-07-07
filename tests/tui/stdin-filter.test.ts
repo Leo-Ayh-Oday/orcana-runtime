@@ -11,7 +11,7 @@
  *    5. installStdinFilter: patches read(), idempotent
  *    6. uninstallStdinFilter: restores original read(), clears buffer
  *    7. enableMouseMode: full disable then enable
- *    8. disableMouseMode: closes all 6 mouse modes
+  *    8. disableMouseMode: closes all mouse modes
  *    9. cleanupTerminal: combined cursor + title + mouse + stdin cleanup
  *   10. read() returns null for pure-mouse chunks
  *   11. read() preserves text chunks unchanged
@@ -27,6 +27,7 @@ import {
   mouseEvents,
   enableMouseMode,
   disableMouseMode,
+  enableAlternateScrollMode,
   cleanupTerminal,
   _getPendingBuffer,
 } from "../../src/tui/stdin-filter"
@@ -509,13 +510,14 @@ describe("enableMouseMode / disableMouseMode", () => {
     }) as typeof process.stdout.write
     try {
       enableMouseMode()
-      // Should write: disable all 6 modes + enable 1006 + 1000
+      // Should write: disable all known modes + enable 1006 + 1000
       const joined = written.join("")
       expect(joined).toContain("?1000l")
       expect(joined).toContain("?1002l")
       expect(joined).toContain("?1003l")
       expect(joined).toContain("?1005l")
       expect(joined).toContain("?1006l")
+      expect(joined).toContain("?1007l")
       expect(joined).toContain("?1015l")
       expect(joined).toContain("?1006h")
       expect(joined).toContain("?1000h")
@@ -524,7 +526,7 @@ describe("enableMouseMode / disableMouseMode", () => {
     }
   })
 
-  test("disableMouseMode writes all 6 mouse mode disable sequences", () => {
+  test("disableMouseMode writes all mouse mode disable sequences", () => {
     const written: string[] = []
     const originalWrite = process.stdout.write.bind(process.stdout)
     process.stdout.write = ((data: unknown) => {
@@ -539,7 +541,26 @@ describe("enableMouseMode / disableMouseMode", () => {
       expect(joined).toContain("?1003l")
       expect(joined).toContain("?1005l")
       expect(joined).toContain("?1006l")
+      expect(joined).toContain("?1007l")
       expect(joined).toContain("?1015l")
+    } finally {
+      process.stdout.write = originalWrite
+    }
+  })
+
+  test("enableAlternateScrollMode writes only alternate-scroll enable sequence", () => {
+    const written: string[] = []
+    const originalWrite = process.stdout.write.bind(process.stdout)
+    process.stdout.write = ((data: unknown) => {
+      if (typeof data === "string") written.push(data)
+      return true
+    }) as typeof process.stdout.write
+    try {
+      enableAlternateScrollMode()
+      const joined = written.join("")
+      expect(joined).toBe("\x1B[?1007h")
+      expect(joined).not.toContain("?1000h")
+      expect(joined).not.toContain("?1006h")
     } finally {
       process.stdout.write = originalWrite
     }

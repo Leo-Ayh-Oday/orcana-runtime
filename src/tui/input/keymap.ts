@@ -64,6 +64,8 @@ export function resolveKeyAction(
       return resolveRewindList(input, key)
     case "Clarification":
       return resolveClarification(input, key)
+    case "RuntimeDialog":
+      return null
     case "CommandShelf":
       // PR-5: 命令菜单打开时，所有键 pass-through 到 TextArea/OrcanaComposer。
       // 命令导航（↑↓/Tab/Enter/Esc）由 OrcanaComposer 内部处理。

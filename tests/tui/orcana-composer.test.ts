@@ -18,6 +18,8 @@ import {
   shouldStagePaste,
   findInsertedText,
   flatToRowCol,
+  nextCommandIndex,
+  completeSlashCommandDraft,
   type PasteBlock,
 } from "../../src/tui/components/OrcanaComposer"
 
@@ -381,5 +383,35 @@ describe("paste detection integration", () => {
     const diff = findInsertedText(oldValue, newValue)
     expect(diff).not.toBeNull()
     expect(shouldStagePaste(diff!.inserted)).toBe(true)
+  })
+})
+
+describe("command shelf keyboard helpers", () => {
+  test("nextCommandIndex wraps up and down", () => {
+    expect(nextCommandIndex(0, 5, -1)).toBe(4)
+    expect(nextCommandIndex(4, 5, 1)).toBe(0)
+    expect(nextCommandIndex(2, 5, 1)).toBe(3)
+  })
+
+  test("nextCommandIndex handles empty command lists", () => {
+    expect(nextCommandIndex(0, 0, 1)).toBe(0)
+  })
+
+  test("completeSlashCommandDraft replaces partial slash command", () => {
+    const completed = completeSlashCommandDraft("/sta", "status")
+    expect(completed.value).toBe("/status")
+    expect(completed.cursor).toEqual([0, 7])
+  })
+
+  test("completeSlashCommandDraft preserves arguments", () => {
+    const completed = completeSlashCommandDraft("/mod deepseek", "models")
+    expect(completed.value).toBe("/models deepseek")
+    expect(completed.cursor).toEqual([0, "/models deepseek".length])
+  })
+
+  test("completeSlashCommandDraft preserves leading indentation", () => {
+    const completed = completeSlashCommandDraft("  /sta", "status")
+    expect(completed.value).toBe("  /status")
+    expect(completed.cursor).toEqual([0, 9])
   })
 })

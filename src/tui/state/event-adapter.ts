@@ -274,7 +274,7 @@ export class StreamEventAdapter {
         kind: "error",
         text: errorText,
         dedupeKey: `error:${errorText}`,
-        minIntervalMs: 0,
+        minIntervalMs: 10_000,
       },
     ]
   }

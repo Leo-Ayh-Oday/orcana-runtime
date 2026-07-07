@@ -343,7 +343,20 @@ describe("AppShell layout: inputChrome affects footer height", () => {
       task: undefined,
       inputChrome: { commandOpen: true, pasteCount: 0, textRows: 1 },
     })
-    expect(layout.inputRows).toBe(5)
+    expect(layout.inputRows).toBe(6)
+  })
+
+  test("commandOpen uses measured commandRows when provided", () => {
+    const layout = computeAppShellLayout({
+      rows: 40,
+      cols: 80,
+      hasContent: false,
+      isWorking: false,
+      clarification: null,
+      task: undefined,
+      inputChrome: { commandOpen: true, pasteCount: 0, textRows: 1, commandRows: 8 },
+    })
+    expect(layout.inputRows).toBe(9)
   })
 
   test("isWorking with no command → inputRows = 2", () => {

@@ -13,10 +13,12 @@ import {
   synthesizeClarificationAnswer,
 } from "./state/adapter-helpers"
 import { AppShell, type ClarificationWizardState, type InputChromeState } from "./components/AppShell"
+import type { ModelDialogOption, RuntimeDialogState, ThinkEffort } from "./components/AppShell"
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import type { ScrollbackScrollState } from "./components/Scrollback"
 import type { TaskProgressState } from "./components/PlanPanel"
 import { renderMessageLines } from "./components/MessageItem"
+import { cleanAgentError } from "./state/adapter-helpers"
 import { dispatchTuiCommand } from "./commands/dispatcher"
 import { resolveActiveContext } from "./input/types"
 import { resolveKeyAction } from "./input/keymap"
@@ -33,15 +35,16 @@ type ModelHistoryRole = "user" | "assistant"
 interface TuiModalState {
   confirm: { request: ConfirmRequest; position: string } | null
   rewind: RewindModalState | null
+  runtime: RuntimeDialogState | null
 }
 
 function emptyModalState(): TuiModalState {
-  return { confirm: null, rewind: null }
+  return { confirm: null, rewind: null, runtime: null }
 }
 
 /** 是否有任何 modal 激活 → composer disabled */
 function isModalActive(modal: TuiModalState): boolean {
-  return modal.confirm !== null || modal.rewind !== null
+  return modal.confirm !== null || modal.rewind !== null || modal.runtime !== null
 }
 
 import { tuiTokens } from "./tokens"
@@ -52,6 +55,7 @@ const TUI_STARTUP_MS = tuiTokens.motion.startupMs
 const TUI_STREAM_FLUSH_MS = tuiTokens.motion.streamFlushMs
 const TUI_FRAME_MS = tuiTokens.motion.frameMs
 const TUI_SCROLL_STEP = tuiTokens.layout.scrollStep
+const TUI_MOUSE_MODE = process.env.ORCANA_TUI_MOUSE === "1"
 
 function TuiInputGuard() {
   // 保持 stdin 在 raw mode，并过滤鼠标/转义序列，防止泄漏到 TextArea。
@@ -98,10 +102,102 @@ function traceRenderedAssistant(
   traceEndRound(trace, rawChars, rendered.length > 0 ? displayChars : finalTextLength, viewportTrimmed)
 }
 
-function useAgentStream(runtime: Runtime, prompt?: string) {
+function providerName(runtime: Runtime, providerId: string): string {
+  return runtime.config.providers?.[providerId]?.displayName ?? providerId
+}
+
+function buildModelOptions(runtime: Runtime, currentModel: string, query = "", providerFilter?: string): ModelDialogOption[] {
+  const needle = query.trim().toLowerCase()
+  const catalogOptions = runtime.registry.allModels
+    .filter(model => !providerFilter || model.providerId === providerFilter)
+    .map(model => ({
+      providerId: model.providerId,
+      providerName: providerName(runtime, model.providerId),
+      modelId: model.id,
+      modelName: model.displayName,
+      configured: runtime.isProviderConfigured(model.providerId),
+      current: model.id === currentModel,
+      tier: model.pricingTier,
+      thinking: model.thinking.supported,
+      contextWindow: model.contextWindow,
+    }))
+    .filter(option => {
+      if (!needle) return true
+      return (
+        option.modelId.toLowerCase().includes(needle)
+        || option.modelName.toLowerCase().includes(needle)
+        || option.providerId.toLowerCase().includes(needle)
+        || option.providerName.toLowerCase().includes(needle)
+      )
+    })
+    .sort((a, b) => Number(b.current) - Number(a.current)
+      || Number(b.configured) - Number(a.configured)
+      || a.providerName.localeCompare(b.providerName)
+      || a.modelName.localeCompare(b.modelName))
+  const showCustom = !providerFilter || providerFilter === "custom"
+  const customOption: ModelDialogOption[] = showCustom ? [{
+    providerId: "custom",
+    providerName: "OpenAI-compatible",
+    modelId: "__custom__",
+    modelName: "自定义模型",
+    configured: runtime.isProviderConfigured("custom"),
+    current: false,
+    tier: "custom",
+    thinking: false,
+    contextWindow: 128_000,
+    custom: true,
+  }] : []
+  return [...catalogOptions, ...customOption]
+}
+
+function clampIndex(index: number, length: number): number {
+  if (length <= 0) return 0
+  if (index < 0) return length - 1
+  if (index >= length) return 0
+  return index
+}
+
+function effortLabel(value: ThinkEffort): string {
+  if (value === "auto") return "自动"
+  if (value === "high") return "高"
+  return "最大"
+}
+
+function modelSeedFromQuery(query: string): string {
+  const value = query.trim()
+  if (!value || value === "/" || value.toLowerCase() === "custom" || value === "自定义") return ""
+  return value
+}
+
+function normalizeBaseUrl(raw: string, fallback?: string): string | undefined {
+  const value = raw.trim() || fallback?.trim() || ""
+  return value || undefined
+}
+
+function isValidBaseUrl(value: string | undefined): boolean {
+  return !value || /^https?:\/\//i.test(value)
+}
+
+function useAgentStream(
+  runtime: Runtime,
+  prompt: string | undefined,
+  controls: {
+    openModels: (provider?: string) => void
+    openEffort: () => void
+  },
+) {
   const storeRef = useRef<TuiStore | null>(null)
   if (storeRef.current === null) {
     storeRef.current = new TuiStore()
+    const currentModel = runtime.modelRouter.getSessionModel()
+    const provider = runtime.registry.resolveModel(currentModel)?.providerId
+    storeRef.current.dispatch({
+      type: "session.started",
+      sessionId: runtime.sessionId,
+      repoRoot: process.cwd(),
+      provider,
+      model: currentModel,
+    })
     // If there's an initial prompt, mark as starting; otherwise ready
     if (prompt?.trim()) {
       storeRef.current.dispatch({ type: "ui.status", text: "starting..." })
@@ -131,6 +227,10 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
   const queuedPromptsRef = useRef<string[]>([])
   const runAgentRef = useRef<(prompt: string) => void>(() => {})
   const [clarification, setClarification] = useState<ClarificationWizardState | null>(null)
+  const initialEffort = runtime.config.runtime?.thinkingEffort
+  const [thinkEffort, setThinkEffortState] = useState<ThinkEffort>(
+    initialEffort === "high" || initialEffort === "max" ? initialEffort : "auto",
+  )
 
   const addSystemMessage = useCallback((content: string) => {
     store.dispatch({ type: "assistant.final", text: content })
@@ -174,12 +274,13 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
         model: runtime.modelRouter.selectForPurpose("agent_main"),
         tools: runtime.tools,
         maxRounds: 30,
+        thinkEffort: thinkEffort === "auto" ? undefined : thinkEffort,
         conversationHistory: historySnapshot,
         gateTelemetryFile: ".wolf/gate-telemetry.json",
         runTrace: runtime.startRunTrace(p),
       })
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = cleanAgentError(err instanceof Error ? err.message : String(err))
       store.dispatch({ type: "ui.error_line", text: message })
       store.dispatch({ type: "assistant.final", text: `Failed to start agent: ${message}` })
       store.dispatch({ type: "ui.done", done: true })
@@ -276,7 +377,7 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
       store.dispatch({ type: "ui.status", text: "done" })
       finishRun()
     })().catch(error => {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = cleanAgentError(error instanceof Error ? error.message : String(error))
       flush()
       traceFinalAccumulated(traceRef.current, message.length, true)
       store.dispatch({ type: "ui.error_line", text: message })
@@ -287,7 +388,18 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
     })
 
     return () => { cancelled = true }
-  }, [runtime, store, adapter])
+  }, [runtime, store, adapter, thinkEffort])
+
+  const setThinkEffort = useCallback((value: ThinkEffort) => {
+    setThinkEffortState(value)
+    runtime.configureThinkingEffort(value)
+    store.dispatch({
+      type: "ui.event_message",
+      kind: "activity",
+      text: `推理深度已切换为 ${value}（${effortLabel(value)}），已保存到 Orcana 全局配置。`,
+      minIntervalMs: 0,
+    })
+  }, [runtime, store])
 
   const answerClarification = useCallback((answer: { question: string; key: string; label: string }) => {
     setClarification(current => {
@@ -345,6 +457,9 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
         runtime.dispose()
         process.exit(0)
       },
+      openModels: controls.openModels,
+      openEffort: controls.openEffort,
+      setThinkEffort,
     })
     if (commandResult === "handled") {
       return
@@ -365,29 +480,58 @@ function useAgentStream(runtime: Runtime, prompt?: string) {
     }
 
     runAgent(newPrompt)
-  }, [addSystemMessage, runAgent, store, adapter, runtime])
+  }, [addSystemMessage, runAgent, store, adapter, runtime, controls.openModels, controls.openEffort, setThinkEffort])
 
   useEffect(() => {
     if (!prompt?.trim()) return
     return runAgent(prompt)
   }, [prompt, runAgent])
 
-  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store }
+  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store, thinkEffort, setThinkEffort }
 }
 
 export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime }) {
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout.rows ?? 32)
   const cols = stdout.columns ?? 96
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store } = useAgentStream(runtime, prompt)
+  const [modal, setModal] = useState<TuiModalState>(emptyModalState)
+  const thinkEffortRef = useRef<ThinkEffort>("auto")
+  const openModels = useCallback((provider?: string) => {
+    const currentModel = runtime.modelRouter.getSessionModel()
+    const options = buildModelOptions(runtime, currentModel, "", provider)
+    setModal(m => ({
+      ...m,
+      runtime: {
+        type: "models",
+        phase: "list",
+        query: "",
+        selected: 0,
+        options,
+        providerFilter: provider,
+        error: provider && options.length === 0 ? `没有找到 provider：${provider}` : undefined,
+      },
+    }))
+  }, [runtime])
+  const openEffort = useCallback(() => {
+    const options: ThinkEffort[] = ["auto", "high", "max"]
+    const selected = Math.max(0, options.indexOf(thinkEffortRef.current))
+    setModal(m => ({
+      ...m,
+      runtime: {
+        type: "effort",
+        selected,
+        current: thinkEffortRef.current,
+      },
+    }))
+  }, [])
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, { openModels, openEffort })
+  thinkEffortRef.current = thinkEffort
   const [tick, setTick] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
   const [autoFollow, setAutoFollow] = useState(true)
   const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1 })
   const [showStartup, setShowStartup] = useState(process.env.DEEPSEEK_TUI_SPLASH !== "off")
-  // Phase 5: Modal state (confirm + rewind)
-  const [modal, setModal] = useState<TuiModalState>(emptyModalState)
   // TuiState.task 是 unknown（reducer 不感知 TaskProgressState 形状），这里做一次类型收窄
   const task = state.task as TaskProgressState | undefined
   const isWorking = !state.done && !state.errorLine
@@ -455,10 +599,298 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     rewindListActive: modal.rewind?.phase === "list",
     rewindConfirmActive: modal.rewind?.phase === "confirm",
     commandOpen: inputChrome.commandOpen,
+    runtimeDialogActive: modal.runtime !== null,
   })
 
   useInput((_input, key) => {
     if (showStartup) return
+    if (modal.runtime) {
+      const runtimeDialog = modal.runtime
+      if (key.escape) {
+        setModal(m => ({ ...m, runtime: null }))
+        return
+      }
+      if (runtimeDialog.type === "effort") {
+        const options: ThinkEffort[] = ["auto", "high", "max"]
+        if (key.upArrow) {
+          setModal(m => m.runtime?.type === "effort" ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected - 1, options.length) } } : m)
+          return
+        }
+        if (key.downArrow) {
+          setModal(m => m.runtime?.type === "effort" ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected + 1, options.length) } } : m)
+          return
+        }
+        if (key.return) {
+          const value = options[runtimeDialog.selected] ?? "auto"
+          setThinkEffort(value)
+          setModal(m => ({ ...m, runtime: null }))
+          return
+        }
+        return
+      }
+
+      if (runtimeDialog.phase === "list") {
+        if (key.upArrow) {
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "list"
+            ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected - 1, m.runtime.options.length) } }
+            : m)
+          return
+        }
+        if (key.downArrow || key.tab) {
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "list"
+            ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected + 1, m.runtime.options.length) } }
+            : m)
+          return
+        }
+        if (key.backspace || key.delete) {
+          setModal(m => {
+            if (m.runtime?.type !== "models" || m.runtime.phase !== "list") return m
+            const query = m.runtime.query.slice(0, -1)
+            return {
+              ...m,
+              runtime: {
+                ...m.runtime,
+                query,
+                selected: 0,
+                options: buildModelOptions(runtime, state.modelName, query, m.runtime.providerFilter),
+              },
+            }
+          })
+          return
+        }
+        if (key.return) {
+          const selected = runtimeDialog.options[runtimeDialog.selected]
+          if (!selected) return
+          if (selected.custom) {
+            setModal(m => ({
+              ...m,
+              runtime: {
+                type: "models",
+                phase: "custom",
+                providerId: selected.providerId,
+                providerName: selected.providerName,
+                modelValue: modelSeedFromQuery(runtimeDialog.query),
+              },
+            }))
+            return
+          }
+          if (!selected.configured) {
+            setModal(m => ({
+              ...m,
+              runtime: {
+                type: "models",
+                phase: "key",
+                providerId: selected.providerId,
+                providerName: selected.providerName,
+                modelId: selected.modelId,
+                modelName: selected.modelName,
+                keyValue: "",
+              },
+            }))
+            return
+          }
+          void runtime.configureModel({ providerId: selected.providerId, modelId: selected.modelId })
+            .then(() => {
+              store.dispatch({ type: "ui.model_name", name: selected.modelId })
+              store.dispatch({ type: "session.started", sessionId: runtime.sessionId, repoRoot: process.cwd(), provider: selected.providerId, model: selected.modelId })
+              store.dispatch({ type: "ui.error_line", text: "" })
+              store.dispatch({ type: "ui.event_message", kind: "activity", text: `模型已切换：${selected.providerName} / ${selected.modelName}`, minIntervalMs: 0 })
+              setModal(m => ({ ...m, runtime: null }))
+            })
+            .catch(err => {
+              const message = cleanAgentError(err instanceof Error ? err.message : String(err))
+              setModal(m => m.runtime?.type === "models" ? { ...m, runtime: { ...m.runtime, error: message } } : m)
+            })
+          return
+        }
+        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
+          const inputText = _input.replace(/\r?\n/g, "")
+          if (!inputText) return
+          setModal(m => {
+            if (m.runtime?.type !== "models" || m.runtime.phase !== "list") return m
+            const query = `${m.runtime.query}${inputText}`
+            return {
+              ...m,
+              runtime: {
+                ...m.runtime,
+                query,
+                selected: 0,
+                options: buildModelOptions(runtime, state.modelName, query, m.runtime.providerFilter),
+                error: undefined,
+              },
+            }
+          })
+          return
+        }
+        return
+      }
+
+      if (runtimeDialog.phase === "custom") {
+        if (key.backspace || key.delete) {
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "custom"
+            ? { ...m, runtime: { ...m.runtime, modelValue: m.runtime.modelValue.slice(0, -1), error: undefined } }
+            : m)
+          return
+        }
+        if (key.return) {
+          const modelId = runtimeDialog.modelValue.trim()
+          if (!modelId) {
+            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "custom"
+              ? { ...m, runtime: { ...m.runtime, error: "请输入模型 ID 后再回车。" } }
+              : m)
+            return
+          }
+          setModal(m => ({
+            ...m,
+            runtime: {
+              type: "models",
+              phase: "url",
+              providerId: runtimeDialog.providerId,
+              providerName: runtimeDialog.providerName,
+              modelId,
+              modelName: modelId,
+              baseUrlValue: "",
+            },
+          }))
+          return
+        }
+        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
+          const inputText = _input.replace(/\r?\n/g, "")
+          if (!inputText) return
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "custom"
+            ? { ...m, runtime: { ...m.runtime, modelValue: `${m.runtime.modelValue}${inputText}`, error: undefined } }
+            : m)
+          return
+        }
+        return
+      }
+
+      if (runtimeDialog.phase === "url") {
+        if (key.backspace || key.delete) {
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
+            ? { ...m, runtime: { ...m.runtime, baseUrlValue: m.runtime.baseUrlValue.slice(0, -1), error: undefined } }
+            : m)
+          return
+        }
+        if (key.return) {
+          const baseUrl = normalizeBaseUrl(runtimeDialog.baseUrlValue, runtimeDialog.defaultBaseUrl)
+          if (!baseUrl) {
+            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
+              ? { ...m, runtime: { ...m.runtime, error: "请输入 API URL，例如 https://api.example.com/v1。" } }
+              : m)
+            return
+          }
+          if (!isValidBaseUrl(baseUrl)) {
+            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
+              ? { ...m, runtime: { ...m.runtime, error: "URL 必须以 http:// 或 https:// 开头。" } }
+              : m)
+            return
+          }
+          if (runtimeDialog.providerId === "custom" || !runtime.isProviderConfigured(runtimeDialog.providerId)) {
+            setModal(m => ({
+              ...m,
+              runtime: {
+                type: "models",
+                phase: "key",
+                providerId: runtimeDialog.providerId,
+                providerName: runtimeDialog.providerName,
+                modelId: runtimeDialog.modelId,
+                modelName: runtimeDialog.modelName,
+                keyValue: "",
+                custom: true,
+                baseUrl,
+              },
+            }))
+            return
+          }
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
+            ? { ...m, runtime: { ...m.runtime, error: "正在保存自定义模型..." } }
+            : m)
+          void runtime.configureModel({
+            providerId: runtimeDialog.providerId,
+            modelId: runtimeDialog.modelId,
+            custom: true,
+            displayName: runtimeDialog.modelName,
+            baseUrl,
+          })
+            .then(() => {
+              store.dispatch({ type: "ui.model_name", name: runtimeDialog.modelId })
+              store.dispatch({ type: "session.started", sessionId: runtime.sessionId, repoRoot: process.cwd(), provider: runtimeDialog.providerId, model: runtimeDialog.modelId })
+              store.dispatch({ type: "ui.error_line", text: "" })
+              store.dispatch({ type: "ui.event_message", kind: "activity", text: `已保存自定义模型：${runtimeDialog.providerName} / ${runtimeDialog.modelName}`, minIntervalMs: 0 })
+              setModal(m => ({ ...m, runtime: null }))
+            })
+            .catch(err => {
+              const message = cleanAgentError(err instanceof Error ? err.message : String(err))
+              setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
+                ? { ...m, runtime: { ...m.runtime, error: message } }
+                : m)
+            })
+          return
+        }
+        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
+          const inputText = _input.replace(/\r?\n/g, "")
+          if (!inputText) return
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
+            ? { ...m, runtime: { ...m.runtime, baseUrlValue: `${m.runtime.baseUrlValue}${inputText}`, error: undefined } }
+            : m)
+          return
+        }
+        return
+      }
+
+      if (runtimeDialog.phase === "key") {
+        if (key.backspace || key.delete) {
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
+            ? { ...m, runtime: { ...m.runtime, keyValue: m.runtime.keyValue.slice(0, -1), error: undefined } }
+            : m)
+          return
+        }
+        if (key.return) {
+          const apiKey = runtimeDialog.keyValue.trim()
+          if (!apiKey) {
+            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
+              ? { ...m, runtime: { ...m.runtime, error: "请输入 API key 后再回车。" } }
+              : m)
+            return
+          }
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
+            ? { ...m, runtime: { ...m.runtime, error: "正在保存 key 并连接模型..." } }
+            : m)
+          void runtime.configureModel({
+            providerId: runtimeDialog.providerId,
+            modelId: runtimeDialog.modelId,
+            apiKey,
+            custom: runtimeDialog.custom,
+            displayName: runtimeDialog.modelName,
+            baseUrl: runtimeDialog.baseUrl,
+          })
+            .then(() => {
+              store.dispatch({ type: "ui.model_name", name: runtimeDialog.modelId })
+              store.dispatch({ type: "session.started", sessionId: runtime.sessionId, repoRoot: process.cwd(), provider: runtimeDialog.providerId, model: runtimeDialog.modelId })
+              store.dispatch({ type: "ui.error_line", text: "" })
+              store.dispatch({ type: "ui.event_message", kind: "activity", text: `已保存 key，并切换到 ${runtimeDialog.providerName} / ${runtimeDialog.modelName}`, minIntervalMs: 0 })
+              setModal(m => ({ ...m, runtime: null }))
+            })
+            .catch(err => {
+              const message = cleanAgentError(err instanceof Error ? err.message : String(err))
+              setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
+                ? { ...m, runtime: { ...m.runtime, error: message } }
+                : m)
+            })
+          return
+        }
+        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
+          const inputText = _input.replace(/\r?\n/g, "")
+          if (!inputText) return
+          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
+            ? { ...m, runtime: { ...m.runtime, keyValue: `${m.runtime.keyValue}${inputText}`, error: undefined } }
+            : m)
+          return
+        }
+      }
+      return
+    }
     const action = resolveKeyAction(_input, key, {
       context: activeKeyContext,
       bodyHeight,
@@ -569,8 +1001,10 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     setScrollOffset(offset => Math.min(offset, scrollState.maxOffset))
   }, [scrollState.maxOffset])
 
-  // 鼠标滚轮滚动：stdin-filter 解析 SGR 滚轮事件并通过 EventEmitter 分发
+  // 鼠标滚轮滚动：默认关闭 mouse reporting，让终端原生拖选/Ctrl+C 复制可用。
+  // 只有 ORCANA_TUI_MOUSE=1 时，stdin-filter 才会收到终端鼠标序列并分发 scroll。
   useEffect(() => {
+    if (!TUI_MOUSE_MODE) return
     const handler = (direction: number, isCtrl: boolean) => {
       const amount = isCtrl ? 1 : 3
       if (direction < 0) scrollUp(amount)
@@ -604,6 +1038,8 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
         setInputChrome={setInputChrome}
         confirmModal={modal.confirm}
         rewindModal={modal.rewind}
+        runtimeDialog={modal.runtime}
+        thinkingEffort={thinkEffort}
       />
     </ClockContext.Provider>
   )
@@ -618,15 +1054,23 @@ export async function startInkTUI(prompt?: string) {
     projectRoot: process.cwd(),
     enableMCP: true,
     enableLSP: true,
+    allowMissingProviderAuth: true,
+    useEnvAuth: false,
+    configOptions: { applyEnv: false },
   })
 
   // Bug 修复：安装 stdin 过滤器拦截鼠标序列。
   // react-ink-textarea 的 useKeyboardInput fallback 分支会插入任何非空 input，
   // 包括 SGR 鼠标序列（\x1B[<0;40;10M），导致滚轮在输入框产生乱码。
   // 必须在 render 之前安装，确保过滤后的数据才到达 Ink。
-  const { installStdinFilter, enableMouseMode } = await import("./stdin-filter")
+  const { installStdinFilter, enableMouseMode, disableMouseMode, enableAlternateScrollMode } = await import("./stdin-filter")
   installStdinFilter()
-  enableMouseMode()
+  disableMouseMode()
+  if (TUI_MOUSE_MODE) {
+    enableMouseMode()
+  } else {
+    enableAlternateScrollMode()
+  }
 
   // 设置终端标题（生产级 TUI 标配）
   const projectDir = process.cwd().split(/[/\\]/).pop() ?? "deepseek-code"

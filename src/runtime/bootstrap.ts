@@ -31,9 +31,8 @@ import { WEB_FETCH_TOOL } from "../tools/webfetch"
 import { CODEGRAPH_TOOLS } from "../tools/codegraph"
 import { LSP_TOOLS } from "../tools/lsp"
 import { TYPECHECK_TOOL } from "../tools/typescript"
-import { HookSystem } from "../hooks"
-import { writeGuardBefore, writeGuardAfter, createJournalGuard } from "../hooks/builtin"
-import { createSafetyPolicyHook } from "../hooks/safety-policy"
+import type { HookSystem } from "../hooks"
+import { createDefaultHookSystem } from "../hooks/defaults"
 import { StagedContextManager } from "../context/staged"
 import { SessionManager, SessionStore, needsMigration, migrateAllJsonSessions } from "../session"
 import { registerCheckpointStore, unregisterCheckpointStore } from "../session/checkpoint"
@@ -439,13 +438,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   const tools = buildTools(...allToolDefs)
 
   // ── 5. Hooks ──
-  const hooks = new HookSystem()
-  // Before hooks: safety → writeGuardBefore (ordered: widest guard first, finest last)
-  hooks.onToolBefore(createSafetyPolicyHook({ projectRoot }))
-  hooks.onToolBefore(writeGuardBefore)
-  // After hooks: writeGuardAfter (tracks reads) → journalGuard (vetoes on write after results)
-  hooks.onToolAfter(writeGuardAfter)
-  hooks.onToolAfter(createJournalGuard(projectRoot))
+  const hooks = createDefaultHookSystem({ projectRoot })
 
   // ── 5b. Dispatch SessionStart (PR-7.2) ──
   // Fire after all hooks are registered so they can inject session-level context.

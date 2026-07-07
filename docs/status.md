@@ -10,8 +10,8 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 |------|--------|------------------|-----|
 | Runtime bootstrap | Done | `src/runtime/bootstrap.ts`, shared CLI/TUI runtime assembly | Keep future UI entrypoints on this path |
 | Runtime event boundary | Partial | `src/runtime/event-bus.ts`, `src/runtime/controller.ts`, `tests/runtime_event_bus.test.ts` | Not yet the single control plane for all slash commands |
-| HookSystem 2.0 | Partial | `src/hooks/index.ts` accumulates warnings and supports lifecycle events | Default hook factory added; write guard still defaults to warn mode |
-| Default hooks | Partial | `src/hooks/defaults.ts` creates safety/write/journal hook stack | Shell side-effect guard still lives in loop preflight, not a hook |
+| HookSystem 2.0 | Partial | `src/hooks/index.ts` accumulates warnings and supports lifecycle events | Exception handling and after-hook replacement chains still need dedicated regressions |
+| Default hooks | Partial | `src/hooks/defaults.ts` creates safety/write/journal hook stack; unread existing-file edits strict-block by default | Shell side-effect guard still lives in loop preflight, not a hook |
 | TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts` | TaskPacket JSON/Zod schema is not implemented |
 | ModeContract | Partial | `src/agent/mode-contract.ts`, `tests/mode_contract.test.ts` | Automatic MasterPlan mode transitions remain limited |
 | Completion / Evidence | Partial | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts` | Final truthfulness is not yet a fully enforced single path |
@@ -30,8 +30,8 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-0.1 Status Matrix | Done | This document is the baseline status matrix. |
 | PR-0.2 Baseline CI | Partial | `.github/workflows/ci.yml` runs typecheck, tests, build; replay/core layering still needs work. |
 | PR-1.1 HookOutput semantics | Partial | `HookSystem` supports warning accumulation and block/replace priority. Needs dedicated regression coverage for exception handling and after-hook replacement chains. |
-| PR-1.2 writeGuard before/after | Partial | Split before/after hooks exist. Existing-file edits still default to warn unless strict mode is enabled. |
-| PR-1.3 CLI/TUI default hooks | Partial | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Confirm any future CLI/TUI entrypoint does not assemble hooks manually. |
+| PR-1.2 writeGuard before/after | Done | Default runtime hook stack strict-blocks unread existing-file edits and `multi_edit`; warn mode remains available as an explicit compatibility option. |
+| PR-1.3 CLI/TUI default hooks | Done | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Future CLI/TUI entrypoints should keep using runtime bootstrap instead of manual hook assembly. |
 | PR-2.x MasterPlan / TaskPacket / ModeContract | Partial | Core modules exist; schema-first TaskPacket and mode auto-flow are remaining work. |
 | PR-3.x Completion / Evidence | Partial | Orchestrator and ledger exist; final truthfulness must be tightened around evidence claims. |
 | PR-4.x Patch / Rewind | Partial | State machine and rewind modules exist; end-user rewind flows and evidence binding remain incomplete. |

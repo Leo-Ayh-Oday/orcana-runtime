@@ -1,4 +1,4 @@
-export type ProviderErrorKind = "rate_limit" | "server" | "network" | "auth" | "client" | "capacity" | "unknown"
+export type ProviderErrorKind = "rate_limit" | "server" | "network" | "auth" | "client" | "capacity" | "quota" | "unknown"
 
 export interface ProviderErrorInfo {
   kind: ProviderErrorKind
@@ -24,9 +24,21 @@ export function classifyProviderError(error: unknown): ProviderErrorInfo {
   const bodyError = isRecord(body?.error) ? body.error as Record<string, unknown> : undefined
   const dsErrorType = typeof body?.type === "string" ? body.type : typeof bodyError?.type === "string" ? bodyError.type : undefined
   const isCapacityError = dsErrorType ? /capacity_error|model_overloaded|busy|upstream_error|overloaded/i.test(dsErrorType) : false
+  const diagnosticText = [
+    message,
+    typeof record.code === "string" ? record.code : "",
+    typeof body?.message === "string" ? body.message : "",
+    typeof bodyError?.message === "string" ? bodyError.message : "",
+    typeof body?.code === "string" ? body.code : "",
+    typeof bodyError?.code === "string" ? bodyError.code : "",
+    typeof body?.type === "string" ? body.type : "",
+    typeof bodyError?.type === "string" ? bodyError.type : "",
+  ].join(" ")
+  const isQuotaError = /insufficient[_\s-]*quota|quota[_\s-]*(?:exceeded|insufficient)|(?:exceeded|insufficient)[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|额度|余额|欠费|账户余额|资源包|套餐/i.test(diagnosticText)
 
   // 408 Request Timeout is a transient server-side timeout (proxy/load balancer)
   if (status === 408) return { kind: "network", retryable: true, status, retryAfterMs, message }
+  if (status === 402 || isQuotaError) return { kind: "quota", retryable: false, status, message }
   if (status === 429) return { kind: "rate_limit", retryable: true, status, retryAfterMs, message }
   if (isCapacityError) return { kind: "capacity", retryable: true, status, retryAfterMs, message }
   if (status && status >= 500 && status <= 599) return { kind: "server", retryable: true, status, retryAfterMs, message }

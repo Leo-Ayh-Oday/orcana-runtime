@@ -50,13 +50,13 @@ describe("ProviderRegistry — capabilities on built-in models", () => {
     expect(cap.fim).toBe(true)
     expect(cap.contextCaching).toBe(true)
     expect(cap.vision).toBe(false)
-    expect(cap.structuredOutput).toBe(false)
+    expect(cap.structuredOutput).toBe(true)
   })
 
-  test("deepseek-v4-flash does NOT have thinking", () => {
+  test("deepseek-v4-flash has thinking", () => {
     const r = makeRegistry()
     const cap = r.getCapabilities("deepseek-v4-flash")!
-    expect(cap.thinking).toBe(false)
+    expect(cap.thinking).toBe(true)
     expect(cap.fim).toBe(true) // same provider, still has FIM
   })
 
@@ -137,8 +137,8 @@ describe("listModelsByCapability", () => {
     const models = r.listModelsByCapability({ thinking: true })
     expect(models.length).toBeGreaterThanOrEqual(3) // deepseek-v4-pro, claude-opus-4-7, claude-sonnet-4-6
     expect(models).toContain("deepseek-v4-pro")
+    expect(models).toContain("deepseek-v4-flash")
     expect(models).toContain("claude-opus-4-7")
-    expect(models).not.toContain("deepseek-v4-flash")
     expect(models).not.toContain("claude-haiku-4-5")
   })
 
@@ -164,16 +164,17 @@ describe("listModelsByCapability", () => {
   test("finds models with structured output", () => {
     const r = makeRegistry()
     const models = r.listModelsByCapability({ structuredOutput: true })
-    // Only GPT-5 currently
+    // DeepSeek V4 and GPT-5 support API-level structured output.
+    expect(models).toContain("deepseek-v4-pro")
+    expect(models).toContain("deepseek-v4-flash")
     expect(models).toContain("gpt-5")
-    expect(models.length).toBe(1)
   })
 
   test("multiple capability requirements (AND logic)", () => {
     const r = makeRegistry()
     const models = r.listModelsByCapability({ thinking: true, fim: true })
     expect(models).toContain("deepseek-v4-pro")
-    expect(models).not.toContain("deepseek-v4-flash") // no thinking
+    expect(models).toContain("deepseek-v4-flash")
     expect(models).not.toContain("claude-opus-4-7") // no FIM
   })
 
@@ -194,7 +195,7 @@ describe("modelHasCapability", () => {
 
   test("returns false when one requirement mismatches", () => {
     const r = makeRegistry()
-    expect(r.modelHasCapability("deepseek-v4-flash", { thinking: true })).toBe(false)
+    expect(r.modelHasCapability("deepseek-v4-flash", { vision: true })).toBe(false)
   })
 
   test("returns false for unknown model", () => {

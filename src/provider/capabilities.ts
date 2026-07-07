@@ -44,7 +44,7 @@ export function toModelSpec(
   providerConfig: ProviderConfig,
 ): ModelSpec {
   const caps = modelConfig.capabilities
-  const pricingTier = inferPricingTier(providerConfig.type)
+  const pricingTier = modelConfig.pricingTier ?? inferPricingTier(providerConfig.type)
   return {
     id: modelId,
     providerId,
@@ -54,7 +54,7 @@ export function toModelSpec(
     pricingTier,
     thinking: toThinkingCapability(caps),
     capabilities: toModelCapabilities(caps),
-    tags: inferTags(caps),
+    tags: modelConfig.tags ?? inferTags(caps),
     isDefault: false,
   }
 }

@@ -787,6 +787,7 @@ export async function* agentLoop(
     let thinkingBlocks: Array<{ thinking: string; signature: string }> = []
     let streamError = ""
     let streamErrorRetryable = true
+    let streamErrorYielded = false
     const roundStart = Date.now()
     let bufferedTextEmitted = false
     const shouldBufferCompletionText = taskTracker?.phase === "building" || taskTracker?.phase === "complete" || taskHadWrite || taskToolErrors > 0
@@ -821,7 +822,8 @@ export async function* agentLoop(
         else if (event.type === "error") {
           streamError = String(event.data ?? "")
           // Provider formats non-retryable errors as "auth ..." or "client ..."
-          streamErrorRetryable = !(streamError.startsWith("auth ") || streamError.startsWith("client "))
+          streamErrorRetryable = !isNonRetryableProviderStreamError(streamError)
+          streamErrorYielded = true
           yield event
         }
       }
@@ -830,6 +832,7 @@ export async function* agentLoop(
       const classified = classifyProviderError(e)
       streamErrorRetryable = classified.retryable
       yield { type: "error", data: streamError }
+      streamErrorYielded = true
     }
 
     const roundMs = Date.now() - roundStart
@@ -879,7 +882,7 @@ export async function* agentLoop(
 
     if (streamError) {
       if (!streamErrorRetryable) {
-        yield { type: "error", data: streamError }
+        if (!streamErrorYielded) yield { type: "error", data: streamError }
         yield { type: "status", data: `provider-stream-gate: blocked (non-retryable: ${streamError.slice(0, 80)})` }
         options.runTrace?.record("gate_decision", {
           gate: "provider_stream",
@@ -1937,4 +1940,9 @@ export async function* agentLoop(
       sessionDurationMs: Date.now() - startTime,
     })
   }
+}
+
+function isNonRetryableProviderStreamError(error: string): boolean {
+  return /^(auth|client|quota)(?:\s|:)/i.test(error)
+    || /insufficient[_\s-]*quota|quota[_\s-]*(?:exceeded|insufficient)|(?:exceeded|insufficient)[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|额度|余额|欠费|账户余额|资源包|套餐/i.test(error)
 }

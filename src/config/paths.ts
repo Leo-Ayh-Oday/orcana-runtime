@@ -4,8 +4,11 @@
  *    ~/.deepseek-code/orcana.jsonc  — 全局 provider/runtime 配置
  *    ~/.deepseek-code/auth.json     — API key 安全存储（0600）
  *    ~/.deepseek-code/tui.jsonc     — TUI 外观/行为配置
- *    ./orcana.jsonc                 — 项目级配置覆盖
- *    ./tui.jsonc                    — 项目级 TUI 配置覆盖
+ *    ./orcana.jsonc                 — 项目级配置覆盖（默认禁用）
+ *    ./tui.jsonc                    — 项目级 TUI 配置覆盖（默认禁用）
+ *
+ *  默认策略：Orcana 使用 global-only 配置中心。
+ *  项目配置仅在 ORCANA_ENABLE_PROJECT_CONFIG=1 或 loadProject=true 时读取。
  *
  *  环境变量覆盖：
  *    ORCANA_CONFIG_DIR  — 替换全局配置目录
@@ -34,6 +37,11 @@ export function globalTuiConfigPath(): string {
 /** 认证存储文件路径（API key，权限 0600）。 */
 export function authStorePath(): string {
   return join(globalConfigDir(), "auth.json")
+}
+
+/** 全局认证存储路径别名。 */
+export function globalAuthPath(): string {
+  return authStorePath()
 }
 
 /** 项目级配置文件路径（当前工作目录下的 orcana.jsonc）。 */

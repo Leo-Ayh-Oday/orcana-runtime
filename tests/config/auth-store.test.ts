@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -95,6 +95,44 @@ describe("FileAuthStore", () => {
     expect(await store.get("deepseek")).toBe("sk-ds")
     const ids = await store.list()
     expect(ids.sort()).toEqual(["deepseek", "openai"])
+  })
+
+  test("migrates legacy provider keys to default credential profiles", async () => {
+    const filePath = join(tempDir, "legacy-migrate.json")
+    writeFileSync(filePath, JSON.stringify({ deepseek: "sk-ds", qwen: "sk-qwen" }, null, 2))
+    const store = new FileAuthStore(filePath)
+    expect(await store.get("deepseek")).toBe("sk-ds")
+    expect(await store.getCredential?.("deepseek/default")).toMatchObject({
+      id: "deepseek/default",
+      providerId: "deepseek",
+      label: "default",
+      apiKey: "sk-ds",
+    })
+    expect(JSON.parse(readFileSync(filePath, "utf-8")).version).toBe(2)
+  })
+
+  test("supports multiple credential profiles for one provider", async () => {
+    const store = new FileAuthStore(join(tempDir, "profiles.json"))
+    await store.setCredential?.({
+      id: "deepseek/default",
+      providerId: "deepseek",
+      label: "default",
+      apiKey: "sk-default",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await store.setCredential?.({
+      id: "deepseek/company",
+      providerId: "deepseek",
+      label: "company",
+      apiKey: "sk-company",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    expect((await store.getCredential?.("deepseek/company"))?.apiKey).toBe("sk-company")
+    const summaries = await store.listCredentials?.("deepseek")
+    expect(summaries?.map(item => item.id).sort()).toEqual(["deepseek/company", "deepseek/default"])
+    expect(JSON.stringify(summaries)).not.toContain("sk-company")
   })
 
   test("corrupted file returns undefined", async () => {

@@ -1,7 +1,7 @@
 /** Tests for config-loader — JSONC parsing, deep merge, role resolution, and config loading. */
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -121,7 +121,7 @@ describe("deepMerge", () => {
 
 describe("resolveModelForRole", () => {
   test("returns role-specific model when defined", () => {
-    expect(resolveModelForRole("planner", defaultConfig)).toBe("deepseek-reasoner")
+    expect(resolveModelForRole("planner", defaultConfig)).toBe("deepseek-v4-pro")
   })
 
   test("falls back to default when role is undefined", () => {
@@ -129,9 +129,9 @@ describe("resolveModelForRole", () => {
     expect(resolveModelForRole("fim", config)).toBe("my-default-model")
   })
 
-  test("falls back to deepseek-chat when neither role nor default is defined", () => {
+  test("falls back to deepseek-v4-pro when neither role nor default is defined", () => {
     const config: OrcanaConfig = {}
-    expect(resolveModelForRole("planner", config)).toBe("deepseek-chat")
+    expect(resolveModelForRole("planner", config)).toBe("deepseek-v4-pro")
   })
 })
 
@@ -166,9 +166,35 @@ describe("loadConfig", () => {
     expect(config.defaultProvider).toBe("openrouter")
     expect(config.models?.default).toBe("custom-model")
     // Roles not overridden should be preserved from defaultConfig
-    expect(config.models?.planner).toBe("deepseek-reasoner")
+    expect(config.models?.planner).toBe("deepseek-v4-pro")
     // Providers unchanged (no providers key in global config)
     expect(config.providers?.deepseek).toBeDefined()
+  })
+
+  test("does not load project config by default", () => {
+    const cwd = join(tempDir, "project-global-only")
+    try { rmSync(cwd, { recursive: true, force: true }) } catch {}
+    mkdirSync(cwd, { recursive: true })
+    writeFileSync(join(cwd, "orcana.jsonc"), `{"models":{"default":"project-model"}}`, "utf-8")
+    const config = loadConfig({
+      cwd,
+      globalPath: join(tempDir, "nonexistent-global-project.jsonc"),
+      applyEnv: false,
+    })
+    expect(config.models?.default).toBe(defaultConfig.models?.default)
+  })
+
+  test("loads project config only when loadProject=true", () => {
+    const cwd = join(tempDir, "project-enabled")
+    mkdirSync(cwd, { recursive: true })
+    writeFileSync(join(cwd, "orcana.jsonc"), `{"models":{"default":"project-model"}}`, "utf-8")
+    const config = loadConfig({
+      cwd,
+      globalPath: join(tempDir, "nonexistent-global-project-enabled.jsonc"),
+      applyEnv: false,
+      loadProject: true,
+    })
+    expect(config.models?.default).toBe("project-model")
   })
 })
 
@@ -177,7 +203,19 @@ describe("loadConfig", () => {
 describe("listProviderIds", () => {
   test("returns provider IDs from config", () => {
     const ids = listProviderIds(defaultConfig)
-    expect(ids.sort()).toEqual(["deepseek", "lmstudio", "ollama", "openrouter"])
+    expect(ids.sort()).toEqual([
+      "custom",
+      "deepseek",
+      "kimi",
+      "lmstudio",
+      "minimax",
+      "ollama",
+      "openrouter",
+      "qwen",
+      "siliconflow",
+      "stepfun",
+      "zhipu",
+    ])
   })
 })
 

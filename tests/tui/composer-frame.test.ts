@@ -254,8 +254,8 @@ describe("PR-2: footerHeight includes divider lines", () => {
 
   test("commandOpen 时 inputRows=5, footerHeight 相应增加", () => {
     const idle = 0 + 2 + 1 + 0 + 2
-    const command = 0 + 5 + 1 + 0 + 2
-    expect(command - idle).toBe(3)
+    const command = 0 + 6 + 1 + 0 + 2
+    expect(command - idle).toBe(4)
   })
 })
 

@@ -23,7 +23,9 @@ import { TextArea } from "react-ink-textarea"
 import { C } from "../theme/theme"
 import type { SlashCommandHint } from "../input"
 import { matchSlashCommands } from "../commands/score"
-import { CommandShelf } from "./CommandShelf"
+import { CommandShelf, commandShelfRows } from "./CommandShelf"
+
+export const COMMAND_SHELF_WINDOW_SIZE = 7
 
 // ── Paste block 系统（从 input.tsx 适配） ──
 
@@ -130,6 +132,32 @@ export function flatToRowCol(text: string, pos: number): [number, number] {
   return [row, col < 0 ? 0 : col]
 }
 
+export function nextCommandIndex(current: number, total: number, delta: number): number {
+  if (total <= 0) return 0
+  return (current + delta + total) % total
+}
+
+export function completeSlashCommandDraft(
+  rawValue: string,
+  commandName: string,
+): { value: string; cursor: [number, number] } {
+  const firstNonSpace = rawValue.search(/\S/)
+  const slashStart = firstNonSpace < 0 ? 0 : firstNonSpace
+  if (rawValue[slashStart] !== "/") {
+    const value = `/${commandName}`
+    return { value, cursor: flatToRowCol(value, value.length) }
+  }
+
+  const tokenStart = slashStart + 1
+  let tokenEnd = tokenStart
+  while (tokenEnd < rawValue.length && !/\s/.test(rawValue[tokenEnd]!)) {
+    tokenEnd++
+  }
+
+  const value = `${rawValue.slice(0, slashStart)}/${commandName}${rawValue.slice(tokenEnd)}`
+  return { value, cursor: flatToRowCol(value, value.length) }
+}
+
 // ── 历史项（结构化存储，修复大粘贴历史丢失问题） ──
 
 interface ComposerHistoryItem {
@@ -163,7 +191,7 @@ export interface OrcanaComposerProps {
   rightStatus?: string
   commands?: SlashCommandHint[]
   focused?: boolean
-  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number; textRows: number }) => void
+  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number; textRows: number; commandRows?: number }) => void
 }
 
 export function OrcanaComposer({
@@ -189,6 +217,7 @@ export function OrcanaComposer({
   const [nextPasteId, setNextPasteId] = useState(1)
   // 当用户浏览历史时，保存当前未发送的草稿（用于回到 "现在" 时恢复）
   const savedDraftRef = useRef<{ value: string; cursor: [number, number]; pasteBlocks: PasteBlock[] } | null>(null)
+  const dismissedSlashQueryRef = useRef<string | null>(null)
 
   // ── 派生数据 ──
   const visibleDraft = useMemo(() => displayDraft(value, pasteBlocks), [pasteBlocks, value])
@@ -200,31 +229,64 @@ export function OrcanaComposer({
   // PR-3+PR-4: 用 fuzzy matchSlashCommands 替换原 startsWith 前缀匹配，上限 5 条。
   // matchSlashCommands 综合 name/aliases/description 评分。
   const scoredMatches = useMemo(
-    () => matchSlashCommands(slashQuery, commands, 5),
+    () => matchSlashCommands(slashQuery, commands, Math.max(commands.length, COMMAND_SHELF_WINDOW_SIZE)),
     [slashQuery, commands],
   )
-  const selectedCommand = scoredMatches.length > 0
-    ? scoredMatches[Math.min(commandIdx, scoredMatches.length - 1)]!.command
-    : undefined
+  const safeCommandIdx = scoredMatches.length > 0
+    ? Math.min(commandIdx, scoredMatches.length - 1)
+    : 0
+  const selectedCommand = scoredMatches.length > 0 ? scoredMatches[safeCommandIdx]!.command : undefined
   const pasteCount = pasteBlocks.filter(block => value.includes(block.token)).length
   // TextArea 当前行数（1-3），用于让 parent 动态计算 footerHeight
   const textRows = Math.min(3, Math.max(1, value ? value.split("\n").length : 1))
+  const commandRows = showCommands
+    ? commandShelfRows(scoredMatches.length, COMMAND_SHELF_WINDOW_SIZE)
+    : 0
 
   // ── 通知 parent chrome 状态 ──
   useEffect(() => {
-    onChromeChange?.({ commandOpen: showCommands, pasteCount, textRows })
-  }, [onChromeChange, pasteCount, showCommands, textRows])
+    onChromeChange?.({ commandOpen: showCommands, pasteCount, textRows, commandRows })
+  }, [commandRows, onChromeChange, pasteCount, showCommands, textRows])
 
   // PR-3: slashQuery 变化时重置 commandsDismissed —— 用户继续输入则菜单重新出现。
   // 覆盖场景：/hel → Esc → 退格 → /he（slashQuery 变化 → 菜单重现）。
   useEffect(() => {
+    if (dismissedSlashQueryRef.current === slashQuery) return
+    dismissedSlashQueryRef.current = null
     setCommandsDismissed(false)
+    setCommandIdx(0)
   }, [slashQuery])
 
   // PR-3: Esc 关闭命令菜单但保留输入文本。useInput 仅在菜单可见时激活，
   // 避免与 TextArea 的按键处理冲突。
+  const moveCommandSelection = useCallback((delta: number) => {
+    setCommandIdx(idx => nextCommandIndex(idx, scoredMatches.length, delta))
+  }, [scoredMatches.length])
+
+  const completeSelectedCommand = useCallback(() => {
+    if (!showCommands || !selectedCommand || selectedCommand.enabled === false) return
+    const completed = completeSlashCommandDraft(value, selectedCommand.name)
+    dismissedSlashQueryRef.current = selectedCommand.name
+    setValue(completed.value)
+    setCursor(completed.cursor)
+    setCommandsDismissed(true)
+  }, [selectedCommand, showCommands, value])
+
   useInput((_input, key) => {
+    if (key.upArrow || (key.ctrl && (_input === "p" || _input === "P"))) {
+      moveCommandSelection(-1)
+      return
+    }
+    if (key.downArrow || (key.ctrl && (_input === "n" || _input === "N"))) {
+      moveCommandSelection(1)
+      return
+    }
+    if (key.tab) {
+      completeSelectedCommand()
+      return
+    }
     if (key.escape) {
+      dismissedSlashQueryRef.current = slashQuery
       setCommandsDismissed(true)
     }
   }, { isActive: showCommands })
@@ -308,15 +370,12 @@ export function OrcanaComposer({
 
   // ── onTab：命令面板导航 ──
   const handleTab = useCallback(
-    (shift: boolean) => {
+    (_shift: boolean) => {
       if (showCommands && scoredMatches.length > 0) {
-        setCommandIdx(idx => {
-          const delta = shift ? -1 : 1
-          return (idx + delta + scoredMatches.length) % scoredMatches.length
-        })
+        completeSelectedCommand()
       }
     },
-    [showCommands, scoredMatches.length],
+    [completeSelectedCommand, showCommands, scoredMatches.length],
   )
 
   // ── onFirstLineUp：第一行按 Up → 命令面板或历史导航 ──
@@ -388,7 +447,8 @@ export function OrcanaComposer({
       {showCommands && (
         <CommandShelf
           matches={scoredMatches}
-          selectedIndex={Math.min(commandIdx, Math.max(0, scoredMatches.length - 1))}
+          selectedIndex={safeCommandIdx}
+          windowSize={COMMAND_SHELF_WINDOW_SIZE}
         />
       )}
 

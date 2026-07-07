@@ -65,6 +65,16 @@ export const FooterHints = React.memo(function FooterHints({ busy, activeContext
     )
   }
 
+  if (activeContext === "RuntimeDialog") {
+    return (
+      <Box>
+        <Text color={theme.textFaint}>↑↓ select  </Text>
+        <KeyHint shortcut="Enter" label=" confirm  " color={theme.success} />
+        <Text color={theme.textFaint}>type search/key  Esc close</Text>
+      </Box>
+    )
+  }
+
   // ── PR-5: CommandShelf context — 命令菜单打开时 ──
   if (activeContext === "CommandShelf") {
     if (width < 60) {

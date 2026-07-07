@@ -10,10 +10,11 @@
 
 import { describe, expect, test } from "bun:test"
 import { scoreCommand, matchCommands, scoreSlashCommand, matchSlashCommands, type ScoredCommand } from "../../src/tui/commands/score"
-import { commandKindColor } from "../../src/tui/components/CommandShelf"
+import { commandKindColor, commandShelfRows, commandShelfWindowStart } from "../../src/tui/components/CommandShelf"
 import { getCommandHints, COMMANDS } from "../../src/tui/commands/registry"
 import type { SlashCommandHint, CommandKind } from "../../src/tui/input"
 import { palette } from "../../src/tui/theme/palette"
+import { theme } from "../../src/tui/theme/theme"
 
 // ── scoreCommand: 四级评分 ──
 
@@ -242,6 +243,28 @@ describe("CommandShelf: data structure (PR-3)", () => {
   })
 })
 
+describe("CommandShelf: scroll window", () => {
+  test("keeps window at top while selected item is visible near start", () => {
+    expect(commandShelfWindowStart(0, 12, 7)).toBe(0)
+    expect(commandShelfWindowStart(3, 12, 7)).toBe(0)
+  })
+
+  test("centers selected item after moving beyond the first page", () => {
+    expect(commandShelfWindowStart(6, 12, 7)).toBe(3)
+  })
+
+  test("clamps window at the end", () => {
+    expect(commandShelfWindowStart(11, 12, 7)).toBe(5)
+    expect(commandShelfWindowStart(99, 12, 7)).toBe(5)
+  })
+
+  test("row count includes an overflow hint when list is scrollable", () => {
+    expect(commandShelfRows(0, 7)).toBe(1)
+    expect(commandShelfRows(5, 7)).toBe(5)
+    expect(commandShelfRows(12, 7)).toBe(8)
+  })
+})
+
 // ── PR-3 集成: fuzzy 匹配真实场景 ──
 
 describe("PR-3: fuzzy matching real scenarios", () => {
@@ -300,33 +323,11 @@ describe("PR-3: fuzzy matching real scenarios", () => {
 // ── PR-4: commandKindColor 语义色 ──
 
 describe("PR-4: commandKindColor", () => {
-  test("system → cyan", () => {
-    expect(commandKindColor("system")).toBe(palette.cyan)
-  })
-
-  test("runtime → jade (低亮度绿)", () => {
-    expect(commandKindColor("runtime")).toBe(palette.jade)
-  })
-
-  test("model → blue", () => {
-    expect(commandKindColor("model")).toBe(palette.blue)
-  })
-
-  test("skill → evidence/lavender", () => {
-    expect(commandKindColor("skill")).toBe(palette.evidence)
-  })
-
-  test("debug → amber", () => {
-    expect(commandKindColor("debug")).toBe(palette.amber)
-  })
-
-  test("danger → coral/rose", () => {
-    expect(commandKindColor("danger")).toBe(palette.coral)
-  })
-
-  test("undefined → theme.text (默认)", () => {
-    expect(commandKindColor(undefined)).toBeDefined()
-    expect(commandKindColor(undefined)).not.toBe(palette.fog)
+  test("enabled commands use one unified color regardless of kind", () => {
+    const kinds: Array<CommandKind | undefined> = ["system", "runtime", "model", "skill", "debug", "danger", undefined]
+    const colors = kinds.map(kind => commandKindColor(kind))
+    expect(new Set(colors).size).toBe(1)
+    expect(colors[0]).toBe(theme.text)
   })
 
   test("disabled (enabled=false) → fog (dim gray) 覆盖 kind", () => {
@@ -336,15 +337,9 @@ describe("PR-4: commandKindColor", () => {
     expect(commandKindColor("model", false)).toBe(palette.fog)
   })
 
-  test("enabled=true (显式) → 按 kind 着色", () => {
-    expect(commandKindColor("danger", true)).toBe(palette.coral)
-    expect(commandKindColor("system", true)).toBe(palette.cyan)
-  })
-
-  test("6 种 CommandKind 互不相同", () => {
-    const kinds: CommandKind[] = ["system", "runtime", "model", "skill", "debug", "danger"]
-    const colors = kinds.map(k => commandKindColor(k))
-    expect(new Set(colors).size).toBe(kinds.length)
+  test("enabled=true remains unified", () => {
+    expect(commandKindColor("danger", true)).toBe(theme.text)
+    expect(commandKindColor("system", true)).toBe(theme.text)
   })
 })
 

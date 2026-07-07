@@ -56,6 +56,69 @@ export interface ClarificationWizardState {
   rawText: string
 }
 
+export type ThinkEffort = "auto" | "high" | "max"
+
+export interface ModelDialogOption {
+  providerId: string
+  providerName: string
+  modelId: string
+  modelName: string
+  configured: boolean
+  current: boolean
+  tier: string
+  thinking: boolean
+  contextWindow: number
+  custom?: boolean
+}
+
+export type RuntimeDialogState =
+  | {
+      type: "models"
+      phase: "list"
+      query: string
+      selected: number
+      options: ModelDialogOption[]
+      providerFilter?: string
+      error?: string
+    }
+  | {
+      type: "models"
+      phase: "key"
+      providerId: string
+      providerName: string
+      modelId: string
+      modelName: string
+      keyValue: string
+      custom?: boolean
+      baseUrl?: string
+      error?: string
+    }
+  | {
+      type: "models"
+      phase: "custom"
+      providerId: string
+      providerName: string
+      modelValue: string
+      error?: string
+    }
+  | {
+      type: "models"
+      phase: "url"
+      providerId: string
+      providerName: string
+      modelId: string
+      modelName: string
+      baseUrlValue: string
+      defaultBaseUrl?: string
+      error?: string
+    }
+  | {
+      type: "effort"
+      selected: number
+      current: ThinkEffort
+      error?: string
+    }
+
 // ── 内部组件 ──
 
 function EmptySurface({ mode, modelName }: { mode: TuiMode; modelName: string }) {
@@ -117,6 +180,138 @@ function ClarificationPanel({ wizard, width }: { wizard: ClarificationWizardStat
   )
 }
 
+function RuntimeDialog({ dialog, width }: { dialog: RuntimeDialogState; width: number }) {
+  const boxWidth = Math.max(42, Math.min(width - 4, 92))
+  if (dialog.type === "effort") {
+    const options: Array<{ value: ThinkEffort; label: string; desc: string }> = [
+      { value: "auto", label: "auto", desc: "自动判断，默认选择" },
+      { value: "high", label: "high", desc: "更深推理，适合复杂修改" },
+      { value: "max", label: "max", desc: "最大推理预算，适合架构/疑难问题" },
+    ]
+    return (
+      <Box flexDirection="column" borderStyle="single" borderColor={theme.borderActive} paddingX={1} width={boxWidth}>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text color={theme.brand} bold>推理深度</Text>
+          <Text color={theme.textFaint}>Esc</Text>
+        </Box>
+        {options.map((item, index) => {
+          const selected = index === dialog.selected
+          const current = item.value === dialog.current
+          return (
+            <Box key={item.value} flexDirection="row">
+              <Text color={selected ? theme.brand : theme.textFaint}>{selected ? ">" : " "} </Text>
+              <Text color={current ? theme.success : selected ? theme.text : theme.textDim}>{item.label.padEnd(5)}</Text>
+              <Text color={theme.textFaint}> {item.desc}</Text>
+            </Box>
+          )
+        })}
+        {dialog.error && <Text color={theme.error}>{fitText(dialog.error, boxWidth - 4)}</Text>}
+      </Box>
+    )
+  }
+
+  if (dialog.phase === "key") {
+    const masked = dialog.keyValue.length > 0 ? "*".repeat(Math.min(dialog.keyValue.length, 32)) : ""
+    return (
+      <Box flexDirection="column" borderStyle="single" borderColor={theme.borderActive} paddingX={1} width={boxWidth}>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text color={theme.brand} bold>配置 API key</Text>
+          <Text color={theme.textFaint}>Esc</Text>
+        </Box>
+        <Text color={theme.textDim}>{dialog.providerName} / {dialog.modelName}</Text>
+        <Box flexDirection="row">
+          <Text color={theme.info}>key </Text>
+          <Text color={dialog.keyValue ? theme.text : theme.textFaint}>{masked || "输入后回车保存"}</Text>
+        </Box>
+        <Text color={theme.textFaint}>key 会保存到 Orcana 全局 auth，不读取系统环境变量。</Text>
+        {dialog.error && <Text color={theme.error}>{fitText(dialog.error, boxWidth - 4)}</Text>}
+      </Box>
+    )
+  }
+
+  if (dialog.phase === "custom") {
+    return (
+      <Box flexDirection="column" borderStyle="single" borderColor={theme.borderActive} paddingX={1} width={boxWidth}>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text color={theme.brand} bold>自定义模型</Text>
+          <Text color={theme.textFaint}>Esc</Text>
+        </Box>
+        <Text color={theme.textDim}>{dialog.providerName}</Text>
+        <Box flexDirection="row">
+          <Text color={theme.info}>model </Text>
+          <Text color={dialog.modelValue ? theme.text : theme.textFaint}>
+            {dialog.modelValue || "输入模型 ID，例如 glm-5.2"}
+          </Text>
+        </Box>
+        <Text color={theme.textFaint}>下一步输入 URL，然后输入 key，保存到 Orcana 全局配置。</Text>
+        {dialog.error && <Text color={theme.error}>{fitText(dialog.error, boxWidth - 4)}</Text>}
+      </Box>
+    )
+  }
+
+  if (dialog.phase === "url") {
+    const fallback = dialog.defaultBaseUrl ? `默认：${dialog.defaultBaseUrl}` : "输入 OpenAI-compatible URL"
+    const hint = dialog.defaultBaseUrl
+      ? "直接回车使用默认 URL；中转站/Ark/自建服务请输入完整 base URL。"
+      : "请输入完整 base URL，例如 https://api.example.com/v1。"
+    return (
+      <Box flexDirection="column" borderStyle="single" borderColor={theme.borderActive} paddingX={1} width={boxWidth}>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text color={theme.brand} bold>模型 API URL</Text>
+          <Text color={theme.textFaint}>Esc</Text>
+        </Box>
+        <Text color={theme.textDim}>{dialog.providerName} / {dialog.modelName}</Text>
+        <Box flexDirection="row">
+          <Text color={theme.info}>url </Text>
+          <Text color={dialog.baseUrlValue ? theme.text : theme.textFaint}>
+            {dialog.baseUrlValue || fallback}
+          </Text>
+        </Box>
+        <Text color={theme.textFaint}>{hint}</Text>
+        {dialog.error && <Text color={theme.error}>{fitText(dialog.error, boxWidth - 4)}</Text>}
+      </Box>
+    )
+  }
+
+  const maxVisible = 9
+  const start = Math.max(0, Math.min(dialog.selected - Math.floor(maxVisible / 2), Math.max(0, dialog.options.length - maxVisible)))
+  const visible = dialog.options.slice(start, start + maxVisible)
+  return (
+    <Box flexDirection="column" borderStyle="single" borderColor={theme.borderActive} paddingX={1} width={boxWidth}>
+      <Box flexDirection="row" justifyContent="space-between">
+        <Text color={theme.brand} bold>选择模型</Text>
+        <Text color={theme.textFaint}>Esc</Text>
+      </Box>
+      <Box flexDirection="row">
+        <Text color={theme.info}>search </Text>
+        <Text color={dialog.query ? theme.text : theme.textFaint}>{dialog.query || "输入模型或 provider"}</Text>
+      </Box>
+      {visible.length === 0 ? (
+        <Text color={theme.textFaint}>没有匹配的模型。</Text>
+      ) : visible.map((item, index) => {
+        const actualIndex = start + index
+        const selected = actualIndex === dialog.selected
+        const cap = item.custom ? "custom" : `${item.tier}${item.thinking ? " · think" : ""} · ${Math.round(item.contextWindow / 1000)}K`
+        return (
+          <Box key={`${item.providerId}/${item.modelId}`} flexDirection="row">
+            <Text color={selected ? theme.brand : theme.textFaint}>{selected ? ">" : " "} </Text>
+            <Text color={item.current ? theme.success : selected ? theme.text : theme.textDim}>
+              {fitText(item.modelName, Math.max(12, Math.floor(boxWidth * 0.36)))}
+            </Text>
+            <Text color={theme.textFaint}>  {fitText(item.providerName, 18)}</Text>
+            <Text color={item.configured ? theme.success : theme.warning}>  {item.custom ? "手动" : item.configured ? "ready" : "需要 key"}</Text>
+            <Text color={theme.textFaint}>  {cap}</Text>
+          </Box>
+        )
+      })}
+      {dialog.options.length > visible.length && (
+        <Text color={theme.textFaint}>显示 {start + 1}-{start + visible.length} / {dialog.options.length}，继续输入可过滤。</Text>
+      )}
+      {dialog.error && <Text color={theme.error}>{fitText(dialog.error, boxWidth - 4)}</Text>}
+    </Box>
+  )
+}
+
 // ── AppShell ──
 
 export interface InputChromeState {
@@ -124,6 +319,7 @@ export interface InputChromeState {
   pasteCount: number
   /** TextArea 当前行数（1-3），用于动态计算 footerHeight */
   textRows: number
+  commandRows?: number
 }
 
 export interface AppShellProps {
@@ -147,6 +343,8 @@ export interface AppShellProps {
   confirmModal: { request: ConfirmRequest; position: string } | null
   /** Phase 5: Rewind modal state */
   rewindModal: RewindModalState | null
+  runtimeDialog: RuntimeDialogState | null
+  thinkingEffort: ThinkEffort
 }
 
 // ── 布局计算（纯函数，便于测试） ──
@@ -200,7 +398,7 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
   const showDash = hasContent && (mode === "standard" || mode === "comfortable")
   const textRows = inputChrome.textRows > 0 ? inputChrome.textRows : 1
   const inputRows = inputChrome.commandOpen
-    ? 5
+    ? textRows + Math.max(1, inputChrome.commandRows ?? 5)
     : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
   // PR-1: ThinkingDock 在 footer 中占 1 行
   // PR-2: ComposerFrame 上下分隔线各占 1 行（+2）
@@ -210,7 +408,7 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
 }
 
 export function AppShell(props: AppShellProps) {
-  const { state, runtime, prompt, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, confirmModal, rewindModal } = props
+  const { state, runtime, prompt, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, confirmModal, rewindModal, runtimeDialog } = props
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout?.rows ?? 32)
   const cols = stdout?.columns ?? 96
@@ -228,7 +426,7 @@ export function AppShell(props: AppShellProps) {
     || rightRail.runtime.patchSummary.total > 0
     || rightRail.runtime.activeTools > 0
   const hasContent = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
-  const modalActive = confirmModal !== null || rewindModal !== null
+  const modalActive = confirmModal !== null || rewindModal !== null || runtimeDialog !== null
 
   // PR-1: ThinkingDock 视图模型（PR-1.6: 传入 confirmActive 触发 waiting_permission phase）
   const thinkingDock = selectThinkingDock(state, { confirmActive: confirmModal !== null })
@@ -250,7 +448,7 @@ export function AppShell(props: AppShellProps) {
           <InkStartupScreen
             version={runtime.version}
             toolsCount={runtime.tools.length}
-            thinkingEffort="auto"
+            thinkingEffort={props.thinkingEffort}
             modelName={state.modelName}
           />
         </Box>
@@ -268,6 +466,7 @@ export function AppShell(props: AppShellProps) {
     rewindListActive: rewindModal?.phase === "list",
     rewindConfirmActive: rewindModal?.phase === "confirm",
     commandOpen: inputChrome.commandOpen,
+    runtimeDialogActive: runtimeDialog !== null,
   })
 
   return (
@@ -307,6 +506,11 @@ export function AppShell(props: AppShellProps) {
       {rewindModal && (
         <Box marginBottom={1}>
           <RewindModal modal={rewindModal} width={cols - 4} />
+        </Box>
+      )}
+      {runtimeDialog && (
+        <Box marginBottom={1}>
+          <RuntimeDialog dialog={runtimeDialog} width={cols - 4} />
         </Box>
       )}
 

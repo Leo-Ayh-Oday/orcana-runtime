@@ -65,9 +65,22 @@ export function compactStatusText(status: string): string {
 
 export function cleanAgentError(text: string): string {
   if (text.includes("[clarification-gate]")) {
-    return "Clarification failed. Please add a little more detail and try again."
+    return "需要补充信息。请把需求说得更具体一点，然后重试。"
   }
-  return text
+  if (/api key|auth|unauthorized|401/i.test(text)) {
+    return "模型服务认证失败。请运行 /models，选择当前模型并重新输入 API key。"
+  }
+  if (/quota|insufficient[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|402|额度|余额|欠费|账户余额|资源包|套餐/i.test(text)) {
+    return "模型服务额度或余额不足。请在 /models 切换模型、重新输入可用 key，或到对应平台充值后再试。"
+  }
+  if (/model not found|ProviderRegistry|no registered provider|unknown model/i.test(text)) {
+    return "当前模型不可用。请运行 /models 重新选择一个已配置的模型。"
+  }
+  if (/rate limit|429/i.test(text)) {
+    return "模型服务限流了。稍等一下再试，或在 /models 切换其他模型。"
+  }
+  const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(Boolean) ?? text
+  return firstLine.length > 180 ? `${firstLine.slice(0, 177)}...` : firstLine
 }
 
 // ── Telemetry ──

@@ -11,6 +11,7 @@
  *    - RewindConfirm   — y/n/Esc 回溯确认
  *    - RewindList      — ↑↓/Enter/Esc 回溯列表
  *    - Clarification   — ↑↓/j/k/Enter/Esc 问答面板
+ *    - RuntimeDialog   — /models /effort 弹层
  *    - CommandShelf    — PR-5: 命令菜单打开，方向键/Tab/Enter/Esc 归 OrcanaComposer
  *    - Scrollback      — 空闲时，翻页/滚轮归它
  *    - Composer        — 文本编辑（TextArea 内部处理，不经过此系统）
@@ -24,7 +25,7 @@
 /** 键盘输入上下文。优先级从高到低排列。
  *  Phase 5: 新增 Confirm、RewindList、RewindConfirm 上下文。
  *  PR-5: 新增 CommandShelf 上下文。 */
-export type InputContext = "Confirm" | "RewindConfirm" | "RewindList" | "Clarification" | "CommandShelf" | "Scrollback" | "Composer" | "Global"
+export type InputContext = "Confirm" | "RewindConfirm" | "RewindList" | "Clarification" | "RuntimeDialog" | "CommandShelf" | "Scrollback" | "Composer" | "Global"
 
 /**
  * 上下文优先级数值。越大越优先。
@@ -35,6 +36,7 @@ export const CONTEXT_PRIORITY: Record<InputContext, number> = {
   RewindConfirm: 4,
   RewindList: 3,
   Clarification: 3,
+  RuntimeDialog: 3,
   CommandShelf: 2,
   Scrollback: 1,
   Composer: 0,
@@ -89,11 +91,13 @@ export function resolveActiveContext(opts: {
   rewindConfirmActive?: boolean
   /** PR-5: 命令菜单打开时 → CommandShelf context（优先于 Scrollback） */
   commandOpen?: boolean
+  runtimeDialogActive?: boolean
 }): InputContext {
   if (opts.confirmActive) return "Confirm"
   if (opts.rewindConfirmActive) return "RewindConfirm"
   if (opts.rewindListActive) return "RewindList"
   if (opts.clarificationActive) return "Clarification"
+  if (opts.runtimeDialogActive) return "RuntimeDialog"
   if (opts.commandOpen) return "CommandShelf"
   return "Scrollback"
 }

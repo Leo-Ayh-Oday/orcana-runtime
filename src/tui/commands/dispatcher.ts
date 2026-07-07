@@ -1,5 +1,6 @@
 import type React from "react"
 import type { Runtime } from "../../runtime/bootstrap"
+import type { ThinkEffort } from "../components/AppShell"
 import { StreamEventAdapter } from "../state/event-adapter"
 import { TuiStore } from "../state/tui-store"
 import type { TuiState } from "../state/types"
@@ -17,6 +18,9 @@ export interface TuiCommandContext {
   addSystemMessage: (content: string) => void
   isRunning: () => boolean
   exit: () => never
+  openModels: (provider?: string) => void
+  openEffort: () => void
+  setThinkEffort: (value: ThinkEffort) => void
 }
 
 export type TuiCommandDispatchResult = "handled" | "pass_to_agent" | "not_command"
@@ -97,7 +101,7 @@ function formatModels(runtime: Runtime, state: TuiState, provider?: string): str
   if (providers.length === 0) {
     lines.push("No models registered. Use /connect to set up a provider.")
   }
-  lines.push("Tip: Set DEEPSEEK_MODEL_OVERRIDE=<model-id> to switch model (restart required).")
+  lines.push("Tip: 在 TUI 中运行 /models 可直接选择模型并保存 API key。")
   return lines.join("\n")
 }
 
@@ -199,11 +203,22 @@ export function dispatchTuiCommand(input: string, context: TuiCommandContext): T
       context.addSystemMessage(formatPatchStatus(state))
       return "handled"
     case "models":
-      context.addSystemMessage(formatModels(context.runtime, state, arg))
+      context.openModels(arg)
       return "handled"
     case "connect":
-      context.addSystemMessage(formatConnect(context.runtime, arg))
+      context.openModels(arg)
       return "handled"
+    case "effort": {
+      const value = arg
+      if (value === "auto" || value === "high" || value === "max") {
+        context.setThinkEffort(value)
+      } else if (value) {
+        context.addSystemMessage(`推理深度只支持 auto / high / max。当前输入：${value}`)
+      } else {
+        context.openEffort()
+      }
+      return "handled"
+    }
     case "status":
       context.addSystemMessage(formatStatus(state))
       return "handled"

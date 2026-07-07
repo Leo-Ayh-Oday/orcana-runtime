@@ -151,6 +151,7 @@ const ALL_MOUSE_MODES = [
   "?1003", // DEC 1003 — 任意移动追踪
   "?1005", // DEC 1005 — UTF-8 坐标编码
   "?1006", // DEC 1006 — SGR 坐标编码
+  "?1007", // alternate scroll — 滚轮转方向键，不启用点击/拖拽追踪
   "?1015", // urxvt — urxvt 坐标编码
 ] as const
 
@@ -165,6 +166,11 @@ export function enableMouseMode(): void {
 /** 禁用全部常见鼠标模式。 */
 export function disableMouseMode(): void {
   process.stdout.write(ALL_MOUSE_MODES.map(m => `\x1B[${m}l`).join(""))
+}
+
+/** 启用终端原生 alternate scroll，不开启点击/拖拽 mouse reporting。 */
+export function enableAlternateScrollMode(): void {
+  process.stdout.write("\x1B[?1007h")
 }
 
 // ── 跨 chunk 边界处理 ──

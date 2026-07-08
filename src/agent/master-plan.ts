@@ -10,7 +10,6 @@
  *  prefix cache stability.
  *
  *  Remaining gaps for v1.0:
- *    - Node→ModeContract auto-transition (shouldTransitionMode still stub)
  *    - Node→PatchTransaction→EvidenceLedger→Completion single path (partially wired)
  *
  *  Inspired by MiMo Code's task registry + checkpoint §4 integration:

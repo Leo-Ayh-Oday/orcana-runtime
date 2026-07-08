@@ -414,6 +414,23 @@ export async function* agentLoop(
   // ── Context Epoch (PR 4): four-layer context architecture ──
   const epochState = createEpochState()
 
+  const syncModeWithMasterPlan = (): void => {
+    if (!masterPlan) return
+    const activeNode = currentNode(masterPlan)
+    const transitionCtx: ModeTransitionContext = {
+      activeNodeStatus: activeNode?.status,
+      hasTrackerSteps: (activeNode?.tracker?.steps?.length ?? 0) > 0,
+      rippleObligationCount: pendingRippleObligations.length,
+      hasEvidence: evidenceLedger.entries.length > 0,
+      toolErrors: errorTracker.errorCount,
+      planComplete: planComplete(masterPlan),
+    }
+    const newMode = shouldTransitionMode(getActiveMode().mode, transitionCtx)
+    if (newMode) {
+      setActiveMode(newMode)
+    }
+  }
+
   // ── MasterPlan: activate from planning artifact ──
   const activateMasterPlan = (planText: string, goal: string, forcePassPacket?: TaskPacket): boolean => {
     // PR 3: if force-passed with a minimal viable packet, use it directly
@@ -440,6 +457,7 @@ export async function* agentLoop(
           nodeId: cur.id,
         })
       }
+      syncModeWithMasterPlan()
       return true
     }
 
@@ -472,6 +490,7 @@ export async function* agentLoop(
         nodeId: cur.id,
       })
     }
+    syncModeWithMasterPlan()
     return true
   }
 
@@ -489,6 +508,7 @@ export async function* agentLoop(
       ? `${review.promptText.slice(0, 1600)}\n\n${validationText}`
       : review.promptText.slice(0, 2000)
     rawMessages.push({ role: "user" as const, content: fullPrompt })
+    syncModeWithMasterPlan()
     if (planComplete(masterPlan)) return false
     // Blocked nodes still need model review — continue even when !review.resume
     if (review.remaining === 0) return false
@@ -505,21 +525,17 @@ export async function* agentLoop(
         })
       }
     }
-    // PR-2.2: auto-transition mode based on new node status
-    const activeNode = currentNode(masterPlan)
-    const transitionCtx: ModeTransitionContext = {
-      activeNodeStatus: activeNode?.status,
-      hasTrackerSteps: (activeNode?.tracker?.steps?.length ?? 0) > 0,
-      rippleObligationCount: pendingRippleObligations?.length ?? 0,
-      hasEvidence: evidenceLedger ? evidenceLedger.entries.length > 0 : false,
-      toolErrors: errorTracker?.errorCount ?? 0,
-      planComplete: planComplete(masterPlan),
-    }
-    const newMode = shouldTransitionMode(getActiveMode().mode, transitionCtx)
-    if (newMode) {
-      setActiveMode(newMode)
-    }
+    syncModeWithMasterPlan()
     return true
+  }
+
+  if (planApproved && options.planText && taskTracker) {
+    markPlanAccepted(taskTracker)
+    if (activateMasterPlan(options.planText, taskTracker.goal)) {
+      yield { type: "status", data: `master-plan: ${planProgress(masterPlan!)} nodes` }
+    }
+    yield { type: "status", data: "任务追踪: 用户已确认规划，进入执行阶段" }
+    planApproved = false
   }
 
   let finalRound = 0 // PR-7.2: tracked for Stop hook outside loop scope
@@ -977,6 +993,7 @@ export async function* agentLoop(
         runTrace: options.runTrace,
         gateTelemetry,
         recentTurns: collectRecentTurns(rawMessages, 6),
+        approvedPlanText: options.planText,
       })
 
       // Apply orchestrator side effects

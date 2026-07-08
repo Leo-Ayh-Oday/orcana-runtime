@@ -9,6 +9,7 @@ import type { AgentRunTrace } from "../src/agent/run-trace"
 import type { RippleReport } from "../src/ripple/types"
 import { buildTools, Result } from "../src/tools/registry"
 import { HookSystem } from "../src/hooks"
+import { getActiveMode } from "../src/agent/mode-contract"
 
 // Disable FlashTriage in integration tests: mock LLM providers don't model triage calls,
 // and FlashTriage is independently tested in src/agent/flash-triage.test.ts.
@@ -416,6 +417,24 @@ class LongTaskCompleteThenFinalProvider implements LLMProvider {
       return
     }
     yield { type: "text", data: "Completed the full-stack blog with verified frontend and backend." }
+  }
+}
+
+class ApprovedSingleNodePlanProvider implements LLMProvider {
+  rounds = 0
+
+  async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    const round = this.rounds++
+    if (round === 0) {
+      yield { type: "text", data: "Plan approved. I will execute the provided plan." }
+      return
+    }
+    if (round === 1) {
+      yield { type: "tool_call", data: { id: "write-ok", name: "write_file", input: { path: "src/ok.ts" } } }
+      yield { type: "tool_call", data: { id: "typecheck", name: "typecheck", input: {} } }
+      return
+    }
+    yield { type: "text", data: "Done. Updated src/ok.ts and typecheck passed." }
   }
 }
 
@@ -1602,6 +1621,65 @@ describe("Agent loop greedy tool execution", () => {
       // External completion gate: task complete with verified output or blocked with missing evidence
       expect(finalText.length).toBeGreaterThan(0)
       expect(trace.events.some(event => event.type === "gate_decision" && JSON.stringify(event.data).includes("external_completion"))).toBe(true)
+    })
+  })
+
+  test("completed MasterPlan synchronizes ModeContract to report mode", async () => {
+    await withTempCwd(async () => {
+      const provider = new ApprovedSingleNodePlanProvider()
+      const tools = buildTools(
+        {
+          name: "write_file",
+          description: "fake write",
+          isReadonly: false,
+          inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+          execute(params) {
+            const path = String(params.path)
+            const fullPath = resolve(process.cwd(), path)
+            mkdirSync(dirname(fullPath), { recursive: true })
+            writeFileSync(fullPath, "export const ok = true\n")
+            return Result.ok(`wrote ${path}`, { path })
+          },
+        },
+        {
+          name: "typecheck",
+          description: "fake typecheck",
+          isReadonly: true,
+          inputSchema: { type: "object", properties: {} },
+          execute() {
+            return Result.ok("typecheck passed", {
+              verification: {
+                kind: "typecheck",
+                command: "typecheck",
+                passed: true,
+                issues: 0,
+                durationMs: 1,
+                summary: "ok",
+                exitCode: 0,
+              },
+            })
+          },
+        },
+      )
+      const events: StreamEvent[] = []
+
+      for await (const event of agentLoop("Build a complete full-stack personal blog with React, API, tests, and build verification", {
+        provider,
+        model: "test",
+        tools,
+        maxRounds: 3,
+        initialPlanState: "approved",
+        planText: "1. Update src/ok.ts and run typecheck",
+        conversationHistory: [
+          { role: "user", content: "Build a full-stack personal blog with React/Vite, Bun API, tests, responsive design, and build verification." },
+          { role: "assistant", content: "[clarification-gate]\n## 需求确认" },
+        ],
+      })) {
+        events.push(event)
+      }
+
+      expect(events.length).toBeGreaterThan(0)
+      expect(getActiveMode().mode).toBe("report")
     })
   })
 

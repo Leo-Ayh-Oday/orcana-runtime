@@ -4,6 +4,9 @@ import {
   isFilePath,
   buildPacketFromLine,
   createTaskTrackerFromPacket,
+  parseTaskPacketJson,
+  validateTaskPacketJsonShape,
+  TASK_PACKET_JSON_SCHEMA,
   DEFAULT_RIPPLE,
   DEFAULT_BUDGET,
   type TaskPacket,
@@ -201,6 +204,82 @@ describe("buildPacketFromLine", () => {
     expect(packet.doneCriteria).toHaveLength(3)
     expect(packet.doneCriteria.some(c => c.includes("类型检查"))).toBe(true)
     expect(packet.doneCriteria.some(c => c.includes("测试"))).toBe(true)
+  })
+})
+
+// ── TaskPacket JSON schema ──
+
+describe("TaskPacket JSON schema", () => {
+  test("exports a strict JSON schema for structured model output", () => {
+    expect(TASK_PACKET_JSON_SCHEMA.type).toBe("object")
+    expect(TASK_PACKET_JSON_SCHEMA.additionalProperties).toBe(false)
+    expect(TASK_PACKET_JSON_SCHEMA.required).toContain("taskId")
+    expect(TASK_PACKET_JSON_SCHEMA.required).toContain("verification")
+    const verification = TASK_PACKET_JSON_SCHEMA.properties.verification
+    expect(verification.items.properties.kind.enum).toContain("typecheck")
+  })
+
+  test("parses valid TaskPacket JSON into a typed packet", () => {
+    const raw = buildPacketFromLine({
+      title: "Update src/agent/task-packet.ts and run typecheck",
+      goal: "schema validation",
+      nodeId: "1",
+    })
+
+    const parsed = parseTaskPacketJson(raw)
+
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) {
+      expect(parsed.packet.taskId).toBe("task-1")
+      expect(parsed.packet.scope).toContain("src/agent/task-packet.ts")
+      expect(parsed.packet.verification[0]!.kind).toBe("typecheck")
+    }
+  })
+
+  test("rejects missing required fields before TaskPacket execution", () => {
+    const raw = {
+      taskId: "task-1",
+      nodeId: "1",
+      title: "T",
+      goal: "G",
+      scope: ["src/a.ts"],
+      doneCriteria: ["done"],
+      ripplePolicy: { ...DEFAULT_RIPPLE },
+      contextBudget: { ...DEFAULT_BUDGET },
+    }
+
+    const parsed = parseTaskPacketJson(raw)
+
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) {
+      expect(parsed.errors.join("\n")).toContain("TaskPacket.verification is required")
+    }
+  })
+
+  test("rejects wrong field types and extra properties", () => {
+    const raw = {
+      ...buildPacketFromLine({ title: "Update src/a.ts", goal: "G", nodeId: "1" }),
+      scope: "src/a.ts",
+      unexpected: true,
+    }
+
+    const errors = validateTaskPacketJsonShape(raw)
+
+    expect(errors.join("\n")).toContain("TaskPacket.scope must be an array")
+    expect(errors.join("\n")).toContain("TaskPacket.unexpected is not allowed")
+  })
+
+  test("rejects invalid verification kinds fail-closed", () => {
+    const raw = buildPacketFromLine({ title: "Update src/a.ts", goal: "G", nodeId: "1" }) as TaskPacket
+    raw.verification = [{ kind: "deploy" as TaskPacket["verification"][number]["kind"], description: "deploy" }]
+
+    const parsed = parseTaskPacketJson(raw)
+
+    expect(parsed.ok).toBe(false)
+    if (!parsed.ok) {
+      expect(parsed.errors.join("\n")).toContain("verification[0].kind")
+    }
+    expect(() => createTaskTrackerFromPacket(raw)).toThrow("TaskPacket validation failed")
   })
 })
 

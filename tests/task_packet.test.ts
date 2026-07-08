@@ -13,7 +13,7 @@ import {
   type ScopeExtraction,
 } from "../src/agent/task-packet"
 import { addNode, createMasterPlan, currentNode, revisePlan, serializePlan } from "../src/agent/master-plan"
-import { markPlanAccepted } from "../src/agent/task-tracker"
+import { markPlanAccepted, taskTrackerComplete, updateTaskTrackerAfterTools } from "../src/agent/task-tracker"
 
 // ── isFilePath ──
 
@@ -389,6 +389,33 @@ describe("createTaskTrackerFromPacket", () => {
     expect(verifySteps.length).toBe(2)
     expect(verifySteps[0]!.id).toBe("verify-typecheck")
     expect(verifySteps[1]!.id).toBe("verify-test")
+  })
+
+  test("packet-driven tracker marks scope and verification steps from tool results", () => {
+    const tracker = createTaskTrackerFromPacket(buildPacketFromLine({
+      title: "Update src/ok.ts and run typecheck",
+      goal: "G",
+      nodeId: "1",
+    }))
+
+    updateTaskTrackerAfterTools({
+      tracker,
+      changedFiles: ["src/ok.ts"],
+      toolNames: ["write_file", "typecheck"],
+      verificationResults: [{
+        kind: "typecheck",
+        command: "typecheck",
+        passed: true,
+        issues: 0,
+        durationMs: 1,
+        summary: "ok",
+      }],
+      skipLegacyStepIds: true,
+    })
+
+    expect(tracker.steps.find(step => step.id === "scope-1")?.status).toBe("done")
+    expect(tracker.steps.find(step => step.id === "verify-typecheck")?.status).toBe("done")
+    expect(taskTrackerComplete(tracker)).toBe(true)
   })
 })
 

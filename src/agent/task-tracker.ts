@@ -192,6 +192,10 @@ export function updateTaskTrackerAfterTools(input: {
     step.status = "done"
     step.evidence = evidence
   }
+  const hasChangedFile = (requiredFile: string) => {
+    const normalized = requiredFile.replace(/\\/g, "/")
+    return files.some(file => file === normalized || file.endsWith(`/${normalized}`))
+  }
 
   // Legacy step-ID matching — only meaningful for keyword-based trackers
   if (!input.skipLegacyStepIds) {
@@ -213,14 +217,26 @@ export function updateTaskTrackerAfterTools(input: {
     if (input.verificationPassed) {
       markDone("verification", "验证命令通过")
     }
+  } else {
+    tracker.requiredFiles.forEach((file, index) => {
+      if (hasChangedFile(file)) {
+        markDone(`scope-${index + 1}`, `已写入 ${file}`)
+      }
+    })
   }
 
   if (input.typecheckPassed) {
     tracker.verificationEvidence.typecheck = "typecheck passed"
+    if (input.skipLegacyStepIds) {
+      markDone("verify-typecheck", "类型检查通过")
+    }
   }
   for (const result of input.verificationResults ?? []) {
     if (result.passed) {
       tracker.verificationEvidence[result.kind] = `${verificationKindLabel(result.kind)} passed: ${result.command}`
+      if (input.skipLegacyStepIds) {
+        markDone(`verify-${result.kind}`, `${verificationKindLabel(result.kind)} passed: ${result.command}`)
+      }
     }
   }
   if (input.verificationPassed && tracker.requiredVerificationKinds.length === 0) {

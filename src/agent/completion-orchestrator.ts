@@ -72,6 +72,8 @@ export interface CompletionOrchestratorInput {
   gateTelemetry?: GateTelemetry
   /** Recent conversation turns for FlashJudge context. Computed in loop.ts. */
   recentTurns?: Array<{ role: string; content: string }>
+  /** Plan text previously approved by the user/UI and passed back into this run. */
+  approvedPlanText?: string
 }
 
 // ── Decision ──
@@ -215,6 +217,10 @@ export class CompletionOrchestrator {
     // Plan approved (user confirmed via UI)
     if (completionResult.reason === "semantic:planning_accepted") {
       out.planningRejections = 0
+      out.activateMasterPlan = {
+        planText: input.approvedPlanText ?? input.finalText,
+        goal: input.taskTracker!.goal,
+      }
       return { ...out, decision: "continue" }
     }
 

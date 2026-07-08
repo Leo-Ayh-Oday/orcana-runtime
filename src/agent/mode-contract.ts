@@ -8,9 +8,10 @@
  *
  *  "不拆 agent，但强制角色纪律"
  *
- *  Phase 1 known limitations:
- *    - Mode transitions not wired to MasterPlan node transitions (mode stays at AgentOptions.activeMode)
- *    - shouldTransitionMode is a stub returning null
+ *  Phase 2:
+ *    - MasterPlan node status, error cascades, ripple obligations, and plan completion
+ *      feed shouldTransitionMode() from loop.ts.
+ *    - AgentOptions.activeMode remains the initial mode override for explicit callers.
  */
 
 import type { EvidenceKind } from "./evidence-ledger"

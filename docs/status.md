@@ -1,6 +1,6 @@
 # Orcana Strong Single v1.0 Status Matrix
 
-Updated: 2026-07-07
+Updated: 2026-07-08
 
 This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is intentionally conservative: a module is `Done` only when the code, tests, and runtime wiring are present.
 
@@ -10,7 +10,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 |------|--------|------------------|-----|
 | Runtime bootstrap | Done | `src/runtime/bootstrap.ts`, shared CLI/TUI runtime assembly | Keep future UI entrypoints on this path |
 | Runtime event boundary | Partial | `src/runtime/event-bus.ts`, `src/runtime/controller.ts`, `tests/runtime_event_bus.test.ts` | Not yet the single control plane for all slash commands |
-| HookSystem 2.0 | Partial | `src/hooks/index.ts` accumulates warnings and supports lifecycle events | Exception handling and after-hook replacement chains still need dedicated regressions |
+| HookSystem 2.0 | Done | `src/hooks/index.ts` accumulates warnings, chains replacements, fail-closes handler exceptions, and supports lifecycle events | Keep future hook events on this shared implementation |
 | Default hooks | Partial | `src/hooks/defaults.ts` creates safety/write/journal hook stack; unread existing-file edits strict-block by default | Shell side-effect guard still lives in loop preflight, not a hook |
 | TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts` | TaskPacket JSON/Zod schema is not implemented |
 | ModeContract | Partial | `src/agent/mode-contract.ts`, `tests/mode_contract.test.ts` | Automatic MasterPlan mode transitions remain limited |
@@ -29,7 +29,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 |----|--------|-------|
 | PR-0.1 Status Matrix | Done | This document is the baseline status matrix. |
 | PR-0.2 Baseline CI | Partial | `.github/workflows/ci.yml` runs typecheck, tests, build; replay/core layering still needs work. |
-| PR-1.1 HookOutput semantics | Partial | `HookSystem` supports warning accumulation and block/replace priority. Needs dedicated regression coverage for exception handling and after-hook replacement chains. |
+| PR-1.1 HookOutput semantics | Done | `HookSystem` supports warning accumulation, block/replace priority, chained Pre/Post replacements, fail-closed handler exceptions, and dedicated regressions. |
 | PR-1.2 writeGuard before/after | Done | Default runtime hook stack strict-blocks unread existing-file edits and `multi_edit`; warn mode remains available as an explicit compatibility option. |
 | PR-1.3 CLI/TUI default hooks | Done | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Future CLI/TUI entrypoints should keep using runtime bootstrap instead of manual hook assembly. |
 | PR-2.x MasterPlan / TaskPacket / ModeContract | Partial | Core modules exist; schema-first TaskPacket and mode auto-flow are remaining work. |
@@ -48,6 +48,7 @@ These commands were used while creating this matrix:
 
 ```bash
 bun test tests/hooks_defaults.test.ts tests/safety_policy.test.ts tests/runtime_event_bus.test.ts
+bun test tests/hooks_system.test.ts
 bun test tests/runtime_model_config.test.ts tests/config/config-loader.test.ts
 bun run typecheck
 bun run build

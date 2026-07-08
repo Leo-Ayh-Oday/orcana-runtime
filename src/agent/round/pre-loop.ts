@@ -118,6 +118,7 @@ export async function runToolAfterHook(
 ): Promise<{ result: ToolResult; warnings: string[] }> {
   if (!hooks) return { result, warnings: [] }
   const output = await hooks.runAfter(tool, params, { success: result.success, content: result.content })
+  if (output.blocked) return { result: blockedByHookResult(tool, output.warnings.join("; ")), warnings: output.warnings }
   return { result: output.replaceResult ? normalizeHookResult(output.replaceResult, result) : result, warnings: output.warnings }
 }
 

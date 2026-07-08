@@ -18,7 +18,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PatchTransaction / Rewind | Partial | `src/agent/patch-transaction.ts`, `src/agent/rewind.ts`, related tests | Rewind UX and transaction evidence binding need hardening |
 | Tool risk / Permission | Partial | `src/agent/tool-risk.ts`, `src/agent/permission.ts`, `tests/tool_policy.test.ts` | Permission UX is not yet complete for all high-risk flows |
 | Provider / ModelRouter | Partial | `src/provider/router.ts`, `src/provider/capabilities.ts`, runtime model config tests | All model calls need complete purpose/cost trace coverage |
-| Replay harness | Partial | `src/agent/replay-harness.ts`, `tests/replay_harness.test.ts`, replay fixtures | Core 50 and CI layering are not complete |
+| Replay harness | Partial | `src/agent/replay-harness.ts`, `tests/replay_harness.test.ts`, 70 deterministic replay fixtures, CI core gate | E2E replay and mini benchmark are not complete |
 | TUI / CLI operator UX | Partial | TUI tests, command dispatcher, command shelf, composer, runtime panels | Plan approval and evidence report UX still need completion checks |
 | Observability | Partial | `AgentRunTrace`, gate telemetry, runtime panels | RunTrace event taxonomy is not fully standardized |
 | Docs / release | Planned | `README.md`, `ARCHITECTURE.md`, `SECURITY.md` exist | v1.0 architecture/status/security docs need synchronization |
@@ -28,7 +28,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR | Status | Notes |
 |----|--------|-------|
 | PR-0.1 Status Matrix | Done | This document is the baseline status matrix. |
-| PR-0.2 Baseline CI | Partial | `.github/workflows/ci.yml` runs typecheck, tests, build; replay/core layering still needs work. |
+| PR-0.2 Baseline CI | Done | CI is split into `typecheck`, `core`, `test`, and `build`; `test:core` runs hook/runtime plus 70-case replay gates. |
 | PR-1.1 HookOutput semantics | Done | `HookSystem` supports warning accumulation, block/replace priority, chained Pre/Post replacements, fail-closed handler exceptions, and dedicated regressions. |
 | PR-1.2 writeGuard before/after | Done | Default runtime hook stack strict-blocks unread existing-file edits and `multi_edit`; warn mode remains available as an explicit compatibility option. |
 | PR-1.3 CLI/TUI default hooks | Done | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Future CLI/TUI entrypoints should keep using runtime bootstrap instead of manual hook assembly. |
@@ -37,7 +37,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-4.x Patch / Rewind | Partial | State machine and rewind modules exist; end-user rewind flows and evidence binding remain incomplete. |
 | PR-5.x Safety | Partial | Tool risk, permission, side-effect, redaction, and sandbox capability exist in pieces. Need unified UX. |
 | PR-6.x Provider | Partial | Model routing and capabilities exist; structured output and transcript manager need complete enforcement coverage. |
-| PR-7.x Replay / CI | Partial | 30-case replay exists; Core 50, mini benchmark, and CI split remain planned. |
+| PR-7.x Replay / CI | Partial | 70-case deterministic replay exists and CI has a core gate; E2E replay and mini benchmark remain planned. |
 | PR-8.x TUI / CLI | Partial | Large TUI surface exists and has high targeted test coverage; final plan/evidence UX still needs acceptance gates. |
 | PR-9.x Observability | Planned | Gate/runtime telemetry exists, but a standard event taxonomy and failure taxonomy report are not complete. |
 | PR-10.x Docs / Release | Planned | Update architecture, roadmap, security, and `orcana doctor` after the runtime gates are stable. |
@@ -49,6 +49,8 @@ These commands were used while creating this matrix:
 ```bash
 bun test tests/hooks_defaults.test.ts tests/safety_policy.test.ts tests/runtime_event_bus.test.ts
 bun test tests/hooks_system.test.ts
+bun run test:core
+bun run test:replay
 bun test tests/runtime_model_config.test.ts tests/config/config-loader.test.ts
 bun run typecheck
 bun run build

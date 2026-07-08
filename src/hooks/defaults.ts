@@ -1,6 +1,7 @@
 import { HookSystem } from "./index"
 import { createWriteGuardBefore, createWriteGuardAfter, createJournalGuard, type WriteGuardMode } from "./builtin"
 import { createSafetyPolicyHook } from "./safety-policy"
+import { createSideEffectPolicyHook } from "./side-effect-policy"
 
 export interface DefaultHookSystemOptions {
   projectRoot: string
@@ -16,6 +17,9 @@ export function createDefaultHookSystem(options: DefaultHookSystemOptions): Hook
   hooks.onToolBefore(createSafetyPolicyHook({
     projectRoot: options.projectRoot,
     allowOutsideProject: options.allowOutsideProject,
+  }))
+  hooks.onToolBefore(createSideEffectPolicyHook({
+    projectRoot: options.projectRoot,
   }))
   hooks.onToolBefore(createWriteGuardBefore({
     cwd: options.projectRoot,

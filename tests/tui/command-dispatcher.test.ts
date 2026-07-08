@@ -50,6 +50,18 @@ describe("dispatchTuiCommand", () => {
     expect(messages[0]).toContain("not available while the agent is running")
   })
 
+  test("uses runtime command aliases for local TUI commands", () => {
+    let openedProvider: string | undefined
+    const { context } = createContext({
+      openModels: provider => {
+        openedProvider = provider
+      },
+    })
+
+    expect(dispatchTuiCommand("/model deepseek", context)).toBe("handled")
+    expect(openedProvider).toBe("deepseek")
+  })
+
   test("/status emits local runtime status", () => {
     const { context, messages } = createContext()
     expect(dispatchTuiCommand("/status", context)).toBe("handled")

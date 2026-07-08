@@ -5,7 +5,8 @@ import { StreamEventAdapter } from "../state/event-adapter"
 import { TuiStore } from "../state/tui-store"
 import type { TuiState } from "../state/types"
 import { selectEvidenceSummary, selectGateSummary } from "../state/selectors"
-import { commandExists, formatHelpText, isSafeConcurrent } from "./registry"
+import { resolveRuntimeControlIntent } from "../../runtime/control-plane"
+import { COMMANDS, formatHelpText } from "./registry"
 
 type ModelHistoryRole = "user" | "assistant"
 
@@ -24,17 +25,6 @@ export interface TuiCommandContext {
 }
 
 export type TuiCommandDispatchResult = "handled" | "pass_to_agent" | "not_command"
-
-function commandName(input: string): string | undefined {
-  const command = input.trim()
-  if (!command.startsWith("/")) return undefined
-  return command.slice(1).split(/\s+/, 1)[0] ?? ""
-}
-
-function commandArg(input: string): string | undefined {
-  const parts = input.trim().slice(1).split(/\s+/)
-  return parts[1]?.trim() || undefined
-}
 
 function formatRippleStatus(state: TuiState): string {
   if (state.rippleFindings.length === 0) {
@@ -160,17 +150,17 @@ function formatStatus(state: TuiState): string {
 }
 
 export function dispatchTuiCommand(input: string, context: TuiCommandContext): TuiCommandDispatchResult {
-  const name = commandName(input)
-  if (name === undefined) return "not_command"
-  if (!commandExists(name)) return "pass_to_agent"
-
-  if (context.isRunning() && !isSafeConcurrent(name)) {
-    context.addSystemMessage(`Command /${name} is not available while the agent is running. Wait for it to finish or use /status to check progress.`)
+  const intent = resolveRuntimeControlIntent(input, COMMANDS, { isRunning: context.isRunning() })
+  if (intent.kind === "agent_prompt" || intent.kind === "empty") return "not_command"
+  if (intent.kind === "unknown_command") return "pass_to_agent"
+  if (intent.kind === "blocked_command") {
+    context.addSystemMessage(`${intent.reason} Wait for it to finish or use /status to check progress.`)
     return "handled"
   }
 
   const state = context.store.getState()
-  const arg = commandArg(input)
+  const name = intent.canonicalName
+  const arg = intent.argv[0]
 
   switch (name) {
     case "exit":

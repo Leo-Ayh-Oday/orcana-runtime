@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { parseRuntimeInput, resolveRuntimeControlIntent } from "../src/runtime/control-plane"
 import { RuntimeController } from "../src/runtime/controller"
 import { RuntimeEventBus } from "../src/runtime/event-bus"
 import type { RuntimeEvent } from "../src/runtime/events"
@@ -127,6 +128,56 @@ describe("RuntimeController", () => {
     expect(controller.eventBus.getHistory()).toEqual([])
   })
 
+  test("command catalog resolves local slash command metadata", () => {
+    const controller = new RuntimeController({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      commandCatalog: [{ name: "status", safeConcurrent: true }],
+    })
+
+    const result = controller.handleIntent({ type: "slash_command", raw: "/status now" })
+
+    expect(result.action).toBe("local_command")
+    expect(result.controlIntent).toMatchObject({
+      kind: "local_command",
+      name: "status",
+      canonicalName: "status",
+      argsText: "now",
+      argv: ["now"],
+    })
+  })
+
+  test("unknown catalog slash command is routed as an agent request", () => {
+    const controller = new RuntimeController({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      commandCatalog: [{ name: "status", safeConcurrent: true }],
+      now: () => 7,
+    })
+
+    const result = controller.handleIntent({ type: "slash_command", raw: "/custom do this" })
+
+    expect(result.action).toBe("agent_request")
+    expect(result.status).toBe("planning")
+    expect(result.controlIntent).toMatchObject({ kind: "unknown_command", name: "custom" })
+  })
+
+  test("running controller blocks unsafe catalog slash command", () => {
+    const controller = new RuntimeController({
+      sessionId: "s1",
+      repoRoot: "E:/repo",
+      commandCatalog: [{ name: "clear" }],
+      now: () => 1,
+    })
+
+    controller.setStatus("running")
+    const result = controller.handleIntent({ type: "slash_command", raw: "/clear" })
+
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe("running")
+    expect(result.controlIntent).toMatchObject({ kind: "blocked_command", name: "clear" })
+  })
+
   test("interrupt moves runtime to blocked status", () => {
     const controller = new RuntimeController({
       sessionId: "s1",
@@ -140,6 +191,36 @@ describe("RuntimeController", () => {
     expect(controller.eventBus.getHistory()).toEqual([
       { type: "session.status", status: "blocked", timestamp: 5 },
     ])
+  })
+})
+
+describe("Runtime control plane", () => {
+  test("parses prompts, empty input, and slash command args", () => {
+    expect(parseRuntimeInput("  fix the test  ")).toEqual({
+      kind: "prompt",
+      raw: "  fix the test  ",
+      text: "fix the test",
+    })
+    expect(parseRuntimeInput("   ")).toEqual({ kind: "empty", raw: "   " })
+    expect(parseRuntimeInput('/search "failing test" --limit 3')).toEqual({
+      kind: "slash_command",
+      raw: '/search "failing test" --limit 3',
+      name: "search",
+      argsText: '"failing test" --limit 3',
+      argv: ["failing test", "--limit", "3"],
+    })
+  })
+
+  test("resolves aliases and safe concurrent commands", () => {
+    expect(resolveRuntimeControlIntent("/model deepseek", [
+      { name: "models", aliases: ["model"], safeConcurrent: true },
+    ], { isRunning: true })).toMatchObject({
+      kind: "local_command",
+      name: "model",
+      canonicalName: "models",
+      safeConcurrent: true,
+      argv: ["deepseek"],
+    })
   })
 })
 

@@ -459,7 +459,7 @@ export function validateTaskPacket(packet: TaskPacket): ValidationReport {
     if (!v.kind) {
       issues.push({ severity: "error", nodeId: packet.nodeId, message: `"${packet.title}" verification 缺少 kind`, check: "packet.verification" })
     } else if (!VALID_VERIFICATION_KINDS.has(v.kind)) {
-      issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" verification kind 无效: ${v.kind}`, check: "packet.verification" })
+      issues.push({ severity: "error", nodeId: packet.nodeId, message: `"${packet.title}" verification kind 无效: ${v.kind}`, check: "packet.verification" })
     }
     if (!v.description || !v.description.trim()) {
       issues.push({ severity: "warn", nodeId: packet.nodeId, message: `"${packet.title}" verification "${v.kind}" 缺少 description`, check: "packet.verification" })

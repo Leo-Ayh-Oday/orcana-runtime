@@ -18,6 +18,8 @@ import { validateTaskPacket } from "./plan-validator"
 
 // ── TaskPacket types ──
 
+export const TASK_PACKET_VERIFICATION_KINDS = ["typecheck", "test", "build", "lint", "smoke", "unknown"] as const satisfies readonly VerificationKind[]
+
 export interface TaskPacket {
   taskId: string
   nodeId: string
@@ -73,6 +75,220 @@ export const DEFAULT_BUDGET: ContextBudget = {
   maxToolsPerNode: 20,
   maxRoundsPerNode: 8,
   estimatedTokens: 50_000,
+}
+
+export const TASK_PACKET_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "taskId",
+    "nodeId",
+    "title",
+    "goal",
+    "scope",
+    "doneCriteria",
+    "verification",
+    "ripplePolicy",
+    "contextBudget",
+  ],
+  properties: {
+    taskId: { type: "string", minLength: 1 },
+    nodeId: { type: "string", minLength: 1 },
+    title: { type: "string", minLength: 1 },
+    goal: { type: "string", minLength: 1 },
+    contextMapId: { type: "string", minLength: 1 },
+    requiredContextEvidence: { type: "array", items: { type: "string", minLength: 1 } },
+    scope: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    doneCriteria: { type: "array", items: { type: "string", minLength: 1 } },
+    verification: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "description"],
+        properties: {
+          kind: { type: "string", enum: TASK_PACKET_VERIFICATION_KINDS },
+          command: { type: "string" },
+          description: { type: "string", minLength: 1 },
+        },
+      },
+    },
+    ripplePolicy: {
+      type: "object",
+      additionalProperties: false,
+      required: ["autoPropagate", "requireEvidence", "maxRetries"],
+      properties: {
+        autoPropagate: { type: "boolean" },
+        requireEvidence: { type: "boolean" },
+        maxRetries: { type: "number", minimum: 0 },
+      },
+    },
+    contextBudget: {
+      type: "object",
+      additionalProperties: false,
+      required: ["maxToolsPerNode", "maxRoundsPerNode", "estimatedTokens"],
+      properties: {
+        maxToolsPerNode: { type: "number", minimum: 1 },
+        maxRoundsPerNode: { type: "number", minimum: 1 },
+        estimatedTokens: { type: "number", minimum: 1 },
+      },
+    },
+  },
+} as const
+
+export const TASK_PACKET_SCHEMA = TASK_PACKET_JSON_SCHEMA
+
+export type TaskPacketJsonParseResult =
+  | { ok: true; packet: TaskPacket }
+  | { ok: false; errors: string[] }
+
+const TASK_PACKET_REQUIRED_KEYS = TASK_PACKET_JSON_SCHEMA.required
+const TASK_PACKET_ALLOWED_KEYS = new Set(Object.keys(TASK_PACKET_JSON_SCHEMA.properties))
+
+export function parseTaskPacketJson(input: unknown): TaskPacketJsonParseResult {
+  const errors = validateTaskPacketJsonShape(input)
+  if (errors.length > 0) return { ok: false, errors }
+
+  const packet = input as TaskPacket
+  const semantic = validateTaskPacket(packet)
+  if (semantic.errors.length > 0) {
+    return { ok: false, errors: semantic.errors.map(issue => issue.message) }
+  }
+
+  return { ok: true, packet }
+}
+
+export function validateTaskPacketJsonShape(input: unknown): string[] {
+  const errors: string[] = []
+  if (!isPlainRecord(input)) return ["TaskPacket must be a JSON object"]
+
+  for (const key of TASK_PACKET_REQUIRED_KEYS) {
+    if (!(key in input)) errors.push(`TaskPacket.${key} is required`)
+  }
+  for (const key of Object.keys(input)) {
+    if (!TASK_PACKET_ALLOWED_KEYS.has(key)) errors.push(`TaskPacket.${key} is not allowed`)
+  }
+
+  requireNonEmptyString(input, "taskId", errors)
+  requireNonEmptyString(input, "nodeId", errors)
+  requireNonEmptyString(input, "title", errors)
+  requireNonEmptyString(input, "goal", errors)
+  optionalNonEmptyString(input, "contextMapId", errors)
+  optionalStringArray(input, "requiredContextEvidence", errors)
+  requireStringArray(input, "scope", errors, { minItems: 1 })
+  requireStringArray(input, "doneCriteria", errors)
+  validateVerificationArray(input.verification, errors)
+  validateRipplePolicy(input.ripplePolicy, errors)
+  validateContextBudget(input.contextBudget, errors)
+
+  return errors
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function requireNonEmptyString(obj: Record<string, unknown>, key: string, errors: string[]): void {
+  const value = obj[key]
+  if (typeof value !== "string" || !value.trim()) errors.push(`TaskPacket.${key} must be a non-empty string`)
+}
+
+function optionalNonEmptyString(obj: Record<string, unknown>, key: string, errors: string[]): void {
+  if (!(key in obj) || obj[key] === undefined) return
+  const value = obj[key]
+  if (typeof value !== "string" || !value.trim()) errors.push(`TaskPacket.${key} must be a non-empty string when provided`)
+}
+
+function optionalStringArray(obj: Record<string, unknown>, key: string, errors: string[]): void {
+  if (!(key in obj) || obj[key] === undefined) return
+  validateStringArrayValue(obj[key], `TaskPacket.${key}`, errors)
+}
+
+function requireStringArray(
+  obj: Record<string, unknown>,
+  key: string,
+  errors: string[],
+  options: { minItems?: number } = {},
+): void {
+  validateStringArrayValue(obj[key], `TaskPacket.${key}`, errors, options)
+}
+
+function validateStringArrayValue(
+  value: unknown,
+  label: string,
+  errors: string[],
+  options: { minItems?: number } = {},
+): void {
+  if (!Array.isArray(value)) {
+    errors.push(`${label} must be an array`)
+    return
+  }
+  if (options.minItems !== undefined && value.length < options.minItems) {
+    errors.push(`${label} must contain at least ${options.minItems} item(s)`)
+  }
+  value.forEach((item, index) => {
+    if (typeof item !== "string" || !item.trim()) errors.push(`${label}[${index}] must be a non-empty string`)
+  })
+}
+
+function validateVerificationArray(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push("TaskPacket.verification must be an array")
+    return
+  }
+  if (value.length === 0) errors.push("TaskPacket.verification must contain at least 1 item(s)")
+  value.forEach((item, index) => {
+    const label = `TaskPacket.verification[${index}]`
+    if (!isPlainRecord(item)) {
+      errors.push(`${label} must be an object`)
+      return
+    }
+    const allowed = new Set(["kind", "command", "description"])
+    for (const key of Object.keys(item)) {
+      if (!allowed.has(key)) errors.push(`${label}.${key} is not allowed`)
+    }
+    if (typeof item.kind !== "string" || !TASK_PACKET_VERIFICATION_KINDS.includes(item.kind as VerificationKind)) {
+      errors.push(`${label}.kind must be one of ${TASK_PACKET_VERIFICATION_KINDS.join(", ")}`)
+    }
+    if ("command" in item && item.command !== undefined && typeof item.command !== "string") {
+      errors.push(`${label}.command must be a string when provided`)
+    }
+    if (typeof item.description !== "string" || !item.description.trim()) {
+      errors.push(`${label}.description must be a non-empty string`)
+    }
+  })
+}
+
+function validateRipplePolicy(value: unknown, errors: string[]): void {
+  if (!isPlainRecord(value)) {
+    errors.push("TaskPacket.ripplePolicy must be an object")
+    return
+  }
+  const allowed = new Set(["autoPropagate", "requireEvidence", "maxRetries"])
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) errors.push(`TaskPacket.ripplePolicy.${key} is not allowed`)
+  }
+  if (typeof value.autoPropagate !== "boolean") errors.push("TaskPacket.ripplePolicy.autoPropagate must be a boolean")
+  if (typeof value.requireEvidence !== "boolean") errors.push("TaskPacket.ripplePolicy.requireEvidence must be a boolean")
+  if (typeof value.maxRetries !== "number" || value.maxRetries < 0) {
+    errors.push("TaskPacket.ripplePolicy.maxRetries must be a number >= 0")
+  }
+}
+
+function validateContextBudget(value: unknown, errors: string[]): void {
+  if (!isPlainRecord(value)) {
+    errors.push("TaskPacket.contextBudget must be an object")
+    return
+  }
+  const allowed = new Set(["maxToolsPerNode", "maxRoundsPerNode", "estimatedTokens"])
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) errors.push(`TaskPacket.contextBudget.${key} is not allowed`)
+  }
+  for (const key of allowed) {
+    const v = value[key]
+    if (typeof v !== "number" || v <= 0) errors.push(`TaskPacket.contextBudget.${key} must be a number > 0`)
+  }
 }
 
 // ── Scope extraction (heuristic — replaced by model-structured output in PR 8) ──

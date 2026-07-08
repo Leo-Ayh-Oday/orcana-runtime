@@ -11,7 +11,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | Runtime bootstrap | Done | `src/runtime/bootstrap.ts`, shared CLI/TUI runtime assembly | Keep future UI entrypoints on this path |
 | Runtime event boundary | Partial | `src/runtime/event-bus.ts`, `src/runtime/controller.ts`, `src/runtime/control-plane.ts`, `tests/runtime_event_bus.test.ts` | Slash parsing/resolution is shared; command execution still needs full CLI/TUI runtime controller wiring |
 | HookSystem 2.0 | Done | `src/hooks/index.ts` accumulates warnings, chains replacements, fail-closes handler exceptions, and supports lifecycle events | Keep future hook events on this shared implementation |
-| Default hooks | Partial | `src/hooks/defaults.ts` creates safety/write/journal hook stack; unread existing-file edits strict-block by default | Shell side-effect guard still lives in loop preflight, not a hook |
+| Default hooks | Done | `src/hooks/defaults.ts` creates safety, side-effect, write, and journal hook stack; unread existing-file edits strict-block by default | Keep future runtime safety policies on the default hook stack |
 | TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts` | TaskPacket JSON/Zod schema is not implemented |
 | ModeContract | Partial | `src/agent/mode-contract.ts`, `tests/mode_contract.test.ts` | Automatic MasterPlan mode transitions remain limited |
 | Completion / Evidence | Partial | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts` | Final truthfulness is not yet a fully enforced single path |
@@ -33,6 +33,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-1.1 HookOutput semantics | Done | `HookSystem` supports warning accumulation, block/replace priority, chained Pre/Post replacements, fail-closed handler exceptions, and dedicated regressions. |
 | PR-1.2 writeGuard before/after | Done | Default runtime hook stack strict-blocks unread existing-file edits and `multi_edit`; warn mode remains available as an explicit compatibility option. |
 | PR-1.3 CLI/TUI default hooks | Done | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Future CLI/TUI entrypoints should keep using runtime bootstrap instead of manual hook assembly. |
+| PR-1.4 Side-effect policy hook | Done | Shell side-effect detection now runs through `hooks:side-effect-policy` in the default hook stack instead of ad hoc loop preflight code. |
 | PR-2.x MasterPlan / TaskPacket / ModeContract | Partial | Core modules exist; schema-first TaskPacket and mode auto-flow are remaining work. |
 | PR-3.x Completion / Evidence | Partial | Orchestrator and ledger exist; final truthfulness must be tightened around evidence claims. |
 | PR-4.x Patch / Rewind | Partial | State machine and rewind modules exist; end-user rewind flows and evidence binding remain incomplete. |

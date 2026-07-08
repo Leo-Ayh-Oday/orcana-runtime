@@ -277,9 +277,9 @@ describe("ShellSideEffectGuard: detection coverage", () => {
     expect(analyzeSideEffects("npm install @foo/bar", "/proj").findings.length).toBe(0)
   })
 
-  test("✅ GAP FIXED: module wired to loop.ts (v0.3.0)", () => {
-    // PR-5.3 wiring: analyzeSideEffects called pre-execution (danger→block) + post-execution (warning→inject)
-    console.log("  ShellSideEffectGuard: 18 patterns, 29 tests, 2 wire-points in loop.ts ✓")
+  test("✅ GAP FIXED: module wired through default hooks", () => {
+    // PR-1.4 wiring: analyzeSideEffects is owned by hooks:side-effect-policy.
+    console.log("  ShellSideEffectGuard: 18 patterns, default hook-stack wiring ✓")
   })
 })
 
@@ -362,11 +362,11 @@ describe("Summary: real gate counts", () => {
 // ════════════════════════════════════════════
 
 describe("Gap Report", () => {
-  test("P0 FIXED: ShellSideEffectGuard wired to loop.ts (v0.3.0)", () => {
+  test("P0 FIXED: ShellSideEffectGuard wired to default hooks", () => {
     console.log("  ✅ Module: 18 patterns, 29 tests, functional")
-    console.log("  ✅ WIRING: analyzeSideEffects called pre-execution + post-execution in loop.ts")
-    console.log("     - Pre-execution: danger severity → blocked before shell runs")
-    console.log("     - Post-execution: warning severity → report injected into tool result")
+    console.log("  ✅ WIRING: hooks:side-effect-policy is part of createDefaultHookSystem")
+    console.log("     - danger severity → blocked before shell runs")
+    console.log("     - warning severity → appended as hook warning")
   })
   test("P1: classifyIntent keyword fallback — 2 bugs fixed, semantic now primary", () => {
     console.log("  1. '帮我设计X，不需要实现' → readonly ✅ (negation pattern added to NO_WRITE)")

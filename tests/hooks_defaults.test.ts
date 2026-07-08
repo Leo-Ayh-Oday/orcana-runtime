@@ -15,10 +15,10 @@ describe("createDefaultHookSystem", () => {
     try {
       const hooks = createDefaultHookSystem({ projectRoot: repo })
 
-      expect(hooks.beforeCount).toBe(2)
+      expect(hooks.beforeCount).toBe(3)
       expect(hooks.afterCount).toBe(2)
       expect(hooks.handlerCounts()).toMatchObject({
-        PreToolUse: 2,
+        PreToolUse: 3,
         PostToolUse: 2,
       })
     } finally {
@@ -38,6 +38,40 @@ describe("createDefaultHookSystem", () => {
       expect(result.blocked).toBe(true)
       expect(result.warnings.join("\n")).toContain("Safety policy blocked")
       expect(result.trace[0]).toContain("hooks:safety-policy")
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("warns about shell side effects from the default hook stack", async () => {
+    const repo = tempRepo()
+    try {
+      const hooks = createDefaultHookSystem({ projectRoot: repo })
+
+      const result = await hooks.runBefore("shell", {
+        command: "Move-Item -Force old.ts new.ts",
+      })
+
+      expect(result.blocked).toBe(false)
+      expect(result.warnings.join("\n")).toContain("Shell 副作用")
+      expect(result.trace).toContain("warn by hooks:side-effect-policy")
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("blocks dangerous side effects from the default hook stack", async () => {
+    const repo = tempRepo()
+    try {
+      const hooks = createDefaultHookSystem({ projectRoot: repo })
+
+      const result = await hooks.runBefore("shell", {
+        command: "git checkout -- /etc/hosts",
+      })
+
+      expect(result.blocked).toBe(true)
+      expect(result.warnings.join("\n")).toContain("Shell 副作用")
+      expect(result.trace[0]).toContain("hooks:side-effect-policy")
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }

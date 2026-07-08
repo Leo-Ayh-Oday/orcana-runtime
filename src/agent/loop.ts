@@ -62,7 +62,6 @@ import { loadUserConfig, loadProjectConfig } from "./permission-config"
 import { evaluateToolPolicy } from "./tool-execution/policy"
 import { GateTelemetry } from "./gates/telemetry"
 import { SandboxManager } from "../sandbox/sandbox"
-import { analyzeSideEffects, formatSideEffectReport } from "../sandbox/side-effect-guard"
 import { setShellSandbox } from "../tools/shell"
 import { saveCheckpoint, adaptiveCheckpointThreshold, shouldSkipCheckpointThisRound, recordCheckpointTaken, formatCheckpointSummary, generateCheckpointId, type ComplexityMetrics } from "../session/checkpoint"
 import { buildContextMessages, buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "./round/request-builder"
@@ -1108,7 +1107,6 @@ export async function* agentLoop(
       const tool = tools.find(t => t.defn.name === tc.name)
       let resultContent = "Unknown tool"
       let resultObj: { success: boolean; content: string; metadata?: Record<string, unknown> } = { success: false, content: "" }
-      let sideEffectBlocked = false
       let toolStartedAt = Date.now()
 
       if (preRoundCtx.taskPlanning && round > 0) {
@@ -1180,30 +1178,18 @@ export async function* agentLoop(
               resultContent = resultObj.content
             } else {
               const effectiveParams = before.replaceParams ?? tc.input
-              // ShellSideEffectGuard: pre-execution danger check (PR-5.3 wiring)
-              if (tc.name === "shell") {
-                const cmd = String(effectiveParams.command ?? "")
-                const seReport = analyzeSideEffects(cmd, process.cwd())
-                if (seReport.severity === "danger") {
-                  resultContent = formatSideEffectReport(seReport)
-                  resultObj = { success: false, content: resultContent }
-                  sideEffectBlocked = true
-                }
-              }
-              if (!sideEffectBlocked) {
-                for await (const ev of tool.executeStream(effectiveParams)) {
-                  if (ev.type === "progress") {
-                    // Raw shell stdout/stderr is often noisy progress output.
-                    // Keep it out of the spinner/status line; the final result
-                    // still carries command output for diagnostics.
-                    continue
-                  } else if (ev.type === "done") {
-                    const rawResult = ev.data
-                    const after = await runToolAfterHook(hooks, tc.name, effectiveParams, rawResult)
-                    const finalResult = appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
-                    resultContent = finalResult.content
-                    resultObj = { success: finalResult.success, content: finalResult.content, metadata: finalResult.metadata }
-                  }
+              for await (const ev of tool.executeStream(effectiveParams)) {
+                if (ev.type === "progress") {
+                  // Raw shell stdout/stderr is often noisy progress output.
+                  // Keep it out of the spinner/status line; the final result
+                  // still carries command output for diagnostics.
+                  continue
+                } else if (ev.type === "done") {
+                  const rawResult = ev.data
+                  const after = await runToolAfterHook(hooks, tc.name, effectiveParams, rawResult)
+                  const finalResult = appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
+                  resultContent = finalResult.content
+                  resultObj = { success: finalResult.success, content: finalResult.content, metadata: finalResult.metadata }
                 }
               }
             }
@@ -1213,40 +1199,18 @@ export async function* agentLoop(
           }
         } else {
           try {
-            // ShellSideEffectGuard: pre-execution danger check (PR-5.3 wiring)
-            if (tc.name === "shell") {
-              const cmd = String(tc.input.command ?? "")
-              const seReport = analyzeSideEffects(cmd, process.cwd())
-              if (seReport.severity === "danger") {
-                resultContent = formatSideEffectReport(seReport)
-                resultObj = { success: false, content: resultContent }
-                sideEffectBlocked = true
-              }
-            }
-            if (!sideEffectBlocked) {
-              const result = await executeToolWithHooks({
-                hooks,
-                tool,
-                params: tc.input,
-                execute: (_params) => withToolTimeout(tc.name, tool.execute(_params)),
-              })
-              resultContent = result.content
-              resultObj = { success: result.success, content: result.content, metadata: result.metadata }
-            }
+            const result = await executeToolWithHooks({
+              hooks,
+              tool,
+              params: tc.input,
+              execute: (_params) => withToolTimeout(tc.name, tool.execute(_params)),
+            })
+            resultContent = result.content
+            resultObj = { success: result.success, content: result.content, metadata: result.metadata }
           } catch (e) {
             resultContent = e instanceof Error ? e.message : String(e)
             resultObj = { success: false, content: resultContent }
           }
-        }
-      }
-      // ShellSideEffectGuard: inject report for agent awareness (PR-5.3 wiring)
-      if (tc.name === "shell" && !sideEffectBlocked) {
-        const cmd = String(tc.input.command ?? "")
-        const seReport = analyzeSideEffects(cmd, process.cwd())
-        if (seReport.severity !== "none") {
-          const note = "\n\n" + formatSideEffectReport(seReport)
-          resultContent = resultContent + note
-          resultObj = { ...resultObj, content: resultContent }
         }
       }
         const changedFilesForLedger = new Set<string>()

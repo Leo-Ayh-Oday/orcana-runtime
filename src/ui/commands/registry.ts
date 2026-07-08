@@ -6,6 +6,7 @@
 
 import type { CommandContext, CommandDef } from "./types"
 import { parseArgs } from "./parser"
+import { parseRuntimeInput } from "../../runtime/control-plane"
 
 interface CommandMatch {
   def: CommandDef
@@ -25,15 +26,13 @@ export class CommandRegistry {
   }
 
   find(input: string): CommandMatch | null {
-    const trimmed = input.trim()
-    if (!trimmed.startsWith("/")) return null
+    const parsed = parseRuntimeInput(input)
+    if (parsed.kind !== "slash_command") return null
 
-    const spaceIdx = trimmed.indexOf(" ")
-    const cmdName = spaceIdx >= 0 ? trimmed.slice(1, spaceIdx) : trimmed.slice(1)
-    const def = this.commands.get(cmdName)
+    const def = this.commands.get(parsed.name)
     if (!def) return null
 
-    return { def, input: trimmed, invokedAs: cmdName }
+    return { def, input: parsed.raw, invokedAs: parsed.name }
   }
 
   /**

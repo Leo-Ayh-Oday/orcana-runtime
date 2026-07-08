@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { resolveRuntimeControlIntent, type RuntimeCommandCatalogEntry, type RuntimeControlIntent } from "./control-plane"
 import { RuntimeEventBus } from "./event-bus"
 import type { RuntimeEvent, RuntimeStatus, UserIntent } from "./events"
 import { createRuntimeSession, updateRuntimeSessionStatus, type RuntimeSession } from "./session"
@@ -18,12 +19,14 @@ export interface RuntimeControllerResult {
   action: RuntimeControllerAction
   status: RuntimeStatus
   message?: string
+  controlIntent?: RuntimeControlIntent
 }
 
 export interface RuntimeControllerOptions {
   sessionId?: string
   repoRoot: string
   eventBus?: RuntimeEventBus
+  commandCatalog?: readonly RuntimeCommandCatalogEntry[]
   now?: () => number
 }
 
@@ -31,11 +34,13 @@ export class RuntimeController {
   readonly eventBus: RuntimeEventBus
   private session: RuntimeSession
   private readonly now: () => number
+  private readonly commandCatalog?: readonly RuntimeCommandCatalogEntry[]
   private started = false
 
   constructor(options: RuntimeControllerOptions) {
     this.eventBus = options.eventBus ?? new RuntimeEventBus()
     this.now = options.now ?? Date.now
+    this.commandCatalog = options.commandCatalog
     this.session = createRuntimeSession({
       sessionId: options.sessionId ?? randomUUID(),
       repoRoot: options.repoRoot,
@@ -93,6 +98,35 @@ export class RuntimeController {
           status: this.session.status,
         }
       case "slash_command":
+        if (this.commandCatalog) {
+          const controlIntent = resolveRuntimeControlIntent(intent.raw, this.commandCatalog, {
+            isRunning: this.session.status === "planning" || this.session.status === "running",
+          })
+          if (controlIntent.kind === "unknown_command") {
+            this.setStatus("planning")
+            return {
+              ok: true,
+              action: "agent_request",
+              status: this.session.status,
+              controlIntent,
+            }
+          }
+          if (controlIntent.kind === "blocked_command") {
+            return {
+              ok: false,
+              action: "local_command",
+              status: this.session.status,
+              message: controlIntent.reason,
+              controlIntent,
+            }
+          }
+          return {
+            ok: true,
+            action: "local_command",
+            status: this.session.status,
+            controlIntent,
+          }
+        }
         return {
           ok: true,
           action: "local_command",

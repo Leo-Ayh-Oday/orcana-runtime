@@ -52,6 +52,8 @@
     "smoke:release": "node scripts/release-smoke.cjs",
     "release": "npm publish --registry https://registry.npmjs.org/",
     "test": "node scripts/run-tests.cjs",
+    "test:core": "bun test tests/hooks_system.test.ts tests/hooks_defaults.test.ts tests/runtime_event_bus.test.ts tests/replay_harness.test.ts",
+    "test:replay": "bun test tests/replay_harness.test.ts",
     "test:all": "bun test",
     "test:integration": "bun test tests/agent_loop.test.ts tests/e2e_fullstack_flow.test.ts tests/e2e_user_flow.test.ts tests/thinking_depth.test.ts tests/thinking_quality.test.ts",
     "test:live": "bun test tests/code_as_action.test.ts tests/fullstack_depth.test.ts tests/knowledge_pipeline.test.ts",

@@ -156,6 +156,11 @@ export type PreToolUseHandler = HookHandler<PreToolUseInput>
 export type PostToolUseHandler = HookHandler<PostToolUseInput>
 export type StopHandler = HookHandler<StopInput>
 
+function formatHookFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return `Hook anonymous failed: ${message}`
+}
+
 // ── HookSystem ──
 
 export class HookSystem {
@@ -219,7 +224,15 @@ export class HookSystem {
     const context: string[] = []
 
     for (const h of this.handlers.get(HookEvent.SessionStart)!) {
-      const out = await h(input)
+      let out: HookOutput
+      try {
+        out = await h(input) ?? {}
+      } catch (error) {
+        const warning = formatHookFailure(error)
+        warnings.push(warning)
+        trace.push("error by anonymous")
+        return { blocked: true, blockReason: warning, context, warnings, trace }
+      }
       const source = out.source ?? "anonymous"
       if (out.blocked) {
         trace.push(`blocked by ${source}`)
@@ -246,7 +259,15 @@ export class HookSystem {
     let context: string | undefined
 
     for (const h of this.handlers.get(HookEvent.UserPromptSubmit)!) {
-      const out = await h(input)
+      let out: HookOutput
+      try {
+        out = await h(input) ?? {}
+      } catch (error) {
+        const warning = formatHookFailure(error)
+        warnings.push(warning)
+        trace.push("error by anonymous")
+        return { blocked: true, blockReason: warning, warnings, trace }
+      }
       const source = out.source ?? "anonymous"
       if (out.blocked) {
         trace.push(`blocked by ${source}`)
@@ -275,10 +296,19 @@ export class HookSystem {
   async runBefore(tool: string, params: Record<string, unknown>): Promise<BeforeHookResult> {
     const warnings: string[] = []
     const trace: string[] = []
+    let currentParams = params
     let replaceParams: Record<string, unknown> | undefined
 
     for (const h of this.handlers.get(HookEvent.PreToolUse)!) {
-      const out = await h({ tool, params } as PreToolUseInput)
+      let out: HookOutput
+      try {
+        out = await h({ tool, params: currentParams } as PreToolUseInput) ?? {}
+      } catch (error) {
+        const warning = formatHookFailure(error)
+        warnings.push(warning)
+        trace.push("error by anonymous")
+        return { blocked: true, warnings, trace }
+      }
       const source = out.source ?? "anonymous"
       if (out.blocked) {
         if (out.warn) warnings.push(out.warn)
@@ -287,6 +317,7 @@ export class HookSystem {
       }
       if (out.replace) {
         replaceParams = out.replace
+        currentParams = out.replace
         trace.push(`replace by ${source}`)
       }
       if (out.warn) {
@@ -306,10 +337,19 @@ export class HookSystem {
   ): Promise<AfterHookResult> {
     const warnings: string[] = []
     const trace: string[] = []
+    let currentResult = result
     let replaceResult: { success: boolean; content: string } | undefined
 
     for (const h of this.handlers.get(HookEvent.PostToolUse)!) {
-      const out = await h({ tool, params, result } as PostToolUseInput)
+      let out: HookOutput
+      try {
+        out = await h({ tool, params, result: currentResult } as PostToolUseInput) ?? {}
+      } catch (error) {
+        const warning = formatHookFailure(error)
+        warnings.push(warning)
+        trace.push("error by anonymous")
+        return { blocked: true, replaceResult, warnings, trace }
+      }
       const source = out.source ?? "anonymous"
       if (out.blocked) {
         if (out.warn) warnings.push(out.warn)
@@ -318,6 +358,7 @@ export class HookSystem {
       }
       if (out.result) {
         replaceResult = out.result
+        currentResult = out.result
         trace.push(`replace_result by ${source}`)
       }
       if (out.warn) {

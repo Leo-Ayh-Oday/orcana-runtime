@@ -416,10 +416,19 @@ export class CompletionOrchestrator {
       return false
     }
 
-    // Final round — note contradiction but allow (don't block forever)
-    out.statusMessages.push(`truthfulness-gate: ${contradictions.length} contradictions (final round — noted)`)
-    out.traceEvents.push({ gate: "truthfulness", decision: "noted", contradictions: contradictions.length })
-    return true
+    // Final round — fail closed. The agent can be blocked, but it cannot
+    // honestly finish with verification or implementation claims that lack evidence.
+    out.statusMessages.push(`truthfulness-gate: blocked (${contradictions.length} contradictions)`)
+    out.yieldTexts.push([
+      "## Completion blocked by truthfulness gate",
+      "The final answer contains claims that are not backed by runtime evidence.",
+      "",
+      "Contradictions:",
+      ...contradictions.map(c => `- ${c.claim}: ${c.contradiction}`),
+    ].join("\n"))
+    out.traceEvents.push({ gate: "semantic:truthfulness", decision: "blocked", contradictions: contradictions.length })
+    out.decision = "break_blocked"
+    return false
   }
 
   // ── Truth claim extraction ──
@@ -470,6 +479,12 @@ export class CompletionOrchestrator {
     // Generic "all tests pass" claim
     if (/(?:所有|全部|all)\s*(?:测试|验证|检查|tests?|checks?|verifications?)\s*(?:通过|passed|成功)/i.test(text)) {
       claims.push({ kind: "test", claim: "所有测试/验证通过", pattern: "all_verification_passed" })
+    }
+
+    // Implementation claims must be backed by actual writes/changed files.
+    // Keep this narrower than generic "done" so ordinary chat completions do not get trapped.
+    if (/(?:已实现|实现了|已创建|已更新|已修改|已修复|implemented|created|updated|modified|fixed|applied)/i.test(text)) {
+      claims.push({ kind: "implementation", claim: "实现/修改已完成", pattern: "implementation_completed" })
     }
 
     // "No errors" claim (only if no more specific typecheck claim exists)
@@ -530,6 +545,16 @@ export class CompletionOrchestrator {
           }
           break
         }
+        case "implementation_completed": {
+          const hasWriteEvidence = input.taskHadWrite || input.taskModifiedFiles > 0 || input.changedFiles.length > 0
+          if (!hasWriteEvidence) {
+            contradictions.push({
+              claim: claim.claim,
+              contradiction: "声称已实现或已修改，但没有写入工具执行记录或变更文件证据",
+            })
+          }
+          break
+        }
       }
     }
 
@@ -571,7 +596,7 @@ export class CompletionOrchestrator {
 // ── Truth claim types ──
 
 interface TruthClaim {
-  kind: "typecheck" | "test" | "build"
+  kind: "typecheck" | "test" | "build" | "implementation"
   claim: string
   pattern: string
 }

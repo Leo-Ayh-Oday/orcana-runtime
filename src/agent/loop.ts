@@ -52,7 +52,6 @@ import { compactThinkingChain } from "../memory/compactor"
 import { evaluatePlanningArtifact, forcePlanningPassAfterLimit, formatPlanningBlockedToolResult, formatPlanningGatePrompt } from "./planning-gate"
 import { detectLanguage, languageInstruction, type UILanguage } from "./language"
 import { CompletionOrchestrator, checkNarrowEditCompletion } from "./completion-orchestrator"
-import { canClaimDone } from "./evidence-ledger"
 import { formatGenericProviderStreamBlockedReport, formatGenericProviderStreamRecoveryPrompt, formatProviderStreamBlockedReport, formatProviderStreamRecoveryPrompt } from "./runtime-failure"
 import { buildResearchEvidenceContext, buildResearchInsufficientEvidenceMessage, type ResearchEvidence } from "./research-answer"
 import { classifyResearchRoute, shouldRunResearch } from "./research-router"
@@ -1088,6 +1087,7 @@ export async function* agentLoop(
     const verificationResultsThisRound: VerificationResult[] = []
     let roundHadToolError = false
     let completionGateText = ""
+    let narrowEditEvidenceBlocked = false
     let verificationPassedThisRound = false
     let serviceTestGuidanceNeeded = false
     rateLimitShell = 0; rateLimitFile = 0; rateLimitNetwork = 0
@@ -1427,9 +1427,18 @@ export async function* agentLoop(
         lastTypecheckPassed: lastTypecheck?.passed,
         missingNarrowFiles,
         modifiedFilesThisRound,
+        taskTracker,
+        evidenceLedger,
       })
       if (narrowResult.completionText) {
         completionGateText = narrowResult.completionText
+      } else if (narrowResult.evidencePrompt) {
+        rawMessages.push({ role: "user", content: narrowResult.evidencePrompt })
+        if (narrowResult.evidenceStatus) {
+          yield { type: "status", data: narrowResult.evidenceStatus }
+        }
+        options.runTrace?.record("gate_decision", { gate: "semantic:evidence", decision: "continue", missing: narrowResult.evidenceMissing })
+        narrowEditEvidenceBlocked = true
       } else if (narrowResult.missingFilesPrompt) {
         postToolRequiredFilesPrompt = narrowResult.missingFilesPrompt
         if (narrowResult.missingFilesStatus) {
@@ -1773,6 +1782,10 @@ export async function* agentLoop(
       options.runTrace?.record("gate_decision", { gate: "service_test", decision: "repair_guidance" })
     }
 
+    if (narrowEditEvidenceBlocked) {
+      continue
+    }
+
     const missingLongTask = missingTaskRequirements(taskTracker)
     if (taskTracker?.phase === "planning" && missingLongTask.length > 0 && round + 1 < maxRounds) {
       rawMessages.push({ role: "user", content: formatTaskPlanningPrompt(taskTracker, round + 1) })
@@ -1791,23 +1804,6 @@ export async function* agentLoop(
       yield { type: "status", data: `任务追踪: 阻止结束，剩余 ${missingLongTask.length} 项` }
       options.runTrace?.record("gate_decision", { gate: "semantic:task_tracker", decision: "continue", missing: missingLongTask })
     } else if (completionGateText) {
-      // PR-3.1: narrow_edit auto-complete must pass evidence gate before breaking
-      if (evidenceLedger && taskTracker) {
-        const evidenceResult = canClaimDone({ tracker: taskTracker, evidence: evidenceLedger })
-        if (!evidenceResult.canClaim) {
-          rawMessages.push({ role: "user", content: [
-            "## 完成被阻止 — 验证证据不足",
-            ...evidenceResult.blocked.map(b => `- **${b}**`),
-            "",
-            "### 缺失项",
-            ...evidenceResult.missing.map(m => `- ${m}`),
-          ].join("\n") })
-          yield { type: "status", data: `evidence-gate: narrow_edit blocked (${evidenceResult.missing.length} missing)` }
-          options.runTrace?.record("gate_decision", { gate: "evidence", decision: "continue", missing: evidenceResult.missing })
-          completionGateText = ""
-          continue
-        }
-      }
       yield { type: "status", data: "completion-gate: verified write; stopping without extra provider round" }
       yield { type: "text", data: completionGateText }
       options.runTrace?.record("gate_decision", { gate: "completion", decision: "verified_write_stop" })

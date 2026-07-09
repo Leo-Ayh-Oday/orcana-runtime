@@ -304,13 +304,14 @@ class VerifiedWriteProvider implements LLMProvider {
 
 class MissingRequestedTestProvider implements LLMProvider {
   rounds = 0
+  constructor(private readonly testPath = "tests/calc.test.ts") {}
 
   async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
     if (this.rounds++ === 0) {
       yield { type: "tool_call", data: { id: "edit", name: "edit_file", input: { path: "src/calc.ts" } } }
       return
     }
-    yield { type: "tool_call", data: { id: "test", name: "write_file", input: { path: "tests/calc.test.ts" } } }
+    yield { type: "tool_call", data: { id: "test", name: "write_file", input: { path: this.testPath } } }
   }
 }
 
@@ -1320,7 +1321,7 @@ describe("Agent loop greedy tool execution", () => {
         },
       },
     )
-    const provider = new MissingRequestedTestProvider()
+    const provider = new MissingRequestedTestProvider("feature-eval/tests/calc.test.ts")
     const events: StreamEvent[] = []
 
     for await (const event of agentLoop("Fix divide. Add feature-eval/tests/calc.test.ts with bun test.", {
@@ -1333,8 +1334,8 @@ describe("Agent loop greedy tool execution", () => {
       events.push(event)
     }
 
-    // Gate chain adjusts completion timing; loop produces events
     expect(provider.rounds).toBeGreaterThanOrEqual(1)
+    expect(testWrites).toBe(1)
     expect(events.length).toBeGreaterThan(0)
   }, 30000)
 

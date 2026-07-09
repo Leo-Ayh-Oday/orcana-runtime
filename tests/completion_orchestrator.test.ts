@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { CompletionOrchestrator } from "../src/agent/completion-orchestrator"
+import { CompletionOrchestrator, checkNarrowEditCompletion } from "../src/agent/completion-orchestrator"
 import { createEvidenceLedger, addEvidence } from "../src/agent/evidence-ledger"
 import { FlashJudge, TestimonyLedger } from "../src/agent/flash-judge"
 import { setActiveMode } from "../src/agent/mode-contract"
 import { ConfidenceEvaluator } from "../src/evaluator/confidence"
 import type { CompletionOrchestratorInput } from "../src/agent/completion-orchestrator"
+import type { TaskTracker } from "../src/agent/task-tracker"
 import type { LLMProvider, StreamEvent } from "../src/provider/types"
 
 const quietProvider: LLMProvider = {
@@ -38,6 +39,20 @@ function input(overrides: Partial<CompletionOrchestratorInput> = {}): Completion
     flashJudge: new FlashJudge(quietProvider, "test"),
     masterPlan: null,
     autoApprovePlan: false,
+    ...overrides,
+  }
+}
+
+function tracker(overrides: Partial<TaskTracker> = {}): TaskTracker {
+  return {
+    goal: "test goal",
+    intent: "narrow_edit",
+    phase: "building",
+    requiredFiles: [],
+    requiredVerificationKinds: ["typecheck"],
+    verificationEvidence: {},
+    verification: ["typecheck"],
+    steps: [{ id: "s1", title: "apply edit", status: "done" }],
     ...overrides,
   }
 }
@@ -85,5 +100,53 @@ describe("CompletionOrchestrator truthfulness gate", () => {
 
     expect(result.decision).toBe("done")
     expect(result.statusMessages).toContain("evidence-gate: passed")
+  })
+})
+
+describe("checkNarrowEditCompletion", () => {
+  test("blocks verified-write auto-complete when structured evidence is missing", () => {
+    const result = checkNarrowEditCompletion({
+      autoFinishOnVerifiedWrite: true,
+      intentMode: "narrow_edit",
+      hadTsWriteThisRound: true,
+      blockingObligations: 0,
+      lastTypecheckPassed: true,
+      missingNarrowFiles: [],
+      modifiedFilesThisRound: new Set(["src/ok.ts"]),
+      taskTracker: tracker(),
+      evidenceLedger: createEvidenceLedger(),
+    })
+
+    expect(result.completionText).toBeNull()
+    expect(result.evidenceStatus).toBe("evidence-gate: narrow_edit blocked (1 missing)")
+    expect(result.evidencePrompt).not.toBeNull()
+    expect(result.evidenceMissing).toHaveLength(1)
+  })
+
+  test("allows verified-write auto-complete when structured evidence is present", () => {
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "evi_typecheck",
+      kind: "typecheck",
+      command: "typecheck",
+      output: "ok",
+      passed: true,
+      timestamp: Date.now(),
+    })
+
+    const result = checkNarrowEditCompletion({
+      autoFinishOnVerifiedWrite: true,
+      intentMode: "narrow_edit",
+      hadTsWriteThisRound: true,
+      blockingObligations: 0,
+      lastTypecheckPassed: true,
+      missingNarrowFiles: [],
+      modifiedFilesThisRound: new Set(["src/ok.ts"]),
+      taskTracker: tracker(),
+      evidenceLedger: ledger,
+    })
+
+    expect(result.completionText).toContain("Changed files: src/ok.ts")
+    expect(result.evidencePrompt).toBeNull()
   })
 })

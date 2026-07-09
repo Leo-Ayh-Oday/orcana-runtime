@@ -10,3 +10,9 @@ export type {
 export { FileStateLedger } from "./file-state-ledger"
 export type { EditFreshnessRequirement } from "./freshness-gate"
 export { validateFreshnessForEdit } from "./freshness-gate"
+export {
+  getRuntimeFileStateLedger,
+  recordRuntimeFileRead,
+  recordRuntimeFileWrite,
+  resetRuntimeFileStateLedger,
+} from "./runtime-file-state"

@@ -10,7 +10,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 |------|--------|------------------|-----|
 | Runtime bootstrap | Done | `src/runtime/bootstrap.ts`, shared CLI/TUI runtime assembly | Keep future UI entrypoints on this path |
 | Runtime event boundary | Partial | `src/runtime/event-bus.ts`, `src/runtime/controller.ts`, `src/runtime/control-plane.ts`, `tests/runtime_event_bus.test.ts` | Slash parsing/resolution is shared; command execution still needs full CLI/TUI runtime controller wiring |
-| File state / Freshness | Partial | `src/file-state/*`, `tests/file_state.test.ts` | Core ledger and freshness gate exist; tool lifecycle observe/enforce wiring is still pending |
+| File state / Freshness | Partial | `src/file-state/*`, `tests/file_state.test.ts`, `tests/file_tools_file_state.test.ts` | File tools now observe read/write baselines; freshness enforcement through ToolContract is still pending |
 | HookSystem 2.0 | Done | `src/hooks/index.ts` accumulates warnings, chains replacements, fail-closes handler exceptions, and supports lifecycle events | Keep future hook events on this shared implementation |
 | Default hooks | Done | `src/hooks/defaults.ts` creates safety, side-effect, write, and journal hook stack; unread existing-file edits strict-block by default | Keep future runtime safety policies on the default hook stack |
 | TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts`, `tests/task_packet.test.ts` | Zod adapter is intentionally deferred while the project has no Zod dependency; keep future packet changes on the validated schema path |
@@ -32,7 +32,8 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-0.2 Baseline CI | Done | CI is split into `typecheck`, `core`, `test`, and `build`; `test:core` runs hook/runtime plus 70-case replay gates. |
 | PR-0.3 Runtime control boundary | Done | Runtime control-plane parsing/resolution is shared by controller, TUI dispatcher, and CLI command registry; unknown slash commands pass to the agent and unsafe local commands are blocked while running. |
 | Harness PR-2.1 FileState/Freshness core | Done | `FileStateLedger`, file fingerprinting, and `validateFreshnessForEdit()` cover fresh/full/partial/truncated/deleted/create cases without touching TUI. |
-| Harness PR-2.x FileState/Freshness wiring | Partial | Core is present; next slice should observe `read_file` and write tools, then enforce through ToolContract/FreshnessGate. |
+| Harness PR-2.2 FileState tool observation | Done | `read_file` records full/partial/truncated baselines; `write_file`, `edit_file`, `multi_edit`, and `edit_fim` record fresh agent-write baselines after successful disk commits. |
+| Harness PR-2.x FileState/Freshness enforcement | Partial | Observation is present; next slice should enforce stale/partial/truncated baselines through ToolContract/FreshnessGate instead of changing tool behavior ad hoc. |
 | PR-1.1 HookOutput semantics | Done | `HookSystem` supports warning accumulation, block/replace priority, chained Pre/Post replacements, fail-closed handler exceptions, and dedicated regressions. |
 | PR-1.2 writeGuard before/after | Done | Default runtime hook stack strict-blocks unread existing-file edits and `multi_edit`; warn mode remains available as an explicit compatibility option. |
 | PR-1.3 CLI/TUI default hooks | Done | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Future CLI/TUI entrypoints should keep using runtime bootstrap instead of manual hook assembly. |

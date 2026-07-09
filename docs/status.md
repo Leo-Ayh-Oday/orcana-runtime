@@ -1,6 +1,6 @@
 # Orcana Strong Single v1.0 Status Matrix
 
-Updated: 2026-07-08
+Updated: 2026-07-09
 
 This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is intentionally conservative: a module is `Done` only when the code, tests, and runtime wiring are present.
 
@@ -14,7 +14,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | Default hooks | Done | `src/hooks/defaults.ts` creates safety, side-effect, write, and journal hook stack; unread existing-file edits strict-block by default | Keep future runtime safety policies on the default hook stack |
 | TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts`, `tests/task_packet.test.ts` | Zod adapter is intentionally deferred while the project has no Zod dependency; completion/evidence single path still needs hardening |
 | ModeContract | Done | `src/agent/mode-contract.ts`, `src/agent/loop.ts`, `tests/mode_contract.test.ts`, `tests/agent_loop.test.ts` | Keep future mode changes routed through shared transition context |
-| Completion / Evidence | Partial | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts` | Final truthfulness is not yet a fully enforced single path |
+| Completion / Evidence | Partial | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts`, `tests/completion_orchestrator.test.ts` | Final truthfulness is fail-closed; narrow_edit auto-complete still has a loop-local evidence handoff |
 | PatchTransaction / Rewind | Partial | `src/agent/patch-transaction.ts`, `src/agent/rewind.ts`, related tests | Rewind UX and transaction evidence binding need hardening |
 | Tool risk / Permission | Partial | `src/agent/tool-risk.ts`, `src/agent/permission.ts`, `tests/tool_policy.test.ts` | Permission UX is not yet complete for all high-risk flows |
 | Provider / ModelRouter | Partial | `src/provider/router.ts`, `src/provider/capabilities.ts`, runtime model config tests | All model calls need complete purpose/cost trace coverage |
@@ -37,7 +37,8 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-2.1 TaskPacket schema | Done | `TASK_PACKET_JSON_SCHEMA` and `parseTaskPacketJson()` validate unknown JSON fail-closed before TaskPacket execution; invalid verification kinds now block. |
 | PR-2.2 MasterPlan mode auto-flow | Done | `loop.ts` feeds MasterPlan node status, error count, ripple obligations, evidence presence, and plan completion into `shouldTransitionMode()`; completed plans now synchronize to report mode before final delivery. |
 | PR-2.x MasterPlan / TaskPacket / ModeContract | Done | TaskPacket schema validation, MasterPlan packet wiring, plan validation, and ModeContract auto-flow are present. Zod adapter remains intentionally deferred because the project does not depend on Zod. |
-| PR-3.x Completion / Evidence | Partial | Orchestrator and ledger exist; final truthfulness must be tightened around evidence claims. |
+| PR-3.1 Final truthfulness gate | Done | `CompletionOrchestrator` now fail-closes final-round truthfulness contradictions and checks implementation claims against write/changed-file evidence. |
+| PR-3.x Completion / Evidence | Partial | Orchestrator and ledger exist; remaining work is to remove legacy loop-local evidence handling around narrow_edit auto-complete. |
 | PR-4.x Patch / Rewind | Partial | State machine and rewind modules exist; end-user rewind flows and evidence binding remain incomplete. |
 | PR-5.x Safety | Partial | Tool risk, permission, side-effect, redaction, and sandbox capability exist in pieces. Need unified UX. |
 | PR-6.x Provider | Partial | Model routing and capabilities exist; structured output and transcript manager need complete enforcement coverage. |

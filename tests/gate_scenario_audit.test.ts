@@ -380,7 +380,9 @@ describe("Gap Report", () => {
     console.log("  Both → readonly intent → same pre-round/tool/completion gates")
     console.log("  Missing: plan structure validator, 'planned vs implemented' detection")
   })
-  test("P2: TruthfulnessGate only checks typecheck/test/build", () => {
-    console.log("  No detection of '已实现' claim without file changes in evidence ledger")
+  test("P2 FIXED: TruthfulnessGate blocks unsupported implementation claims", () => {
+    console.log("  Covered by tests/completion_orchestrator.test.ts")
+    console.log("  Final-round verification contradictions now break_blocked instead of noted/allowed")
+    console.log("  '已实现' claims require write evidence or changed files")
   })
 })

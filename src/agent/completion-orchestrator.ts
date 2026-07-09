@@ -616,6 +616,8 @@ export interface NarrowEditCheckInput {
   lastTypecheckPassed?: boolean
   missingNarrowFiles: string[]
   modifiedFilesThisRound: Set<string>
+  taskTracker?: TaskTracker | null
+  evidenceLedger?: EvidenceLedger
 }
 
 export interface NarrowEditCheckResult {
@@ -624,6 +626,9 @@ export interface NarrowEditCheckResult {
   /** If set, required files are still missing — this is the prompt to inject. */
   missingFilesPrompt: string | null
   missingFilesStatus: string | null
+  evidencePrompt: string | null
+  evidenceStatus: string | null
+  evidenceMissing: string[]
 }
 
 /** Check whether a narrow_edit task can auto-complete after verified writes.
@@ -632,6 +637,15 @@ export interface NarrowEditCheckResult {
  *  source of truth for completion decisions.
  */
 export function checkNarrowEditCompletion(input: NarrowEditCheckInput): NarrowEditCheckResult {
+  const empty: NarrowEditCheckResult = {
+    completionText: null,
+    missingFilesPrompt: null,
+    missingFilesStatus: null,
+    evidencePrompt: null,
+    evidenceStatus: null,
+    evidenceMissing: [],
+  }
+
   if (
     input.autoFinishOnVerifiedWrite &&
     input.intentMode === "narrow_edit" &&
@@ -640,11 +654,29 @@ export function checkNarrowEditCompletion(input: NarrowEditCheckInput): NarrowEd
     input.lastTypecheckPassed &&
     input.missingNarrowFiles.length === 0
   ) {
+    if (input.evidenceLedger) {
+      const evidenceResult = canClaimDone({
+        tracker: input.taskTracker ?? null,
+        evidence: input.evidenceLedger,
+      })
+      if (!evidenceResult.canClaim) {
+        return {
+          ...empty,
+          evidencePrompt: formatCanClaimDoneBlocked(evidenceResult),
+          evidenceStatus: `evidence-gate: narrow_edit blocked (${evidenceResult.missing.length} missing)`,
+          evidenceMissing: evidenceResult.missing,
+        }
+      }
+    }
+
     const files = [...input.modifiedFilesThisRound].sort().join(", ")
     return {
       completionText: `Done. Applied a verified TypeScript cascade edit. TypeScript verification passed. Changed files: ${files}.`,
       missingFilesPrompt: null,
       missingFilesStatus: null,
+      evidencePrompt: null,
+      evidenceStatus: null,
+      evidenceMissing: [],
     }
   }
 
@@ -659,8 +691,11 @@ export function checkNarrowEditCompletion(input: NarrowEditCheckInput): NarrowEd
         "Create the missing file(s), then run the requested verification.",
       ].join("\n"),
       missingFilesStatus: `completion-gate: missing requested file ${input.missingNarrowFiles[0]}`,
+      evidencePrompt: null,
+      evidenceStatus: null,
+      evidenceMissing: [],
     }
   }
 
-  return { completionText: null, missingFilesPrompt: null, missingFilesStatus: null }
+  return empty
 }

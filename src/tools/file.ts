@@ -11,6 +11,7 @@ import { cascadeAwareDecision, formatRippleBlock, getRippleProgram, previewEdit,
 import { getRuntimeContextBudgetMode } from "../agent/runtime-context"
 import { createTransaction, rollbackTransaction } from "./transaction"
 import { applyAndCommit, type ManagedPatchTransaction } from "../agent/patch-transaction"
+import { recordRuntimeFileRead, recordRuntimeFileWrite } from "../file-state"
 
 /** Threshold: files larger than this get sub-agent analysis instead of raw dump. */
 const LARGE_FILE_LINES = 400
@@ -133,7 +134,14 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
     // instead of raw dump. The agent can then request specific sections with offset/limit.
     if (total > LARGE_FILE_LINES && offset <= 0 && !limit) {
       const analysis = analyzeCodeStructure(content, path)
-      return Result.ok(analysis, { path, analyzed: true, totalLines: total, exportedSymbols: (analysis.match(/^  L/gm) ?? []).length })
+      const fileState = recordRuntimeFileRead({ path: p, range: { kind: "full" }, content: analysis, totalLines: total, truncated: true })
+      return Result.ok(analysis, {
+        path,
+        analyzed: true,
+        totalLines: total,
+        exportedSymbols: (analysis.match(/^  L/gm) ?? []).length,
+        fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+      })
     }
 
     let selected = lines
@@ -141,7 +149,17 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
     if (limit) selected = selected.slice(0, limit)
 
     const header = `[${path}] lines ${offset + 1}-${offset + selected.length} of ${total}\n`
-    return Result.ok(header + selected.join("\n"), { path, lines: selected.length, total })
+    const selectedContent = selected.join("\n")
+    const range = offset > 0 || typeof limit === "number"
+      ? { kind: "range" as const, startLine: offset + 1, endLine: offset + selected.length }
+      : { kind: "full" as const }
+    const fileState = recordRuntimeFileRead({ path: p, range, content: selectedContent, totalLines: total })
+    return Result.ok(header + selectedContent, {
+      path,
+      lines: selected.length,
+      total,
+      fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+    })
   } catch (e) {
     return Result.fail(e instanceof Error ? e.message : String(e))
   }
@@ -185,12 +203,14 @@ async function write_file(params: Record<string, unknown>): Promise<ToolResult> 
     const lines = content.split("\n").length
     const diag = runTsCheck(path)
     getRippleProgram().invalidateFile(path)
+    const fileState = recordRuntimeFileWrite({ path: p, content })
     return Result.ok(`Written ${path} - ${lines} lines, ${content.length} chars${diag}`, {
       path,
       lines,
       transactionId: mpt.patch.fileTransaction.id,
       rippleReport: ripple,
       checkpoint: checkpointMetadata(path, existedBefore ? oldContent : null),
+      fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
     return Result.fail(e instanceof Error ? e.message : String(e))
@@ -237,12 +257,14 @@ async function edit_file(params: Record<string, unknown>): Promise<ToolResult> {
 
     const diag = runTsCheck(path)
     getRippleProgram().invalidateFile(path)
+    const fileState = recordRuntimeFileWrite({ path: p, content: newContent })
     return Result.ok(`Replaced 1 occurrence in ${path}${diag}`, {
       path,
       occurrences: 1,
       transactionId: mpt.patch.fileTransaction.id,
       rippleReport: ripple,
       checkpoint: checkpointMetadata(path, content),
+      fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
     return Result.fail(e instanceof Error ? e.message : String(e))
@@ -309,11 +331,16 @@ async function multi_edit(params: Record<string, unknown>): Promise<ToolResult> 
 
     const diag = displayPaths.map(path => runTsCheck(path)).filter(Boolean).join("\n")
     for (const p of proposed.keys()) getRippleProgram().invalidateFile(p)
+    const fileStates = [...proposed.entries()].map(([p, content]) => {
+      const record = recordRuntimeFileWrite({ path: p, content })
+      return { path: record.path, status: record.status, source: record.source }
+    })
     return Result.ok(`Applied ${edits.length} atomic edit(s) across ${proposed.size} file(s)${diag}`, {
       paths: displayPaths,
       transactionId: mpt.patch.fileTransaction.id,
       rippleReports: reports,
       checkpoints: displayPaths.map(path => checkpointMetadata(path, originals.get(resolve(path)) ?? "")),
+      fileStates,
     })
   } catch (e) {
     return Result.fail(e instanceof Error ? e.message : String(e))
@@ -443,7 +470,14 @@ async function edit_fim(params: Record<string, unknown>): Promise<ToolResult> {
     await writeFile(p, result.fullNewFile, "utf-8")
     const diag = runTsCheck(path)
     getRippleProgram().invalidateFile(path)
-    return Result.ok(`FIM edit applied to ${path}\n${result.newText.slice(0, 500)}${diag}`, { path, mode: "fim", transactionId: transaction.id, rippleReport: ripple })
+    const fileState = recordRuntimeFileWrite({ path: p, content: result.fullNewFile })
+    return Result.ok(`FIM edit applied to ${path}\n${result.newText.slice(0, 500)}${diag}`, {
+      path,
+      mode: "fim",
+      transactionId: transaction.id,
+      rippleReport: ripple,
+      fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
+    })
   } catch (e) {
     return Result.fail(`FIM generated edit but file write failed: ${e}\n\n${result.newText.slice(0, 500)}`)
   }

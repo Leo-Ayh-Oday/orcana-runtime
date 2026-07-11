@@ -86,6 +86,34 @@ describe("ModelRouter — purpose routing", () => {
   })
 })
 
+describe("MultiProvider — explicit model routing", () => {
+  test("honors the model selected by the caller for cheap sub-calls", async () => {
+    let actualModel = ""
+    const provider: LLMProvider = {
+      async *streamChat(opts: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        actualModel = opts.model
+        yield { type: "done" }
+      },
+    }
+    const registry = new ProviderRegistry()
+    registry.register({ id: "deepseek", provider, defaultModel: "deepseek-v4-pro" })
+    registry.registerBuiltinModels()
+    const multi = new MultiProvider({ registry, defaultModel: "deepseek-v4-pro" })
+
+    for await (const _event of multi.streamChat({
+      model: "deepseek-v4-flash",
+      purpose: "flash_triage",
+      system: "",
+      messages: [{ role: "user", content: "classify" }],
+      maxTokens: 32,
+    })) {
+      // Consume the routed provider stream.
+    }
+
+    expect(actualModel).toBe("deepseek-v4-flash")
+  })
+})
+
 // ── Cheap model logic ──
 
 describe("ModelRouter — cheap model selection", () => {

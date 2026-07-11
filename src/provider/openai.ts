@@ -112,6 +112,19 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = "auto"
     }
 
+    if (options.responseFormat?.type === "json_schema" && options.responseFormat.schema) {
+      body.response_format = {
+        type: "json_schema",
+        json_schema: {
+          name: options.responseFormat.name,
+          schema: options.responseFormat.schema,
+          strict: options.responseFormat.strict ?? true,
+        },
+      }
+    } else if (options.responseFormat?.type === "json_object") {
+      body.response_format = { type: "json_object" }
+    }
+
     return body
   }
 
@@ -129,16 +142,44 @@ export class OpenAIProvider implements LLMProvider {
 
     for (const msg of messages) {
       if (msg.role === "user") {
-        result.push({
-          role: "user",
-          content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
-        })
+        result.push(...this.convertUserMessage(msg))
       } else if (msg.role === "assistant") {
         result.push(this.convertAssistantMessage(msg))
       }
     }
 
     return result
+  }
+
+  private convertUserMessage(msg: ProviderCallOptions["messages"][number]): OpenAIChatMessage[] {
+    if (typeof msg.content === "string") {
+      return [{ role: "user", content: msg.content }]
+    }
+
+    const toolMessages: OpenAIChatMessage[] = []
+    const textParts: string[] = []
+    for (const block of msg.content) {
+      if (!isRecord(block)) continue
+      if (block.type === "tool_result") {
+        const content = typeof block.content === "string"
+          ? block.content
+          : JSON.stringify(block.content ?? "")
+        toolMessages.push({
+          role: "tool",
+          tool_call_id: String(block.tool_use_id ?? ""),
+          content,
+        })
+      } else if (block.type === "text" && typeof block.text === "string") {
+        textParts.push(block.text)
+      } else {
+        textParts.push(JSON.stringify(block))
+      }
+    }
+
+    if (textParts.length > 0) {
+      toolMessages.push({ role: "user", content: textParts.join("\n") })
+    }
+    return toolMessages
   }
 
   private convertAssistantMessage(msg: ProviderCallOptions["messages"][number]): OpenAIChatMessage {
@@ -289,6 +330,11 @@ export class OpenAIProvider implements LLMProvider {
           purpose: options.purpose ?? "unknown",
         },
       }
+    }
+
+    if (finishReason === "length") {
+      yield { type: "error", data: "provider finish_reason=length: response hit the output token limit before completion" }
+      return
     }
 
     const finalText = textChunks.join("")

@@ -21,8 +21,24 @@ interface ClosableAsyncIterable extends AsyncIterable<unknown> {
 interface DeepSeekProviderOptions {
   baseURL?: string
   client?: AnthropicLikeClient
+  fetch?: typeof fetch
   maxRetries?: number
   sleep?: (ms: number) => Promise<void>
+}
+
+const DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+
+function normalizeDeepSeekBaseURL(baseURL: string | undefined): string {
+  const value = (baseURL ?? DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL).trim().replace(/\/+$/, "")
+  try {
+    const url = new URL(value)
+    if (url.hostname.toLowerCase() === "api.deepseek.com" && (url.pathname === "" || url.pathname === "/")) {
+      return `${url.origin}/anthropic`
+    }
+  } catch {
+    // Let the SDK surface malformed custom URLs with its normal diagnostics.
+  }
+  return value
 }
 
 export class DeepSeekProvider implements LLMProvider {
@@ -32,7 +48,12 @@ export class DeepSeekProvider implements LLMProvider {
 
   constructor(apiKey: string, baseURLOrOptions: string | DeepSeekProviderOptions = "https://api.deepseek.com/anthropic") {
     const options = typeof baseURLOrOptions === "string" ? { baseURL: baseURLOrOptions } : baseURLOrOptions
-    this.client = options.client ?? new Anthropic({ apiKey, baseURL: options.baseURL ?? "https://api.deepseek.com/anthropic", timeout: 120_000 })
+    this.client = options.client ?? new Anthropic({
+      apiKey,
+      baseURL: normalizeDeepSeekBaseURL(options.baseURL),
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      timeout: 120_000,
+    })
     this.maxRetries = options.maxRetries ?? 3
     this.sleep = options.sleep ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms)))
   }

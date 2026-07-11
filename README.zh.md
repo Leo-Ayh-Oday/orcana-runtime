@@ -132,6 +132,7 @@ npm uninstall -g deepseek-orcana
 | [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10 Phase 路线图、P0/P1/P2 优先级 |
 | [docs/ripple-engine.md](./docs/ripple-engine.md) | 7 层变更影响分析深度解析 |
 | [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | 每个 gate、每个场景、验证行为 |
+| [docs/model-provider-runtime.md](./docs/model-provider-runtime.md) | 模型配置、中转站兼容、持久化与 provider 故障排查 |
 | [docs/skill-template/](./docs/skill-template/) | 黄金标准 Skill 模板——面向人类、AI、Orcana Runtime |
 | [SECURITY.md](./SECURITY.md) | 沙箱能力、漏洞报告 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 环境搭建、代码规范、PR 流程 |

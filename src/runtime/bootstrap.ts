@@ -272,6 +272,10 @@ function providerEnvKey(providerId: string, config: ProviderConfig | undefined):
   }[providerId]
 }
 
+function providerRequiresAuth(config: ProviderConfig | undefined): boolean {
+  return config?.type !== "ollama" && config?.type !== "lmstudio"
+}
+
 function createProviderInstance(providerId: string, providerConfig: ProviderConfig | undefined, apiKey: string): LLMProvider {
   const type = providerConfig?.type ?? providerId
   const baseUrl = providerConfig?.baseUrl
@@ -355,10 +359,11 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   const registerProviderFromConfig = async (providerId: string, forceMissing = false): Promise<void> => {
     const providerConfig = getProviderConfig(config, providerId)
     const apiKey = forceMissing ? "" : await readProviderKey(providerId)
-    const provider = apiKey
+    const authRequired = providerRequiresAuth(providerConfig)
+    const provider = apiKey || !authRequired
       ? createProviderInstance(providerId, providerConfig, apiKey)
       : new MissingAuthProvider(providerId)
-    if (apiKey) configuredProviders.add(providerId)
+    if (apiKey || !authRequired) configuredProviders.add(providerId)
     const defaultModel = providerId === config.defaultProvider
       ? resolveModelForRole("default", config)
       : Object.keys(providerConfig?.models ?? {})[0] ?? resolveModelForRole("default", config)
@@ -520,13 +525,13 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
       }
     }
     const apiKey = key || await readProviderKey(input.providerId)
-    if (!apiKey) {
+    if (!apiKey && providerRequiresAuth(providerConfig)) {
       throw new Error(`还没有配置 ${providerConfig.displayName ?? input.providerId} 的 API key。`)
     }
 
     registry.upsertProvider({
       id: input.providerId,
-      provider: createProviderInstance(input.providerId, providerConfig, apiKey),
+      provider: createProviderInstance(input.providerId, providerConfig, apiKey ?? ""),
       defaultModel: input.modelId,
       toolAdapter: providerToolAdapter(providerConfig),
     })

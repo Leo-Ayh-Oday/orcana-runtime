@@ -56,4 +56,35 @@ describe("runtime model configuration", () => {
       runtime.dispose()
     }
   })
+
+  test("configures and persists a local Ollama model without requiring an API key", async () => {
+    const globalPath = makeTempConfigPath()
+    const authStore = new MemoryAuthStore()
+    const runtime = await createRuntime({
+      enableMCP: false,
+      enableLSP: false,
+      allowMissingProviderAuth: true,
+      useEnvAuth: false,
+      authStore,
+      configOptions: { globalPath, applyEnv: false, loadProject: false },
+    })
+
+    try {
+      await runtime.configureModel({
+        providerId: "ollama",
+        modelId: "qwen3-coder:8b",
+        custom: true,
+      })
+
+      expect(runtime.modelRouter.getSessionModel()).toBe("qwen3-coder:8b")
+      expect(runtime.isProviderConfigured("ollama")).toBe(true)
+      expect(await authStore.get("ollama")).toBeUndefined()
+
+      const saved = JSON.parse(readFileSync(globalPath, "utf-8"))
+      expect(saved.providers.ollama.baseUrl).toBe("http://localhost:11434/v1")
+      expect(saved.providers.ollama.models["qwen3-coder:8b"]).toBeDefined()
+    } finally {
+      runtime.dispose()
+    }
+  })
 })

@@ -415,7 +415,7 @@ export const builtInProviders: Record<string, ProviderConfig> = {
   ollama: {
     type: "ollama",
     displayName: "Ollama (local)",
-    baseUrl: "http://localhost:11434",
+    baseUrl: "http://localhost:11434/v1",
     models: {},
   },
   lmstudio: {

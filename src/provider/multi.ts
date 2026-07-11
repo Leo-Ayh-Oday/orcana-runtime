@@ -125,7 +125,7 @@ export class MultiProvider implements LLMProvider {
   // ── LLMProvider implementation ──
 
   async *streamChat(options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
-    const resolved = this.selectModel(options.purpose)
+    const resolved = this.registry.resolve(options.model) ?? this.selectModel(options.purpose)
     const provider = resolved.provider
 
     // Adapt tools if this provider needs schema conversion

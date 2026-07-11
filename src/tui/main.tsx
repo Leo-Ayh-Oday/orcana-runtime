@@ -106,7 +106,7 @@ function providerName(runtime: Runtime, providerId: string): string {
   return runtime.config.providers?.[providerId]?.displayName ?? providerId
 }
 
-function buildModelOptions(runtime: Runtime, currentModel: string, query = "", providerFilter?: string): ModelDialogOption[] {
+export function buildModelOptions(runtime: Runtime, currentModel: string, query = "", providerFilter?: string): ModelDialogOption[] {
   const needle = query.trim().toLowerCase()
   const catalogOptions = runtime.registry.allModels
     .filter(model => !providerFilter || model.providerId === providerFilter)
@@ -134,13 +134,15 @@ function buildModelOptions(runtime: Runtime, currentModel: string, query = "", p
       || Number(b.configured) - Number(a.configured)
       || a.providerName.localeCompare(b.providerName)
       || a.modelName.localeCompare(b.modelName))
-  const showCustom = !providerFilter || providerFilter === "custom"
+  const filteredProvider = providerFilter ? runtime.config.providers?.[providerFilter] : undefined
+  const customProviderId = filteredProvider ? providerFilter! : "custom"
+  const showCustom = !providerFilter || Boolean(filteredProvider)
   const customOption: ModelDialogOption[] = showCustom ? [{
-    providerId: "custom",
-    providerName: "OpenAI-compatible",
+    providerId: customProviderId,
+    providerName: filteredProvider?.displayName ?? "OpenAI-compatible",
     modelId: "__custom__",
     modelName: "自定义模型",
-    configured: runtime.isProviderConfigured("custom"),
+    configured: runtime.isProviderConfigured(customProviderId),
     current: false,
     tier: "custom",
     thinking: false,
@@ -750,6 +752,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
               modelId,
               modelName: modelId,
               baseUrlValue: "",
+              defaultBaseUrl: runtime.config.providers?.[runtimeDialog.providerId]?.baseUrl,
             },
           }))
           return
@@ -855,7 +858,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
             return
           }
           setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
-            ? { ...m, runtime: { ...m.runtime, error: "正在保存 key 并连接模型..." } }
+            ? { ...m, runtime: { ...m.runtime, error: "正在保存 key 并切换模型..." } }
             : m)
           void runtime.configureModel({
             providerId: runtimeDialog.providerId,

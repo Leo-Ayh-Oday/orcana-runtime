@@ -132,6 +132,7 @@ npm uninstall -g deepseek-orcana
 | [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10-Phase roadmap, P0/P1/P2 priorities |
 | [docs/ripple-engine.md](./docs/ripple-engine.md) | 7-layer change-impact analysis deep-dive |
 | [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | Every gate, every scenario, verified behavior |
+| [docs/model-provider-runtime.md](./docs/model-provider-runtime.md) | Model setup, relay compatibility, persistence, and provider troubleshooting |
 | [docs/skill-template/](./docs/skill-template/) | Gold Standard Skill Template — for humans, AI, and Orcana Runtime |
 | [SECURITY.md](./SECURITY.md) | Sandbox capabilities, vulnerability reporting |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Setup, conventions, PR process |

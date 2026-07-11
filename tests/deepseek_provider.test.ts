@@ -51,3 +51,30 @@ describe("DeepSeekProvider stop_reason handling", () => {
     expect(events.some(ev => ev.type === "error")).toBe(false)
   })
 })
+
+describe("DeepSeekProvider official endpoint handling", () => {
+  test("routes the persisted official API root through the Anthropic-compatible endpoint", async () => {
+    let requestedUrl = ""
+    const provider = new DeepSeekProvider("test-key", {
+      baseURL: "https://api.deepseek.com",
+      maxRetries: 0,
+      fetch: (async (input: RequestInfo | URL) => {
+        requestedUrl = typeof input === "string" ? input : input.toString()
+        return new Response("not found", { status: 404 })
+      }) as typeof fetch,
+    })
+
+    for await (const _event of provider.streamChat({
+      model: "deepseek-v4-pro",
+      purpose: "agent_main",
+      system: "system",
+      messages: [{ role: "user", content: "hello" }],
+      tools: [],
+      maxTokens: 1,
+    })) {
+      // Consume the stream so the SDK performs the request.
+    }
+
+    expect(requestedUrl).toBe("https://api.deepseek.com/anthropic/v1/messages")
+  })
+})

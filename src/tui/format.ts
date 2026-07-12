@@ -219,12 +219,15 @@ function formatMarkdownTable(rows: string[], width: number): string[] {
     return Math.min(maxContentWidth, natural)
   })
 
-  const formatted = dataRows.map(row =>
-    `| ${widths.map((cellWidth, column) => padCell(row[column] ?? "", cellWidth)).join(" | ")} |`,
-  )
-
-  if (formatted.length >= 2) {
-    formatted.splice(1, 0, separator(widths))
+  const formatted: string[] = []
+  for (let rowIndex = 0; rowIndex < dataRows.length; rowIndex++) {
+    const row = dataRows[rowIndex]!
+    const wrappedCells = widths.map((cellWidth, column) => wrapTerminalLine(row[column] ?? "", cellWidth))
+    const rowHeight = Math.max(...wrappedCells.map(lines => lines.length), 1)
+    for (let lineIndex = 0; lineIndex < rowHeight; lineIndex++) {
+      formatted.push(`| ${widths.map((cellWidth, column) => padCell(wrappedCells[column]?.[lineIndex] ?? "", cellWidth)).join(" | ")} |`)
+    }
+    if (rowIndex === 0 && dataRows.length >= 2) formatted.push(separator(widths))
   }
 
   return formatted.flatMap(line => wrapTerminalLine(line, width))

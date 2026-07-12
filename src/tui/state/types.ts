@@ -24,6 +24,7 @@ export interface TuiMessage {
   kind?: TuiEventKind
   pending?: boolean
   error?: boolean
+  replaceKey?: string
   createdAt: number
 }
 
@@ -78,6 +79,7 @@ export interface TuiTokenState {
   inputTokens: number
   outputTokens: number
   contextMax: number
+  activeContextPercent?: number
   cacheHitRate?: number
 }
 

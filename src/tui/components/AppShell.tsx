@@ -533,7 +533,6 @@ export function AppShell(props: AppShellProps) {
               />
             )}
           </Box>
-          {state.errorLine && <Text color={theme.error}>{state.errorLine}</Text>}
         </Box>
 
         {layout.showDash && (

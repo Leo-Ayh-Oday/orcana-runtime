@@ -79,6 +79,8 @@ export type TuiEvent =
       inputTokens?: number
       outputTokens?: number
       contextMax?: number
+      /** Percentage of the current provider request context window in use. */
+      activeContextPercent?: number
       cacheHitRate?: number
       round?: number
     }
@@ -95,6 +97,8 @@ export type TuiEvent =
       text: string
       dedupeKey?: string
       minIntervalMs?: number
+      /** Replace the latest matching event after the current user turn. */
+      replaceKey?: string
     }
   | { type: "clarification.ready"; data: ClarificationReady }
   | { type: "ripple.phase"; phase: TuiRipplePhase }

@@ -12,6 +12,7 @@
 
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
+import { clipProviderContext } from "../context/staged"
 
 const JINA_READER_URL = "https://r.jina.ai"
 
@@ -22,6 +23,44 @@ const BLOCKED_DOMAINS = new Set([
 
 const TIMEOUT_MS = 15_000
 const MAX_CONTENT_BYTES = 500_000
+const SUMMARY_CHARS = 12_000
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function compactJson(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return value.length > 800 ? `${value.slice(0, 800)}…` : value
+  if (typeof value !== "object" || value === null) return value
+  if (depth >= 2) return Array.isArray(value) ? `[${value.length} items]` : "[nested object]"
+  if (Array.isArray(value)) return value.slice(0, 12).map(item => compactJson(item, depth + 1))
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 30)
+      .map(([key, item]) => [key, compactJson(item, depth + 1)]),
+  )
+}
+
+/** Deterministic local summary used when the tool schema requests summarize=true. */
+export function summarizeFetchedContent(text: string, url: string): string {
+  const marker = "Markdown Content:"
+  const candidate = (text.includes(marker) ? text.slice(text.indexOf(marker) + marker.length) : text).trim()
+  try {
+    const parsed = JSON.parse(candidate) as unknown
+    if (isRecord(parsed)) {
+      const preferredKeys = [
+        "name", "full_name", "description", "html_url", "homepage", "stargazers_count",
+        "forks_count", "open_issues_count", "language", "topics", "license", "created_at", "updated_at",
+      ]
+      const preferred = Object.fromEntries(preferredKeys.filter(key => key in parsed).map(key => [key, compactJson(parsed[key])]))
+      const payload = Object.keys(preferred).length >= 2 ? preferred : compactJson(parsed)
+      return `Source: ${url}\n${JSON.stringify(payload, null, 2)}`
+    }
+    return clipProviderContext(JSON.stringify(compactJson(parsed), null, 2), SUMMARY_CHARS)
+  } catch {
+    return clipProviderContext(text, SUMMARY_CHARS)
+  }
+}
 
 function jinaApiKey(): string {
   return process.env.JINA_API_KEY ?? ""
@@ -156,7 +195,8 @@ async function fetchAndExtract(params: WebFetchParams): Promise<ToolResult> {
   try {
     const apiKey = jinaApiKey()
     const text = await fetchViaJina(parsed.toString(), apiKey)
-    const truncated = text.slice(0, MAX_CONTENT_BYTES)
+    const extracted = params.summarize !== false ? summarizeFetchedContent(text, parsed.toString()) : text
+    const truncated = extracted.slice(0, MAX_CONTENT_BYTES)
 
     const result = Result.ok(truncated, {
       url: parsed.toString(),
@@ -173,7 +213,8 @@ async function fetchAndExtract(params: WebFetchParams): Promise<ToolResult> {
   // Fallback: direct HTTP + stripHtml
   try {
     const text = await fetchDirect(parsed.toString())
-    const truncated = text.slice(0, MAX_CONTENT_BYTES)
+    const extracted = params.summarize !== false ? summarizeFetchedContent(text, parsed.toString()) : text
+    const truncated = extracted.slice(0, MAX_CONTENT_BYTES)
 
     const result = Result.ok(truncated, {
       url: parsed.toString(),

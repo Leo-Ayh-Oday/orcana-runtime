@@ -310,6 +310,21 @@ describe("event-reducer: no mutation", () => {
 // ── Additional coverage: event deduplication ──
 
 describe("event-reducer: ui.event_message deduplication", () => {
+  test("replaceKey updates one progress row instead of appending every round", () => {
+    let state = createInitialTuiState()
+    state = reduceTuiEvent(state, {
+      type: "ui.event_message", kind: "activity", text: "round 7",
+      replaceKey: "round-progress", minIntervalMs: 0,
+    }, 1000)
+    state = reduceTuiEvent(state, {
+      type: "ui.event_message", kind: "activity", text: "round 8",
+      replaceKey: "round-progress", minIntervalMs: 0,
+    }, 1001)
+
+    expect(state.messages).toHaveLength(1)
+    expect(state.messages[0]!.text).toBe("round 8")
+  })
+
   test("same dedupeKey within minIntervalMs is suppressed", () => {
     let state = createInitialTuiState()
     state = reduceTuiEvent(state, {
@@ -360,7 +375,7 @@ describe("event-reducer: user.message resets run state", () => {
     state = reduceTuiEvent(state, { type: "user.message", text: "first" }, 1000)
     state = reduceTuiEvent(state, { type: "assistant.delta", text: "streaming" }, 1001)
     state = reduceTuiEvent(state, {
-      type: "token.updated", cacheHitRate: 80, round: 3, inputTokens: 1000,
+      type: "token.updated", cacheHitRate: 80, activeContextPercent: 47, round: 3, inputTokens: 1000,
     }, 1002)
     state = reduceTuiEvent(state, {
       type: "task.assigned",
@@ -379,6 +394,7 @@ describe("event-reducer: user.message resets run state", () => {
     expect(state.task).toBeUndefined()
     expect(state.round).toBe(0)
     expect(state.cacheHitHistory).toHaveLength(0)
+    expect(state.tokens.activeContextPercent).toBe(0)
     expect(state.dashToolHistory).toHaveLength(0)
     expect(state.status).toBe("starting...")
     expect(state.done).toBe(false)

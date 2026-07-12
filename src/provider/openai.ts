@@ -59,6 +59,11 @@ export class OpenAIProvider implements LLMProvider {
   private sleep: (ms: number) => Promise<void>
   private fetchFn: typeof fetch
 
+  private chatCompletionsURL(): string {
+    const value = this.baseURL.trim().replace(/\/+$/, "")
+    return /\/chat\/completions$/i.test(value) ? value : `${value}/chat/completions`
+  }
+
   constructor(
     apiKey: string,
     options: {
@@ -223,7 +228,7 @@ export class OpenAIProvider implements LLMProvider {
     body: Record<string, unknown>,
     options: ProviderCallOptions,
   ): AsyncGenerator<StreamEvent> {
-    const response = await this.fetchFn(`${this.baseURL}/chat/completions`, {
+    const response = await this.fetchFn(this.chatCompletionsURL(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -260,7 +265,7 @@ export class OpenAIProvider implements LLMProvider {
     let buffer = ""
 
     try {
-      while (true) {
+      readLoop: while (true) {
         const { done, value } = await reader.read()
         if (done) break
 
@@ -272,7 +277,7 @@ export class OpenAIProvider implements LLMProvider {
           const trimmed = line.trim()
           if (!trimmed || !trimmed.startsWith("data: ")) continue
           const data = trimmed.slice(6)
-          if (data === "[DONE]") continue
+          if (data === "[DONE]") break readLoop
 
           try {
             const chunk = JSON.parse(data) as OpenAIStreamChunk

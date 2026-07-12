@@ -26,7 +26,7 @@ import { setCascadeFiles } from "../ripple/engine"
 import type { ModelRouter } from "../provider/router"
 import { ConfidenceEvaluator } from "../evaluator/confidence"
 import { AgentState, StateMachine } from "./state-machine"
-import { compactAssistantContext } from "./round/helpers"
+import { compactAssistantContext, formatRoundBudgetExhausted, resolveMaxRounds, selectRecentHistoryWithinBudget } from "./round/helpers"
 import { runPostEditDiagnostics, runRippleVerification, collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
 import { ErrorTracker, withToolTimeout, nextProviderEvent, providerIdleTimeoutMs, runToolBeforeHook, runToolAfterHook, appendHookWarnings, executeToolWithHooks, buildVolatileContextMessage, collectResearchEvidence, containsTypecheckFailure, countTypecheckIssues, isVerificationUnavailable, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles, missingExplicitRequiredFiles } from "./round/pre-loop"
 import type { HookSystem } from "../hooks"
@@ -66,12 +66,13 @@ import { saveCheckpoint, adaptiveCheckpointThreshold, shouldSkipCheckpointThisRo
 import { buildContextMessages, buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "./round/request-builder"
 import { createPreRoundChain } from "./gates/pre-round"
 import { processGateOverflow } from "./gates/overflow"
-import { createEpochState, buildPlanStateContext, classifyEpochAction, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
+import { createEpochState, buildPlanStateContext, classifyEpochAction, epochThresholdsForContext, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
 import { setActivePatchContext } from "./patch-transaction"
 import { createEvidenceLedger, type EvidenceLedger } from "./evidence-ledger"
 import { setActiveMode, getActiveMode, formatModePrompt, shouldTransitionMode } from "./mode-contract"
 import type { ModeTransitionContext } from "./mode-contract"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMap, type ContextMapTaskLevel } from "../context/context-map"
+import { clipProviderContext } from "../context/staged"
 
 import type { UsageStats, AgentOptions } from "./loop-types"
 export type { UsageStats, AgentOptions }
@@ -80,8 +81,8 @@ export async function* agentLoop(
   prompt: string,
   options: AgentOptions,
 ): AsyncGenerator<StreamEvent> {
-  const maxRoundsFromEnv = process.env.DEEPSEEK_MAX_ROUNDS ? parseInt(process.env.DEEPSEEK_MAX_ROUNDS, 10) : undefined
-  const { provider, model, tools, maxRounds = maxRoundsFromEnv ?? 50, stagedContext, hooks } = options
+  const { provider, model, tools, stagedContext, hooks } = options
+  const maxRounds = resolveMaxRounds(options.maxRounds, process.env.DEEPSEEK_MAX_ROUNDS)
   const startTime = Date.now() // PR-7.2: for Stop hook session duration
   const effectivePrompt = buildEffectivePrompt(prompt, options.conversationHistory)
   const language = detectLanguage(effectivePrompt)
@@ -94,14 +95,13 @@ export async function* agentLoop(
   if (options.conversationHistory?.length) {
     const ESTIMATED_CHARS_PER_TOKEN = 3
     const HISTORY_TOKEN_BUDGET = 150_000
-    let used = 0
-    const recent = options.conversationHistory.length > 60
-      ? options.conversationHistory.slice(-60)
-      : options.conversationHistory
+    const recent = selectRecentHistoryWithinBudget(
+      options.conversationHistory,
+      HISTORY_TOKEN_BUDGET,
+      ESTIMATED_CHARS_PER_TOKEN,
+      60,
+    )
     for (const h of recent) {
-      const est = Math.ceil(h.content.length / ESTIMATED_CHARS_PER_TOKEN)
-      if (used + est > HISTORY_TOKEN_BUDGET) break
-      used += est
       rawMessages.push({ role: h.role, content: h.content })
     }
   }
@@ -408,10 +408,10 @@ export async function* agentLoop(
   // Cumulative context tracking (DeepSeek V4: 1M context window)
   let contextInputTotal = 0
   let contextOutputTotal = 0
-  const CONTEXT_MAX = 1_048_576
+  const CONTEXT_MAX = options.contextMaxTokens ?? 1_048_576
 
   // ── Context Epoch (PR 4): four-layer context architecture ──
-  const epochState = createEpochState()
+  const epochState = createEpochState(epochThresholdsForContext(CONTEXT_MAX))
 
   const syncModeWithMasterPlan = (): void => {
     if (!masterPlan) return
@@ -538,6 +538,7 @@ export async function* agentLoop(
   }
 
   let finalRound = 0 // PR-7.2: tracked for Stop hook outside loop scope
+  let reachedRoundBudget = false
   for (let round = 0; round < maxRounds; round++) {
     finalRound = round
     options.runTrace?.record("round_started", { round })
@@ -807,9 +808,10 @@ export async function* agentLoop(
     const shouldBufferCompletionText = taskTracker?.phase === "building" || taskTracker?.phase === "complete" || taskHadWrite || taskToolErrors > 0
     const bufferReadonlyText = intentPolicy.mode === "readonly" || shouldBufferCompletionText
     let providerUsage: ProviderTokenUsage | null = null
+    const providerAbort = new AbortController()
 
     try {
-      const providerIterator = provider.streamChat({ model: modelName, purpose: "agent_main", system, messages: providerMessages, tools: providerToolSchemas, thinking, maxTokens: maxTok })[Symbol.asyncIterator]()
+      const providerIterator = provider.streamChat({ model: modelName, purpose: "agent_main", system, messages: providerMessages, tools: providerToolSchemas, thinking, maxTokens: maxTok, abortSignal: providerAbort.signal })[Symbol.asyncIterator]()
       while (true) {
         const next = await nextProviderEvent(providerIterator, providerIdleTimeoutMs())
         if (next.done) break
@@ -842,6 +844,7 @@ export async function* agentLoop(
         }
       }
     } catch (e) {
+      providerAbort.abort(e)
       streamError = e instanceof Error ? e.message : String(e)
       const classified = classifyProviderError(e)
       streamErrorRetryable = classified.retryable
@@ -1092,10 +1095,38 @@ export async function* agentLoop(
     let serviceTestGuidanceNeeded = false
     rateLimitShell = 0; rateLimitFile = 0; rateLimitNetwork = 0
 
-    const parallelReadonly = completedToolCalls.length > 1 && completedToolCalls.every(tc => {
+    const parallelCandidate = !preRoundCtx.taskPlanning && completedToolCalls.length > 1 && completedToolCalls.every(tc => {
       const tool = tools.find(t => t.defn.name === tc.name)
       return Boolean(tc.name !== "web_search" && tool && tool.defn.isReadonly && !tool.executeStream && (tool.defn.isConcurrencySafe ?? true))
     })
+    const parallelPolicies = new Map<string, ReturnType<typeof evaluateToolPolicy>>()
+    if (parallelCandidate) {
+      const previewRateLimits = { safe: 0, shell: rateLimitShell, file: rateLimitFile, network: rateLimitNetwork, git: 0 }
+      for (const tc of completedToolCalls) {
+        const tool = tools.find(t => t.defn.name === tc.name)
+        const decision = evaluateToolPolicy({
+          toolCall: { id: tc.id, name: tc.name, input: tc.input },
+          tool,
+          intentPolicy,
+          taskTracker,
+          rippleBlockActive,
+          pendingRippleObligations,
+          permissionGate,
+          permissionMode: pmode,
+          rateLimits: previewRateLimits,
+          webSearchFailedThisTurn,
+          webSearchFailReason,
+          finalText,
+          contextReadinessBlocked,
+          contextReadinessBlockers,
+          modeContract: getActiveMode(),
+        })
+        parallelPolicies.set(tc.id, decision)
+        if (decision.incrementRateLimit) previewRateLimits[decision.incrementRateLimit]++
+      }
+    }
+    const parallelReadonly = parallelCandidate
+      && completedToolCalls.every(tc => parallelPolicies.get(tc.id)?.allowed === true)
     const parallelResults = new Map<string, { content: string; success: boolean; metadata?: Record<string, unknown>; startedAt: number }>()
     if (parallelReadonly) {
       yield { type: "status", data: `greedy-tools: ${completedToolCalls.length} readonly calls` }
@@ -1129,12 +1160,12 @@ export async function* agentLoop(
       if (preRoundCtx.taskPlanning && round > 0) {
         resultContent = `任务追踪已阻止：当前是计划专用回合，只允许输出计划，不允许调用 ${tc.name}。下一轮将进入执行阶段。`
         resultObj = { success: false, content: resultContent, metadata: { blocked: true, planOnlyRound: true } }
-        resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: resultContent.slice(0, 4000) })
+        resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(resultContent, 4000) })
         continue
       }
 
       // ── Unified tool execution policy — all gates in one pure function ──
-      const policyResult = evaluateToolPolicy({
+      const policyResult = parallelPolicies.get(tc.id) ?? evaluateToolPolicy({
         toolCall: { id: tc.id, name: tc.name, input: tc.input },
         tool,
         intentPolicy,
@@ -1175,7 +1206,7 @@ export async function* agentLoop(
         // Hard blocks (rate_limit, permission:deny) push immediately and skip yield.
         // Soft blocks (readonly, ripple, planning, web_search) fall through to yield.
         if (policyResult.reason === "rate_limit" || policyResult.reason.startsWith("permission:")) {
-          resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: resultContent.slice(0, 4000) })
+          resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(resultContent, 4000) })
           continue
         }
       }
@@ -1366,7 +1397,7 @@ export async function* agentLoop(
         options.runTrace?.record("tool_result", ledgerEntry)
         yield { type: "status", data: formatToolLedgerStatus(ledgerEntry) }
 
-      resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: resultContent.slice(0, 4000) })
+      resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(resultContent, 4000) })
     }
 
     // ── Microcompact: forward pass — compact fresh tool results before they enter history ──
@@ -1891,6 +1922,14 @@ export async function* agentLoop(
         yield { type: "status", data: `knowledge-reconcile: pruned ${recResult.pruned} expired, ${recResult.indexed} active` }
       }
     }
+    if (round + 1 >= maxRounds) reachedRoundBudget = true
+  }
+
+  if (reachedRoundBudget) {
+    const message = formatRoundBudgetExhausted(maxRounds)
+    yield { type: "status", data: `round-budget: exhausted ${maxRounds}` }
+    yield { type: "text", data: message }
+    options.runTrace?.record("gate_decision", { gate: "round_budget", decision: "paused", maxRounds })
   }
 
   options.runTrace?.record("agent_loop_finished", {

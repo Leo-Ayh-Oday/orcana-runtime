@@ -15,14 +15,14 @@ import {
 import { AppShell, type ClarificationWizardState, type InputChromeState } from "./components/AppShell"
 import type { ModelDialogOption, RuntimeDialogState, ThinkEffort } from "./components/AppShell"
 import { ErrorBoundary } from "./components/ErrorBoundary"
-import type { ScrollbackScrollState } from "./components/Scrollback"
+import { adjustScrollOffsetForGrowth, type ScrollbackScrollState } from "./components/Scrollback"
 import type { TaskProgressState } from "./components/PlanPanel"
 import { renderMessageLines } from "./components/MessageItem"
 import { cleanAgentError } from "./state/adapter-helpers"
 import { dispatchTuiCommand } from "./commands/dispatcher"
 import { resolveActiveContext } from "./input/types"
 import { resolveKeyAction } from "./input/keymap"
-import { cleanupTerminal, mouseEvents } from "./stdin-filter"
+import { cleanupTerminal, mouseEvents, resolveMouseModeEnabled } from "./stdin-filter"
 import { createStreamTrace, traceStartRound, traceDeltaChunk, traceFinalAccumulated, traceEndRound, traceSetStopReason, traceSetStreamError } from "./stream-trace"
 import type { StreamTraceState } from "./stream-trace"
 import type { ConfirmRequest } from "./confirm-stubs"
@@ -55,7 +55,7 @@ const TUI_STARTUP_MS = tuiTokens.motion.startupMs
 const TUI_STREAM_FLUSH_MS = tuiTokens.motion.streamFlushMs
 const TUI_FRAME_MS = tuiTokens.motion.frameMs
 const TUI_SCROLL_STEP = tuiTokens.layout.scrollStep
-const TUI_MOUSE_MODE = process.env.ORCANA_TUI_MOUSE === "1"
+const TUI_MOUSE_MODE = resolveMouseModeEnabled(process.env.ORCANA_TUI_MOUSE)
 
 function TuiInputGuard() {
   // 保持 stdin 在 raw mode，并过滤鼠标/转义序列，防止泄漏到 TextArea。
@@ -275,7 +275,6 @@ function useAgentStream(
       opts = runtime.buildAgentOptions({
         model: runtime.modelRouter.selectForPurpose("agent_main"),
         tools: runtime.tools,
-        maxRounds: 30,
         thinkEffort: thinkEffort === "auto" ? undefined : thinkEffort,
         conversationHistory: historySnapshot,
         gateTelemetryFile: ".wolf/gate-telemetry.json",
@@ -531,6 +530,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   const [tick, setTick] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
+  const previousMaxOffsetRef = useRef(0)
   const [autoFollow, setAutoFollow] = useState(true)
   const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1 })
   const [showStartup, setShowStartup] = useState(process.env.DEEPSEEK_TUI_SPLASH !== "off")
@@ -1001,11 +1001,18 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   }, [autoFollow, state.messages.length])
 
   useEffect(() => {
-    setScrollOffset(offset => Math.min(offset, scrollState.maxOffset))
-  }, [scrollState.maxOffset])
+    const previousMaxOffset = previousMaxOffsetRef.current
+    setScrollOffset(offset => adjustScrollOffsetForGrowth(
+      offset,
+      previousMaxOffset,
+      scrollState.maxOffset,
+      autoFollow,
+    ))
+    previousMaxOffsetRef.current = scrollState.maxOffset
+  }, [autoFollow, scrollState.maxOffset])
 
-  // 鼠标滚轮滚动：默认关闭 mouse reporting，让终端原生拖选/Ctrl+C 复制可用。
-  // 只有 ORCANA_TUI_MOUSE=1 时，stdin-filter 才会收到终端鼠标序列并分发 scroll。
+  // 鼠标滚轮滚动默认由应用接管，因此运行中、输入中和弹窗中都能滚动历史。
+  // ORCANA_TUI_MOUSE=0 可显式退回终端原生选择/alternate-scroll 模式。
   useEffect(() => {
     if (!TUI_MOUSE_MODE) return
     const handler = (direction: number, isCtrl: boolean) => {

@@ -150,6 +150,7 @@ export function reduceTuiEvent(
         task: undefined,
         clarification: undefined,
         round: 0,
+        tokens: { ...state.tokens, activeContextPercent: 0 },
         cacheHitHistory: [],
         rippleFindings: [],
         dashToolHistory: [],
@@ -370,6 +371,7 @@ export function reduceTuiEvent(
         inputTokens: event.inputTokens ?? prevTokens.inputTokens,
         outputTokens: event.outputTokens ?? prevTokens.outputTokens,
         contextMax: event.contextMax ?? prevTokens.contextMax,
+        activeContextPercent: event.activeContextPercent ?? prevTokens.activeContextPercent,
         cacheHitRate: event.cacheHitRate ?? prevTokens.cacheHitRate,
       }
       const result: TuiState = {
@@ -451,12 +453,40 @@ export function reduceTuiEvent(
         return state
       }
 
+      if (event.replaceKey) {
+        let replaceIndex = -1
+        for (let index = state.messages.length - 1; index >= 0; index--) {
+          const candidate = state.messages[index]!
+          if (candidate.role === "user") break
+          if (candidate.role === "event" && candidate.replaceKey === event.replaceKey) {
+            replaceIndex = index
+            break
+          }
+        }
+        if (replaceIndex >= 0) {
+          const messages = state.messages.slice()
+          messages[replaceIndex] = {
+            ...messages[replaceIndex]!,
+            kind: event.kind,
+            text: trimmed,
+            createdAt: ts,
+          }
+          return {
+            ...state,
+            _lastEventKey: key,
+            _lastEventAt: ts,
+            messages,
+          }
+        }
+      }
+
       let nextId = state._nextId
       const msg: TuiMessage = {
         id: `msg-${++nextId}`,
         role: "event",
         kind: event.kind,
         text: trimmed,
+        replaceKey: event.replaceKey,
         createdAt: ts,
       }
       return {

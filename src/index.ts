@@ -69,16 +69,18 @@ function printHelp() {
     "  orcana --cli",
     "  orcana list",
     "",
-    "Environment:",
-    "  DEEPSEEK_API_KEY    DeepSeek API key (required for model calls)",
+    "Model configuration:",
+    "  Run /models in the TUI to select a model and save its key globally.",
+    "  Environment keys are used only when runtime.allowEnvKeys is enabled.",
     "",
     "Docs: https://github.com/Leo-Ayh-Oday/deepseek-orcana",
   ].join("\n"))
 }
 
-function printDoctor() {
+async function printDoctor() {
+  const { diagnoseModelConfiguration } = await import("./config/diagnostics")
+  const model = await diagnoseModelConfiguration()
   const nodeOk = Number(process.versions.node.split(".")[0] ?? 0) >= 20
-  const apiKeyOk = Boolean(process.env.DEEPSEEK_API_KEY)
   const sessionStore = process.versions.bun
     ? "SQLite/FTS available"
     : "JSON fallback; SQLite/FTS unavailable without Bun"
@@ -87,7 +89,8 @@ function printDoctor() {
     `Node.js ${process.versions.node} ${nodeOk ? "ok" : "requires >=20"}`,
     `Bun ${process.versions.bun ?? "not required for npm users"}`,
     `Session store ${sessionStore}`,
-    `DEEPSEEK_API_KEY ${apiKeyOk ? "set" : "missing"}`,
+    `Model ${model.providerId}/${model.modelId}`,
+    `Authentication ${model.auth}`,
   ].join("\n"))
 }
 
@@ -103,7 +106,7 @@ async function main() {
   }
 
   if (arg === "doctor") {
-    printDoctor()
+    await printDoctor()
     return
   }
 

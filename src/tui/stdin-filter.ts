@@ -29,6 +29,12 @@ import { EventEmitter } from "events"
 /** 鼠标事件总线。ChatApp 监听 "scroll" 事件实现滚轮滚动。 */
 export const mouseEvents = new EventEmitter()
 
+/** Application scrolling is the default. Set ORCANA_TUI_MOUSE=0 only when
+ * native terminal text selection is more important than in-app wheel input. */
+export function resolveMouseModeEnabled(value: string | undefined): boolean {
+  return value !== "0"
+}
+
 // SGR 鼠标序列：\x1B[<button;col;rowM 或 m
 const SGR_MOUSE_REGEX = /\x1B\[<(\d+);\d+;\d+[mM]/g
 const DEC1000_MOUSE_REGEX = /\x1B\[M([^\x1B])([^\x1B])([^\x1B])/g

@@ -3,6 +3,10 @@ import { cleanAgentError } from "../../src/tui/state/adapter-helpers"
 import { StreamEventAdapter } from "../../src/tui/state/event-adapter"
 
 describe("TUI provider error formatting", () => {
+  test("explains truncated escape request errors as recoverable context corruption", () => {
+    expect(cleanAgentError("client 400: Failed to parse request: unexpected end of hex escape")).toContain("上下文")
+  })
+
   test("renders quota failures as a short Chinese action message", () => {
     const message = cleanAgentError("quota 429: insufficient_quota: Your account balance is too low")
 

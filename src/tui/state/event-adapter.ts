@@ -196,15 +196,13 @@ export class StreamEventAdapter {
     // ── 本轮工具活动聚合摘要（仅 provider 侧真实数据时发射一次） ──
     const isProviderUsage = d.cacheSource === "provider" || typeof d.actualModel === "string"
     if (isProviderUsage && !this.roundSummaryEmitted && this.roundToolCalls.size > 0) {
-      const parts = [...this.roundToolCalls.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([name, count]) => count > 1 ? `${name} ×${count}` : name)
       const round = typeof d.round === "number" ? d.round : "?"
       events.push({
         type: "ui.event_message",
         kind: "activity",
-        text: `round ${round} · ${parts.join(" · ")}`,
+        text: `round ${round}`,
         dedupeKey: `round-activity:${round}`,
+        replaceKey: "round-progress",
         minIntervalMs: 0,
       })
       this.roundSummaryEmitted = true
@@ -233,7 +231,12 @@ export class StreamEventAdapter {
       inputTokens: typeof d.inputTokens === "number" ? d.inputTokens : undefined,
       outputTokens: typeof d.outputTokens === "number" ? d.outputTokens : undefined,
       contextMax: typeof d.contextMax === "number" ? d.contextMax : undefined,
-      cacheHitRate: typeof d.cacheHitRate === "number" ? d.cacheHitRate : undefined,
+      activeContextPercent: typeof d.contextUsagePercent === "number" ? d.contextUsagePercent : undefined,
+      // Pre-request estimates always report 0 on a changing conversation hash.
+      // They are not provider cache telemetry and must not erase the last real rate.
+      ...(d.cacheSource !== "estimate" && typeof d.cacheHitRate === "number"
+        ? { cacheHitRate: d.cacheHitRate }
+        : {}),
       round: typeof d.round === "number" ? d.round : undefined,
     })
 

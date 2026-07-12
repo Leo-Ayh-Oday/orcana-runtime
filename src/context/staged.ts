@@ -20,6 +20,22 @@ function priorityScore(path: string): number {
   return 4
 }
 
+/** Clip source context without leaving an incomplete source escape at the end.
+ * DeepSeek's Anthropic-compatible parser rejects message content ending in a
+ * partial `\xNN` / `\uNNNN` sequence even though the outer JSON is valid. */
+export function clipProviderContext(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content
+  const marker = `\n[context clipped from ${content.length} chars]`
+  const budget = Math.max(0, maxChars - marker.length)
+  let clipped = content.slice(0, budget)
+  const lastNewline = clipped.lastIndexOf("\n")
+  if (lastNewline >= Math.floor(budget * 0.75)) clipped = clipped.slice(0, lastNewline)
+  clipped = clipped.replace(/\\(?:x[0-9a-fA-F]{0,1}|u[0-9a-fA-F]{0,3})?$/, "")
+  const lastCodeUnit = clipped.charCodeAt(clipped.length - 1)
+  if (lastCodeUnit >= 0xD800 && lastCodeUnit <= 0xDBFF) clipped = clipped.slice(0, -1)
+  return clipped + marker
+}
+
 // ── Project scanner ──
 
 const SKIP = new Set([".git","__pycache__",".pytest_cache","node_modules",".venv","venv","dist","build",".egg-info",".codegraph",".obsidian",".wolf",".deepseek-code"])
@@ -114,7 +130,7 @@ export class StagedContextManager {
     if (this.loadedFiles.size > 0) {
       const sorted = [...this.loadedFiles.entries()].sort((a, b) => priorityScore(a[0]) - priorityScore(b[0]))
       for (const [path, content] of sorted.slice(0, this.maxActive)) {
-        const truncated = content.length > 4000 ? content.slice(0, 4000) : content
+        const truncated = clipProviderContext(content, 4000)
         ctx.warm.push({ name: "warm", content: truncated, source: path, tokenEstimate: Math.ceil(truncated.length / 3) })
       }
     }
@@ -163,7 +179,7 @@ export class StagedContextManager {
       const sorted = [...this.loadedFiles.entries()]
         .sort((a, b) => priorityScore(a[0]) - priorityScore(b[0]))
       for (const [path, content] of sorted.slice(0, this.maxActive)) {
-        const truncated = content.length > 2000 ? content.slice(0, 2000) : content
+        const truncated = clipProviderContext(content, 2000)
         stableCtx.warm.push({ name: "warm", content: truncated, source: path, tokenEstimate: Math.ceil(truncated.length / 3) })
       }
     }

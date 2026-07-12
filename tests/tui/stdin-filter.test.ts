@@ -28,9 +28,18 @@ import {
   enableMouseMode,
   disableMouseMode,
   enableAlternateScrollMode,
+  resolveMouseModeEnabled,
   cleanupTerminal,
   _getPendingBuffer,
 } from "../../src/tui/stdin-filter"
+
+describe("mouse mode policy", () => {
+  test("application wheel scrolling is enabled by default and has an explicit opt-out", () => {
+    expect(resolveMouseModeEnabled(undefined)).toBe(true)
+    expect(resolveMouseModeEnabled("1")).toBe(true)
+    expect(resolveMouseModeEnabled("0")).toBe(false)
+  })
+})
 
 function dec1000(button: number, col = 40, row = 10): string {
   return String.fromCharCode(button + 32, col + 32, row + 32)

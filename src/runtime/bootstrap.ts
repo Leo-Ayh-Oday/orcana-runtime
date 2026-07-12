@@ -581,28 +581,32 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   }
 
   // ── 11. AgentOptions builder ──
-  const buildAgentOptions = (overrides?: Partial<AgentOptions>): AgentOptions => ({
-    provider: multiProvider,
-    model: modelRouter.selectForPurpose("agent_main"),
-    tools,
-    maxRounds: 50,
-    hooks,
-    stagedContext: stagedCtx,
-    thinkingStore,
-    knowledgeBase,
-    stableMemoryContext: buildStableAnchorContext(compactor),
-    autoFinishOnVerifiedWrite: true,
-    autoApprovePlan: false,
-    modelRouter,
-    sessionId: activeSessionId,
-    gateTelemetryFile,
-    contextMapPolicy,
-    // PR-7.2: inject SessionStart context from hooks
-    sessionStartContext: sessionStartResult.context.length > 0
-      ? sessionStartResult.context.join("\n\n")
-      : undefined,
-    ...overrides,
-  })
+  const buildAgentOptions = (overrides?: Partial<AgentOptions>): AgentOptions => {
+    const selectedModel = overrides?.model ?? modelRouter.selectForPurpose("agent_main")
+    const modelSpec = registry.resolveModel(selectedModel)
+    return {
+      provider: multiProvider,
+      model: selectedModel,
+      tools,
+      contextMaxTokens: modelSpec?.contextWindow ?? 128_000,
+      hooks,
+      stagedContext: stagedCtx,
+      thinkingStore,
+      knowledgeBase,
+      stableMemoryContext: buildStableAnchorContext(compactor),
+      autoFinishOnVerifiedWrite: true,
+      autoApprovePlan: false,
+      modelRouter,
+      sessionId: activeSessionId,
+      gateTelemetryFile,
+      contextMapPolicy,
+      // PR-7.2: inject SessionStart context from hooks
+      sessionStartContext: sessionStartResult.context.length > 0
+        ? sessionStartResult.context.join("\n\n")
+        : undefined,
+      ...overrides,
+    }
+  }
 
   // ── 12. RunTrace factory ──
   const startRunTrace = (prompt: string) => AgentRunTrace.start(projectRoot, prompt)

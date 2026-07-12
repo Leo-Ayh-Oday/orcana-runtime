@@ -123,13 +123,16 @@ export class DeepSeekProvider implements LLMProvider {
     const thinkingBlocks: Array<{ thinking: string; signature: string }> = []
     const stream = this.client.messages.stream(params) as ClosableAsyncIterable
     let stopReason = ""
+    const abortStream = () => closeProviderStream(stream)
+    options.abortSignal?.addEventListener("abort", abortStream, { once: true })
 
-    for await (const event of stream) {
-      if (options.abortSignal?.aborted) {
-        closeProviderStream(stream)
-        yield { type: "status", data: "provider-stream: aborted by local budget guard" }
-        break
-      }
+    try {
+      for await (const event of stream) {
+        if (options.abortSignal?.aborted) {
+          closeProviderStream(stream)
+          yield { type: "status", data: "provider-stream: aborted by local budget guard" }
+          break
+        }
 
       const providerUsage = extractProviderTokenUsage(event)
       if (providerUsage) {
@@ -158,7 +161,7 @@ export class DeepSeekProvider implements LLMProvider {
           }
         }
       }
-      switch (event.type) {
+        switch (event.type) {
         case "content_block_start": {
           const b = event.content_block
           if (isRecord(b) && b.type === "tool_use") {
@@ -215,7 +218,10 @@ export class DeepSeekProvider implements LLMProvider {
           }
           break
         }
+        }
       }
+    } finally {
+      options.abortSignal?.removeEventListener("abort", abortStream)
     }
 
     for (const tb of toolBlocks) {

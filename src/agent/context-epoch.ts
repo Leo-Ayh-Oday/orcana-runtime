@@ -44,6 +44,24 @@ export const DEFAULT_EPOCH_THRESHOLDS: EpochThresholds = {
   rolloverChars: Number(process.env.DEEPSEEK_EPOCH_ROLLOVER_CHARS) || 300_000,
 }
 
+/** Scale automatic compaction so it runs before ContextBudgetGate blocks models
+ * with windows smaller than DeepSeek V4's 1M tokens. */
+export function epochThresholdsForContext(contextMaxTokens: number): EpochThresholds {
+  const estimatedWindowChars = Math.max(3, contextMaxTokens * 3)
+  const rolloverChars = Math.min(DEFAULT_EPOCH_THRESHOLDS.rolloverChars, Math.floor(estimatedWindowChars * 0.45))
+  const forceCompressChars = Math.min(
+    DEFAULT_EPOCH_THRESHOLDS.forceCompressChars,
+    Math.floor(estimatedWindowChars * 0.38),
+    Math.floor(rolloverChars * 0.85),
+  )
+  const compressChars = Math.min(
+    DEFAULT_EPOCH_THRESHOLDS.compressChars,
+    Math.floor(estimatedWindowChars * 0.25),
+    Math.floor(forceCompressChars * 0.75),
+  )
+  return { compressChars, forceCompressChars, rolloverChars }
+}
+
 // ── Epoch state ──
 
 export interface EpochSnapshot {

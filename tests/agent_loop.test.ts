@@ -508,12 +508,15 @@ class GenericThrowStreamErrorThenTextProvider implements LLMProvider {
 
 class HangingThenTextProvider implements LLMProvider {
   rounds = 0
+  aborted = false
   messages: ProviderCallOptions["messages"][] = []
 
   async *streamChat(options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
     this.messages.push(options.messages)
     if (this.rounds++ === 0) {
-      await new Promise(() => {})
+      await new Promise<void>(resolve => {
+        options.abortSignal?.addEventListener("abort", () => { this.aborted = true; resolve() }, { once: true })
+      })
       return
     }
     yield { type: "text", data: "Recovered after idle timeout." }
@@ -772,6 +775,30 @@ describe("Agent loop greedy tool execution", () => {
     expect(starts).toHaveLength(2)
     expect(Math.abs(starts[0]! - starts[1]!)).toBeLessThan(80)
     expect(events.some(e => e.type === "status" && String(e.data).includes("greedy-tools"))).toBe(true)
+  })
+
+  test("applies mode policy before launching parallel readonly tools", async () => {
+    let executions = 0
+    const tools = buildTools(
+      {
+        name: "probe_a", description: "Probe A", isReadonly: true, isConcurrencySafe: true,
+        inputSchema: { type: "object", properties: {} },
+        async execute() { executions += 1; return Result.ok("a") },
+      },
+      {
+        name: "probe_b", description: "Probe B", isReadonly: true, isConcurrencySafe: true,
+        inputSchema: { type: "object", properties: {} },
+        async execute() { executions += 1; return Result.ok("b") },
+      },
+    )
+
+    const events: StreamEvent[] = []
+    for await (const event of agentLoop("prepare report", {
+      provider: new ParallelToolProvider(), model: "test", tools, maxRounds: 1, activeMode: "report",
+    })) events.push(event)
+
+    expect(executions).toBe(0)
+    expect(events.some(event => event.type === "tool_result")).toBe(true)
   })
 
   test("does not run multiple web_search calls in parallel after a failure", async () => {
@@ -1818,6 +1845,7 @@ describe("Agent loop greedy tool execution", () => {
 
       const text = events.filter(event => event.type === "text").map(event => String(event.data ?? "")).join("\n")
       expect(provider.rounds).toBe(2)
+      expect(provider.aborted).toBe(true)
       expect(text).toContain("Recovered after idle timeout.")
       expect(events.some(event => event.type === "error" && String(event.data).includes("provider stream idle timeout"))).toBe(true)
       expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying interrupted round"))).toBe(true)
@@ -1826,6 +1854,20 @@ describe("Agent loop greedy tool execution", () => {
       if (previous === undefined) delete process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS
       else process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS = previous
     }
+  })
+
+  test("uses the selected model context window for budget telemetry", async () => {
+    const events: StreamEvent[] = []
+    for await (const event of agentLoop("Say hello", {
+      provider: new CaptureNativeToolsProvider(),
+      model: "custom-128k",
+      tools: [],
+      maxRounds: 1,
+      contextMaxTokens: 128_000,
+    })) events.push(event)
+
+    const usage = events.find(event => event.type === "token_usage")
+    expect((usage?.data as { contextMax?: number } | undefined)?.contextMax).toBe(128_000)
   })
 
   test("provider stream failure without remaining rounds returns blocked report", async () => {

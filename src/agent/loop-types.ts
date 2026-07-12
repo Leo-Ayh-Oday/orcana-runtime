@@ -23,6 +23,8 @@ export interface AgentOptions {
   model: string
   tools: ToolDescriptor[]
   maxRounds?: number
+  /** Active model context window; defaults to DeepSeek V4's 1M for legacy callers. */
+  contextMaxTokens?: number
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>
   stagedContext?: StagedContextManager
   thinkingStore?: ThinkingStore

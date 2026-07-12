@@ -64,6 +64,9 @@ export function compactStatusText(status: string): string {
 }
 
 export function cleanAgentError(text: string): string {
+  if (/unexpected end of (?:hex|unicode) escape|failed to parse the request body as json/i.test(text)) {
+    return "模型请求中的加载上下文被截断在转义序列中。本轮已安全停止；上下文裁剪已修复，请直接重试或发送“继续”。"
+  }
   if (text.includes("[clarification-gate]")) {
     return "需要补充信息。请把需求说得更具体一点，然后重试。"
   }

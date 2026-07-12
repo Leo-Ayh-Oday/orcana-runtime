@@ -21,8 +21,12 @@ interface ClosableAsyncIterable extends AsyncIterable<unknown> {
   return?: () => Promise<unknown>
 }
 
+interface AnthropicLikeClient {
+  messages: { stream(params: Anthropic.MessageCreateParams): AsyncIterable<unknown> }
+}
+
 export class AnthropicProvider implements LLMProvider {
-  private client: Anthropic
+  private client: AnthropicLikeClient
   private maxRetries: number
   private sleep: (ms: number) => Promise<void>
 
@@ -32,9 +36,10 @@ export class AnthropicProvider implements LLMProvider {
       baseURL?: string
       maxRetries?: number
       sleep?: (ms: number) => Promise<void>
+      client?: AnthropicLikeClient
     } = {},
   ) {
-    this.client = new Anthropic({
+    this.client = options.client ?? new Anthropic({
       apiKey,
       baseURL: options.baseURL ?? "https://api.anthropic.com",
       timeout: 180_000, // Anthropic can be slower than DeepSeek
@@ -44,11 +49,24 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async *streamChat(options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    const cacheControl = { type: "ephemeral" as const }
+    const system = typeof options.system === "string"
+      ? [{ type: "text" as const, text: options.system, cache_control: cacheControl }]
+      : options.system
+    const messages = options.messages.map((message, index) => {
+      if (index === 0 && typeof message.content === "string") {
+        return {
+          role: message.role,
+          content: [{ type: "text" as const, text: message.content, cache_control: cacheControl }],
+        }
+      }
+      return message
+    })
     const params: Anthropic.MessageCreateParams = {
       model: options.model as Anthropic.Model,
       max_tokens: options.maxTokens,
-      system: options.system,
-      messages: options.messages as Anthropic.MessageParam[],
+      system,
+      messages: messages as Anthropic.MessageParam[],
     }
     if (options.tools?.length) params.tools = options.tools as unknown as Anthropic.Tool[]
     if (options.thinking) params.thinking = options.thinking as Anthropic.ThinkingConfigParam
@@ -82,23 +100,27 @@ export class AnthropicProvider implements LLMProvider {
     const thinkingBlocks: Array<{ thinking: string; signature: string }> = []
     let ct: { id: string; name: string; input_json: string } | null = null
     let cthink: { thinking: string; signature: string } | null = null
+    let stopReason = ""
 
     const stream = this.client.messages.stream(params) as ClosableAsyncIterable
+    const abortStream = () => closeProviderStream(stream)
+    options.abortSignal?.addEventListener("abort", abortStream, { once: true })
 
-    for await (const event of stream) {
-      const providerUsage = extractProviderTokenUsage(event)
-      if (providerUsage) {
-        yield {
-          type: "token_usage",
-          data: {
-            ...providerUsage,
-            requestedModel: params.model,
-            purpose: options.purpose ?? "unknown",
-          },
+    try {
+      for await (const event of stream) {
+        const providerUsage = extractProviderTokenUsage(event)
+        if (providerUsage) {
+          yield {
+            type: "token_usage",
+            data: {
+              ...providerUsage,
+              requestedModel: params.model,
+              purpose: options.purpose ?? "unknown",
+            },
+          }
         }
-      }
 
-      if (!isRecord(event) || typeof event.type !== "string") continue
+        if (!isRecord(event) || typeof event.type !== "string") continue
 
       if (event.type === "message_start") {
         const message = isRecord(event.message) ? event.message : null
@@ -115,7 +137,7 @@ export class AnthropicProvider implements LLMProvider {
         }
       }
 
-      switch (event.type) {
+        switch (event.type) {
         case "content_block_start": {
           const b = event.content_block
           if (isRecord(b) && b.type === "tool_use") {
@@ -141,7 +163,7 @@ export class AnthropicProvider implements LLMProvider {
           }
           break
         }
-        case "content_block_stop": {
+          case "content_block_stop": {
           if (ct) {
             let input: Record<string, unknown> = {}
             try {
@@ -162,9 +184,17 @@ export class AnthropicProvider implements LLMProvider {
             thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
             cthink = null
           }
-          break
+            break
+          }
+          case "message_delta": {
+            const delta = event.delta
+            if (isRecord(delta) && typeof delta.stop_reason === "string") stopReason = delta.stop_reason
+            break
+          }
         }
       }
+    } finally {
+      options.abortSignal?.removeEventListener("abort", abortStream)
     }
 
     for (const tb of toolBlocks) {
@@ -183,6 +213,12 @@ export class AnthropicProvider implements LLMProvider {
       yield { type: "thinking_blocks", data: thinkingBlocks }
     }
 
+    if (stopReason) yield { type: "status", data: `provider-stop: ${stopReason}` }
+    if (stopReason === "max_tokens") {
+      yield { type: "error", data: "provider stop_reason=max_tokens: response hit the output token limit before completion" }
+      return
+    }
+
     const finalText = textChunks.join("")
     if (finalText && toolBlocks.length === 0) yield { type: "done", data: finalText }
   }
@@ -190,4 +226,10 @@ export class AnthropicProvider implements LLMProvider {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function closeProviderStream(stream: ClosableAsyncIterable): void {
+  try { stream.controller?.abort?.() } catch { /* best effort */ }
+  try { stream.abort?.() } catch { /* best effort */ }
+  try { void stream.return?.() } catch { /* best effort */ }
 }

@@ -27,11 +27,13 @@ export interface RuntimeCounters {
 export function extractRuntimeCounters(state: TuiState): RuntimeCounters {
   const gates = selectGateSummary(state)
   const evidence = selectEvidenceSummary(state)
-  const ctxPct = Math.round(
-    state.tokens.contextMax > 0
-      ? (state.tokens.inputTokens / state.tokens.contextMax) * 100
-      : 0,
-  )
+  const ctxPct = state.tokens.activeContextPercent !== undefined
+    ? Math.max(0, Math.min(100, Math.round(state.tokens.activeContextPercent)))
+    : Math.round(
+        state.tokens.contextMax > 0
+          ? (state.tokens.inputTokens / state.tokens.contextMax) * 100
+          : 0,
+      )
   return {
     ctxPct,
     cachePct: state.tokens.cacheHitRate ?? 0,

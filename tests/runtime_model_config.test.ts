@@ -87,4 +87,40 @@ describe("runtime model configuration", () => {
       runtime.dispose()
     }
   })
+
+  test("restores the configured relay model and credential after a runtime restart", async () => {
+    const globalPath = makeTempConfigPath()
+    const authStore = new MemoryAuthStore()
+    const commonOptions = {
+      enableMCP: false,
+      enableLSP: false,
+      useEnvAuth: false,
+      authStore,
+      configOptions: { globalPath, applyEnv: false, loadProject: false },
+    }
+
+    const first = await createRuntime({ ...commonOptions, allowMissingProviderAuth: true })
+    try {
+      await first.configureModel({
+        providerId: "qwen",
+        modelId: "relay-gpt",
+        apiKey: "sk-persisted",
+        custom: true,
+        baseUrl: "https://relay.example.com/v1",
+      })
+    } finally {
+      first.dispose()
+    }
+
+    const restarted = await createRuntime(commonOptions)
+    try {
+      expect(restarted.config.defaultProvider).toBe("qwen")
+      expect(restarted.modelRouter.getSessionModel()).toBe("relay-gpt")
+      expect(restarted.registry.resolveModel("relay-gpt")?.providerId).toBe("qwen")
+      expect(restarted.isProviderConfigured("qwen")).toBe(true)
+      expect((await authStore.getCredential?.("qwen/default"))?.baseUrl).toBe("https://relay.example.com/v1")
+    } finally {
+      restarted.dispose()
+    }
+  })
 })

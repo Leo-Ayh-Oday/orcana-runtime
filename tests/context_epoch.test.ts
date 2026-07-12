@@ -9,6 +9,7 @@ import {
   buildPlanStateContext,
   hasUnclosedToolChain,
   classifyEpochAction,
+  epochThresholdsForContext,
   epochRollover,
   formatEpochBudgetWarning,
   formatEpochStatus,
@@ -402,5 +403,12 @@ describe("DEFAULT_EPOCH_THRESHOLDS", () => {
   it("has ordered thresholds", () => {
     expect(DEFAULT_EPOCH_THRESHOLDS.compressChars).toBeLessThan(DEFAULT_EPOCH_THRESHOLDS.forceCompressChars)
     expect(DEFAULT_EPOCH_THRESHOLDS.forceCompressChars).toBeLessThan(DEFAULT_EPOCH_THRESHOLDS.rolloverChars)
+  })
+
+  it("scales rollover below the block point for smaller model windows", () => {
+    const thresholds = epochThresholdsForContext(128_000)
+    expect(thresholds.compressChars).toBeLessThan(thresholds.forceCompressChars)
+    expect(thresholds.forceCompressChars).toBeLessThan(thresholds.rolloverChars)
+    expect(thresholds.rolloverChars).toBeLessThan(128_000 * 3 * 0.6)
   })
 })

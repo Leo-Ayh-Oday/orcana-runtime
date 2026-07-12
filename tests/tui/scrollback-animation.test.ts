@@ -193,7 +193,7 @@ describe("classifyPendingActivity (Phase 5)", () => {
 
 // ── Phase 6: FormattedLineCache ──
 
-import { FormattedLineCache, formatLineCacheKey } from "../../src/tui/components/Scrollback"
+import { adjustScrollOffsetForGrowth, FormattedLineCache, formatLineCacheKey, prepareScrollbackViewport } from "../../src/tui/components/Scrollback"
 import type { TuiMessage } from "../../src/tui/state/types"
 
 function makeMsg(id: string, text: string, pending = false): TuiMessage {
@@ -316,6 +316,25 @@ describe("FormattedLineCache (Phase 6)", () => {
     const s = cache.stats()
     expect(s.size).toBeGreaterThan(0)
     expect(s.width).toBe(80)
+  })
+})
+
+describe("Scrollback viewport keeps live output scrollable", () => {
+  test("a wrapped pending response participates in viewport clipping and exposes older rows", () => {
+    const cache = new FormattedLineCache()
+    const pending = makeMsg("live", Array.from({ length: 12 }, (_, i) => `live row ${i}`).join("\n"), true)
+
+    const viewport = prepareScrollbackViewport(cache, [pending], 24, 5, 0, "streaming")
+
+    expect(viewport.maxOffset).toBeGreaterThan(0)
+    expect(viewport.hiddenAbove).toBe(true)
+    expect(viewport.visibleLines.some(line => line.text.includes("live row 11"))).toBe(true)
+    expect(viewport.visibleLines.some(line => line.text.includes("live row 0"))).toBe(false)
+  })
+
+  test("keeps the same earlier rows anchored while live output grows", () => {
+    expect(adjustScrollOffsetForGrowth(6, 20, 24, false)).toBe(10)
+    expect(adjustScrollOffsetForGrowth(0, 20, 24, true)).toBe(0)
   })
 })
 

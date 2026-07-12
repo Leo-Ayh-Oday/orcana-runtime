@@ -9,6 +9,32 @@ function emptyStreamResponse(): Response {
 }
 
 describe("OpenAIProvider message conversion", () => {
+  test("accepts either an API root or a full chat completions endpoint", async () => {
+    const requested: string[] = []
+    const fetchFn = (async (input: RequestInfo | URL) => {
+      requested.push(String(input))
+      return emptyStreamResponse()
+    }) as typeof fetch
+    const options = {
+      model: "test-model",
+      system: "",
+      messages: [{ role: "user" as const, content: "hello" }],
+      maxTokens: 32,
+    }
+
+    for (const baseURL of ["https://relay.test/v1/", "https://relay.test/v1/chat/completions"]) {
+      const provider = new OpenAIProvider("test-key", { baseURL, fetch: fetchFn })
+      for await (const _event of provider.streamChat(options)) {
+        // Consume the stream so the request URL is captured.
+      }
+    }
+
+    expect(requested).toEqual([
+      "https://relay.test/v1/chat/completions",
+      "https://relay.test/v1/chat/completions",
+    ])
+  })
+
   test("sends Anthropic-style tool results as OpenAI tool messages", async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = new OpenAIProvider("test-key", {

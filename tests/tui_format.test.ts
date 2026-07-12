@@ -23,4 +23,13 @@ describe("TUI display formatting", () => {
     expect(lines.length).toBeGreaterThan(1)
     expect(lines.every(line => line.length <= 12)).toBe(true)
   })
+
+  test("wraps long markdown table cells without discarding their tail", () => {
+    const lines = formatDisplayText([
+      "| 能力 | 说明 |",
+      "| 搜索 | 这段很长的说明必须完整保留直到最后四个字 |",
+    ].join("\n"), 32)
+
+    expect(lines.join("").replace(/[|\s]/g, "")).toContain("最后四个字")
+  })
 })

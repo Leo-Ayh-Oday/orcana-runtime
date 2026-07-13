@@ -28,9 +28,14 @@ const NO_THINKING: ThinkingCapability = {
   effortLevels: [],
 }
 
-function thinking(budget: number, defaultBudget?: number): ThinkingCapability {
+function thinking(
+  budget: number,
+  defaultBudget?: number,
+  mode: "manual" | "adaptive" = "manual",
+): ThinkingCapability {
   return {
     supported: true,
+    mode,
     maxBudgetTokens: budget,
     defaultBudget: defaultBudget ?? budget,
     effortLevels: ["high", "max"],
@@ -106,7 +111,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     contextWindow: 200_000,
     maxOutputTokens: 32768,
     pricingTier: "premium",
-    thinking: thinking(32768, 16384),
+    thinking: thinking(32768, 16384, "adaptive"),
     capabilities: ANTHROPIC_CAPABILITIES,
     tags: ["coding", "reasoning", "deep-thinking", "safety"],
     isDefault: true,
@@ -118,7 +123,7 @@ const BUILTIN_MODELS: ModelSpec[] = [
     contextWindow: 200_000,
     maxOutputTokens: 16384,
     pricingTier: "standard",
-    thinking: thinking(16384, 8192),
+    thinking: thinking(16384, 8192, "adaptive"),
     capabilities: ANTHROPIC_CAPABILITIES,
     tags: ["coding", "fast", "balanced"],
     isDefault: true,

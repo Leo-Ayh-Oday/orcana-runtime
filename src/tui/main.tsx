@@ -135,11 +135,18 @@ export function buildModelOptions(runtime: Runtime, currentModel: string, query 
       || a.providerName.localeCompare(b.providerName)
       || a.modelName.localeCompare(b.modelName))
   const filteredProvider = providerFilter ? runtime.config.providers?.[providerFilter] : undefined
-  const customProviderId = filteredProvider ? providerFilter! : "custom"
+  // DeepSeek/Anthropic entries use their native Messages protocol. Relay
+  // endpoints entered from those filtered views are normally OpenAI-compatible,
+  // so route them through the explicit custom provider instead of silently
+  // inheriting an incompatible wire protocol.
+  const canReuseFilteredProvider = filteredProvider
+    && filteredProvider.type !== "deepseek"
+    && filteredProvider.type !== "anthropic"
+  const customProviderId = canReuseFilteredProvider ? providerFilter! : "custom"
   const showCustom = !providerFilter || Boolean(filteredProvider)
   const customOption: ModelDialogOption[] = showCustom ? [{
     providerId: customProviderId,
-    providerName: filteredProvider?.displayName ?? "OpenAI-compatible",
+    providerName: canReuseFilteredProvider ? filteredProvider.displayName ?? providerFilter! : "OpenAI-compatible",
     modelId: "__custom__",
     modelName: "自定义模型",
     configured: runtime.isProviderConfigured(customProviderId),

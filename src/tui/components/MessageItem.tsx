@@ -5,7 +5,7 @@
 import React from "react"
 import { Box, Text } from "ink"
 import { theme } from "../theme/theme"
-import { cleanDisplayText, formatDisplayText, trimForViewport, trimAssistantForViewport } from "../format"
+import { cleanDisplayText, formatDisplayText, trimForViewport } from "../format"
 import { fitTerminalText } from "../format"
 import { getGlyphTheme } from "../tokens"
 import type { TuiMessage } from "../state/types"
@@ -114,12 +114,10 @@ export function renderMessageLines(
 
   if (message.text) {
     const assistantContent = stripCompletionReportForTranscript(message.text)
-    // Phase 3: assistant 双端截断 — code fenced 保留头尾, 纯对话保留头
-    const truncated = trimAssistantForViewport(assistantContent, Math.max(2000, Math.min(12000, width * 80)))
-    const assistantText = cleanDisplayText(truncated)
-    const trimKind: "above" | "below" | "middle" | "none" = truncated.includes("hidden middle")
-      ? "middle"
-      : truncated.includes("hidden below") ? "below" : "none"
+    // Assistant content stays complete. Scrollback owns bounded row-level
+    // clipping, so text hidden outside the viewport remains reachable.
+    const assistantText = cleanDisplayText(assistantContent)
+    const trimKind = "none" as const
     const formatted: RenderedLine[] = formatDisplayText(assistantText, contentWidth).map((line, index) => ({
       marker: index === 0 ? marker : " ",
       text: line,

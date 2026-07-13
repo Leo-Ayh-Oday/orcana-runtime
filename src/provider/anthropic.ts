@@ -98,9 +98,10 @@ export class AnthropicProvider implements LLMProvider {
     const textChunks: string[] = []
     const toolBlocks: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
     const thinkingBlocks: Array<{ thinking: string; signature: string }> = []
-    let ct: { id: string; name: string; input_json: string } | null = null
+    let ct: { id: string; name: string; input_json: string; initialInput: Record<string, unknown> | null } | null = null
     let cthink: { thinking: string; signature: string } | null = null
     let stopReason = ""
+    let toolCallError = ""
 
     const stream = this.client.messages.stream(params) as ClosableAsyncIterable
     const abortStream = () => closeProviderStream(stream)
@@ -142,7 +143,12 @@ export class AnthropicProvider implements LLMProvider {
           const b = event.content_block
           if (isRecord(b) && b.type === "tool_use") {
             markUnsafeToRetry(true)
-            ct = { id: String(b.id), name: String(b.name), input_json: "" }
+            ct = {
+              id: String(b.id),
+              name: String(b.name),
+              input_json: "",
+              initialInput: isRecord(b.input) ? b.input : null,
+            }
           } else if (isRecord(b) && b.type === "thinking") {
             cthink = { thinking: "", signature: String(b.signature ?? "") }
           }
@@ -165,16 +171,20 @@ export class AnthropicProvider implements LLMProvider {
         }
           case "content_block_stop": {
           if (ct) {
-            let input: Record<string, unknown> = {}
-            try {
-              input = JSON.parse(ct.input_json)
-            } catch {
-              const repaired = repairToolCall(ct.input_json)
-              if (repaired) input = repaired
-              else {
-                toolBlocks.push({ id: ct.id, name: ct.name, input: { _raw: ct.input_json.slice(0, 500) } })
-                ct = null
-                continue
+            let input: Record<string, unknown>
+            if (!ct.input_json && ct.initialInput) {
+              input = ct.initialInput
+            } else {
+              try {
+                input = JSON.parse(ct.input_json)
+              } catch {
+                const repaired = repairToolCall(ct.input_json)
+                if (repaired) input = repaired
+                else {
+                  toolCallError = `provider returned invalid tool call JSON for ${ct.name}`
+                  ct = null
+                  continue
+                }
               }
             }
             toolBlocks.push({ id: ct.id, name: ct.name, input })
@@ -197,32 +207,43 @@ export class AnthropicProvider implements LLMProvider {
       options.abortSignal?.removeEventListener("abort", abortStream)
     }
 
+    if (!stopReason) {
+      yield { type: "error", data: "provider stream ended unexpectedly without stop_reason" }
+      return
+    }
+    if (toolCallError) {
+      yield { type: "error", data: toolCallError }
+      return
+    }
+    if (ct) {
+      yield { type: "error", data: "provider stream ended with an incomplete tool call" }
+      return
+    }
+    yield { type: "status", data: `provider-stop: ${stopReason}` }
+    if (!NORMAL_STOP_REASONS.has(stopReason)) {
+      const detail = stopReason === "max_tokens"
+        ? "response hit the output token limit before completion"
+        : "response ended before normal completion"
+      yield { type: "error", data: `provider stop_reason=${stopReason}: ${detail}` }
+      return
+    }
+
     for (const tb of toolBlocks) {
       yield { type: "tool_call", data: { id: tb.id, name: tb.name, input: tb.input } }
     }
     if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
 
-    // Flush partial state from interrupted stream
-    if (ct && ct.input_json) {
-      let input: Record<string, unknown> = { _raw: ct.input_json.slice(0, 500) }
-      try { input = JSON.parse(ct.input_json) } catch { /* partial, emit as is */ }
-      yield { type: "tool_call", data: { id: ct.id, name: ct.name, input } }
-    }
     if (cthink?.thinking) {
       thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
       yield { type: "thinking_blocks", data: thinkingBlocks }
-    }
-
-    if (stopReason) yield { type: "status", data: `provider-stop: ${stopReason}` }
-    if (stopReason === "max_tokens") {
-      yield { type: "error", data: "provider stop_reason=max_tokens: response hit the output token limit before completion" }
-      return
     }
 
     const finalText = textChunks.join("")
     if (finalText && toolBlocks.length === 0) yield { type: "done", data: finalText }
   }
 }
+
+const NORMAL_STOP_REASONS = new Set(["end_turn", "stop_sequence", "tool_use"])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null

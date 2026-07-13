@@ -21,6 +21,56 @@ afterEach(() => {
 })
 
 describe("runtime model configuration", () => {
+  test("configures a catalog Claude model instead of rejecting its provider as unknown", async () => {
+    const globalPath = makeTempConfigPath()
+    const runtime = await createRuntime({
+      enableMCP: false,
+      enableLSP: false,
+      allowMissingProviderAuth: true,
+      useEnvAuth: false,
+      authStore: new MemoryAuthStore(),
+      configOptions: { globalPath, applyEnv: false, loadProject: false },
+    })
+
+    try {
+      await runtime.configureModel({
+        providerId: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        apiKey: "sk-ant-test",
+      })
+
+      expect(runtime.modelRouter.getSessionModel()).toBe("claude-sonnet-4-6")
+      expect(runtime.isProviderConfigured("anthropic")).toBe(true)
+      expect(runtime.registry.resolveModel("claude-sonnet-4-6")?.thinking.mode).toBe("adaptive")
+    } finally {
+      runtime.dispose()
+    }
+  })
+
+  test("configures a catalog OpenAI model with its own persisted credential", async () => {
+    const globalPath = makeTempConfigPath()
+    const authStore = new MemoryAuthStore()
+    const runtime = await createRuntime({
+      enableMCP: false,
+      enableLSP: false,
+      allowMissingProviderAuth: true,
+      useEnvAuth: false,
+      authStore,
+      configOptions: { globalPath, applyEnv: false, loadProject: false },
+    })
+
+    try {
+      await runtime.configureModel({ providerId: "openai", modelId: "gpt-5", apiKey: "sk-openai-test" })
+
+      expect(runtime.modelRouter.getSessionModel()).toBe("gpt-5")
+      expect(runtime.isProviderConfigured("openai")).toBe(true)
+      expect(await authStore.get("openai")).toBe("sk-openai-test")
+    } finally {
+      runtime.dispose()
+    }
+  })
+
+
   test("configureModel registers and persists a custom model in the global config file", async () => {
     const globalPath = makeTempConfigPath()
     const runtime = await createRuntime({

@@ -204,12 +204,14 @@ describe("listProviderIds", () => {
   test("returns provider IDs from config", () => {
     const ids = listProviderIds(defaultConfig)
     expect(ids.sort()).toEqual([
+      "anthropic",
       "custom",
       "deepseek",
       "kimi",
       "lmstudio",
       "minimax",
       "ollama",
+      "openai",
       "openrouter",
       "qwen",
       "siliconflow",

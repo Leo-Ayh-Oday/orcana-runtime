@@ -100,14 +100,26 @@ export class MultiProvider implements LLMProvider {
   }
 
   /** Get the effective thinking config for a model, provider-adapted. */
-  thinkingFor(model: ResolvedModel, requestedThinking?: ThinkingConfig): ThinkingConfig | undefined {
+  thinkingFor(
+    model: ResolvedModel,
+    requestedThinking?: ThinkingConfig,
+    maxTokens?: number,
+  ): ThinkingConfig | undefined {
     if (!requestedThinking) return undefined
     const capability = model.spec.thinking
     if (!capability.supported) return undefined
 
+    if (capability.mode === "adaptive") {
+      return { type: "adaptive", effort: requestedThinking.effort ?? "high" }
+    }
+
     let budget = requestedThinking.budget_tokens ?? capability.defaultBudget
     if (budget && capability.maxBudgetTokens) {
       budget = Math.min(budget, capability.maxBudgetTokens)
+    }
+    if (model.providerId === "anthropic" && typeof maxTokens === "number") {
+      if (maxTokens <= 1_024) return undefined
+      budget = Math.min(budget ?? maxTokens - 1, maxTokens - 1)
     }
 
     let effort = requestedThinking.effort ?? "high"
@@ -135,7 +147,7 @@ export class MultiProvider implements LLMProvider {
     }
 
     // Adapt thinking to model capability
-    const adaptedThinking = this.thinkingFor(resolved, options.thinking)
+    const adaptedThinking = this.thinkingFor(resolved, options.thinking, options.maxTokens)
 
     // Route to the selected provider
     yield* provider.streamChat({

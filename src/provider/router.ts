@@ -135,6 +135,14 @@ export class ModelRouter {
 
     const capability = spec.thinking
 
+    if (capability.mode === "adaptive") {
+      const forceMax =
+        profile?.intentMode !== "readonly" &&
+        profile?.autoMaxSignals &&
+        (profile.autoMaxSignals.consecutiveErrors >= 3 || profile.autoMaxSignals.modifiedFiles >= 5)
+      return { type: "adaptive", effort: forceMax ? "max" : baseThinking.effort ?? "high" }
+    }
+
     // Force max thinking on error cascades or broad edits
     const forceMax =
       profile?.intentMode !== "readonly" &&

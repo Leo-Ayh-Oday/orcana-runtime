@@ -28,6 +28,15 @@ async function collect(events: unknown[]) {
 }
 
 describe("DeepSeekProvider stop_reason handling", () => {
+  test("reports a clean EOF without stop_reason as an interrupted stream", async () => {
+    const events = await collect([
+      { type: "content_block_delta", delta: { type: "text_delta", text: "partial answer" } },
+    ])
+
+    expect(events.some(ev => ev.type === "error" && String(ev.data).includes("ended unexpectedly"))).toBe(true)
+    expect(events.some(ev => ev.type === "done")).toBe(false)
+  })
+
   test("emits a recoverable error when the provider stops at max_tokens", async () => {
     const events = await collect([
       { type: "content_block_delta", delta: { type: "text_delta", text: "partial table" } },
@@ -48,6 +57,29 @@ describe("DeepSeekProvider stop_reason handling", () => {
     ])
 
     expect(events.some(ev => ev.type === "status" && String(ev.data).includes("provider-stop: end_turn"))).toBe(true)
+    expect(events.some(ev => ev.type === "error")).toBe(false)
+  })
+
+  test("does not execute an irreparable tool call payload", async () => {
+    const events = await collect([
+      { type: "content_block_start", content_block: { type: "tool_use", id: "bad", name: "write_file" } },
+      { type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "not-json" } },
+      { type: "content_block_stop" },
+      { type: "message_delta", delta: { stop_reason: "tool_use" } },
+    ])
+
+    expect(events.some(ev => ev.type === "error" && String(ev.data).includes("invalid tool call JSON"))).toBe(true)
+    expect(events.some(ev => ev.type === "tool_call")).toBe(false)
+  })
+
+  test("accepts an empty tool input carried by content_block_start", async () => {
+    const events = await collect([
+      { type: "content_block_start", content_block: { type: "tool_use", id: "empty", name: "list_files", input: {} } },
+      { type: "content_block_stop" },
+      { type: "message_delta", delta: { stop_reason: "tool_use" } },
+    ])
+
+    expect(events.find(ev => ev.type === "tool_call")?.data).toEqual({ id: "empty", name: "list_files", input: {} })
     expect(events.some(ev => ev.type === "error")).toBe(false)
   })
 })

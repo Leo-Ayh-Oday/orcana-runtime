@@ -2,7 +2,7 @@
  *
  *  Phase 6 变更:
  *    - FormattedLineCache: 按 msgId+textLen+width 缓存渲染行，流式输出时只重算最后一条消息
- *    - Viewport row cap: 5000 行硬上限，超出行从顶部裁剪
+ *    - Scrollback viewport slices visible rows without discarding history
  *    - Resize cache invalidation: width 变化时清空缓存
  *
  *  PR-1.5 变更:
@@ -42,9 +42,6 @@ export interface ScrollbackProps {
 
 // ── Phase 6: 格式化行缓存 ──
 
-/** 视口行硬上限。超过此值的消息行从顶部裁剪，防止超长会话 OOM。 */
-const MAX_VIEWPORT_LINES = 5_000
-
 function hashText(text: string): string {
   let hash = 2166136261
   for (let index = 0; index < text.length; index++) {
@@ -64,6 +61,7 @@ export function formatLineCacheKey(msg: TuiMessage, width: number): string {
 
 /** 缓存条目。 */
 export interface CachedLinesEntry {
+  key: string
   lines: RenderedLine[]
 }
 
@@ -74,6 +72,8 @@ export interface CachedLinesEntry {
  * 流式输出场景（最后一条消息持续增长）：O(1) 重算 → 显著降低 CPU。
  */
 export class FormattedLineCache {
+  /** Exactly one rendered version per live message. Streaming deltas replace
+   * the previous version instead of retaining every intermediate response. */
   private cache = new Map<string, CachedLinesEntry>()
   private prevWidth = 0
 
@@ -86,20 +86,20 @@ export class FormattedLineCache {
     this.prevWidth = width
 
     const key = formatLineCacheKey(msg, width)
-    const hit = this.cache.get(key)
-    if (hit) return hit.lines
+    const hit = this.cache.get(msg.id)
+    if (hit?.key === key) return hit.lines
 
     const rendered = renderMessageLines(msg, width, status)
     // PR-1.5: 空 pending message 返回 [] — 不追加 spacer，避免渲染空占位行
     const lines = rendered.length > 0
       ? [...rendered, { marker: " " as const, text: "", color: C.dim }]
       : rendered
-    this.cache.set(key, { lines })
+    this.cache.set(msg.id, { key, lines })
     return lines
   }
 
   /** 构建全量行数组，仅在消息变更时重算变更部分。
-   *  返回 { allLines, capped }: allLines 可能超过 MAX_VIEWPORT_LINES，此时 capped=true。 */
+   *  行级可见范围由 viewport 计算，不在这里永久丢弃历史。 */
   buildAllLines(messages: TuiMessage[], width: number, status: string): { allLines: RenderedLine[]; capped: boolean } {
     const result: RenderedLine[] = []
     for (const msg of messages) {
@@ -111,25 +111,17 @@ export class FormattedLineCache {
       result.pop()
     }
 
-    // Phase 6: viewport row cap — 超过上限从顶部裁剪
-    const capped = result.length > MAX_VIEWPORT_LINES
-    if (capped) {
-      const trimmed = result.length - MAX_VIEWPORT_LINES
-      result.splice(0, trimmed)
-    }
-
     // Evict stale cache entries (messages removed from the list)
     this.evictStale(messages)
 
-    return { allLines: result, capped }
+    return { allLines: result, capped: false }
   }
 
   /** 清理缓存中已不存在于消息列表的条目。 */
   private evictStale(messages: TuiMessage[]): void {
     const liveIds = new Set(messages.map(m => m.id))
-    for (const key of this.cache.keys()) {
-      const msgId = key.split(":")[0]!
-      if (!liveIds.has(msgId)) this.cache.delete(key)
+    for (const msgId of this.cache.keys()) {
+      if (!liveIds.has(msgId)) this.cache.delete(msgId)
     }
   }
 

@@ -244,6 +244,17 @@ describe("FormattedLineCache (Phase 6)", () => {
     expect(first).not.toBe(second)
   })
 
+  test("streaming updates replace the previous cache entry for the same message", () => {
+    const cache = new FormattedLineCache()
+    const base = makeMsg("stream", "a", true)
+
+    for (let index = 1; index <= 100; index++) {
+      cache.getOrCompute({ ...base, text: "a".repeat(index) }, 80, "streaming")
+    }
+
+    expect(cache.stats().size).toBe(1)
+  })
+
   test("getOrCompute cache miss when same-length text changes", () => {
     const cache = new FormattedLineCache()
     const first = cache.getOrCompute(makeMsg("m1", "hello", false), 80, "idle")
@@ -341,6 +352,16 @@ describe("Scrollback viewport keeps live output scrollable", () => {
 // ── Phase 6: viewport row cap ──
 
 describe("viewport row cap (Phase 6)", () => {
+  test("long assistant output keeps its earliest rows reachable", () => {
+    const cache = new FormattedLineCache()
+    const text = Array.from({ length: 5_100 }, (_, index) => `line-${index}`).join("\n")
+    const { allLines, capped } = cache.buildAllLines([makeMsg("long", text, false)], 80, "idle")
+
+    expect(capped).toBe(false)
+    expect(allLines.some(line => line.text === "line-0")).toBe(true)
+    expect(allLines.some(line => line.text === "line-5099")).toBe(true)
+  })
+
   test("buildAllLines does not cap when under MAX_VIEWPORT_LINES", () => {
     const cache = new FormattedLineCache()
     const msgs = [makeMsg("m1", "short text"), makeMsg("m2", "also short")]

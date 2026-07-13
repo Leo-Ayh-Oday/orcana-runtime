@@ -252,6 +252,28 @@ describe("OpenAIProvider stop reason handling", () => {
     expect(events.some(event => event.type === "done" && event.data === "complete")).toBe(true)
   })
 
+  test("processes a valid final SSE data line when the relay closes without a trailing newline", async () => {
+    const chunk = JSON.stringify({
+      id: "chunk_no_newline",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, delta: { content: "complete" }, finish_reason: "stop" }],
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(`data: ${chunk}`, { status: 200 })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 32,
+    })) events.push(event)
+
+    expect(events.some(event => event.type === "done" && event.data === "complete")).toBe(true)
+    expect(events.some(event => event.type === "error")).toBe(false)
+  })
+
   test("reports a clean EOF without a terminal signal as an interrupted stream", async () => {
     const chunk = JSON.stringify({
       id: "chunk_partial",
@@ -309,6 +331,28 @@ describe("OpenAIProvider stop reason handling", () => {
 
     expect(events.some(event => event.type === "text" && event.data === "partial answer")).toBe(true)
     expect(events.some(event => event.type === "error" && String(event.data).includes("length"))).toBe(true)
+    expect(events.some(event => event.type === "done")).toBe(false)
+  })
+
+  test("rejects an unknown relay finish reason instead of completing partial text", async () => {
+    const chunk = JSON.stringify({
+      id: "chunk_unknown_stop",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, delta: { content: "partial" }, finish_reason: "max_tokens" }],
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(`data: ${chunk}\n\ndata: [DONE]\n\n`, { status: 200 })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 32,
+    })) events.push(event)
+
+    expect(events.some(event => event.type === "error" && String(event.data).includes("max_tokens"))).toBe(true)
     expect(events.some(event => event.type === "done")).toBe(false)
   })
 })

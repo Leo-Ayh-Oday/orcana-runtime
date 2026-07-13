@@ -271,11 +271,9 @@ export class OpenAIProvider implements LLMProvider {
     try {
       readLoop: while (true) {
         const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
         const lines = buffer.split("\n")
-        buffer = lines.pop() ?? ""
+        buffer = done ? "" : lines.pop() ?? ""
 
         for (const line of lines) {
           const trimmed = line.trim()
@@ -321,6 +319,7 @@ export class OpenAIProvider implements LLMProvider {
             malformedSseChunk = true
           }
         }
+        if (done) break
       }
     } finally {
       reader.releaseLock()
@@ -336,6 +335,10 @@ export class OpenAIProvider implements LLMProvider {
     }
     if (finishReason === "content_filter") {
       yield { type: "error", data: "provider finish_reason=content_filter: response was interrupted by the provider content filter" }
+      return
+    }
+    if (finishReason && !NORMAL_OPENAI_FINISH_REASONS.has(finishReason)) {
+      yield { type: "error", data: `provider finish_reason=${finishReason}: response ended before normal completion` }
       return
     }
     if (!finishReason && !sawDoneSentinel) {
@@ -386,6 +389,8 @@ export class OpenAIProvider implements LLMProvider {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
+
+const NORMAL_OPENAI_FINISH_REASONS = new Set<string>(["stop", "tool_calls", "function_call"])
 
 /** Compatible relays vary between true deltas and cumulative snapshots. */
 function mergeStreamedField(current: string, incoming: string): string {

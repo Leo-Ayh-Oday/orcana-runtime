@@ -27,3 +27,18 @@ describe("StreamEventAdapter usage authority", () => {
     })
   })
 })
+
+describe("StreamEventAdapter tool result status", () => {
+  test("preserves a failed tool result instead of marking it passed", () => {
+    const adapter = new StreamEventAdapter()
+    const [started] = adapter.adapt({ type: "tool_call", data: { name: "shell" } })
+    const [finished] = adapter.adapt({
+      type: "tool_result",
+      data: { name: "shell", content: "exit code 1", success: false },
+    })
+
+    expect(started).toMatchObject({ type: "tool.started", tool: "shell" })
+    expect(finished).toMatchObject({ type: "tool.finished", ok: false })
+    expect(finished && "outputSummary" in finished ? finished.outputSummary : "").toContain("exit code 1")
+  })
+})

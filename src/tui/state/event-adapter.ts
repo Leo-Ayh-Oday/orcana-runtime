@@ -47,6 +47,7 @@ interface ToolCallData {
 interface ToolResultData {
   name?: string
   content?: string
+  success?: boolean
 }
 
 interface TaskProgressData {
@@ -182,7 +183,7 @@ export class StreamEventAdapter {
     return [{
       type: "tool.finished",
       id,
-      ok: true,
+      ok: d.success !== false,
       outputSummary: summary || undefined,
     }]
   }

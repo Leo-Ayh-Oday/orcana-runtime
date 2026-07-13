@@ -1283,7 +1283,10 @@ export async function* agentLoop(
           }
         }
 
-        yield { type: "tool_result", data: { name: tc.name, content: resultContent.slice(0, 500) } }
+        yield {
+          type: "tool_result",
+          data: { name: tc.name, content: resultContent.slice(0, 500), success: resultObj.success },
+        }
         if (tc.name === "web_search" && !resultObj.success) {
           webSearchFailedThisTurn = true
           webSearchFailReason = resultContent.slice(0, 200)

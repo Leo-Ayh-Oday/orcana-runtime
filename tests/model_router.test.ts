@@ -87,6 +87,67 @@ describe("ModelRouter — purpose routing", () => {
 })
 
 describe("MultiProvider — explicit model routing", () => {
+  test("adapts Claude Opus 4.7 to adaptive thinking without a manual budget", async () => {
+    let forwardedThinking: ProviderCallOptions["thinking"]
+    const provider: LLMProvider = {
+      async *streamChat(opts: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        forwardedThinking = opts.thinking
+        yield { type: "done" }
+      },
+    }
+    const registry = new ProviderRegistry()
+    registry.register({ id: "anthropic", provider, defaultModel: "claude-opus-4-7" })
+    registry.registerBuiltinModels()
+    const multi = new MultiProvider({ registry, defaultModel: "claude-opus-4-7" })
+
+    for await (const _event of multi.streamChat({
+      model: "claude-opus-4-7",
+      system: "",
+      messages: [{ role: "user", content: "analyze" }],
+      maxTokens: 16_384,
+      thinking: { type: "enabled", budget_tokens: 32_768, effort: "max" },
+    })) { /* consume */ }
+
+    expect(forwardedThinking).toEqual({ type: "adaptive", effort: "max" })
+  })
+
+  test("keeps manual Anthropic thinking budget below maxTokens", async () => {
+    let forwardedThinking: ProviderCallOptions["thinking"]
+    const provider: LLMProvider = {
+      async *streamChat(opts: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        forwardedThinking = opts.thinking
+        yield { type: "done" }
+      },
+    }
+    const registry = new ProviderRegistry()
+    registry.register({ id: "anthropic", provider, defaultModel: "claude-manual" })
+    registry.registerModel({
+      id: "claude-manual",
+      providerId: "anthropic",
+      displayName: "Claude Manual",
+      contextWindow: 200_000,
+      maxOutputTokens: 16_384,
+      pricingTier: "standard",
+      thinking: { supported: true, mode: "manual", maxBudgetTokens: 32_768, effortLevels: ["high", "max"] },
+      capabilities: { thinking: true, fim: false, contextCaching: true, vision: false, structuredOutput: false, toolUse: true, streaming: true, maxContextWindow: 200_000 },
+      tags: ["reasoning"],
+      isDefault: true,
+    })
+    const multi = new MultiProvider({ registry, defaultModel: "claude-manual" })
+
+    for await (const _event of multi.streamChat({
+      model: "claude-manual",
+      system: "",
+      messages: [{ role: "user", content: "analyze" }],
+      maxTokens: 6_144,
+      thinking: { type: "enabled", budget_tokens: 16_384, effort: "high" },
+    })) { /* consume */ }
+
+    expect(forwardedThinking?.budget_tokens).toBeLessThan(6_144)
+    expect(forwardedThinking?.budget_tokens).toBeGreaterThanOrEqual(1_024)
+  })
+
+
   test("honors the model selected by the caller for cheap sub-calls", async () => {
     let actualModel = ""
     const provider: LLMProvider = {

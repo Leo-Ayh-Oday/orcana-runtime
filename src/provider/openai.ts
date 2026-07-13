@@ -11,8 +11,10 @@
  *  so loop.ts doesn't know the difference.
  */
 
-import type { StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
+import type { StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage } from "./types"
 import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs } from "./retry"
+import { repairToolCall } from "../tools/repair"
+import { extractProviderTokenUsage } from "./usage"
 
 interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool"
@@ -253,7 +255,9 @@ export class OpenAIProvider implements LLMProvider {
     const textChunks: string[] = []
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
     let finishReason: string | null = null
-    let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined
+    let sawDoneSentinel = false
+    let malformedSseChunk = false
+    let usage: ProviderTokenUsage | undefined
 
     const reader = response.body?.getReader()
     if (!reader) {
@@ -275,13 +279,16 @@ export class OpenAIProvider implements LLMProvider {
 
         for (const line of lines) {
           const trimmed = line.trim()
-          if (!trimmed || !trimmed.startsWith("data: ")) continue
-          const data = trimmed.slice(6)
-          if (data === "[DONE]") break readLoop
+          if (!trimmed || !trimmed.startsWith("data:")) continue
+          const data = trimmed.slice(5).trimStart()
+          if (data === "[DONE]") {
+            sawDoneSentinel = true
+            break readLoop
+          }
 
           try {
             const chunk = JSON.parse(data) as OpenAIStreamChunk
-            if (chunk.usage) usage = chunk.usage
+            if (chunk.usage) usage = extractProviderTokenUsage({ usage: chunk.usage }) ?? usage
 
             for (const choice of chunk.choices) {
               const delta = choice.delta
@@ -304,22 +311,51 @@ export class OpenAIProvider implements LLMProvider {
 
               if (choice.finish_reason) finishReason = choice.finish_reason
             }
-          } catch { /* skip malformed chunks */ }
+          } catch {
+            malformedSseChunk = true
+          }
         }
       }
     } finally {
       reader.releaseLock()
     }
 
-    // Emit tool calls
+    if (malformedSseChunk) {
+      yield { type: "error", data: "provider returned a malformed SSE data chunk; response may be incomplete" }
+      return
+    }
+    if (finishReason === "length") {
+      yield { type: "error", data: "provider finish_reason=length: response hit the output token limit before completion" }
+      return
+    }
+    if (finishReason === "content_filter") {
+      yield { type: "error", data: "provider finish_reason=content_filter: response was interrupted by the provider content filter" }
+      return
+    }
+    if (!finishReason && !sawDoneSentinel) {
+      yield { type: "error", data: "provider stream ended unexpectedly without finish_reason or [DONE]" }
+      return
+    }
+
+    // Validate every tool call before emitting any of them. A partially parsed
+    // batch must never execute its valid prefix and then fail halfway through.
+    const parsedToolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
     for (const [, tc] of toolCalls) {
       let input: Record<string, unknown> = {}
       try {
         input = JSON.parse(tc.arguments)
       } catch {
-        input = { _raw: tc.arguments.slice(0, 500) }
+        const repaired = repairToolCall(tc.arguments)
+        if (!repaired) {
+          yield { type: "error", data: `provider returned invalid tool call JSON for ${tc.name}` }
+          return
+        }
+        input = repaired
       }
-      yield { type: "tool_call", data: { id: tc.id, name: tc.name, input } }
+      parsedToolCalls.push({ id: tc.id, name: tc.name, input })
+    }
+    for (const toolCall of parsedToolCalls) {
+      yield { type: "tool_call", data: toolCall }
     }
 
     // Emit token usage
@@ -327,19 +363,13 @@ export class OpenAIProvider implements LLMProvider {
       yield {
         type: "token_usage",
         data: {
+          ...usage,
           requestedModel: options.model,
           actualModel: body.model,
-          inputTokens: usage.prompt_tokens,
-          outputTokens: usage.completion_tokens,
           source: "provider",
           purpose: options.purpose ?? "unknown",
         },
       }
-    }
-
-    if (finishReason === "length") {
-      yield { type: "error", data: "provider finish_reason=length: response hit the output token limit before completion" }
-      return
     }
 
     const finalText = textChunks.join("")

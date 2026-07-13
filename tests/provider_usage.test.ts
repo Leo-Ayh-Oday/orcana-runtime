@@ -38,6 +38,21 @@ describe("provider usage extraction", () => {
     expect(usage?.cacheHitRate).toBe(90)
   })
 
+  test("extracts OpenAI cached prompt tokens from nested usage details", () => {
+    const usage = extractProviderTokenUsage({
+      usage: {
+        prompt_tokens: 1_000,
+        completion_tokens: 50,
+        prompt_tokens_details: { cached_tokens: 750 },
+      },
+    })
+
+    expect(usage?.inputTokens).toBe(1_000)
+    expect(usage?.cacheReadInputTokens).toBe(750)
+    expect(usage?.cacheMissInputTokens).toBe(250)
+    expect(usage?.cacheHitRate).toBe(75)
+  })
+
   test("marks Claude-style high cache hit usage shape", () => {
     const usage = extractProviderTokenUsage({
       usage: {

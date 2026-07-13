@@ -65,13 +65,14 @@ export function extractProviderTokenUsage(event: unknown): ProviderTokenUsage | 
 
   const inputTokens = numberField(usage, ["input_tokens", "prompt_tokens", "inputTokens", "promptTokens"])
   const outputTokens = numberField(usage, ["output_tokens", "completion_tokens", "outputTokens", "completionTokens"])
+  const promptTokenDetails = asRecord(usage.prompt_tokens_details) ?? asRecord(usage.promptTokensDetails)
   const cacheReadInputTokens = numberField(usage, [
     "cache_read_input_tokens",
     "cache_hit_tokens",
     "prompt_cache_hit_tokens",
     "cacheHitTokens",
     "cache_read_tokens",
-  ])
+  ]) ?? (promptTokenDetails ? numberField(promptTokenDetails, ["cached_tokens", "cachedTokens"]) : undefined)
   const cacheCreationInputTokens = numberField(usage, [
     "cache_creation_input_tokens",
     "prompt_cache_creation_tokens",

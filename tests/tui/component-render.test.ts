@@ -447,7 +447,7 @@ describe("renderMessageLines truncation (Phase 2)", () => {
     expect(allText).not.toContain("hidden below")
   })
 
-  test("assistant text > width*80 shows truncation marker (Phase 3: hidden below)", () => {
+  test("assistant text wider than the viewport remains scrollable without truncation", () => {
     const long = "a".repeat(5000)
     const message: TuiMessage = {
       id: "m1",
@@ -455,12 +455,11 @@ describe("renderMessageLines truncation (Phase 2)", () => {
       text: long,
       createdAt: 0,
     }
-    // width=30 → maxChars = 30*80 = 2400 < 5000, should truncate
     const lines = renderMessageLines(message, 30, "")
     expect(lines.length).toBeGreaterThan(0)
-    const allText = lines.map(l => l.text).join("\n")
-    // Phase 3: reversed from "hidden above" to "hidden below" (pure text, no code fence)
-    expect(allText).toContain("hidden below")
+    const allText = lines.map(l => l.text).join("")
+    expect(allText).toBe(long)
+    expect(lines.some(line => line.text.includes("hidden below"))).toBe(false)
   })
 
   test("pending message is not truncated by trimForViewport", () => {
@@ -478,6 +477,23 @@ describe("renderMessageLines truncation (Phase 2)", () => {
     // Pending messages skip trimForViewport — full text should be there
     const allText = lines.map(l => l.text).join("\n")
     expect(allText.length).toBeGreaterThan(2000)
+  })
+
+  test("assistant output remains fully available to the scrollback viewport", () => {
+    const full = "complete-output-".repeat(1_000)
+    const message: TuiMessage = {
+      id: "full-output",
+      role: "assistant",
+      text: full,
+      pending: true,
+      createdAt: 0,
+    }
+
+    const lines = renderMessageLines(message, 120, "streaming")
+    const renderedText = lines.map(line => line.text).join("")
+
+    expect(renderedText).toBe(full)
+    expect(lines.some(line => line.text.includes("hidden below") || line.text.includes("hidden middle"))).toBe(false)
   })
 })
 

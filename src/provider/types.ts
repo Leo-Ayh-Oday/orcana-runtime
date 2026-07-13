@@ -51,7 +51,7 @@ export interface ProviderTokenUsage {
 }
 
 export interface ThinkingConfig {
-  type: "enabled" | "disabled"
+  type: "enabled" | "adaptive" | "disabled"
   budget_tokens?: number
   effort?: "high" | "max"
 }
@@ -100,6 +100,7 @@ export type PricingTier = "free" | "cheap" | "standard" | "premium"
 /** Thinking capability descriptor — what the model supports. */
 export interface ThinkingCapability {
   supported: boolean
+  mode?: "manual" | "adaptive"
   maxBudgetTokens?: number    // max thinking budget this model accepts
   defaultBudget?: number       // default when router doesn't specify
   effortLevels: Array<"high" | "max">

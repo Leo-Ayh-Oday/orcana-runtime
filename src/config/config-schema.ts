@@ -73,6 +73,8 @@ export interface ModelConfig {
   maxOutputTokens?: number
   pricingTier?: "free" | "cheap" | "standard" | "premium"
   tags?: string[]
+  /** Provider thinking API shape. Adaptive models reject manual budget_tokens. */
+  thinkingMode?: "manual" | "adaptive"
   capabilities?: Partial<ProviderCapabilities>
 }
 
@@ -203,6 +205,77 @@ export const builtInProviders: Record<string, ProviderConfig> = {
           supportsEmbeddings: false,
           maxContextTokens: 128_000,
           maxOutputTokens: 32_768,
+        },
+      },
+    },
+  },
+  anthropic: {
+    type: "anthropic",
+    displayName: "Anthropic",
+    baseUrl: "https://api.anthropic.com",
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+    models: {
+      "claude-opus-4-7": {
+        displayName: "Claude Opus 4.7",
+        contextWindow: 200_000,
+        maxOutputTokens: 32_768,
+        pricingTier: "premium",
+        tags: ["coding", "reasoning", "deep-thinking", "vision"],
+        thinkingMode: "adaptive",
+        capabilities: {
+          supportsToolCalls: true, supportsStreaming: true, supportsJsonMode: false,
+          supportsThinking: true, supportsReasoningEffort: true, supportsFim: false,
+          supportsPrefixCache: true, supportsVision: true, supportsEmbeddings: false,
+          maxContextTokens: 200_000, maxOutputTokens: 32_768,
+        },
+      },
+      "claude-sonnet-4-6": {
+        displayName: "Claude Sonnet 4.6",
+        contextWindow: 200_000,
+        maxOutputTokens: 16_384,
+        pricingTier: "standard",
+        tags: ["coding", "reasoning", "vision"],
+        thinkingMode: "adaptive",
+        capabilities: {
+          supportsToolCalls: true, supportsStreaming: true, supportsJsonMode: false,
+          supportsThinking: true, supportsReasoningEffort: true, supportsFim: false,
+          supportsPrefixCache: true, supportsVision: true, supportsEmbeddings: false,
+          maxContextTokens: 200_000, maxOutputTokens: 16_384,
+        },
+      },
+      "claude-haiku-4-5": {
+        displayName: "Claude Haiku 4.5",
+        contextWindow: 200_000,
+        maxOutputTokens: 8_192,
+        pricingTier: "cheap",
+        tags: ["fast", "chat", "vision"],
+        capabilities: {
+          supportsToolCalls: true, supportsStreaming: true, supportsJsonMode: false,
+          supportsThinking: false, supportsReasoningEffort: false, supportsFim: false,
+          supportsPrefixCache: true, supportsVision: true, supportsEmbeddings: false,
+          maxContextTokens: 200_000, maxOutputTokens: 8_192,
+        },
+      },
+    },
+  },
+  openai: {
+    type: "openai",
+    displayName: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    apiKeyEnv: "OPENAI_API_KEY",
+    models: {
+      "gpt-5": {
+        displayName: "GPT-5",
+        contextWindow: 128_000,
+        maxOutputTokens: 16_384,
+        pricingTier: "premium",
+        tags: ["coding", "reasoning", "vision"],
+        capabilities: {
+          ...OPENAI_COMPAT_VISION_AGENT_CAPS,
+          supportsThinking: false,
+          supportsPrefixCache: false,
+          maxContextTokens: 128_000,
+          maxOutputTokens: 16_384,
         },
       },
     },

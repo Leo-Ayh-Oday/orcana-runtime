@@ -112,6 +112,146 @@ describe("OpenAIProvider message conversion", () => {
 })
 
 describe("OpenAIProvider stop reason handling", () => {
+  test("emits real nested cache usage from OpenAI-compatible relays", async () => {
+    const chunk = JSON.stringify({
+      id: "chunk_usage",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, delta: { content: "complete" }, finish_reason: "stop" }],
+      usage: {
+        prompt_tokens: 1_000,
+        completion_tokens: 50,
+        total_tokens: 1_050,
+        prompt_tokens_details: { cached_tokens: 750 },
+      },
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(`data: ${chunk}\n\ndata: [DONE]\n\n`, { status: 200 })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 32,
+    })) events.push(event)
+
+    const usage = events.find(event => event.type === "token_usage")?.data as Record<string, unknown> | undefined
+    expect(usage?.cacheReadInputTokens).toBe(750)
+    expect(usage?.cacheMissInputTokens).toBe(250)
+    expect(usage?.cacheHitRate).toBe(75)
+  })
+
+  test("does not treat a malformed SSE chunk followed by DONE as a complete response", async () => {
+    const valid = JSON.stringify({
+      id: "chunk_partial",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }],
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(
+        `data: ${valid}\n\ndata: {broken-json\n\ndata: [DONE]\n\n`,
+        { status: 200 },
+      )) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model",
+      system: "",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 32,
+    })) events.push(event)
+
+    expect(events.some(event => event.type === "error" && String(event.data).includes("malformed SSE"))).toBe(true)
+    expect(events.some(event => event.type === "done")).toBe(false)
+  })
+
+  test("does not execute an irreparable streamed tool call payload", async () => {
+    const chunk = JSON.stringify({
+      id: "chunk_tool",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{
+        index: 0,
+        delta: { tool_calls: [{ index: 0, id: "bad", type: "function", function: { name: "write_file", arguments: "not-json" } }] },
+        finish_reason: "tool_calls",
+      }],
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(`data: ${chunk}\n\ndata: [DONE]\n\n`, { status: 200 })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model",
+      system: "",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 32,
+    })) events.push(event)
+
+    expect(events.some(event => event.type === "error" && String(event.data).includes("invalid tool call JSON"))).toBe(true)
+    expect(events.some(event => event.type === "tool_call")).toBe(false)
+  })
+
+  test("accepts relay SSE data fields without a space after the colon", async () => {
+    const chunk = JSON.stringify({
+      id: "chunk_relay",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, delta: { content: "complete" }, finish_reason: "stop" }],
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(`data:${chunk}\n\ndata:[DONE]\n\n`, { status: 200 })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model",
+      system: "",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 32,
+    })) events.push(event)
+
+    expect(events.some(event => event.type === "text" && event.data === "complete")).toBe(true)
+    expect(events.some(event => event.type === "done" && event.data === "complete")).toBe(true)
+  })
+
+  test("reports a clean EOF without a terminal signal as an interrupted stream", async () => {
+    const chunk = JSON.stringify({
+      id: "chunk_partial",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, delta: { content: "partial answer" }, finish_reason: null }],
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(`data: ${chunk}\n\n`, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model",
+      system: "",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 32,
+    })) events.push(event)
+
+    expect(events.some(event => event.type === "error" && String(event.data).includes("ended unexpectedly"))).toBe(true)
+    expect(events.some(event => event.type === "done")).toBe(false)
+  })
+
   test("reports length truncation instead of completing normally", async () => {
     const chunk = JSON.stringify({
       id: "chunk_1",

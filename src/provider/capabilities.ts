@@ -27,11 +27,15 @@ export function toModelCapabilities(caps: Partial<ProviderCapabilities> | undefi
 }
 
 /** 从 ModelConfig 构建 ThinkingCapability。 */
-export function toThinkingCapability(caps: Partial<ProviderCapabilities> | undefined): ThinkingCapability {
+export function toThinkingCapability(
+  caps: Partial<ProviderCapabilities> | undefined,
+  mode: ModelConfig["thinkingMode"] = "manual",
+): ThinkingCapability {
   const supportsThinking = caps?.supportsThinking ?? false
   const supportsEffort = caps?.supportsReasoningEffort ?? false
   return {
     supported: supportsThinking,
+    ...(supportsThinking ? { mode } : {}),
     effortLevels: supportsEffort ? ["high", "max"] : supportsThinking ? ["high"] : [],
   }
 }
@@ -52,7 +56,7 @@ export function toModelSpec(
     contextWindow: modelConfig.contextWindow ?? caps?.maxContextTokens ?? 128_000,
     maxOutputTokens: modelConfig.maxOutputTokens ?? caps?.maxOutputTokens ?? 8_192,
     pricingTier,
-    thinking: toThinkingCapability(caps),
+    thinking: toThinkingCapability(caps, modelConfig.thinkingMode),
     capabilities: toModelCapabilities(caps),
     tags: modelConfig.tags ?? inferTags(caps),
     isDefault: false,

@@ -1006,6 +1006,11 @@ export async function* agentLoop(
         yield { type: "status", data: s }
       }
       for (const t of orchResult.yieldTexts) {
+        // The model's finalText is either already streamed or emitted below for
+        // buffered runs. Emitting the accepted evidence wrapper as assistant
+        // text duplicates that response; the TUI then mistakes its four-line
+        // compact preview for the full answer and hides the real trailing text.
+        if (isCompletionEvidenceReport(t)) continue
         yield { type: "text", data: t }
       }
       for (const ev of orchResult.traceEvents) {
@@ -1964,4 +1969,10 @@ export async function* agentLoop(
 function isNonRetryableProviderStreamError(error: string): boolean {
   return /^(auth|client|quota)(?:\s|:)/i.test(error)
     || /insufficient[_\s-]*quota|quota[_\s-]*(?:exceeded|insufficient)|(?:exceeded|insufficient)[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|额度|余额|欠费|账户余额|资源包|套餐/i.test(error)
+}
+
+function isCompletionEvidenceReport(text: string): boolean {
+  return /^##\s+(Delivery Report|交付报告)\s*$/im.test(text)
+    && /^##\s+(Evidence|证据)\s*$/im.test(text)
+    && /^##\s+(Risk|风险)\s*$/im.test(text)
 }

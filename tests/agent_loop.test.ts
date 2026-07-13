@@ -895,6 +895,8 @@ describe("Agent loop greedy tool execution", () => {
     const text = events.filter(e => e.type === "text").map(e => String(e.data ?? "")).join("")
     expect(provider.rounds).toBe(1)
     expect(text).toContain("Looks coherent")
+    expect(text.match(/Looks coherent/g)).toHaveLength(1)
+    expect(text).not.toContain("## Delivery Report")
     expect(events.some(e => e.type === "status" && String(e.data).includes("output-gate"))).toBe(false)
   })
 

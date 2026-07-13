@@ -301,11 +301,17 @@ export class OpenAIProvider implements LLMProvider {
               if (delta.tool_calls) {
                 for (const tc of delta.tool_calls) {
                   const existing = toolCalls.get(tc.index)
-                  if (tc.id) {
-                    toolCalls.set(tc.index, { id: tc.id, name: tc.function?.name ?? "", arguments: tc.function?.arguments ?? "" })
-                  } else if (existing && tc.function?.arguments) {
-                    existing.arguments += tc.function.arguments
+                  if (!existing || (tc.id && existing.id && tc.id !== existing.id)) {
+                    toolCalls.set(tc.index, {
+                      id: tc.id ?? "",
+                      name: tc.function?.name ?? "",
+                      arguments: tc.function?.arguments ?? "",
+                    })
+                    continue
                   }
+                  if (tc.id) existing.id = tc.id
+                  if (tc.function?.name) existing.name = mergeStreamedField(existing.name, tc.function.name)
+                  if (tc.function?.arguments) existing.arguments = mergeStreamedField(existing.arguments, tc.function.arguments)
                 }
               }
 
@@ -379,6 +385,14 @@ export class OpenAIProvider implements LLMProvider {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+/** Compatible relays vary between true deltas and cumulative snapshots. */
+function mergeStreamedField(current: string, incoming: string): string {
+  if (!current) return incoming
+  if (incoming === current || current.endsWith(incoming)) return current
+  if (incoming.startsWith(current)) return incoming
+  return current + incoming
 }
 
 function parseErrorBody(text: string): Record<string, unknown> | undefined {

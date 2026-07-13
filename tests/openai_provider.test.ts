@@ -199,6 +199,34 @@ describe("OpenAIProvider stop reason handling", () => {
     expect(events.some(event => event.type === "tool_call")).toBe(false)
   })
 
+  test("preserves tool arguments when a relay repeats the tool id in every chunk", async () => {
+    const chunks = [
+      {
+        id: "chunk_tool_1", object: "chat.completion.chunk", created: 1, model: "test-model",
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { name: "read_file", arguments: '{"path":' } }] }, finish_reason: null }],
+      },
+      {
+        id: "chunk_tool_2", object: "chat.completion.chunk", created: 1, model: "test-model",
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call-1", type: "function", function: { arguments: '"src/a.ts"}' } }] }, finish_reason: "tool_calls" }],
+      },
+    ]
+    const body = chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n"
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(body, { status: 200 })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 32,
+    })) events.push(event)
+
+    expect(events.find(event => event.type === "tool_call")?.data).toEqual({
+      id: "call-1", name: "read_file", input: { path: "src/a.ts" },
+    })
+    expect(events.some(event => event.type === "error")).toBe(false)
+  })
+
   test("accepts relay SSE data fields without a space after the colon", async () => {
     const chunk = JSON.stringify({
       id: "chunk_relay",

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { addEvidence, createEvidenceLedger, latestEvidence } from "../src/agent/evidence-ledger"
 import {
   createTaskTracker,
   formatTaskTrackerPrompt,
@@ -10,6 +11,7 @@ import {
   taskTrackerComplete,
   updateTaskTrackerAfterTools,
 } from "../src/agent/task-tracker"
+import { recordRuntimeFileWrite, resetRuntimeFileStateLedger } from "../src/file-state"
 
 function withTempProject(run: (dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "dscode-quality-"))
@@ -85,6 +87,53 @@ describe("TaskTracker", () => {
 
     expect(tracker.steps.find(step => step.id === "verification")?.status).toBe("done")
     expect(taskTrackerComplete(tracker)).toBe(true)
+  })
+
+  test("evidence ledger preserves verification generation captured before later writes", () => {
+    resetRuntimeFileStateLedger()
+    const tracker = createTaskTracker("Build a complete full-stack personal blog with React and API", "long_task")!
+    const ledger = createEvidenceLedger()
+    recordRuntimeFileWrite({ path: join(tmpdir(), "after-verification.ts"), content: "export const changed = true\n" })
+
+    updateTaskTrackerAfterTools({
+      tracker,
+      changedFiles: [],
+      toolNames: ["shell"],
+      verificationResults: [
+        { kind: "typecheck", command: "bun run typecheck", passed: true, issues: 0, durationMs: 1, summary: "ok", generation: 0 },
+      ],
+      evidenceLedger: ledger,
+    })
+
+    expect(ledger.entries[0]?.generation).toBe(0)
+  })
+
+  test("completed tracker still ingests a later failed re-verification", () => {
+    resetRuntimeFileStateLedger()
+    const tracker = createTaskTracker("Build a complete full-stack personal blog with React and API", "long_task")!
+    tracker.phase = "complete"
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "previous-pass",
+      kind: "typecheck",
+      command: "bun run typecheck",
+      output: "ok",
+      passed: true,
+      timestamp: 1,
+      generation: 0,
+    })
+
+    updateTaskTrackerAfterTools({
+      tracker,
+      changedFiles: [],
+      toolNames: ["shell"],
+      verificationResults: [
+        { kind: "typecheck", command: "bun run typecheck", passed: false, issues: 1, durationMs: 1, summary: "failed", generation: 0 },
+      ],
+      evidenceLedger: ledger,
+    })
+
+    expect(latestEvidence(ledger, "typecheck")?.passed).toBe(false)
   })
 
   test("generic verification boolean does not satisfy concrete quality evidence", () => {

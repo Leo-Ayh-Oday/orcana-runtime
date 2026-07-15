@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import type { VerificationKind, VerificationResult } from "../verification/result"
 import { ingestVerificationResults, type EvidenceLedger } from "./evidence-ledger"
+import { getWriteGeneration } from "../file-state"
 
 export type TaskIntent = "readonly" | "narrow_edit" | "long_task"
 export type TaskStepStatus = "pending" | "running" | "done" | "failed"
@@ -182,6 +183,13 @@ export function updateTaskTrackerAfterTools(input: {
   /** PR 6: optional evidence ledger — when provided, verification results are also ingested. */
   evidenceLedger?: EvidenceLedger
 }) {
+  // Evidence belongs to the run, not to the tracker lifecycle. Narrow edits may
+  // have no tracker, and completed trackers may still receive a later failed
+  // re-verification that must invalidate an earlier pass.
+  if (input.evidenceLedger && input.verificationResults && input.verificationResults.length > 0) {
+    ingestVerificationResults(input.evidenceLedger, input.verificationResults, undefined, getWriteGeneration())
+  }
+
   const tracker = input.tracker
   if (!tracker || tracker.phase === "complete") return
   const files = input.changedFiles.map(file => file.replace(/\\/g, "/"))
@@ -265,10 +273,6 @@ export function updateTaskTrackerAfterTools(input: {
     tracker.phase = "complete"
   }
 
-  // PR 6: also populate evidence ledger when provided
-  if (input.evidenceLedger && input.verificationResults && input.verificationResults.length > 0) {
-    ingestVerificationResults(input.evidenceLedger, input.verificationResults)
-  }
 }
 
 export function missingTaskRequirements(tracker: TaskTracker | null, cwd = process.cwd()): string[] {

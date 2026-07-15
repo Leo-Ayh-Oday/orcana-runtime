@@ -33,6 +33,10 @@ export interface EvidenceEntry {
   timestamp: number
   /** Optional link to the PatchTransaction that produced the code under verification. */
   txId?: string
+  /** [PR-2 / I-2] Write-generation at collection time. If a later write bumps the
+   *  runtime write-generation past this value, this evidence verified an older code
+   *  state and is considered stale by the completion gate. */
+  generation?: number
 }
 
 /** Collection of all evidence gathered during a task. */
@@ -136,6 +140,39 @@ export function latestPassedEvidence(ledger: EvidenceLedger, kind: EvidenceKind)
   return passed.reduce((latest, e) => e.timestamp > latest.timestamp ? e : latest)
 }
 
+/** Get the latest evidence entry of a kind in collection order (passed or not), or null.
+ *  Uses array (insertion) order rather than timestamp so same-ms entries resolve to the
+ *  actually-latest one. */
+export function latestEvidence(ledger: EvidenceLedger, kind: EvidenceKind): EvidenceEntry | null {
+  for (let i = ledger.entries.length - 1; i >= 0; i--) {
+    const e = ledger.entries[i]!
+    if (e.kind === kind) return e
+  }
+  return null
+}
+
+/** [PR-2 / I-2] The state-aware evidence check used by the completion gate.
+ *
+ *  Unlike `hasEvidence` ("any passed entry EVER"), this enforces that evidence is
+ *  bound to the current code state:
+ *    L1 — the MOST RECENT entry of the kind must be passed (a later failed
+ *         re-verification invalidates an earlier pass).
+ *    L2 — if `currentGeneration` is provided and the entry carries a generation,
+ *         they must match (no writes since it was verified; otherwise it's stale).
+ *
+ *  Backward compatible for callers that omit `currentGeneration`: those enforce L1
+ *  only. Once the current generation is known, evidence must carry the same generation;
+ *  an unstamped legacy entry cannot prove freshness and fails closed.
+ */
+export function hasFreshPassingEvidence(ledger: EvidenceLedger, kind: EvidenceKind, currentGeneration?: number): boolean {
+  const latest = latestEvidence(ledger, kind)
+  if (!latest || !latest.passed) return false // L1
+  if (currentGeneration !== undefined && latest.generation !== currentGeneration) {
+    return false // L2 — code changed since this evidence was collected
+  }
+  return true
+}
+
 // ── Ingestion: VerificationResult → EvidenceEntry ──
 
 /** Convert a VerificationResult into evidence entries and add them to the ledger.
@@ -143,7 +180,7 @@ export function latestPassedEvidence(ledger: EvidenceLedger, kind: EvidenceKind)
  *  A single VerificationResult may produce evidence for its primary kind.
  *  Returns the newly added entries.
  */
-export function ingestVerificationResult(ledger: EvidenceLedger, result: VerificationResult, txId?: string): EvidenceEntry | null {
+export function ingestVerificationResult(ledger: EvidenceLedger, result: VerificationResult, txId?: string, generation?: number): EvidenceEntry | null {
   const kind = toEvidenceKind(result.kind)
   if (!kind) return null
 
@@ -155,16 +192,17 @@ export function ingestVerificationResult(ledger: EvidenceLedger, result: Verific
     passed: result.passed,
     timestamp: Date.now(),
     txId,
+    generation: result.generation ?? generation,
   }
   addEvidence(ledger, entry)
   return entry
 }
 
 /** Batch-ingest multiple verification results. */
-export function ingestVerificationResults(ledger: EvidenceLedger, results: VerificationResult[], txId?: string): EvidenceEntry[] {
+export function ingestVerificationResults(ledger: EvidenceLedger, results: VerificationResult[], txId?: string, generation?: number): EvidenceEntry[] {
   const entries: EvidenceEntry[] = []
   for (const r of results) {
-    const entry = ingestVerificationResult(ledger, r, txId)
+    const entry = ingestVerificationResult(ledger, r, txId, generation)
     if (entry) entries.push(entry)
   }
   return entries
@@ -175,6 +213,7 @@ export function addManualEvidence(ledger: EvidenceLedger, opts: {
   description: string
   passed: boolean
   txId?: string
+  generation?: number
 }): EvidenceEntry {
   const entry: EvidenceEntry = {
     id: generateEvidenceId(),
@@ -184,6 +223,7 @@ export function addManualEvidence(ledger: EvidenceLedger, opts: {
     passed: opts.passed,
     timestamp: Date.now(),
     txId: opts.txId,
+    generation: opts.generation,
   }
   addEvidence(ledger, entry)
   return entry
@@ -206,11 +246,10 @@ export function requiredEvidenceKinds(tracker: TaskTracker | null): EvidenceKind
 /** The single hard-check entry point for claiming task completion.
  *
  *  Checks:
- *  1. No tracker → can claim (no structured task)
- *  2. Tracker already complete → can claim
- *  3. All steps must be done (no pending/running)
- *  4. All required evidence kinds must have at least one passed entry
- *  5. All required files must exist on disk
+ *  1. No tracker and no explicit requirements → can claim (no structured task)
+ *  2. All steps must be done (no pending/running)
+ *  3. All required evidence kinds must have fresh passed evidence
+ *  4. All required files must exist on disk
  *
  *  Returns a structured result with canClaim + detailed missing/blocked lists.
  */
@@ -218,25 +257,20 @@ export function canClaimDone(params: {
   tracker: TaskTracker | null
   evidence: EvidenceLedger
   cwd?: string
+  /** Explicit evidence requirements for flows such as narrow_edit that do not
+   * create a TaskTracker but still make a verified-completion claim. */
+  requiredKinds?: EvidenceKind[]
+  /** [PR-2 / I-2] Current write-generation. When provided, required evidence must
+   *  have been collected at this generation (no writes since) — else it is stale. */
+  currentGeneration?: number
 }): CanClaimDoneResult {
-  const { tracker, evidence, cwd } = params
+  const { tracker, evidence, cwd, requiredKinds: explicitRequiredKinds = [], currentGeneration } = params
   const missing: string[] = []
   const blocked: string[] = []
 
-  // No tracker → nothing to check
-  if (!tracker) {
-    return {
-      canClaim: true,
-      missing: [],
-      blocked: [],
-      requiredKinds: [],
-      satisfiedKinds: [],
-      unsatisfiedKinds: [],
-    }
-  }
-
-  // Already complete
-  if (tracker.phase === "complete") {
+  // Unstructured chat has no evidence contract. Tracker-less flows may still
+  // opt into one through explicit requirements (for example narrow_edit).
+  if (!tracker && explicitRequiredKinds.length === 0) {
     return {
       canClaim: true,
       missing: [],
@@ -248,7 +282,7 @@ export function canClaimDone(params: {
   }
 
   // Check: all steps must be done
-  const undoneSteps = tracker.steps.filter(s => s.status !== "done")
+  const undoneSteps = tracker?.steps.filter(s => s.status !== "done") ?? []
   if (undoneSteps.length > 0) {
     for (const s of undoneSteps) {
       missing.push(`步骤未完成: ${s.title}`)
@@ -256,7 +290,7 @@ export function canClaimDone(params: {
   }
 
   // Check: required files exist
-  if (cwd) {
+  if (tracker && cwd) {
     const { existsSync } = require("node:fs")
     const { resolve } = require("node:path")
     for (const file of tracker.requiredFiles) {
@@ -269,12 +303,12 @@ export function canClaimDone(params: {
   }
 
   // Check: required evidence
-  const required = requiredEvidenceKinds(tracker)
+  const required = [...new Set([...requiredEvidenceKinds(tracker), ...explicitRequiredKinds])]
   const satisfied: EvidenceKind[] = []
   const unsatisfied: EvidenceKind[] = []
 
   for (const kind of required) {
-    if (hasEvidence(evidence, kind)) {
+    if (hasFreshPassingEvidence(evidence, kind, currentGeneration)) {
       satisfied.push(kind)
     } else {
       unsatisfied.push(kind)
@@ -377,6 +411,7 @@ export interface SerializedEvidenceEntry {
   passed: boolean
   timestamp: number
   txId?: string
+  generation?: number
 }
 
 export interface SerializedLedger {
@@ -394,6 +429,7 @@ export function serializeLedger(ledger: EvidenceLedger): SerializedLedger {
       passed: e.passed,
       timestamp: e.timestamp,
       txId: e.txId,
+      generation: e.generation,
     })),
   }
 }
@@ -409,6 +445,7 @@ export function deserializeLedger(data: SerializedLedger): EvidenceLedger {
       passed: e.passed,
       timestamp: e.timestamp,
       txId: e.txId,
+      generation: e.generation,
     })),
   }
 }

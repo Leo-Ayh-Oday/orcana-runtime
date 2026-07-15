@@ -7,6 +7,7 @@ import { ConfidenceEvaluator } from "../src/evaluator/confidence"
 import type { CompletionOrchestratorInput } from "../src/agent/completion-orchestrator"
 import type { TaskTracker } from "../src/agent/task-tracker"
 import type { LLMProvider, StreamEvent } from "../src/provider/types"
+import { recordRuntimeFileWrite, resetRuntimeFileStateLedger } from "../src/file-state"
 
 const quietProvider: LLMProvider = {
   async *streamChat(): AsyncGenerator<StreamEvent> {
@@ -86,6 +87,7 @@ describe("CompletionOrchestrator truthfulness gate", () => {
       output: "ok",
       passed: true,
       timestamp: Date.now(),
+      generation: 0,
     })
 
     const result = await new CompletionOrchestrator().evaluate(input({
@@ -101,9 +103,62 @@ describe("CompletionOrchestrator truthfulness gate", () => {
     expect(result.decision).toBe("done")
     expect(result.statusMessages).toContain("evidence-gate: passed")
   })
+
+  test("blocks verification claims backed only by evidence from an older write generation", async () => {
+    resetRuntimeFileStateLedger()
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "evi_stale_typecheck",
+      kind: "typecheck",
+      command: "typecheck",
+      output: "ok",
+      passed: true,
+      timestamp: Date.now(),
+      generation: 0,
+    })
+    recordRuntimeFileWrite({ path: "src/after-verification.ts", content: "export const changed = true\n" })
+
+    const result = await new CompletionOrchestrator().evaluate(input({
+      finalText: "Typecheck passed.",
+      evidenceLedger: ledger,
+    }))
+
+    expect(result.decision).toBe("break_blocked")
+    expect(result.statusMessages).toContain("truthfulness-gate: blocked (1 contradictions)")
+  })
 })
 
 describe("checkNarrowEditCompletion", () => {
+  test("blocks stale evidence when narrow edit has no task tracker", () => {
+    resetRuntimeFileStateLedger()
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "evi_stale",
+      kind: "typecheck",
+      command: "typecheck",
+      output: "ok",
+      passed: true,
+      timestamp: Date.now(),
+      generation: 0,
+    })
+    recordRuntimeFileWrite({ path: "src/after-typecheck.ts", content: "export const changed = true\n" })
+
+    const result = checkNarrowEditCompletion({
+      autoFinishOnVerifiedWrite: true,
+      intentMode: "narrow_edit",
+      hadTsWriteThisRound: true,
+      blockingObligations: 0,
+      lastTypecheckPassed: true,
+      missingNarrowFiles: [],
+      modifiedFilesThisRound: new Set(["src/after-typecheck.ts"]),
+      taskTracker: null,
+      evidenceLedger: ledger,
+    })
+
+    expect(result.completionText).toBeNull()
+    expect(result.evidenceMissing).toContain("缺少验证证据: 类型检查")
+  })
+
   test("blocks verified-write auto-complete when structured evidence is missing", () => {
     const result = checkNarrowEditCompletion({
       autoFinishOnVerifiedWrite: true,
@@ -124,6 +179,7 @@ describe("checkNarrowEditCompletion", () => {
   })
 
   test("allows verified-write auto-complete when structured evidence is present", () => {
+    resetRuntimeFileStateLedger()
     const ledger = createEvidenceLedger()
     addEvidence(ledger, {
       id: "evi_typecheck",
@@ -132,6 +188,7 @@ describe("checkNarrowEditCompletion", () => {
       output: "ok",
       passed: true,
       timestamp: Date.now(),
+      generation: 0,
     })
 
     const result = checkNarrowEditCompletion({
@@ -142,7 +199,7 @@ describe("checkNarrowEditCompletion", () => {
       lastTypecheckPassed: true,
       missingNarrowFiles: [],
       modifiedFilesThisRound: new Set(["src/ok.ts"]),
-      taskTracker: tracker(),
+      taskTracker: null,
       evidenceLedger: ledger,
     })
 

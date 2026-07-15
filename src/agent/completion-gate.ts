@@ -17,6 +17,8 @@ export interface CompletionGateInput {
   lastTypecheck?: { passed: boolean; issues: number; output?: string }
   /** PR 6: optional evidence ledger for structured evidence check. */
   evidenceLedger?: EvidenceLedger
+  /** Runtime write-generation used to reject evidence collected for older code. */
+  currentGeneration?: number
 }
 
 export interface CompletionGateReport {
@@ -94,6 +96,7 @@ export function evaluateCompletionGate(input: CompletionGateInput): CompletionGa
     toolErrors: input.toolErrors,
     finalText: input.finalText,
     evidenceLedger: input.evidenceLedger,
+    currentGeneration: input.currentGeneration,
   })
   if (!modeExitResult.met) {
     for (const unmet of modeExitResult.unmet) {

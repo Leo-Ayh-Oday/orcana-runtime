@@ -5,13 +5,19 @@ import type { ToolDef, ToolResult } from "./registry"
 import { Result, isNonInteractive } from "./registry"
 import { buildVerificationResult } from "../verification/result"
 import type { SandboxManager } from "../sandbox/sandbox"
+import { recordRuntimeObservedWrites } from "../file-state"
+import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 // ── Sandbox injection (set by loop.ts at startup) ──
 
-let _sandbox: SandboxManager | null = null
+const SHELL_SANDBOX = Symbol("shell-sandbox")
 
 export function setShellSandbox(sandbox: SandboxManager | null) {
-  _sandbox = sandbox
+  setRuntimeContextValue(SHELL_SANDBOX, sandbox)
+}
+
+export function getShellSandbox(): SandboxManager | null {
+  return getRuntimeContextValue<SandboxManager | null>(SHELL_SANDBOX, null)
 }
 
 const BLOCKLIST = new Set([
@@ -64,7 +70,7 @@ async function shell(params: Record<string, unknown>, onProgress?: (chunk: strin
     return Result.blocked(`${longRunningReason}，为避免任务卡住已阻止执行。请改用可结束的验证命令，例如 bun test、bun run check、bun run build 或 tsc --noEmit。如果测试需要服务，请修改测试让它在测试进程内启动并关闭服务。`)
   }
 
-  const sandbox = _sandbox
+  const sandbox = getShellSandbox()
   const verdict = sandbox?.check(command) ?? { allowed: true }
   if (!verdict.allowed) {
     return Result.blocked(verdict.reason ?? "沙箱阻止")
@@ -73,6 +79,7 @@ async function shell(params: Record<string, unknown>, onProgress?: (chunk: strin
   const effectiveTimeout = sandboxed
     ? verdict.timeoutOverride ?? Math.min(timeoutSec, Number(process.env.DEEPSEEK_SANDBOX_TIMEOUT_SEC) || 30)
     : timeoutSec
+  sandbox?.snapshotWorkspace()
 
   return new Promise(resolve => {
     const startedAt = Date.now()
@@ -115,14 +122,7 @@ async function shell(params: Record<string, unknown>, onProgress?: (chunk: strin
 
     proc.on("close", (code) => {
       clearTimeout(timer)
-      // Post-exec path guard check
-      let sandboxReport = ""
-      if (sandboxed && sandbox) {
-        const report = sandbox.diff()
-        sandboxReport = report.violations.length > 0
-          ? `\n\n[沙箱文件守护]\n${report.violations.map(v => `  ${v.kind}: ${v.path}`).join("\n")}`
-          : ""
-      }
+      const sandboxReport = observeWorkspaceWrites(sandbox)
       if (timedOut) {
         resolve(shellResult({
           command,
@@ -185,7 +185,7 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
     return
   }
 
-  const sandbox = _sandbox
+  const sandbox = getShellSandbox()
   const verdict = sandbox?.check(command) ?? { allowed: true }
   if (!verdict.allowed) {
     yield { type: "done", data: Result.blocked(verdict.reason ?? "沙箱阻止") }
@@ -195,6 +195,7 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
   const childEnv = sandboxed && verdict.injectedEnv
     ? verdict.injectedEnv
     : process.env
+  sandbox?.snapshotWorkspace()
 
   const proc = spawn(command, {
     shell: true,
@@ -258,11 +259,12 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
   }
 
   if (timedOut) {
+    const sandboxReport = observeWorkspaceWrites(sandbox)
     yield { type: "done", data: shellResult({
       command,
       success: false,
       error: `Command timed out after ${timeoutSec}s`,
-      content: `Command timed out after ${timeoutSec}s`,
+      content: `Command timed out after ${timeoutSec}s${sandboxReport}`,
       durationMs: Date.now() - startedAt,
     }) }
     return
@@ -275,6 +277,7 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
 
   let output = stdoutChunks.join("").trim() || "(empty output)"
   if (stderrChunks.length) output += `\n[stderr]\n${stderrChunks.join("").trim()}`
+  output += observeWorkspaceWrites(sandbox)
   const MAX_SHELL_OUTPUT = 8000
   const truncated = output.length > MAX_SHELL_OUTPUT
   const display = truncated
@@ -302,6 +305,14 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
     durationMs: Date.now() - startedAt,
     truncated: truncated ? output.length : undefined,
   }) }
+}
+
+function observeWorkspaceWrites(sandbox: SandboxManager | null): string {
+  if (!sandbox) return ""
+  const report = sandbox.diff()
+  if (report.violations.length === 0) return ""
+  recordRuntimeObservedWrites(report.violations.map(change => change.path))
+  return `\n\n[沙箱文件守护]\n${report.violations.map(change => `  ${change.kind}: ${change.path}`).join("\n")}`
 }
 
 function shellResult(input: {

@@ -64,6 +64,12 @@ export class SandboxManager {
     this.blockedFiles.clear()
   }
 
+  /** Snapshot the project tree before any shell command. This is separate from
+   * sandbox eligibility because ordinary shell commands can still mutate files. */
+  snapshotWorkspace(): void {
+    this.pathGuard.snapshotTree()
+  }
+
   /** Check a command before spawning. Returns verdict + env to inject. */
   check(command: string, _workingDir?: string): SandboxVerdict {
     // Pre-check: block shell commands that try to write to ripple-blocked files

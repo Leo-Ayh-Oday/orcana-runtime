@@ -13,6 +13,7 @@
 
 import { readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
+import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 import { SessionStore, type CheckpointRecord } from "./sqlite-session"
 
 // ═══════════════════════════════════════════════════════════
@@ -238,22 +239,35 @@ const CP_THRESHOLDS = [
   { percent: 70, label: "compact", description: "精简 checkpoint — 建议压缩上下文" },
 ]
 
-let _lastCpPercent = 0
+const LAST_CHECKPOINT_PERCENT = Symbol("last-checkpoint-percent")
+const LAST_CHECKPOINT_ROUND = Symbol("last-checkpoint-round")
+
+function getLastCheckpointPercent(): number {
+  return getRuntimeContextValue(LAST_CHECKPOINT_PERCENT, 0)
+}
+
+function setLastCheckpointPercent(percent: number): void {
+  setRuntimeContextValue(LAST_CHECKPOINT_PERCENT, percent)
+}
 
 export function shouldCheckpoint(contextPercent: number): false | { label: string; urgency: string } {
+  const lastCheckpointPercent = getLastCheckpointPercent()
   for (const t of CP_THRESHOLDS) {
-    if (contextPercent >= t.percent && _lastCpPercent < t.percent) {
-      _lastCpPercent = contextPercent
+    if (contextPercent >= t.percent && lastCheckpointPercent < t.percent) {
+      setLastCheckpointPercent(contextPercent)
       return { label: t.label, urgency: t.description }
     }
   }
-  if (contextPercent < _lastCpPercent - 20) {
-    _lastCpPercent = Math.floor(contextPercent / 20) * 20
+  if (contextPercent < lastCheckpointPercent - 20) {
+    setLastCheckpointPercent(Math.floor(contextPercent / 20) * 20)
   }
   return false
 }
 
-export function resetCheckpointScheduler() { _lastCpPercent = 0 }
+export function resetCheckpointScheduler() {
+  setLastCheckpointPercent(0)
+  setRuntimeContextValue(LAST_CHECKPOINT_ROUND, 0)
+}
 
 // ── Adaptive checkpoint density ──
 
@@ -267,6 +281,7 @@ export function adaptiveCheckpointThreshold(
   contextPercent: number,
   metrics: ComplexityMetrics,
 ): false | { label: string; urgency: string } {
+  const lastCheckpointPercent = getLastCheckpointPercent()
   const isComplex = metrics.filesPerRound > 0.3 || metrics.errorRate > 0.1 || metrics.round > 20
   const thresholds = isComplex
     ? [
@@ -279,25 +294,23 @@ export function adaptiveCheckpointThreshold(
         { percent: 75, label: "compact", urgency: "simple task — compact checkpoint" },
       ]
   for (const t of thresholds) {
-    if (contextPercent >= t.percent && _lastCpPercent < t.percent) {
-      _lastCpPercent = contextPercent
+    if (contextPercent >= t.percent && lastCheckpointPercent < t.percent) {
+      setLastCheckpointPercent(contextPercent)
       return { label: t.label, urgency: t.urgency }
     }
   }
-  if (contextPercent < _lastCpPercent - 20) {
-    _lastCpPercent = Math.floor(contextPercent / 20) * 20
+  if (contextPercent < lastCheckpointPercent - 20) {
+    setLastCheckpointPercent(Math.floor(contextPercent / 20) * 20)
   }
   return false
 }
 
-let _lastCpRound = 0
-
 export function shouldSkipCheckpointThisRound(round: number): boolean {
-  return round - _lastCpRound < 3
+  return round - getRuntimeContextValue(LAST_CHECKPOINT_ROUND, 0) < 3
 }
 
 export function recordCheckpointTaken(round: number): void {
-  _lastCpRound = round
+  setRuntimeContextValue(LAST_CHECKPOINT_ROUND, round)
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -22,6 +22,7 @@ import { FORBIDDEN_SECRET_FILES } from "../sandbox/forbidden-patterns"
 import type { VerificationKind } from "../verification/result"
 import type { FileTransaction, TransactionSnapshot } from "../tools/transaction"
 import { createTransaction, rollbackTransaction } from "../tools/transaction"
+import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 // ── PatchTransaction types ──
 
@@ -236,7 +237,7 @@ interface ActivePatchContext {
   nodeId: string
 }
 
-let activePatch: ActivePatchContext | null = null
+const ACTIVE_PATCH = Symbol("active-patch")
 
 /** Set the active patch context from the current node's TaskPacket.
  *  Called by loop.ts when a node becomes active. */
@@ -245,15 +246,15 @@ export function setActivePatchContext(opts: {
   verification: VerificationKind[]
   nodeId: string
 }): void {
-  activePatch = { ...opts }
+  setRuntimeContextValue(ACTIVE_PATCH, { ...opts })
 }
 
 export function getActivePatchContext(): ActivePatchContext | null {
-  return activePatch
+  return getRuntimeContextValue<ActivePatchContext | null>(ACTIVE_PATCH, null)
 }
 
 export function clearActivePatchContext(): void {
-  activePatch = null
+  setRuntimeContextValue<ActivePatchContext | null>(ACTIVE_PATCH, null)
 }
 
 // ── PatchTransaction factory ──

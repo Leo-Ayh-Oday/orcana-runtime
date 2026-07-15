@@ -106,9 +106,17 @@ describe("PermissionGate", () => {
   test("deny — .env file write is globally blocked", () => {
     const gate = new PermissionGate()
     const tool = makeTool("write_file", { category: "file", permission: "ask", isReadonly: false })
-    const result = gate.check("write_file", { file_path: ".env" }, tool)
+    const result = gate.check("write_file", { path: ".env" }, tool)
     expect(result.allowed).toBe(false)
     expect(result.level).toBe("deny")
+  })
+
+  test("deny — canonical secret-file variants are globally blocked", () => {
+    const gate = new PermissionGate()
+    const tool = makeTool("write_file", { category: "file", permission: "ask", isReadonly: false })
+    for (const path of [".env.production", ".htpasswd", "deploy/secret.yml"]) {
+      expect(gate.check("write_file", { path }, tool).level).toBe("deny")
+    }
   })
 
   test("reset clears session overrides", () => {

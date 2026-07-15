@@ -20,6 +20,8 @@
 
 import type { ToolDescriptor } from "../tools/registry"
 import type { ToolCategory } from "./permission"
+import { redactForToolOutput } from "./secret-redactor"
+import { isForbiddenSecretPath } from "../sandbox/forbidden-patterns"
 
 // ── Risk level ──
 
@@ -119,12 +121,6 @@ const RISK_5_PARAM_PATTERNS: Array<{
     description: "直接写入块设备",
   },
   {
-    toolName: "write_file",
-    paramKey: "file_path",
-    pattern: /\.env$|\.env\.local$|credentials\.json$|\.pem$|id_rsa$|id_ecdsa$|id_ed25519$/i,
-    description: "覆盖敏感配置文件/密钥",
-  },
-  {
     toolName: "shell",
     paramKey: "command",
     pattern: /chmod\s+777\s+\/|chown\s+-R\s+\//i,
@@ -158,6 +154,17 @@ export function getToolRisk(
   params: Record<string, unknown>,
   tool?: ToolDescriptor,
 ): RiskProfile {
+  const targetPath = params.path ?? params.file_path
+  if (toolName === "write_file" && typeof targetPath === "string" && isForbiddenSecretPath(targetPath)) {
+    return {
+      level: 5,
+      category: "shell",
+      requiresConfirmation: true,
+      sessionAllowable: false,
+      description: "覆盖敏感配置文件/密钥",
+    }
+  }
+
   // 1. Check Risk-5 param patterns first (most dangerous)
   for (const rule of RISK_5_PARAM_PATTERNS) {
     if (rule.toolName !== toolName) continue
@@ -207,6 +214,28 @@ export function canAutoAllow(risk: RiskProfile): boolean {
   return risk.sessionAllowable
 }
 
+function summarizeRiskParams(params: Record<string, unknown>): Record<string, unknown> {
+  const summary: Record<string, unknown> = {}
+  const omittedKeys = new Set(["command", "content", "oldContent", "newContent", "replacement", "body", "data", "text", "value"])
+  const usefulStringKeys = new Set(["path", "file_path", "cwd"])
+
+  for (const [key, value] of Object.entries(params)) {
+    if (omittedKeys.has(key) || (typeof value === "string" && !usefulStringKeys.has(key))) {
+      summary[key] = "[omitted]"
+    } else if (usefulStringKeys.has(key) || value === null || ["number", "boolean"].includes(typeof value)) {
+      summary[key] = value
+    } else {
+      summary[key] = Array.isArray(value) ? "[array]" : "[object]"
+    }
+  }
+
+  return redactForToolOutput(summary) as Record<string, unknown>
+}
+
+function formatRiskParams(params: Record<string, unknown>): string {
+  return JSON.stringify(summarizeRiskParams(params)).slice(0, 200)
+}
+
 /**
  * Format a risk-blocked message for the agent context.
  */
@@ -220,7 +249,7 @@ export function formatRiskBlockMessage(
       `<system-reminder>`,
       `[风险阻止 Risk-5] ${risk.description}`,
       `工具: ${toolName}`,
-      `参数: ${JSON.stringify(params).slice(0, 200)}`,
+      `参数: ${formatRiskParams(params)}`,
       ``,
       `此操作属于最高风险级别，已被永久禁止。不要重试。`,
       `寻找不会造成不可逆损害的替代方案。`,
@@ -232,7 +261,7 @@ export function formatRiskBlockMessage(
     `<system-reminder>`,
     `[风险确认 Risk-${risk.level}] ${risk.description}`,
     `工具: ${toolName}`,
-    `参数: ${JSON.stringify(params).slice(0, 200)}`,
+    `参数: ${formatRiskParams(params)}`,
     ``,
     `此操作需要用户逐次确认（不允许会话级自动批准）。`,
     `在回复中解释为什么需要执行此操作，等待用户批准。`,

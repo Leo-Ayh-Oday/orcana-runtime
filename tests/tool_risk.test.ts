@@ -119,27 +119,33 @@ describe("getToolRisk — Risk-5 param patterns", () => {
   })
 
   test("overwrite .env elevates to Risk 5", () => {
-    const r = getToolRisk("write_file", { file_path: ".env" })
+    const r = getToolRisk("write_file", { path: ".env" })
     expect(r.level).toBe(5)
   })
 
+  test("canonical secret-file variants elevate to Risk 5", () => {
+    for (const path of [".env.production", ".htpasswd", "deploy/secret.yml"]) {
+      expect(getToolRisk("write_file", { path }).level).toBe(5)
+    }
+  })
+
   test("overwrite .pem elevates to Risk 5", () => {
-    const r = getToolRisk("write_file", { file_path: "server.pem" })
+    const r = getToolRisk("write_file", { path: "server.pem" })
     expect(r.level).toBe(5)
   })
 
   test("overwrite SSH private key (id_rsa) elevates to Risk 5", () => {
-    const r = getToolRisk("write_file", { file_path: "id_rsa" })
+    const r = getToolRisk("write_file", { path: "id_rsa" })
     expect(r.level).toBe(5)
   })
 
   test("overwrite SSH private key (id_ed25519) elevates to Risk 5", () => {
-    const r = getToolRisk("write_file", { file_path: "id_ed25519" })
+    const r = getToolRisk("write_file", { path: "id_ed25519" })
     expect(r.level).toBe(5)
   })
 
   test("overwrite generic .key file does NOT elevate to Risk 5 (not a secret key extension)", () => {
-    const r = getToolRisk("write_file", { file_path: "en.key" })
+    const r = getToolRisk("write_file", { path: "en.key" })
     expect(r.level).toBe(2)
   })
 
@@ -235,6 +241,32 @@ describe("formatRiskBlockMessage", () => {
     expect(msg).toContain("Risk-5")
     expect(msg).toContain("永久禁止")
     expect(msg).toContain("不要重试")
+  })
+
+  test("Risk-5 write_file message does not leak file content", () => {
+    const msg = formatRiskBlockMessage("write_file", {
+      level: 5, category: "shell", requiresConfirmation: true, sessionAllowable: false, description: "secret file",
+    }, {
+      path: ".env",
+      content: "DEEPSEEK_API_KEY=sk-PLACEHOLDER_12345678901234567890",
+    })
+
+    expect(msg).toContain(".env")
+    expect(msg).toContain("[omitted]")
+    expect(msg).not.toContain("DEEPSEEK_API_KEY")
+    expect(msg).not.toContain("PLACEHOLDER_12345678901234567890")
+  })
+
+  test("Risk-4 shell message does not echo an opaque bearer credential", () => {
+    const token = "opaque-demo-token-123456789"
+    const msg = formatRiskBlockMessage("shell", {
+      level: 4, category: "shell", requiresConfirmation: true, sessionAllowable: false, description: "Shell command",
+    }, {
+      command: `curl -H "Authorization: Bearer ${token}" https://example.test`,
+    })
+
+    expect(msg).toContain("[omitted]")
+    expect(msg).not.toContain(token)
   })
 
   test("Risk-4 message contains per-invocation confirmation language", () => {

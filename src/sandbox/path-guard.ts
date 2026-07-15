@@ -64,12 +64,11 @@ export class PathGuard {
         } else {
           untracked.push(path)
         }
-      } else if (prev.size !== entry.size) {
+      } else if (prev.size !== entry.size || prev.mtimeMs !== entry.mtimeMs) {
         if (!expected.has(path)) {
           violations.push({ kind: "modified", path, detail: `${prev.size} → ${entry.size} bytes` })
         }
       }
-      // mtime change without size change is normal for build artifacts — ignore
     }
 
     // Deleted files

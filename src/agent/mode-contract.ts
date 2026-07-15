@@ -19,7 +19,8 @@ import type { EvidenceKind } from "./evidence-ledger"
 import type { ToolPolicyInput } from "./tool-execution/policy"
 import type { CompletionGateInput } from "./completion-gate"
 import type { EvidenceLedger } from "./evidence-ledger"
-import { hasEvidence } from "./evidence-ledger"
+import { hasFreshPassingEvidence } from "./evidence-ledger"
+import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 // ── Types ──
 
@@ -151,14 +152,14 @@ export const MODES: Record<ModeName, ModeContract> = {
 
 // ── Module-level active mode (same pattern as patch-transaction.ts) ──
 
-let _activeMode: ModeContract = MODES.coder
+const ACTIVE_MODE = Symbol("active-mode")
 
 export function setActiveMode(mode: ModeName): void {
-  _activeMode = MODES[mode]
+  setRuntimeContextValue(ACTIVE_MODE, MODES[mode])
 }
 
 export function getActiveMode(): ModeContract {
-  return _activeMode
+  return getRuntimeContextValue(ACTIVE_MODE, MODES.coder)
 }
 
 // ── Tool enforcement ──
@@ -209,6 +210,7 @@ export function checkModeExitCriteria(
     toolErrors: number
     finalText: string
     evidenceLedger?: EvidenceLedger
+    currentGeneration?: number
   },
 ): ModeExitResult {
   const unmet: string[] = []
@@ -229,7 +231,7 @@ export function checkModeExitCriteria(
       }
       case "has_evidence": {
         if (criterion.evidenceKind && context.evidenceLedger) {
-          if (!hasEvidence(context.evidenceLedger, criterion.evidenceKind)) {
+          if (!hasFreshPassingEvidence(context.evidenceLedger, criterion.evidenceKind, context.currentGeneration)) {
             unmet.push(criterion.description)
           }
         } else if (criterion.evidenceKind && !context.evidenceLedger) {

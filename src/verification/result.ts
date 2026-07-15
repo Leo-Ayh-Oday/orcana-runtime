@@ -8,6 +8,7 @@ export interface VerificationResult {
   issues: number
   durationMs: number
   summary: string
+  generation?: number
 }
 
 export function detectVerificationKind(command: string): VerificationKind {

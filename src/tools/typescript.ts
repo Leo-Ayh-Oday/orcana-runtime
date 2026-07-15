@@ -4,6 +4,8 @@ import { resolve } from "node:path"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 
+const TYPECHECK_RESULT_MAX_CHARS = 2000
+
 export interface TypeScriptCheckResult {
   passed: boolean
   available: boolean
@@ -60,6 +62,10 @@ export const TYPECHECK_TOOL: ToolDef = {
   isReadonly: true,
   isConcurrencySafe: false,
   category: "safe",
+  contract: {
+    stateUpdates: ["evidence"],
+    resultBudget: { maxChars: TYPECHECK_RESULT_MAX_CHARS, overflow: "clip" },
+  },
   inputSchema: {
     type: "object",
     properties: {},
@@ -67,6 +73,6 @@ export const TYPECHECK_TOOL: ToolDef = {
   execute: async (): Promise<ToolResult> => {
     const result = runTypeScriptNoEmit()
     if (result.passed) return Result.ok("typecheck passed", { verification: { kind: "typecheck", command: "tsc --noEmit", passed: true, issues: 0 } })
-    return Result.ok(`typecheck found ${result.issues} issue(s):\n${result.output.slice(0, 2000)}`, { verification: { kind: "typecheck", command: "tsc --noEmit", passed: false, issues: result.issues } })
+    return Result.ok(`typecheck found ${result.issues} issue(s):\n${result.output.slice(0, TYPECHECK_RESULT_MAX_CHARS)}`, { verification: { kind: "typecheck", command: "tsc --noEmit", passed: false, issues: result.issues } })
   },
 }

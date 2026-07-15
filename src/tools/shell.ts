@@ -8,6 +8,8 @@ import type { SandboxManager } from "../sandbox/sandbox"
 import { recordRuntimeObservedWrites } from "../file-state"
 import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
+const SHELL_RESULT_MAX_CHARS = 8000
+
 // ── Sandbox injection (set by loop.ts at startup) ──
 
 const SHELL_SANDBOX = Symbol("shell-sandbox")
@@ -316,10 +318,9 @@ export async function* shellStream(
   let output = stdoutChunks.join("").trim() || "(empty output)"
   if (stderrChunks.length) output += `\n[stderr]\n${stderrChunks.join("").trim()}`
   output += observeWorkspaceWrites(sandbox)
-  const MAX_SHELL_OUTPUT = 8000
-  const truncated = output.length > MAX_SHELL_OUTPUT
+  const truncated = output.length > SHELL_RESULT_MAX_CHARS
   const display = truncated
-    ? output.slice(0, MAX_SHELL_OUTPUT) + `\n\n… [shell 输出被截断：${output.length} 字符，仅显示前 ${MAX_SHELL_OUTPUT}。用 timeout 参数缩短命令输出，或用 findstr/grep 过滤。]`
+    ? output.slice(0, SHELL_RESULT_MAX_CHARS) + `\n\n… [shell 输出被截断：${output.length} 字符，仅显示前 ${SHELL_RESULT_MAX_CHARS}。用 timeout 参数缩短命令输出，或用 findstr/grep 过滤。]`
     : output
 
   const exitCode = proc.exitCode ?? 0
@@ -401,6 +402,12 @@ export const SHELL_TOOL: ToolDef = {
   category: "shell" as const,
   requiresConfirmation: true,
   userFacingName: "Shell",
+  contract: {
+    sideEffects: ["shell", "external_process", "workspace_write"],
+    stateUpdates: ["file_state", "evidence"],
+    resultBudget: { maxChars: SHELL_RESULT_MAX_CHARS, overflow: "clip" },
+    cooperativeCancellation: true,
+  },
   inputSchema: {
     type: "object",
     properties: {

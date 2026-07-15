@@ -358,6 +358,9 @@ export const READ_FILE: ToolDef = {
   description: "Read a file's contents. Pass offset and limit to read specific lines.",
   isReadonly: true,
   category: "safe" as const,
+  contract: {
+    stateUpdates: ["file_state"],
+  },
   inputSchema: {
     type: "object",
     properties: {
@@ -377,6 +380,11 @@ export const WRITE_FILE: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "Save File",
+  contract: {
+    pathPolicy: "workspace_only",
+    stateRequirement: "fresh_full_baseline_if_existing",
+    stateUpdates: ["file_state", "checkpoint"],
+  },
   inputSchema: {
     type: "object",
     properties: {
@@ -395,6 +403,11 @@ export const EDIT_FILE: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "Edit File",
+  contract: {
+    pathPolicy: "workspace_only",
+    stateRequirement: "fresh_full_baseline",
+    stateUpdates: ["file_state", "checkpoint"],
+  },
   inputSchema: {
     type: "object",
     properties: {
@@ -414,6 +427,11 @@ export const MULTI_EDIT: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "Atomic Multi Edit",
+  contract: {
+    pathPolicy: "workspace_only",
+    stateRequirement: "fresh_full_baseline",
+    stateUpdates: ["file_state", "checkpoint"],
+  },
   inputSchema: {
     type: "object",
     properties: {
@@ -524,6 +542,10 @@ export const EDIT_FIM: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "FIM Edit",
+  contract: {
+    stateRequirement: "fresh_full_baseline",
+    stateUpdates: ["file_state"],
+  },
   inputSchema: {
     type: "object",
     properties: {

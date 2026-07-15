@@ -48,18 +48,38 @@ const TOOL_TIMEOUT_SLOW = 180_000
 const TOOL_TIMEOUT_DEFAULT = 60_000
 const SLOW_TOOLS = new Set(["shell", "multi_edit", "edit_file", "edit_fim"])
 
-export async function withToolTimeout<T>(name: string, work: Promise<T>, timeoutMs?: number): Promise<T> {
+export async function withToolTimeout<T>(
+  name: string,
+  work: Promise<T>,
+  timeoutMs?: number,
+  abortSignal?: AbortSignal,
+): Promise<T> {
   const effectiveTimeout = timeoutMs ?? (SLOW_TOOLS.has(name) ? TOOL_TIMEOUT_SLOW : TOOL_TIMEOUT_DEFAULT)
   let timer: ReturnType<typeof setTimeout> | undefined
+  let abortHandler: (() => void) | undefined
   try {
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`Tool '${name}' timed out after ${effectiveTimeout / 1000}s`)), effectiveTimeout)
       }),
+      new Promise<never>((_, reject) => {
+        const rejectAborted = () => {
+          const error = new Error(`Tool '${name}' aborted`)
+          error.name = "AbortError"
+          reject(error)
+        }
+        if (abortSignal?.aborted) {
+          rejectAborted()
+          return
+        }
+        abortHandler = rejectAborted
+        abortSignal?.addEventListener("abort", abortHandler, { once: true })
+      }),
     ])
   } finally {
     if (timer) clearTimeout(timer)
+    if (abortHandler) abortSignal?.removeEventListener("abort", abortHandler)
   }
 }
 

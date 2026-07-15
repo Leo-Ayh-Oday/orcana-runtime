@@ -1211,7 +1211,12 @@ async function* runAgentLoop(
             hooks,
             tool,
             params: tc.input,
-            execute: (_params) => withToolTimeout(tc.name, tool.execute(_params)),
+            execute: (_params) => withToolTimeout(
+              tc.name,
+              tool.execute(_params, { abortSignal: options.abortSignal }),
+              undefined,
+              options.abortSignal,
+            ),
           })
           return { id: tc.id, content: result.content, success: result.success, metadata: result.metadata, startedAt }
         } catch (e) {
@@ -1220,6 +1225,7 @@ async function* runAgentLoop(
         }
       }))
       for (const result of results) parallelResults.set(result.id, result)
+      if (options.abortSignal?.aborted) return
     }
 
     for (const tc of completedToolCalls) {
@@ -1299,7 +1305,7 @@ async function* runAgentLoop(
               resultContent = resultObj.content
             } else {
               const effectiveParams = before.replaceParams ?? tc.input
-              for await (const ev of tool.executeStream(effectiveParams)) {
+              for await (const ev of tool.executeStream(effectiveParams, { abortSignal: options.abortSignal })) {
                 if (ev.type === "progress") {
                   // Raw shell stdout/stderr is often noisy progress output.
                   // Keep it out of the spinner/status line; the final result
@@ -1324,7 +1330,12 @@ async function* runAgentLoop(
               hooks,
               tool,
               params: tc.input,
-              execute: (_params) => withToolTimeout(tc.name, tool.execute(_params)),
+              execute: (_params) => withToolTimeout(
+                tc.name,
+                tool.execute(_params, { abortSignal: options.abortSignal }),
+                undefined,
+                options.abortSignal,
+              ),
             })
             resultContent = result.content
             resultObj = { success: result.success, content: result.content, metadata: result.metadata }
@@ -1334,6 +1345,7 @@ async function* runAgentLoop(
           }
         }
       }
+      if (options.abortSignal?.aborted) return
         const changedFilesForLedger = new Set<string>()
         // ── Smart truncation: head+tail with error-aware allocation ──
         if (resultObj.success && resultContent.length > 1400) {

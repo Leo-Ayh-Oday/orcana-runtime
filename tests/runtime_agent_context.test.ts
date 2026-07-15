@@ -78,6 +78,18 @@ class CountingProvider implements LLMProvider {
   }
 }
 
+class BlockingToolProvider implements LLMProvider {
+  rounds = 0
+
+  async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    if (this.rounds++ === 0) {
+      yield { type: "tool_call", data: { id: "blocking", name: "mcp__blocking_probe", input: {} } }
+      return
+    }
+    yield { type: "text", data: "done" }
+  }
+}
+
 describe("agent runtime context", () => {
   test("checkpoint scheduling is independent for each runtime context", () => {
     resetCheckpointScheduler()
@@ -300,5 +312,53 @@ describe("agent runtime context", () => {
     }
 
     expect(provider.calls).toBe(0)
+  })
+
+  test("an external run abort stops waiting for a legacy blocking tool", async () => {
+    const controller = new AbortController()
+    let markStarted!: () => void
+    let releaseTool!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    const blocked = new Promise<ReturnType<typeof Result.ok>>(resolve => {
+      releaseTool = () => resolve(Result.ok("released"))
+    })
+    const tools = buildTools({
+      name: "mcp__blocking_probe",
+      description: "Legacy tool that does not observe cancellation",
+      isReadonly: true,
+      isConcurrencySafe: true,
+      inputSchema: { type: "object", properties: {} },
+      execute() {
+        markStarted()
+        return blocked
+      },
+    })
+    const run = (async () => {
+      for await (const _event of agentLoop("run the blocking probe", {
+        provider: new BlockingToolProvider(),
+        model: "test",
+        tools,
+        abortSignal: controller.signal,
+        maxRounds: 2,
+      })) {
+        // Consume until cancellation closes the run.
+      }
+    })()
+
+    await started
+    controller.abort("cancel blocking tool")
+    const completedPromptly = await Promise.race([
+      run.then(() => true),
+      // Keep the bound generous enough for a loaded Windows CI worker while
+      // still proving that cancellation does not wait for the legacy tool's
+      // 60-second timeout or eventual completion.
+      new Promise<false>(resolve => setTimeout(() => resolve(false), 250)),
+    ])
+
+    // Always release the legacy promise so a failed assertion cannot leave
+    // background work retained by the test process.
+    releaseTool()
+    await run
+    expect(completedPromptly).toBe(true)
   })
 })

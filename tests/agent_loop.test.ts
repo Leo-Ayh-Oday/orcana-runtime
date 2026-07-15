@@ -1665,7 +1665,7 @@ describe("Agent loop greedy tool execution", () => {
     })
   })
 
-  test("completed MasterPlan synchronizes ModeContract to report mode", async () => {
+  test("completed MasterPlan report mode does not leak outside its run context", async () => {
     await withTempCwd(async () => {
       const provider = new ApprovedSingleNodePlanProvider()
       const tools = buildTools(
@@ -1720,7 +1720,7 @@ describe("Agent loop greedy tool execution", () => {
       }
 
       expect(events.length).toBeGreaterThan(0)
-      expect(getActiveMode().mode).toBe("report")
+      expect(getActiveMode().mode).toBe("coder")
     })
   })
 

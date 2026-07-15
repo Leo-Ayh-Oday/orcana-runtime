@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto"
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { getToolRisk } from "../src/agent/tool-risk"
 import { assembleRuntimeToolDefs, BUILTIN_TOOL_DEFS } from "../src/tools/builtins"
 import { buildTool, Result, type ToolContractMetadata, type ToolDef } from "../src/tools/registry"
@@ -32,7 +35,7 @@ describe("ToolContract projection", () => {
     }
     const contractMetadata: ToolContractMetadata = {
       pathPolicy: "workspace_only",
-      stateRequirement: "fresh_full_baseline",
+      stateRequirement: "none",
       stateUpdates: ["file_state"],
     }
     const tool = buildTool({
@@ -81,7 +84,7 @@ describe("ToolContract projection", () => {
         policy: "workspace_only",
       },
       state: {
-        requirement: "fresh_full_baseline",
+        requirement: "none",
         updates: ["file_state"],
       },
       resultBudget: {
@@ -115,6 +118,158 @@ describe("ToolContract projection", () => {
     expect(result.content).toBe("unchanged behavior")
   })
 
+  test("rejects freshness-bound streaming tools at registration", () => {
+    expect(() => buildTool({
+      name: "streaming_writer",
+      description: "test-only streaming writer",
+      isReadonly: false,
+      contract: {
+        pathParameters: ["path"],
+        stateRequirement: "fresh_full_baseline",
+      },
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+      },
+      execute: async () => Result.ok("unused"),
+      async *executeStream() {
+        yield { type: "done" as const, data: Result.ok("wrote") }
+      },
+    })).toThrow("cannot combine streaming execution with a freshness requirement")
+  })
+
+  test("rejects freshness contracts whose handlers do not consume managed approvals", () => {
+    expect(() => buildTool({
+      name: "unmanaged_writer",
+      description: "test-only unmanaged writer",
+      isReadonly: false,
+      contract: { pathParameters: ["path"], stateRequirement: "fresh_full_baseline" },
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => Result.ok("wrote"),
+    })).toThrow("without a managed freshness transaction")
+  })
+
+  test("freshness requirements fail closed when the contract declares no path", async () => {
+    let handlerCalls = 0
+    const tool = buildTool({
+      name: "misdeclared_writer",
+      description: "test-only malformed freshness contract",
+      isReadonly: false,
+      managesFreshnessApproval: true,
+      contract: { stateRequirement: "fresh_full_baseline" },
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        handlerCalls++
+        return Result.ok("wrote")
+      },
+    })
+
+    const result = await tool.execute({})
+
+    expect(result.success).toBe(false)
+    expect(handlerCalls).toBe(0)
+    expect(result.metadata).toMatchObject({
+      gate: "freshness",
+      freshness: { path: "path", status: "missing" },
+    })
+  })
+
+  test("freshness preflight bounds oversized multi-target operations", async () => {
+    let handlerCalls = 0
+    const tool = buildTool({
+      name: "oversized_writer",
+      description: "test-only oversized writer",
+      isReadonly: false,
+      managesFreshnessApproval: true,
+      contract: {
+        pathParameters: ["files[].path"],
+        stateRequirement: "fresh_full_baseline_if_existing",
+      },
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        handlerCalls++
+        return Result.ok("wrote")
+      },
+    })
+
+    const result = await tool.execute({
+      files: Array.from({ length: 129 }, (_, index) => ({ path: `new-${index}.ts` })),
+    })
+
+    expect(result.success).toBe(false)
+    expect(handlerCalls).toBe(0)
+    expect(result.content).toContain("freshness target limit exceeded")
+  })
+
+  test("freshness preflight rejects a file above the snapshot byte budget before execution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-contract-budget-"))
+    const path = join(root, "large.ts")
+    writeFileSync(path, "")
+    truncateSync(path, 16 * 1024 * 1024 + 1)
+    try {
+      let handlerCalls = 0
+      const tool = buildTool({
+        name: "budgeted_writer",
+        description: "test-only budgeted writer",
+        isReadonly: false,
+        managesFreshnessApproval: true,
+        contract: {
+          pathParameters: ["path"],
+          stateRequirement: "fresh_full_baseline_if_existing",
+        },
+        inputSchema: { type: "object", properties: { path: { type: "string" } } },
+        execute: async () => {
+          handlerCalls++
+          return Result.ok("wrote")
+        },
+      })
+
+      const result = await tool.execute({ path })
+
+      expect(result.success).toBe(false)
+      expect(handlerCalls).toBe(0)
+      expect(result.content).toContain("per-file byte budget")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("freshness preflight rejects a batch above the total snapshot byte budget", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-contract-total-budget-"))
+    const paths = Array.from({ length: 3 }, (_, index) => join(root, `large-${index}.ts`))
+    for (const path of paths) {
+      writeFileSync(path, "")
+      truncateSync(path, 12 * 1024 * 1024)
+    }
+    try {
+      let handlerCalls = 0
+      const tool = buildTool({
+        name: "batch_budgeted_writer",
+        description: "test-only batch budgeted writer",
+        isReadonly: false,
+        managesFreshnessApproval: true,
+        contract: {
+          pathParameters: ["files[].path"],
+          stateRequirement: "fresh_full_baseline_if_existing",
+        },
+        inputSchema: { type: "object", properties: {} },
+        execute: async () => {
+          handlerCalls++
+          return Result.ok("wrote")
+        },
+      })
+
+      const result = await tool.execute({ files: paths.map(path => ({ path })) })
+
+      expect(result.success).toBe(false)
+      expect(handlerCalls).toBe(0)
+      expect(result.content).toContain("total byte budget")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test("all built-in tools have stable full-contract fingerprints", () => {
     const fingerprints = BUILTIN_TOOL_DEFS.map(defn => `${defn.name}:${contractHash(defn)}`)
 
@@ -129,7 +284,7 @@ describe("ToolContract projection", () => {
       "write_file:2218c0aef6985044266acabe2cc488069185efbb87188db6da5e70bb635d67c9",
       "edit_file:f0331d1876fcfdca52a0c02014cac5eb119a947bca69f0b45b80c7785bf23621",
       "multi_edit:bd01af46e7ffe175654bb58e7646e1f5041cba74a0f888034ff94b7bd322d48d",
-      "edit_fim:e29cc0b0cd58c9496d9698a589b51465acacc9876b30cd55c769bf32c64df0b5",
+      "edit_fim:fc75fcd080561a80e1d5741f4c08a532208362f214d8ff7034b6834e1775d14a",
       "rollback_transaction:bd4ceed1a486ff0148894eca74974868a20731709d009cf8858553a3c9f26495",
       "shell:5163d7bdacab8e07f9c612a574d9fbf53feb9d417114b2f53ff4b8cb8e669969",
       "start_service:483dc391fdcd57e97a5664b0f6215072fbccc10efe6c9426222792e6f6d45ea5",

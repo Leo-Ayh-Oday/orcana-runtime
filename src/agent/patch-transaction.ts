@@ -15,13 +15,13 @@
  *  Phase 2 (future, PR 8): apply to temp → verify → atomically swap
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync, mkdirSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { createHash, randomBytes } from "node:crypto"
 import { FORBIDDEN_SECRET_FILES } from "../sandbox/forbidden-patterns"
 import type { VerificationKind } from "../verification/result"
 import type { FileTransaction, TransactionSnapshot } from "../tools/transaction"
-import { createTransaction, rollbackTransaction } from "../tools/transaction"
+import { createTransaction, rollbackTransaction, rollbackTransactionPaths } from "../tools/transaction"
 import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 // ── PatchTransaction types ──
@@ -84,12 +84,27 @@ export function computeBaseHash(content: string): string {
 }
 
 export function readFileHash(path: string): string | null {
-  if (!existsSync(path)) return null
+  const probe = probeFileHash(path)
+  return probe.state === "file" ? probe.hash : null
+}
+
+type FileHashProbe =
+  | { state: "absent" | "unreadable" | "non_file"; hash: null }
+  | { state: "file"; hash: string }
+
+function probeFileHash(path: string): FileHashProbe {
   try {
+    const stat = lstatSync(path)
+    if (!stat.isFile()) return { state: "non_file", hash: null }
     const content = readFileSync(path, "utf-8")
-    return computeBaseHash(content)
-  } catch {
-    return null
+    return { state: "file", hash: computeBaseHash(content) }
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : ""
+    return code === "ENOENT"
+      ? { state: "absent", hash: null }
+      : { state: "unreadable", hash: null }
   }
 }
 
@@ -97,21 +112,84 @@ export interface HashCheckResult {
   match: boolean
   expected: string | null
   actual: string | null
+  actualState: FileHashProbe["state"]
 }
 
 /** Verify that the file on disk matches the expected base hash.
  *  Returns mismatch when another process modified the file between read and write. */
 export function checkBaseHash(path: string, expectedHash: string | null): HashCheckResult {
-  const actual = readFileHash(path)
+  const probe = probeFileHash(path)
+  const actual = probe.hash
   if (expectedHash === null) {
-    // New file — no previous hash to check
-    return { match: true, expected: null, actual: null }
+    // New file — it must still be absent when the transaction checks it.
+    return { match: probe.state === "absent", expected: null, actual, actualState: probe.state }
   }
-  if (actual === null) {
+  if (probe.state !== "file") {
     // File existed before but is now gone
-    return { match: false, expected: expectedHash, actual: null }
+    return { match: false, expected: expectedHash, actual: null, actualState: probe.state }
   }
-  return { match: actual === expectedHash, expected: expectedHash, actual }
+  return { match: actual === expectedHash, expected: expectedHash, actual, actualState: probe.state }
+}
+
+export class PatchFreshnessConflictError extends Error {
+  readonly path: string
+  readonly expected: string | null
+  readonly actual: string | null
+  readonly actualState: FileHashProbe["state"]
+  readonly committedCount: number
+  readonly totalCount: number
+
+  constructor(input: {
+    transactionId: string
+    path: string
+    expected: string | null
+    actual: string | null
+    actualState: FileHashProbe["state"]
+    committedCount?: number
+    totalCount?: number
+  }) {
+    const committedCount = input.committedCount ?? 0
+    const totalCount = input.totalCount ?? 1
+    super(
+      `[PatchTransaction ${input.transactionId}] Base hash 不匹配: ${input.path}。` +
+      `期望 ${input.expected}, 实际 ${input.actual} (${input.actualState})。` +
+      `文件可能在事务期间被外部修改。已提交 ${committedCount}/${totalCount} 个文件。`,
+    )
+    this.name = "PatchFreshnessConflictError"
+    this.path = input.path
+    this.expected = input.expected
+    this.actual = input.actual
+    this.actualState = input.actualState
+    this.committedCount = committedCount
+    this.totalCount = totalCount
+  }
+}
+
+export class PatchPathConflictError extends Error {
+  readonly path: string
+  readonly reason: string
+  readonly committedCount: number
+  readonly totalCount: number
+
+  constructor(input: {
+    transactionId: string
+    path: string
+    reason: string
+    committedCount?: number
+    totalCount?: number
+  }) {
+    const committedCount = input.committedCount ?? 0
+    const totalCount = input.totalCount ?? 1
+    super(
+      `[PatchTransaction ${input.transactionId}] 路径边界复核失败: ${input.path}: ${input.reason}。` +
+      `已提交 ${committedCount}/${totalCount} 个文件。`,
+    )
+    this.name = "PatchPathConflictError"
+    this.path = input.path
+    this.reason = input.reason
+    this.committedCount = committedCount
+    this.totalCount = totalCount
+  }
 }
 
 // ── Forbidden file check ──
@@ -121,7 +199,70 @@ export interface ForbiddenCheckResult {
   reason?: string
 }
 
-export function checkForbiddenFile(path: string, cwd = process.cwd()): ForbiddenCheckResult {
+interface ResolvedBoundaryCache {
+  root: string
+  rootReal: string
+  safeExistingPaths: Set<string>
+}
+
+function createResolvedBoundaryCache(cwd: string): ResolvedBoundaryCache | undefined {
+  try {
+    const root = resolve(cwd)
+    return { root, rootReal: realpathSync(root), safeExistingPaths: new Set([root]) }
+  } catch {
+    return undefined
+  }
+}
+
+function checkResolvedBoundary(
+  absolute: string,
+  cwd: string,
+  suppliedCache?: ResolvedBoundaryCache,
+): ForbiddenCheckResult {
+  const cache = suppliedCache?.root === cwd ? suppliedCache : createResolvedBoundaryCache(cwd)
+  if (!cache) return { allowed: false, reason: "无法解析项目根目录" }
+
+  let cursor = absolute
+  let depth = 0
+  const verifiedExisting: string[] = []
+  while (true) {
+    const wasCached = cache.safeExistingPaths.has(cursor)
+    try {
+      const stat = lstatSync(cursor)
+      if (cursor !== cwd && stat.isSymbolicLink()) {
+        const rel = relative(cwd, cursor).replace(/\\/g, "/")
+        return { allowed: false, reason: `路径包含 symbolic link: ${rel}` }
+      }
+      if (isOutsideRoot(realpathSync(cursor), cache.rootReal)) {
+        return { allowed: false, reason: "解析后的路径在项目根目录之外" }
+      }
+      verifiedExisting.push(cursor)
+      // Always re-check the target and its direct parent. A cached deeper
+      // ancestor can then terminate the walk for sibling-heavy transactions.
+      if (wasCached && depth >= 1) break
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : ""
+      if (code !== "ENOENT") return { allowed: false, reason: "无法安全解析目标路径" }
+    }
+
+    if (cursor === cwd) break
+    const parent = dirname(cursor)
+    if (parent === cursor) return { allowed: false, reason: "无法确认目标路径属于项目根目录" }
+    cursor = parent
+    depth++
+  }
+
+  for (const path of verifiedExisting) cache.safeExistingPaths.add(path)
+  return { allowed: true }
+}
+
+function checkForbiddenFileWithCache(
+  path: string,
+  cwd = process.cwd(),
+  boundaryCache?: ResolvedBoundaryCache,
+): ForbiddenCheckResult {
   // Resolve to absolute path for containment check
   let absolute: string
   try {
@@ -130,11 +271,15 @@ export function checkForbiddenFile(path: string, cwd = process.cwd()): Forbidden
     return { allowed: false, reason: `无效路径: ${path}` }
   }
 
-  if (isOutsideRoot(absolute, resolve(cwd))) {
+  const root = resolve(cwd)
+  if (isOutsideRoot(absolute, root)) {
     return { allowed: false, reason: `路径在项目根目录之外: ${path}` }
   }
 
-  const rel = relative(resolve(cwd), absolute).replace(/\\/g, "/")
+  const resolvedBoundary = checkResolvedBoundary(absolute, root, boundaryCache)
+  if (!resolvedBoundary.allowed) return resolvedBoundary
+
+  const rel = relative(root, absolute).replace(/\\/g, "/")
 
   if (isRuntimeInternal(rel)) {
     return { allowed: false, reason: `禁止写入运行时文件: ${rel}` }
@@ -149,6 +294,10 @@ export function checkForbiddenFile(path: string, cwd = process.cwd()): Forbidden
   }
 
   return { allowed: true }
+}
+
+export function checkForbiddenFile(path: string, cwd = process.cwd()): ForbiddenCheckResult {
+  return checkForbiddenFileWithCache(path, cwd)
 }
 
 // ── Diff generation ──
@@ -538,12 +687,17 @@ export function initManagedTransaction(input: InitManagedTxInput): ManagedPatchT
     absolutePath: resolve(cwd, f.relativePath),
     oldContent: f.oldContent,
     newContent: f.newContent,
-    expectedBaseHash: f.expectedBaseHash ?? null,
+    expectedBaseHash: f.expectedBaseHash !== undefined
+      ? f.expectedBaseHash
+      : f.oldContent === null
+        ? null
+        : computeBaseHash(f.oldContent),
   }))
 
   // Forbidden file gate — reject before creating any disk artifacts
+  const boundaryCache = createResolvedBoundaryCache(cwd)
   for (const entry of entries) {
-    const forbidden = checkForbiddenFile(entry.relativePath, cwd)
+    const forbidden = checkForbiddenFileWithCache(entry.relativePath, cwd, boundaryCache)
     if (!forbidden.allowed) {
       throw new Error(
         `initManagedTransaction: 禁止写入 ${entry.relativePath}: ${forbidden.reason}`
@@ -556,6 +710,10 @@ export function initManagedTransaction(input: InitManagedTxInput): ManagedPatchT
   const ft = createTransaction({
     tool: input.tool,
     paths: entries.map(e => e.absolutePath),
+    preloadedSnapshots: entries.map(entry => ({
+      path: entry.absolutePath,
+      content: entry.oldContent,
+    })),
     cwd,
   })
 
@@ -634,6 +792,7 @@ export function commitManagedTransaction(mpt: ManagedPatchTransaction): ManagedP
   assertTransition(mpt.state, "committed", mpt.txId)
 
   const committed: string[] = []
+  const boundaryCache = createResolvedBoundaryCache(mpt.cwd)
   try {
     for (const entry of mpt.files) {
       const tempPath = entry.tempPath
@@ -641,23 +800,62 @@ export function commitManagedTransaction(mpt: ManagedPatchTransaction): ManagedP
         throw new Error(`Temp file missing for ${entry.relativePath}: ${tempPath ?? "未设置 tempPath"}`)
       }
 
-      // Base-hash TOCTOU guard: verify target file hasn't changed since oldContent was captured.
-      // Skip for new files (expectedBaseHash is null).
-      if (entry.expectedBaseHash !== null) {
-        const diskHash = readFileHash(entry.absolutePath)
-        if (diskHash !== null && diskHash !== entry.expectedBaseHash) {
-          throw new Error(
-            `[PatchTransaction ${mpt.txId}] Base hash 不匹配: ${entry.relativePath}。` +
-            `期望 ${entry.expectedBaseHash}, 实际 ${diskHash}。文件可能在事务期间被外部修改。`
-          )
-        }
+      const boundaryBefore = checkForbiddenFileWithCache(entry.relativePath, mpt.cwd, boundaryCache)
+      if (!boundaryBefore.allowed) {
+        throw new PatchPathConflictError({
+          transactionId: mpt.txId,
+          path: entry.relativePath,
+          reason: boundaryBefore.reason ?? "无法确认目标路径边界",
+        })
       }
 
       mkdirSync(dirname(entry.absolutePath), { recursive: true })
+      const boundaryAfterMkdir = checkForbiddenFileWithCache(entry.relativePath, mpt.cwd, boundaryCache)
+      if (!boundaryAfterMkdir.allowed) {
+        throw new PatchPathConflictError({
+          transactionId: mpt.txId,
+          path: entry.relativePath,
+          reason: boundaryAfterMkdir.reason ?? "创建父目录后无法确认目标路径边界",
+        })
+      }
+
+      // Base-hash TOCTOU guard is the last check before rename: existing files
+      // must keep the approved hash and new files must remain absent.
+      const hashCheck = checkBaseHash(entry.absolutePath, entry.expectedBaseHash)
+      if (!hashCheck.match) {
+        throw new PatchFreshnessConflictError({
+          transactionId: mpt.txId,
+          path: entry.relativePath,
+          expected: hashCheck.expected,
+          actual: hashCheck.actual,
+          actualState: hashCheck.actualState,
+        })
+      }
+
       renameSync(tempPath, entry.absolutePath)
       committed.push(entry.absolutePath)
     }
   } catch (err) {
+    if (err instanceof PatchFreshnessConflictError) {
+      throw new PatchFreshnessConflictError({
+        transactionId: mpt.txId,
+        path: err.path,
+        expected: err.expected,
+        actual: err.actual,
+        actualState: err.actualState,
+        committedCount: committed.length,
+        totalCount: mpt.files.length,
+      })
+    }
+    if (err instanceof PatchPathConflictError) {
+      throw new PatchPathConflictError({
+        transactionId: mpt.txId,
+        path: err.path,
+        reason: err.reason,
+        committedCount: committed.length,
+        totalCount: mpt.files.length,
+      })
+    }
     // Partial commit — throw; the transaction.ts rollbackSnapshot is the safety net
     const errMsg = err instanceof Error ? err.message : String(err)
     throw new Error(
@@ -756,7 +954,18 @@ export async function applyAndCommit(
     if (mpt.state !== "committed" && mpt.state !== "rolled_back") {
       // Revert partial commits via FileTransaction snapshots (multi-file safety net)
       if (mpt.patch?.fileTransaction) {
-        try { rollbackTransaction(mpt.patch.fileTransaction.id, mpt.cwd) } catch {
+        try {
+          if (err instanceof PatchFreshnessConflictError || err instanceof PatchPathConflictError) {
+            const committedPaths = mpt.files
+              .slice(0, err.committedCount)
+              .map(file => file.relativePath)
+            if (committedPaths.length > 0) {
+              rollbackTransactionPaths(mpt.patch.fileTransaction.id, committedPaths, mpt.cwd)
+            }
+          } else {
+            rollbackTransaction(mpt.patch.fileTransaction.id, mpt.cwd)
+          }
+        } catch {
           /* best-effort reversion */
         }
       }

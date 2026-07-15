@@ -361,4 +361,47 @@ describe("agent runtime context", () => {
     await run
     expect(completedPromptly).toBe(true)
   })
+
+  test("an external run abort stops waiting for a legacy blocking streaming tool", async () => {
+    const controller = new AbortController()
+    let markStarted!: () => void
+    let releaseTool!: () => void
+    const started = new Promise<void>(resolve => { markStarted = resolve })
+    const blocked = new Promise<void>(resolve => { releaseTool = resolve })
+    const tools = buildTools({
+      name: "mcp__blocking_probe",
+      description: "Legacy streaming tool that ignores cancellation",
+      isReadonly: true,
+      inputSchema: { type: "object", properties: {} },
+      execute() {
+        return Result.ok("unused")
+      },
+      async *executeStream() {
+        markStarted()
+        yield { type: "progress" as const, data: "started" }
+        await blocked
+        yield { type: "done" as const, data: Result.ok("released") }
+      },
+    })
+    const run = (async () => {
+      for await (const _event of agentLoop("run the blocking probe", {
+        provider: new BlockingToolProvider(),
+        model: "test",
+        tools,
+        abortSignal: controller.signal,
+        maxRounds: 2,
+      })) {}
+    })()
+
+    await started
+    controller.abort("cancel blocking stream")
+    const completedPromptly = await Promise.race([
+      run.then(() => true),
+      new Promise<false>(resolve => setTimeout(() => resolve(false), 250)),
+    ])
+
+    releaseTool()
+    await run
+    expect(completedPromptly).toBe(true)
+  })
 })

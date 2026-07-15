@@ -1,7 +1,7 @@
 /** Shell tool — execute commands with streaming progress. */
 
 import { spawn } from "node:child_process"
-import type { ToolDef, ToolResult } from "./registry"
+import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result, isNonInteractive } from "./registry"
 import { buildVerificationResult } from "../verification/result"
 import type { SandboxManager } from "../sandbox/sandbox"
@@ -49,7 +49,11 @@ function longRunningCommandReason(command: string): string {
   return ""
 }
 
-async function shell(params: Record<string, unknown>, onProgress?: (chunk: string) => void): Promise<ToolResult> {
+async function shell(
+  params: Record<string, unknown>,
+  onProgress?: (chunk: string) => void,
+  context?: ToolExecutionContext,
+): Promise<ToolResult> {
   const command = String(params.command ?? "")
   const timeoutSec = Number(params.timeout ?? 120)
 
@@ -69,6 +73,7 @@ async function shell(params: Record<string, unknown>, onProgress?: (chunk: strin
   if (longRunningReason) {
     return Result.blocked(`${longRunningReason}，为避免任务卡住已阻止执行。请改用可结束的验证命令，例如 bun test、bun run check、bun run build 或 tsc --noEmit。如果测试需要服务，请修改测试让它在测试进程内启动并关闭服务。`)
   }
+  if (context?.abortSignal?.aborted) return Result.fail("Command aborted before start")
 
   const sandbox = getShellSandbox()
   const verdict = sandbox?.check(command) ?? { allowed: true }
@@ -96,11 +101,17 @@ async function shell(params: Record<string, unknown>, onProgress?: (chunk: strin
     const stdoutChunks: string[] = []
     const stderrChunks: string[] = []
     let timedOut = false
+    let aborted = false
+    const abortHandler = () => {
+      aborted = true
+      void sandbox?.cleanup()
+      terminateProcess(proc)
+    }
+    context?.abortSignal?.addEventListener("abort", abortHandler, { once: true })
 
     const timer = setTimeout(() => {
       timedOut = true
-      proc.kill("SIGTERM")
-      setTimeout(() => proc.kill("SIGKILL"), 2000)
+      terminateProcess(proc)
     }, effectiveTimeout * 1000)
 
     proc.stdout?.on("data", (data: Buffer) => {
@@ -117,12 +128,18 @@ async function shell(params: Record<string, unknown>, onProgress?: (chunk: strin
 
     proc.on("error", (err) => {
       clearTimeout(timer)
+      context?.abortSignal?.removeEventListener("abort", abortHandler)
       resolve(Result.fail(`Failed to spawn: ${err.message}`))
     })
 
     proc.on("close", (code) => {
       clearTimeout(timer)
+      context?.abortSignal?.removeEventListener("abort", abortHandler)
       const sandboxReport = observeWorkspaceWrites(sandbox)
+      if (aborted) {
+        resolve(Result.fail(`Command aborted${sandboxReport}`))
+        return
+      }
       if (timedOut) {
         resolve(shellResult({
           command,
@@ -159,7 +176,10 @@ async function shell(params: Record<string, unknown>, onProgress?: (chunk: strin
   })
 }
 
-export async function* shellStream(params: Record<string, unknown>): AsyncGenerator<{ type: "progress"; data: string } | { type: "done"; data: ToolResult }> {
+export async function* shellStream(
+  params: Record<string, unknown>,
+  context?: ToolExecutionContext,
+): AsyncGenerator<{ type: "progress"; data: string } | { type: "done"; data: ToolResult }> {
   const command = String(params.command ?? "")
   const timeoutSec = Number(params.timeout ?? 120)
 
@@ -182,6 +202,10 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
   const longRunningReason = longRunningCommandReason(command)
   if (longRunningReason) {
     yield { type: "done", data: Result.blocked(`${longRunningReason}，为避免任务卡住已阻止执行。请改用可结束的验证命令，例如 bun test、bun run check、bun run build 或 tsc --noEmit。如果测试需要服务，请修改测试让它在测试进程内启动并关闭服务。`) }
+    return
+  }
+  if (context?.abortSignal?.aborted) {
+    yield { type: "done", data: Result.fail("Command aborted before start") }
     return
   }
 
@@ -208,15 +232,20 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
   let timedOut = false
+  let aborted = false
   let finished = false
   let spawnError = ""
 
+  const abortHandler = () => {
+    aborted = true
+    void sandbox?.cleanup()
+    terminateProcess(proc)
+  }
+  context?.abortSignal?.addEventListener("abort", abortHandler, { once: true })
+
   const timer = setTimeout(() => {
     timedOut = true
-    proc.kill("SIGTERM")
-    setTimeout(() => {
-      if (!finished) proc.kill("SIGKILL")
-    }, 2000).unref?.()
+    terminateProcess(proc)
   }, timeoutSec * 1000)
 
   const closed = new Promise<void>((resolve) => {
@@ -246,7 +275,7 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
   // Yield progress chunks while process is running
   let lastStdoutLen = 0
   let lastStderrLen = 0
-  while (!finished && !timedOut) {
+  while (!finished && !timedOut && !aborted) {
     await Promise.race([closed, new Promise(r => setTimeout(r, 100))])
 
     const newStdout = stdoutChunks.slice(lastStdoutLen)
@@ -256,6 +285,15 @@ export async function* shellStream(params: Record<string, unknown>): AsyncGenera
 
     const combined = [...newStdout, ...(newStderr.length ? ["\n[stderr]"] : []), ...newStderr].join("")
     if (combined) yield { type: "progress", data: combined }
+  }
+  context?.abortSignal?.removeEventListener("abort", abortHandler)
+
+  if (aborted) {
+    clearTimeout(timer)
+    await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 100))])
+    const sandboxReport = observeWorkspaceWrites(sandbox)
+    yield { type: "done", data: Result.fail(`Command aborted${sandboxReport}`) }
+    return
   }
 
   if (timedOut) {
@@ -313,6 +351,23 @@ function observeWorkspaceWrites(sandbox: SandboxManager | null): string {
   if (report.violations.length === 0) return ""
   recordRuntimeObservedWrites(report.violations.map(change => change.path))
   return `\n\n[沙箱文件守护]\n${report.violations.map(change => `  ${change.kind}: ${change.path}`).join("\n")}`
+}
+
+function terminateProcess(proc: ReturnType<typeof spawn>): void {
+  if (proc.pid && process.platform === "win32") {
+    const killer = spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    })
+    killer.unref()
+    return
+  }
+  try { proc.kill("SIGTERM") } catch { /* process already exited */ }
+  setTimeout(() => {
+    if (proc.exitCode === null) {
+      try { proc.kill("SIGKILL") } catch { /* process already exited */ }
+    }
+  }, 2000).unref?.()
 }
 
 function shellResult(input: {

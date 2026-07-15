@@ -1305,19 +1305,38 @@ async function* runAgentLoop(
               resultContent = resultObj.content
             } else {
               const effectiveParams = before.replaceParams ?? tc.input
-              for await (const ev of tool.executeStream(effectiveParams, { abortSignal: options.abortSignal })) {
-                if (ev.type === "progress") {
-                  // Raw shell stdout/stderr is often noisy progress output.
-                  // Keep it out of the spinner/status line; the final result
-                  // still carries command output for diagnostics.
-                  continue
-                } else if (ev.type === "done") {
-                  const rawResult = ev.data
-                  const after = await runToolAfterHook(hooks, tc.name, effectiveParams, rawResult)
-                  const finalResult = appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
-                  resultContent = finalResult.content
-                  resultObj = { success: finalResult.success, content: finalResult.content, metadata: finalResult.metadata }
+              const toolIterator = tool.executeStream(
+                effectiveParams,
+                { abortSignal: options.abortSignal },
+              )[Symbol.asyncIterator]()
+              try {
+                while (true) {
+                  const next = await withToolTimeout(
+                    tc.name,
+                    toolIterator.next(),
+                    undefined,
+                    options.abortSignal,
+                  )
+                  if (next.done) break
+                  const ev = next.value
+                  if (ev.type === "progress") {
+                    // Raw shell stdout/stderr is often noisy progress output.
+                    // Keep it out of the spinner/status line; the final result
+                    // still carries command output for diagnostics.
+                    continue
+                  } else if (ev.type === "done") {
+                    const rawResult = ev.data
+                    const after = await runToolAfterHook(hooks, tc.name, effectiveParams, rawResult)
+                    const finalResult = appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
+                    resultContent = finalResult.content
+                    resultObj = { success: finalResult.success, content: finalResult.content, metadata: finalResult.metadata }
+                  }
                 }
+              } finally {
+                try {
+                  const closing = toolIterator.return?.(undefined)
+                  if (closing) void closing.catch(() => {})
+                } catch { /* best-effort close for legacy streaming tools */ }
               }
             }
           } catch (e) {

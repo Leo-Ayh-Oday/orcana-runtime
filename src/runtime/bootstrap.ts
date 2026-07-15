@@ -315,7 +315,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   const tools = buildTools(...allToolDefs)
 
   // ── 5. Hooks ──
-  const hooks = createDefaultHookSystem({ projectRoot })
+  const hooks = createDefaultHookSystem({ projectRoot, writeGuardMode: "warn" })
 
   // ── 5b. Dispatch SessionStart (PR-7.2) ──
   // Fire after all hooks are registered so they can inject session-level context.

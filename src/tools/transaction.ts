@@ -27,12 +27,24 @@ function transactionPath(id: string, cwd = process.cwd()): string {
 export function createTransaction(input: {
   tool: string
   paths: string[]
+  preloadedSnapshots?: Array<{ path: string; content: string | null }>
   cwd?: string
 }): FileTransaction {
   const cwd = resolve(input.cwd ?? process.cwd())
   const id = `txn_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`
   const uniquePaths = [...new Set(input.paths.map(path => resolve(cwd, path)))]
+  const preloaded = new Map(
+    (input.preloadedSnapshots ?? []).map(snapshot => [resolve(cwd, snapshot.path), snapshot.content]),
+  )
   const snapshots = uniquePaths.map(path => {
+    if (preloaded.has(path)) {
+      const content = preloaded.get(path) ?? null
+      return {
+        path: relative(cwd, path).replace(/\\/g, "/"),
+        existedBefore: content !== null,
+        content,
+      }
+    }
     const existedBefore = existsSync(path)
     return {
       path: relative(cwd, path).replace(/\\/g, "/"),
@@ -61,10 +73,29 @@ export function loadTransaction(id: string, cwd = process.cwd()): FileTransactio
 export function rollbackTransaction(id: string, cwd = process.cwd()): { restored: string[]; deleted: string[] } {
   const transaction = loadTransaction(id, cwd)
   if (!transaction) throw new Error(`Transaction not found: ${id}`)
+  return rollbackSnapshots(transaction)
+}
+
+export function rollbackTransactionPaths(
+  id: string,
+  paths: string[],
+  cwd = process.cwd(),
+): { restored: string[]; deleted: string[] } {
+  const transaction = loadTransaction(id, cwd)
+  if (!transaction) throw new Error(`Transaction not found: ${id}`)
+  const selected = new Set(paths.map(path => relative(transaction.cwd, resolve(transaction.cwd, path)).replace(/\\/g, "/")))
+  return rollbackSnapshots(transaction, selected)
+}
+
+function rollbackSnapshots(
+  transaction: FileTransaction,
+  selected?: ReadonlySet<string>,
+): { restored: string[]; deleted: string[] } {
   const restored: string[] = []
   const deleted: string[] = []
 
   for (const snapshot of transaction.snapshots) {
+    if (selected && !selected.has(snapshot.path)) continue
     const fullPath = resolve(transaction.cwd, snapshot.path)
     if (snapshot.existedBefore) {
       mkdirSync(dirname(fullPath), { recursive: true })

@@ -1,17 +1,24 @@
 /** File tools — read, write, edit. */
 
-import { readFile, writeFile } from "node:fs/promises"
-import { existsSync, mkdirSync } from "node:fs"
-import { dirname, relative, resolve } from "node:path"
-import { createHash } from "node:crypto"
-import type { ToolDef, ToolResult } from "./registry"
+import { readFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { isAbsolute, relative, resolve } from "node:path"
+import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result } from "./registry"
 import { FimEditor } from "../provider/fim"
 import { cascadeAwareDecision, formatRippleBlock, getRippleProgram, previewEdit, tightenRippleDecision } from "../ripple/engine"
 import { getRuntimeContextBudgetMode } from "../agent/runtime-context"
 import { createTransaction, rollbackTransaction } from "./transaction"
-import { applyAndCommit, type ManagedPatchTransaction } from "../agent/patch-transaction"
-import { recordRuntimeFileRead, recordRuntimeFileWrite } from "../file-state"
+import {
+  applyAndCommit,
+  checkBaseHash,
+  checkForbiddenFile,
+  computeBaseHash,
+  PatchFreshnessConflictError,
+  PatchPathConflictError,
+  type ManagedPatchTransaction,
+} from "../agent/patch-transaction"
+import { fingerprintContent, recordRuntimeFileRead, recordRuntimeFileWrite } from "../file-state"
 
 /** Threshold: files larger than this get sub-agent analysis instead of raw dump. */
 const LARGE_FILE_LINES = 400
@@ -96,13 +103,115 @@ function runTsCheck(_path: string): string {
   return ""
 }
 
-function checkpointMetadata(path: string, oldContent: string | null): Record<string, unknown> {
+function checkpointMetadata(
+  path: string,
+  oldContent: string | null,
+  previousHash = oldContent === null ? null : computeBaseHash(oldContent),
+): Record<string, unknown> {
   return {
     path,
     existedBefore: oldContent !== null,
     previousBytes: oldContent === null ? 0 : Buffer.byteLength(oldContent, "utf-8"),
-    previousHash: oldContent === null ? null : createHash("sha256").update(oldContent).digest("hex").slice(0, 16),
+    previousHash,
   }
+}
+
+function safeResultPath(path: string): string {
+  const canonicalPath = resolve(path)
+  const workspaceRelative = relative(process.cwd(), canonicalPath)
+  if (workspaceRelative && !workspaceRelative.startsWith("..") && !isAbsolute(workspaceRelative)) {
+    return workspaceRelative.replace(/\\/g, "/")
+  }
+  return "path"
+}
+
+function approvedBaseHash(
+  context: ToolExecutionContext | undefined,
+  path: string,
+  fallback: () => string | null,
+): string | null {
+  const canonicalPath = resolve(path)
+  const approved = context?.freshness?.expectedBaseHashes
+  return approved && Object.prototype.hasOwnProperty.call(approved, canonicalPath)
+    ? approved[canonicalPath] ?? null
+    : fallback()
+}
+
+function approvedContent(
+  context: ToolExecutionContext | undefined,
+  path: string,
+): { found: boolean; content: string | null } {
+  const canonicalPath = resolve(path)
+  const approved = context?.freshness?.approvedContents
+  return approved && Object.prototype.hasOwnProperty.call(approved, canonicalPath)
+    ? { found: true, content: approved[canonicalPath] ?? null }
+    : { found: false, content: null }
+}
+
+function revalidateApprovedSnapshot(
+  context: ToolExecutionContext | undefined,
+  path: string,
+  content: string | null,
+): ToolResult | undefined {
+  const canonicalPath = resolve(path)
+  const approved = context?.freshness?.expectedBaseHashes
+  if (!approved || !Object.prototype.hasOwnProperty.call(approved, canonicalPath)) return undefined
+
+  const expected = approved[canonicalPath] ?? null
+  const approvedSnapshot = context?.freshness?.approvedContents
+  if (
+    expected !== null &&
+    approvedSnapshot &&
+    Object.prototype.hasOwnProperty.call(approvedSnapshot, canonicalPath) &&
+    approvedSnapshot[canonicalPath] === content
+  ) {
+    return undefined
+  }
+  const actual = content === null ? null : computeBaseHash(content)
+  const result = expected === null
+    ? checkBaseHash(canonicalPath, null)
+    : {
+        match: actual === expected,
+        actual,
+      }
+  if (result.match) return undefined
+
+  const status = expected === null ? "changed" : result.actual === null ? "deleted" : "stale"
+  const reason = expected === null
+    ? "new-file target appeared after freshness approval"
+    : result.actual === null
+      ? "file was deleted after freshness approval"
+      : "disk content changed after freshness approval"
+  const displayPath = safeResultPath(path)
+  return Result.freshnessBlocked(displayPath, status, reason)
+}
+
+function fileToolFailure(error: unknown): ToolResult {
+  if (error instanceof PatchPathConflictError) {
+    const path = safeResultPath(error.path)
+    return Result.blocked(`PathPolicy blocked write for ${path}: ${error.reason}`, {
+      gate: "path_policy",
+      pathPolicy: { path, reason: error.reason },
+    })
+  }
+  if (error instanceof PatchFreshnessConflictError) {
+    const status = error.expected === null
+      ? "changed"
+      : error.actualState === "absent"
+        ? "deleted"
+        : error.actualState === "file"
+          ? "stale"
+          : "changed"
+    const reason = error.expected === null
+      ? "new-file target appeared before commit"
+      : error.actualState === "absent"
+        ? "file was deleted before commit"
+        : error.actualState === "file"
+          ? "disk content changed before commit"
+          : "target became unreadable or stopped being a regular file before commit"
+    return Result.freshnessBlocked(safeResultPath(error.path), status, reason)
+  }
+  return Result.fail(error instanceof Error ? error.message : String(error))
 }
 
 function isRuntimeArtifact(path: string): boolean {
@@ -126,7 +235,9 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
     }
     const p = resolve(path)
     if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
-    const content = await readFile(p, "utf-8")
+    const buffer = await readFile(p)
+    const content = buffer.toString("utf-8")
+    const fingerprint = fingerprintContent(buffer)
     const lines = content.split("\n")
     const total = lines.length
 
@@ -134,7 +245,7 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
     // instead of raw dump. The agent can then request specific sections with offset/limit.
     if (total > LARGE_FILE_LINES && offset <= 0 && !limit) {
       const analysis = analyzeCodeStructure(content, path)
-      const fileState = recordRuntimeFileRead({ path: p, range: { kind: "full" }, content: analysis, totalLines: total, truncated: true })
+      const fileState = recordRuntimeFileRead({ path: p, range: { kind: "full" }, content: analysis, fingerprint, totalLines: total, truncated: true })
       return Result.ok(analysis, {
         path,
         analyzed: true,
@@ -153,7 +264,7 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
     const range = offset > 0 || typeof limit === "number"
       ? { kind: "range" as const, startLine: offset + 1, endLine: offset + selected.length }
       : { kind: "full" as const }
-    const fileState = recordRuntimeFileRead({ path: p, range, content: selectedContent, totalLines: total })
+    const fileState = recordRuntimeFileRead({ path: p, range, content: selectedContent, fingerprint, totalLines: total })
     return Result.ok(header + selectedContent, {
       path,
       lines: selected.length,
@@ -165,15 +276,27 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
   }
 }
 
-async function write_file(params: Record<string, unknown>): Promise<ToolResult> {
+async function write_file(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const path = String(params.path ?? "")
   const content = String(params.content ?? "")
 
   try {
     const p = resolve(path)
-    const existedBefore = existsSync(p)
-    const oldContent = existedBefore ? await readFile(p, "utf-8") : ""
+    const snapshot = approvedContent(context, p)
+    const existedBefore = snapshot.found ? snapshot.content !== null : existsSync(p)
+    const oldContent = snapshot.found
+      ? snapshot.content ?? ""
+      : existedBefore
+        ? await readFile(p, "utf-8")
+        : ""
+    const freshnessBlock = revalidateApprovedSnapshot(context, p, existedBefore ? oldContent : null)
+    if (freshnessBlock) return freshnessBlock
     const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+    const baseHash = approvedBaseHash(
+      context,
+      p,
+      () => existedBefore ? computeBaseHash(oldContent) : null,
+    )
 
     // Ripple pre-check
     const ripple = previewEdit({ targetFile: p, oldContent, newContent: content, mode: "write_file" })
@@ -190,7 +313,7 @@ async function write_file(params: Record<string, unknown>): Promise<ToolResult> 
           relativePath: relPath,
           oldContent: existedBefore ? oldContent : null,
           newContent: content,
-          expectedBaseHash: existedBefore ? checkpointMetadata(path, oldContent).previousHash as string : null,
+          expectedBaseHash: baseHash,
         }],
       },
       async (_mpt: ManagedPatchTransaction) => {
@@ -209,23 +332,28 @@ async function write_file(params: Record<string, unknown>): Promise<ToolResult> 
       lines,
       transactionId: mpt.patch.fileTransaction.id,
       rippleReport: ripple,
-      checkpoint: checkpointMetadata(path, existedBefore ? oldContent : null),
+      checkpoint: checkpointMetadata(path, existedBefore ? oldContent : null, baseHash),
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
-    return Result.fail(e instanceof Error ? e.message : String(e))
+    return fileToolFailure(e)
   }
 }
 
-async function edit_file(params: Record<string, unknown>): Promise<ToolResult> {
+async function edit_file(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const path = String(params.path ?? "")
   const oldStr = String(params.old_string ?? "")
   const newStr = String(params.new_string ?? "")
 
   try {
     const p = resolve(path)
-    if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
-    const content = await readFile(p, "utf-8")
+    const snapshot = approvedContent(context, p)
+    if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
+    if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
+    const content = snapshot.found ? snapshot.content! : await readFile(p, "utf-8")
+    const freshnessBlock = revalidateApprovedSnapshot(context, p, content)
+    if (freshnessBlock) return freshnessBlock
+    const baseHash = approvedBaseHash(context, p, () => computeBaseHash(content))
     const count = content.split(oldStr).length - 1
 
     if (count === 0) return Result.fail(`String not found in ${path}`)
@@ -249,7 +377,7 @@ async function edit_file(params: Record<string, unknown>): Promise<ToolResult> {
           relativePath: relPath,
           oldContent: content,
           newContent,
-          expectedBaseHash: checkpointMetadata(path, content).previousHash as string,
+          expectedBaseHash: baseHash,
         }],
       },
       async (_mpt: ManagedPatchTransaction) => true,
@@ -263,20 +391,21 @@ async function edit_file(params: Record<string, unknown>): Promise<ToolResult> {
       occurrences: 1,
       transactionId: mpt.patch.fileTransaction.id,
       rippleReport: ripple,
-      checkpoint: checkpointMetadata(path, content),
+      checkpoint: checkpointMetadata(path, content, baseHash),
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
-    return Result.fail(e instanceof Error ? e.message : String(e))
+    return fileToolFailure(e)
   }
 }
 
-async function multi_edit(params: Record<string, unknown>): Promise<ToolResult> {
+async function multi_edit(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const edits = Array.isArray(params.edits) ? params.edits as Array<Record<string, unknown>> : []
   if (!edits.length) return Result.fail("edits array is required")
 
   const originals = new Map<string, string>()
   const proposed = new Map<string, string>()
+  const baseHashes = new Map<string, string>()
   const displayPaths: string[] = []
 
   try {
@@ -287,8 +416,16 @@ async function multi_edit(params: Record<string, unknown>): Promise<ToolResult> 
       if (!path || !oldStr) return Result.fail("Each edit requires path and old_string")
 
       const p = resolve(path)
-      if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
-      if (!originals.has(p)) originals.set(p, await readFile(p, "utf-8"))
+      if (!originals.has(p)) {
+        const snapshot = approvedContent(context, p)
+        if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
+        if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
+        const original = snapshot.found ? snapshot.content! : await readFile(p, "utf-8")
+        originals.set(p, original)
+        const freshnessBlock = revalidateApprovedSnapshot(context, p, original)
+        if (freshnessBlock) return freshnessBlock
+        baseHashes.set(p, approvedBaseHash(context, p, () => computeBaseHash(original))!)
+      }
       const current = proposed.get(p) ?? originals.get(p) ?? ""
       const count = current.split(oldStr).length - 1
       if (count === 0) return Result.fail(`String not found in ${path}`)
@@ -318,7 +455,7 @@ async function multi_edit(params: Record<string, unknown>): Promise<ToolResult> 
         relativePath: relPath,
         oldContent,
         newContent,
-        expectedBaseHash: checkpointMetadata(relPath, oldContent).previousHash as string,
+        expectedBaseHash: baseHashes.get(p) ?? computeBaseHash(oldContent),
       }
     })
 
@@ -339,11 +476,18 @@ async function multi_edit(params: Record<string, unknown>): Promise<ToolResult> 
       paths: displayPaths,
       transactionId: mpt.patch.fileTransaction.id,
       rippleReports: reports,
-      checkpoints: displayPaths.map(path => checkpointMetadata(path, originals.get(resolve(path)) ?? "")),
+      checkpoints: displayPaths.map(path => {
+        const canonicalPath = resolve(path)
+        return checkpointMetadata(
+          path,
+          originals.get(canonicalPath) ?? "",
+          baseHashes.get(canonicalPath) ?? null,
+        )
+      }),
       fileStates,
     })
   } catch (e) {
-    return Result.fail(e instanceof Error ? e.message : String(e))
+    return fileToolFailure(e)
   }
 }
 
@@ -380,6 +524,7 @@ export const WRITE_FILE: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "Save File",
+  managesFreshnessApproval: true,
   contract: {
     pathPolicy: "workspace_only",
     stateRequirement: "fresh_full_baseline_if_existing",
@@ -393,7 +538,7 @@ export const WRITE_FILE: ToolDef = {
     },
     required: ["path", "content"],
   },
-  execute: write_file,
+  execute: (params, _onProgress, context) => write_file(params, context),
 }
 
 export const EDIT_FILE: ToolDef = {
@@ -403,6 +548,7 @@ export const EDIT_FILE: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "Edit File",
+  managesFreshnessApproval: true,
   contract: {
     pathPolicy: "workspace_only",
     stateRequirement: "fresh_full_baseline",
@@ -417,7 +563,7 @@ export const EDIT_FILE: ToolDef = {
     },
     required: ["path", "old_string", "new_string"],
   },
-  execute: edit_file,
+  execute: (params, _onProgress, context) => edit_file(params, context),
 }
 
 export const MULTI_EDIT: ToolDef = {
@@ -427,6 +573,7 @@ export const MULTI_EDIT: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "Atomic Multi Edit",
+  managesFreshnessApproval: true,
   contract: {
     pathPolicy: "workspace_only",
     stateRequirement: "fresh_full_baseline",
@@ -451,10 +598,10 @@ export const MULTI_EDIT: ToolDef = {
     },
     required: ["edits"],
   },
-  execute: multi_edit,
+  execute: (params, _onProgress, context) => multi_edit(params, context),
 }
 
-async function edit_fim(params: Record<string, unknown>): Promise<ToolResult> {
+async function edit_fim(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const path = String(params.path ?? "")
   const instruction = String(params.instruction ?? "")
   const startLine = Number(params.start_line ?? 0)
@@ -464,40 +611,64 @@ async function edit_fim(params: Record<string, unknown>): Promise<ToolResult> {
   if (!instruction) return Result.fail("instruction is required")
   if (!startLine && !endLine && !functionName) return Result.fail("Specify start_line+end_line or function_name")
 
-  const editor = new FimEditor()
-  let result
-
-  if (functionName) {
-    result = await editor.editFunction(path, instruction, functionName)
-  } else {
-    result = await editor.editFileRegion(path, instruction, startLine, endLine)
-  }
-
-  if (!result.success) return Result.fail(`FIM edit failed: ${result.error}`)
-
+  let generatedPreview = ""
   try {
     const p = resolve(path)
-    const oldContent = existsSync(p) ? await readFile(p, "utf-8") : ""
+    const pathCheck = checkForbiddenFile(p, process.cwd())
+    if (!pathCheck.allowed) {
+      const displayPath = safeResultPath(path)
+      return Result.blocked(`PathPolicy blocked edit_fim for ${displayPath}: ${pathCheck.reason ?? "forbidden path"}`, {
+        gate: "path_policy",
+        pathPolicy: { path: displayPath, reason: pathCheck.reason ?? "forbidden path" },
+      })
+    }
+
+    const snapshot = approvedContent(context, p)
+    const oldContent = snapshot.found ? snapshot.content : await readFile(p, "utf-8")
+    if (oldContent === null) return Result.fail(`File not found: ${path}`)
+    const freshnessBlock = revalidateApprovedSnapshot(context, p, oldContent)
+    if (freshnessBlock) return freshnessBlock
+    const baseHash = approvedBaseHash(context, p, () => computeBaseHash(oldContent))
+
+    const editor = new FimEditor()
+    const result = functionName
+      ? await editor.editFunctionContent(path, oldContent, instruction, functionName)
+      : await editor.editFileContentRegion(path, oldContent, instruction, startLine, endLine)
+    if (!result.success) return Result.fail(`FIM edit failed: ${result.error}`)
+    generatedPreview = result.newText.slice(0, 500)
+
     const ripple = previewEdit({ targetFile: p, oldContent, newContent: result.fullNewFile, mode: "edit_fim" })
     const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
     if (effectiveDecision !== "allow") {
       return Result.blocked(`${formatRippleBlock(ripple)}\n\nFIM preview:\n${result.newText.slice(0, 500)}`)
     }
-    const transaction = createTransaction({ tool: "edit_fim", paths: [p] })
-    mkdirSync(dirname(p), { recursive: true })
-    await writeFile(p, result.fullNewFile, "utf-8")
+    const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+    const mpt = await applyAndCommit(
+      {
+        tool: "edit_fim",
+        files: [{
+          relativePath: relPath,
+          oldContent,
+          newContent: result.fullNewFile,
+          expectedBaseHash: baseHash,
+        }],
+      },
+      async (_mpt: ManagedPatchTransaction) => true,
+    )
     const diag = runTsCheck(path)
     getRippleProgram().invalidateFile(path)
     const fileState = recordRuntimeFileWrite({ path: p, content: result.fullNewFile })
     return Result.ok(`FIM edit applied to ${path}\n${result.newText.slice(0, 500)}${diag}`, {
       path,
       mode: "fim",
-      transactionId: transaction.id,
+      transactionId: mpt.patch.fileTransaction.id,
       rippleReport: ripple,
+      checkpoint: checkpointMetadata(path, oldContent, baseHash),
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
-    return Result.fail(`FIM generated edit but file write failed: ${e}\n\n${result.newText.slice(0, 500)}`)
+    if (e instanceof PatchFreshnessConflictError || e instanceof PatchPathConflictError) return fileToolFailure(e)
+    return Result.fail(`FIM generated edit but file write failed: ${e}\n\n${generatedPreview}`)
   }
 }
 
@@ -542,9 +713,11 @@ export const EDIT_FIM: ToolDef = {
   category: "file" as const,
   requiresConfirmation: true,
   userFacingName: "FIM Edit",
+  managesFreshnessApproval: true,
   contract: {
+    pathPolicy: "workspace_only",
     stateRequirement: "fresh_full_baseline",
-    stateUpdates: ["file_state"],
+    stateUpdates: ["file_state", "checkpoint"],
   },
   inputSchema: {
     type: "object",
@@ -557,7 +730,7 @@ export const EDIT_FIM: ToolDef = {
     },
     required: ["path", "instruction"],
   },
-  execute: edit_fim,
+  execute: (params, _onProgress, context) => edit_fim(params, context),
 }
 
 export const FILE_TOOLS: ToolDef[] = [READ_FILE, WRITE_FILE, EDIT_FILE, MULTI_EDIT, EDIT_FIM, ROLLBACK_TRANSACTION]

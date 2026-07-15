@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 import { agentLoop } from "../src/agent/loop"
 import {
   createRuntimeFileStateContext,
+  fingerprintContent,
+  fingerprintFile,
+  getRuntimeFileStateLedger,
   getWriteGeneration,
+  recordRuntimeFileRead,
   recordRuntimeFileWrite,
   resetRuntimeFileStateLedger,
   runWithRuntimeFileStateContext,
@@ -27,6 +34,30 @@ class FileStateProbeProvider implements LLMProvider {
 }
 
 describe("runtime file-state context", () => {
+  test("records the exact bytes returned by read_file instead of re-reading a changed path", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-runtime-read-"))
+    const path = join(root, "race.ts")
+    try {
+      resetRuntimeFileStateLedger()
+      writeFileSync(path, "model saw this", "utf-8")
+      const observed = readFileSync(path)
+      writeFileSync(path, "external replacement", "utf-8")
+
+      const record = recordRuntimeFileRead({
+        path,
+        range: { kind: "full" },
+        content: observed.toString("utf-8"),
+        fingerprint: fingerprintContent(observed),
+      })
+
+      expect(record?.baseline.sha256).toBe(fingerprintContent(observed).sha256)
+      expect(record?.baseline.sha256).not.toBe(fingerprintFile(resolve(path))?.sha256)
+      expect(getRuntimeFileStateLedger().get(resolve(path))?.baseline.sha256).toBe(record?.baseline.sha256)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test("concurrent agent runs keep independent write generations", async () => {
     resetRuntimeFileStateLedger()
     const first = createRuntimeFileStateContext()

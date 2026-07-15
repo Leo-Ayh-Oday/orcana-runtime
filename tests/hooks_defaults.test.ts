@@ -77,7 +77,50 @@ describe("createDefaultHookSystem", () => {
     }
   })
 
-  test("blocks unread existing-file edits by default", async () => {
+  test("observes unread existing-file edits before the canonical gate", async () => {
+    resetWriteGuard()
+    const repo = tempRepo()
+    try {
+      const hooks = createDefaultHookSystem({ projectRoot: repo, writeGuardMode: "warn" })
+      const path = join(repo, "src", "file.ts")
+      mkdirSync(join(repo, "src"), { recursive: true })
+      writeFileSync(path, "old", "utf-8")
+
+      const result = await hooks.runBefore("edit_file", { path })
+
+      expect(result.blocked).toBe(false)
+      expect(result.warnings.join("\n")).toContain("hasn't been read yet")
+      expect(result.trace).toContain("warn by hooks:writeGuard")
+    } finally {
+      resetWriteGuard()
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("observes unread write_file overwrites but ignores new files", async () => {
+    resetWriteGuard()
+    const repo = tempRepo()
+    try {
+      const hooks = createDefaultHookSystem({ projectRoot: repo, writeGuardMode: "warn" })
+      const existing = join(repo, "src", "existing.ts")
+      const created = join(repo, "src", "created.ts")
+      mkdirSync(join(repo, "src"), { recursive: true })
+      writeFileSync(existing, "old", "utf-8")
+
+      const overwrite = await hooks.runBefore("write_file", { path: existing, content: "new" })
+      const create = await hooks.runBefore("write_file", { path: created, content: "new" })
+
+      expect(overwrite.blocked).toBe(false)
+      expect(overwrite.warnings.join("\n")).toContain("hasn't been read yet")
+      expect(create.blocked).toBe(false)
+      expect(create.warnings).toEqual([])
+    } finally {
+      resetWriteGuard()
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  test("keeps the legacy strict write guard as the public factory default", async () => {
     resetWriteGuard()
     const repo = tempRepo()
     try {
@@ -97,54 +140,11 @@ describe("createDefaultHookSystem", () => {
     }
   })
 
-  test("blocks unread write_file overwrites but allows new files", async () => {
-    resetWriteGuard()
-    const repo = tempRepo()
-    try {
-      const hooks = createDefaultHookSystem({ projectRoot: repo })
-      const existing = join(repo, "src", "existing.ts")
-      const created = join(repo, "src", "created.ts")
-      mkdirSync(join(repo, "src"), { recursive: true })
-      writeFileSync(existing, "old", "utf-8")
-
-      const overwrite = await hooks.runBefore("write_file", { path: existing, content: "new" })
-      const create = await hooks.runBefore("write_file", { path: created, content: "new" })
-
-      expect(overwrite.blocked).toBe(true)
-      expect(overwrite.warnings.join("\n")).toContain("blocked in strict mode")
-      expect(create.blocked).toBe(false)
-      expect(create.warnings).toEqual([])
-    } finally {
-      resetWriteGuard()
-      rmSync(repo, { recursive: true, force: true })
-    }
-  })
-
-  test("can keep unread existing-file edits in warn mode for compatibility", async () => {
+  test("observes every unread multi_edit target before the canonical gate", async () => {
     resetWriteGuard()
     const repo = tempRepo()
     try {
       const hooks = createDefaultHookSystem({ projectRoot: repo, writeGuardMode: "warn" })
-      const path = join(repo, "src", "file.ts")
-      mkdirSync(join(repo, "src"), { recursive: true })
-      writeFileSync(path, "old", "utf-8")
-
-      const result = await hooks.runBefore("edit_file", { path })
-
-      expect(result.blocked).toBe(false)
-      expect(result.warnings.join("\n")).toContain("hasn't been read yet")
-      expect(result.trace[0]).toContain("hooks:writeGuard")
-    } finally {
-      resetWriteGuard()
-      rmSync(repo, { recursive: true, force: true })
-    }
-  })
-
-  test("requires every multi_edit target to be read in strict mode", async () => {
-    resetWriteGuard()
-    const repo = tempRepo()
-    try {
-      const hooks = createDefaultHookSystem({ projectRoot: repo })
       const pathA = join(repo, "src", "a.ts")
       const pathB = join(repo, "src", "b.ts")
       mkdirSync(join(repo, "src"), { recursive: true })
@@ -159,7 +159,7 @@ describe("createDefaultHookSystem", () => {
         ],
       })
 
-      expect(result.blocked).toBe(true)
+      expect(result.blocked).toBe(false)
       expect(result.warnings.join("\n")).toContain("b.ts")
       expect(result.warnings.join("\n")).not.toContain("a.ts,")
     } finally {
@@ -174,16 +174,18 @@ describe("createDefaultHookSystem", () => {
       const path = join(repo, "src", "file.ts")
       mkdirSync(join(repo, "src"), { recursive: true })
       writeFileSync(path, "old", "utf-8")
-      const first = createDefaultHookSystem({ projectRoot: repo })
-      const second = createDefaultHookSystem({ projectRoot: repo })
+      const first = createDefaultHookSystem({ projectRoot: repo, writeGuardMode: "warn" })
+      const second = createDefaultHookSystem({ projectRoot: repo, writeGuardMode: "warn" })
 
       await first.runAfter("read_file", { path }, { success: true, content: "old" })
       const firstResult = await first.runBefore("edit_file", { path })
       const secondResult = await second.runBefore("edit_file", { path })
 
       expect(firstResult.blocked).toBe(false)
-      expect(secondResult.blocked).toBe(true)
-      expect(secondResult.trace[0]).toContain("hooks:writeGuard")
+      expect(firstResult.warnings).toEqual([])
+      expect(secondResult.blocked).toBe(false)
+      expect(secondResult.warnings.join("\n")).toContain("hasn't been read yet")
+      expect(secondResult.trace).toContain("warn by hooks:writeGuard")
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }

@@ -10,6 +10,8 @@ export type {
 export { FileStateLedger } from "./file-state-ledger"
 export type { EditFreshnessRequirement } from "./freshness-gate"
 export { validateFreshnessForEdit } from "./freshness-gate"
+export type { ToolContractFreshnessResult, ToolFreshnessApproval } from "./contract-freshness"
+export { validateToolContractFreshness } from "./contract-freshness"
 export {
   createRuntimeFileStateContext,
   getRuntimeFileStateLedger,

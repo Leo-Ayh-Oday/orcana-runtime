@@ -11,8 +11,13 @@ export { FileStateLedger } from "./file-state-ledger"
 export type { EditFreshnessRequirement } from "./freshness-gate"
 export { validateFreshnessForEdit } from "./freshness-gate"
 export {
+  createRuntimeFileStateContext,
   getRuntimeFileStateLedger,
+  getWriteGeneration,
+  recordRuntimeObservedWrites,
   recordRuntimeFileRead,
   recordRuntimeFileWrite,
   resetRuntimeFileStateLedger,
+  runWithRuntimeFileStateContext,
 } from "./runtime-file-state"
+export type { RuntimeFileStateContext } from "./runtime-file-state"

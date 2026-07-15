@@ -237,6 +237,29 @@ describe("checkModeExitCriteria", () => {
     expect(result.met).toBe(true)
   })
 
+  it("fails repair has_evidence when typecheck evidence belongs to an older write generation", () => {
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "evi_stale_typecheck",
+      kind: "typecheck",
+      command: "tsc --noEmit",
+      output: "0 errors",
+      passed: true,
+      timestamp: Date.now(),
+      generation: 0,
+    })
+
+    const result = checkModeExitCriteria(MODES.repair, {
+      toolErrors: 0,
+      finalText: "done",
+      evidenceLedger: ledger,
+      currentGeneration: 1,
+    })
+
+    expect(result.met).toBe(false)
+    expect(result.unmet).toContain("类型检查通过")
+  })
+
   it("fails when typecheck evidence doesn't exist", () => {
     const ledger = createEvidenceLedger()
     addEvidence(ledger, {

@@ -30,7 +30,8 @@ import { markPlanAccepted, missingTaskRequirements, formatTaskTrackerPrompt } fr
 import { evaluateCompletionGate, formatBlockedCompletion, formatCompletionEvidenceReport, formatCompletionGatePrompt, needsExternalCompletionGate } from "./completion-gate"
 import { FlashJudge, type TestimonyLedger } from "./flash-judge"
 import { extractPromises } from "./round/post-loop"
-import { canClaimDone, formatCanClaimDoneBlocked, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
+import { canClaimDone, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
+import { getWriteGeneration } from "../file-state"
 import type { VerificationResult } from "../verification/result"
 import type { RippleObligation } from "../ripple/obligations"
 import type { RippleReport } from "../ripple/types"
@@ -258,6 +259,7 @@ export class CompletionOrchestrator {
       toolErrors: input.taskToolErrors,
       lastTypecheck: input.lastTypecheck,
       evidenceLedger: input.evidenceLedger,
+      currentGeneration: getWriteGeneration(),
     })
 
     if (!completionReport.allowed && input.round + 1 < input.maxRounds) {
@@ -352,6 +354,7 @@ export class CompletionOrchestrator {
     const evidenceResult = canClaimDone({
       tracker: input.taskTracker,
       evidence: input.evidenceLedger,
+      currentGeneration: getWriteGeneration(),
     })
 
     out.evidenceResult = evidenceResult
@@ -506,9 +509,9 @@ export class CompletionOrchestrator {
         case "lint_passed": {
           // Check typecheck evidence
           const hasTypecheckEvidence = input.evidenceLedger
-            ? input.evidenceLedger.entries.some(e => e.kind === "typecheck" && e.passed)
+            ? hasFreshPassingEvidence(input.evidenceLedger, "typecheck", getWriteGeneration())
             : input.verificationResults.some(v => (v.kind === "typecheck" || v.kind === "lint") && v.passed)
-          const hasLastTypecheck = input.lastTypecheck?.passed === true
+          const hasLastTypecheck = !input.evidenceLedger && input.lastTypecheck?.passed === true
 
           if (!hasTypecheckEvidence && !hasLastTypecheck) {
             contradictions.push({
@@ -521,7 +524,7 @@ export class CompletionOrchestrator {
         case "tests_passed":
         case "all_verification_passed": {
           const hasTestEvidence = input.evidenceLedger
-            ? input.evidenceLedger.entries.some(e => (e.kind === "test") && e.passed)
+            ? hasFreshPassingEvidence(input.evidenceLedger, "test", getWriteGeneration())
             : input.verificationResults.some(v => (v.kind === "test" || v.kind === "smoke") && v.passed)
 
           if (!hasTestEvidence) {
@@ -534,7 +537,7 @@ export class CompletionOrchestrator {
         }
         case "build_passed": {
           const hasBuildEvidence = input.evidenceLedger
-            ? input.evidenceLedger.entries.some(e => e.kind === "build" && e.passed)
+            ? hasFreshPassingEvidence(input.evidenceLedger, "build", getWriteGeneration())
             : input.verificationResults.some(v => v.kind === "build" && v.passed)
 
           if (!hasBuildEvidence) {
@@ -658,6 +661,8 @@ export function checkNarrowEditCompletion(input: NarrowEditCheckInput): NarrowEd
       const evidenceResult = canClaimDone({
         tracker: input.taskTracker ?? null,
         evidence: input.evidenceLedger,
+        requiredKinds: ["typecheck"],
+        currentGeneration: getWriteGeneration(),
       })
       if (!evidenceResult.canClaim) {
         return {

@@ -20,6 +20,10 @@ import { createMasterPlan, createMasterPlanFromPacket, nodesFromPlanText, markNo
 import { validatePlan, validateNode, formatValidationReport } from "./plan-validator"
 import { mergeProviderTokenUsage } from "../provider/usage"
 import { setRuntimeContextBudgetMode } from "./runtime-context"
+import {
+  createRuntimeExecutionContext,
+  runWithRuntimeExecutionContext,
+} from "../runtime/execution-context"
 import type { RippleReport } from "../ripple/types"
 import { getBlockingObligations, mergeObligations, normalizeProjectPath, obligationsFromReport, resolveObligations, type RippleObligation } from "../ripple/obligations"
 import { setCascadeFiles } from "../ripple/engine"
@@ -67,8 +71,13 @@ import { buildContextMessages, buildRoundProviderRequest, cacheStableProviderToo
 import { createPreRoundChain } from "./gates/pre-round"
 import { processGateOverflow } from "./gates/overflow"
 import { createEpochState, buildPlanStateContext, classifyEpochAction, epochThresholdsForContext, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
-import { setActivePatchContext } from "./patch-transaction"
+import { clearActivePatchContext, setActivePatchContext } from "./patch-transaction"
 import { createEvidenceLedger, type EvidenceLedger } from "./evidence-ledger"
+import {
+  createRuntimeFileStateContext,
+  getWriteGeneration,
+  runWithRuntimeFileStateContext,
+} from "../file-state"
 import { setActiveMode, getActiveMode, formatModePrompt, shouldTransitionMode } from "./mode-contract"
 import type { ModeTransitionContext } from "./mode-contract"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMap, type ContextMapTaskLevel } from "../context/context-map"
@@ -81,9 +90,58 @@ export async function* agentLoop(
   prompt: string,
   options: AgentOptions,
 ): AsyncGenerator<StreamEvent> {
+  const fileStateContext = createRuntimeFileStateContext()
+  const runtimeContext = createRuntimeExecutionContext()
+  const iterator = runAgentLoop(prompt, options)
+  let completed = false
+
+  try {
+    while (true) {
+      const step = await runWithRuntimeExecutionContext(
+        runtimeContext,
+        () => runWithRuntimeFileStateContext(
+          fileStateContext,
+          () => iterator.next(),
+        ),
+      )
+      if (step.done) {
+        completed = true
+        return
+      }
+      yield step.value
+    }
+  } finally {
+    if (!completed) {
+      await runWithRuntimeExecutionContext(
+        runtimeContext,
+        () => runWithRuntimeFileStateContext(
+          fileStateContext,
+          () => iterator.return(undefined),
+        ),
+      )
+    }
+  }
+}
+
+async function* runAgentLoop(
+  prompt: string,
+  options: AgentOptions,
+): AsyncGenerator<StreamEvent> {
   const { provider, model, tools, stagedContext, hooks } = options
   const maxRounds = resolveMaxRounds(options.maxRounds, process.env.DEEPSEEK_MAX_ROUNDS)
   const startTime = Date.now() // PR-7.2: for Stop hook session duration
+  let finalRound = 0
+  let stopHookDispatched = false
+  let stopReason: "completed" | "aborted" | "error" | "blocked" = "aborted"
+  const dispatchStopHook = async (reason: typeof stopReason, totalRounds = finalRound) => {
+    if (!hooks || stopHookDispatched) return
+    stopHookDispatched = true
+    await hooks.dispatchStop({ reason, totalRounds, sessionDurationMs: Date.now() - startTime })
+  }
+  if (options.abortSignal?.aborted) {
+    await dispatchStopHook("aborted", 0)
+    return
+  }
   const effectivePrompt = buildEffectivePrompt(prompt, options.conversationHistory)
   const language = detectLanguage(effectivePrompt)
   const langInstruction = languageInstruction(language)
@@ -112,10 +170,9 @@ export async function* agentLoop(
   if (hooks) {
     const promptResult = await hooks.dispatchPromptSubmit({ prompt, round: 0 })
     if (promptResult.blocked) {
+      stopReason = "blocked"
+      await dispatchStopHook(stopReason, 0)
       yield { type: "error", data: `Prompt blocked by hook: ${promptResult.blockReason}` }
-      if (hooks) {
-        await hooks.dispatchStop({ reason: "blocked", totalRounds: 0, sessionDurationMs: Date.now() - startTime })
-      }
       return
     }
     if (promptResult.replacePrompt) {
@@ -226,6 +283,7 @@ export async function* agentLoop(
     jobMemoryLimitMb: process.env.DEEPSEEK_SANDBOX_MEMORY_MB ? Number(process.env.DEEPSEEK_SANDBOX_MEMORY_MB) : 512,
   })
   setShellSandbox(sandbox)
+  try {
   // PR 8: set active mode contract from options (defaults to "coder")
   setActiveMode(options.activeMode ?? "coder")
   const pmode: "full" | "strict" = process.env.DEEPSEEK_PERMISSION_MODE === "strict" ? "strict" : "full"
@@ -319,9 +377,7 @@ export async function* agentLoop(
       source: structuredClarification ? "model_structured" : "model_failed",
     })
     await flushTelemetry()
-    if (hooks) {
-      await hooks.dispatchStop({ reason: "aborted", totalRounds: 0, sessionDurationMs: Date.now() - startTime })
-    }
+    await dispatchStopHook("aborted", 0)
     return
   }
 
@@ -537,7 +593,6 @@ export async function* agentLoop(
     planApproved = false
   }
 
-  let finalRound = 0 // PR-7.2: tracked for Stop hook outside loop scope
   let reachedRoundBudget = false
   for (let round = 0; round < maxRounds; round++) {
     finalRound = round
@@ -809,6 +864,11 @@ export async function* agentLoop(
     const bufferReadonlyText = intentPolicy.mode === "readonly" || shouldBufferCompletionText
     let providerUsage: ProviderTokenUsage | null = null
     const providerAbort = new AbortController()
+    const abortActiveProvider = () => {
+      if (!providerAbort.signal.aborted) providerAbort.abort(options.abortSignal?.reason)
+    }
+    options.abortSignal?.addEventListener("abort", abortActiveProvider, { once: true })
+    if (options.abortSignal?.aborted) abortActiveProvider()
 
     try {
       const providerIterator = provider.streamChat({ model: modelName, purpose: "agent_main", system, messages: providerMessages, tools: providerToolSchemas, thinking, maxTokens: maxTok, abortSignal: providerAbort.signal })[Symbol.asyncIterator]()
@@ -850,6 +910,14 @@ export async function* agentLoop(
       streamErrorRetryable = classified.retryable
       yield { type: "error", data: streamError }
       streamErrorYielded = true
+    } finally {
+      options.abortSignal?.removeEventListener("abort", abortActiveProvider)
+      abortActiveProvider()
+    }
+
+    if (options.abortSignal?.aborted) {
+      options.runTrace?.record("agent_loop_aborted", { round, reason: String(options.abortSignal.reason ?? "aborted") })
+      return
     }
 
     const roundMs = Date.now() - roundStart
@@ -1327,17 +1395,21 @@ export async function* agentLoop(
         }
         const verification = resultObj.metadata?.verification as VerificationResult | undefined
         if (verification) {
-          verificationResultsThisRound.push(verification)
-          options.runTrace?.record("verification_result", verification)
-          if (verification.kind === "typecheck") {
+          const stampedVerification: VerificationResult = {
+            ...verification,
+            generation: verification.generation ?? getWriteGeneration(),
+          }
+          verificationResultsThisRound.push(stampedVerification)
+          options.runTrace?.record("verification_result", stampedVerification)
+          if (stampedVerification.kind === "typecheck") {
             lastTypecheck = {
-              passed: verification.passed,
-              issues: verification.issues,
-              output: verification.summary,
+              passed: stampedVerification.passed,
+              issues: stampedVerification.issues,
+              output: stampedVerification.summary,
             }
           }
-          if (verification.passed) verificationPassedThisRound = true
-          if (!verification.passed && verification.kind === "test" && hasServiceTestFailure(resultContent)) {
+          if (stampedVerification.passed) verificationPassedThisRound = true
+          if (!stampedVerification.passed && stampedVerification.kind === "test" && hasServiceTestFailure(resultContent)) {
             serviceTestGuidanceNeeded = true
           }
         }
@@ -1505,11 +1577,9 @@ export async function* agentLoop(
     if (overflowResult.blocked) {
       const reason = `${overflowResult.blockedGate} 累积阻断 ${overflowResult.blockedCount} 次，请求人工介入。`
       sm.transition(AgentState.BLOCKED, reason)
+      stopReason = "blocked"
       yield { type: "status", data: `gate-overflow: ${overflowResult.blockedGate} blocked ${overflowResult.blockedCount} times — BLOCKED` }
       options.runTrace?.record("agent_loop_blocked", { reason, gate: overflowResult.blockedGate, blockCount: overflowResult.blockedCount })
-      setRuntimeContextBudgetMode("normal")
-      sandbox.dispose()
-      setShellSandbox(null)
       await flushTelemetry()
       return
     }
@@ -1946,23 +2016,26 @@ export async function* agentLoop(
     toolErrors: taskToolErrors,
     modifiedFiles: taskModifiedFiles,
   })
-  setRuntimeContextBudgetMode("normal")
-  sandbox.dispose()
-  setShellSandbox(null)
-
   // ── Gate telemetry: yield summary + auto-save if configured ──
   if (gateTelemetry.gateNames().length > 0) {
     yield { type: "status", data: `gate-telemetry: ${gateTelemetry.gateNames().length} gates\n${gateTelemetry.report()}` }
   }
   await flushTelemetry()
 
-  // PR-7.2: Dispatch Stop hook (fire-and-forget — errors are silently caught)
-  if (hooks) {
-    await hooks.dispatchStop({
-      reason: "completed",
-      totalRounds: finalRound,
-      sessionDurationMs: Date.now() - startTime,
-    })
+  stopReason = "completed"
+  } catch (error) {
+    stopReason = "error"
+    throw error
+  } finally {
+    try {
+      setRuntimeContextBudgetMode("normal")
+      setCascadeFiles(new Set())
+      clearActivePatchContext()
+      setShellSandbox(null)
+      sandbox.dispose()
+    } finally {
+      await dispatchStopHook(stopReason)
+    }
   }
 }
 

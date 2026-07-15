@@ -22,6 +22,8 @@ export interface AgentOptions {
   provider: LLMProvider
   model: string
   tools: ToolDescriptor[]
+  /** Cancels the whole agent run and is bridged to the currently active provider stream. */
+  abortSignal?: AbortSignal
   maxRounds?: number
   /** Active model context window; defaults to DeepSeek V4's 1M for legacy callers. */
   contextMaxTokens?: number

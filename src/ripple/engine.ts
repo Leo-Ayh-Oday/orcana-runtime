@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import ts from "typescript"
 import type { RuntimeContextBudgetMode } from "../agent/runtime-context"
+import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 import { buildContextKernel } from "../context/kernel"
 import { HybridMemory } from "../memory/hybrid"
 import { diffApiSurface, toSymbolShapes, changedSymbolNames, hasSeverity, type ApiChange } from "./api-diff"
@@ -20,7 +21,7 @@ import type {
 } from "./types"
 
 let _program: ProjectProgram | null = null
-let _pendingCascadeFiles = new Set<string>()
+const PENDING_CASCADE_FILES = Symbol("pending-cascade-files")
 
 /** Get or create the shared ProjectProgram (lazy, cached). */
 export function getRippleProgram(): ProjectProgram {
@@ -45,7 +46,11 @@ export function invalidateFileListCache(): void {
 
 /** Set files currently being cascaded (set by loop.ts when ripple obligations exist). */
 export function setCascadeFiles(files: Set<string>): void {
-  _pendingCascadeFiles = files
+  setRuntimeContextValue(PENDING_CASCADE_FILES, files)
+}
+
+function getCascadeFiles(): Set<string> {
+  return getRuntimeContextValue(PENDING_CASCADE_FILES, new Set<string>())
 }
 
 interface SymbolInfo {
@@ -359,7 +364,7 @@ export function tightenRippleDecision(report: RippleReport, mode: RuntimeContext
   // Cascade-aware leniency: demote block→warn when agent is working
   // through a cascade. The obligations system catches any truly
   // unresolved callers at exit.
-  const pendingFiles = _pendingFiles ?? _pendingCascadeFiles
+  const pendingFiles = _pendingFiles ?? getCascadeFiles()
   if (report.decision === "block" && pendingFiles && pendingFiles.has(report.targetFile)) {
     return "warn"
   }

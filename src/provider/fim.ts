@@ -1,7 +1,7 @@
 /** FIM (Fill-in-the-Middle) editor — DeepSeek V4 /beta/completions endpoint.
  *  Ported from deepseek-code/core/fim_editor.py */
 
-import { readFile, existsSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { readFile as readFileProm } from "node:fs/promises"
 
 export interface FimEdit {
@@ -66,6 +66,16 @@ export class FimEditor {
     if (!existsSync(filePath)) return { success: false, newText: "", error: `File not found: ${filePath}`, fullNewFile: "" }
 
     const content = await readFileProm(filePath, "utf-8")
+    return this.editFileContentRegion(filePath, content, instruction, startLine, endLine)
+  }
+
+  async editFileContentRegion(
+    filePath: string,
+    content: string,
+    instruction: string,
+    startLine: number,
+    endLine: number,
+  ): Promise<FimResult> {
     const lines = content.split("\n")
     if (startLine < 1) startLine = 1
     if (endLine > lines.length) endLine = lines.length
@@ -81,6 +91,15 @@ export class FimEditor {
     if (!existsSync(filePath)) return { success: false, newText: "", error: `File not found: ${filePath}`, fullNewFile: "" }
 
     const content = await readFileProm(filePath, "utf-8")
+    return this.editFunctionContent(filePath, content, instruction, functionName)
+  }
+
+  async editFunctionContent(
+    filePath: string,
+    content: string,
+    instruction: string,
+    functionName: string,
+  ): Promise<FimResult> {
     const lines = content.split("\n")
     let start = -1
     let end = -1

@@ -49,8 +49,9 @@ export interface ToolContractMetadata {
 }
 
 /**
- * Immutable descriptive projection only. Existing permission, hook, freshness,
- * and handler code remains authoritative until a later slice adopts a field.
+ * Immutable canonical projection. Permission and hooks remain authoritative;
+ * buildTool enforces declared freshness requirements and binds approved
+ * content/hash snapshots into managed transaction handlers.
  */
 export interface ToolContract {
   readonly name: string

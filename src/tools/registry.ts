@@ -1,10 +1,13 @@
 /** Tool system — single factory, zero external deps. Port from Python tool_system.py. */
 
 import type { ToolCategory, PermissionLevel } from "../agent/permission"
+import { validateToolContractFreshness, type ToolFreshnessApproval } from "../file-state"
+import type { FileStateStatus } from "../file-state"
 import { projectToolContract, type ToolContract, type ToolContractMetadata } from "./tool-contract"
 
 export interface ToolExecutionContext {
   abortSignal?: AbortSignal
+  freshness?: ToolFreshnessApproval
 }
 
 export interface ToolDef {
@@ -20,6 +23,8 @@ export interface ToolDef {
   permission?: PermissionLevel
   /** Declarative metadata used by the canonical, handler-free ToolContract projection. */
   contract?: ToolContractMetadata
+  /** Required for freshness-bound writes: the handler consumes approval snapshots and commits through PatchTransaction. */
+  managesFreshnessApproval?: boolean
   inputSchema: Record<string, unknown>
   validate?: (params: Record<string, unknown>) => { ok: boolean; message?: string }
   execute: (
@@ -38,6 +43,15 @@ export type ToolResult =
   | { success: true; content: string; metadata?: Record<string, unknown> }
   | { success: false; content: string; error: string; metadata?: Record<string, unknown> }
 
+export interface FreshnessGateMetadata extends Record<string, unknown> {
+  gate: "freshness"
+  freshness: {
+    path: string
+    status: FileStateStatus
+    reason: string
+  }
+}
+
 export const Result = {
   ok(content: string, metadata?: Record<string, unknown>): ToolResult {
     return { success: true, content, metadata }
@@ -45,8 +59,19 @@ export const Result = {
   fail(error: string, content?: string): ToolResult {
     return { success: false, content: content ?? error, error }
   },
-  blocked(reason: string): ToolResult {
-    return { success: false, content: `[blocked] ${reason}`, error: reason, metadata: { blocked: true } }
+  blocked(reason: string, metadata?: Record<string, unknown>): ToolResult {
+    return {
+      success: false,
+      content: `[blocked] ${reason}`,
+      error: reason,
+      metadata: { ...metadata, blocked: true },
+    }
+  },
+  freshnessBlocked(path: string, status: FileStateStatus, reason: string): ToolResult {
+    return Result.blocked(`FreshnessGate blocked write for ${path}: ${reason}`, {
+      gate: "freshness",
+      freshness: { path, status, reason },
+    } satisfies FreshnessGateMetadata)
   },
 }
 
@@ -88,21 +113,63 @@ export type ContractToolDescriptor = ToolDescriptor & { readonly contract: ToolC
 
 export function buildTool(defn: ToolDef): ContractToolDescriptor {
   const contract = projectToolContract(defn)
-  const execute = async (params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> => {
+  if (contract.state.requirement !== "none") {
+    if (defn.executeStream) {
+      throw new Error(`Tool ${defn.name} cannot combine streaming execution with a freshness requirement`)
+    }
+    if (defn.managesFreshnessApproval !== true) {
+      throw new Error(`Tool ${defn.name} declares a freshness requirement without a managed freshness transaction`)
+    }
+  }
+
+  const preflight = async (
+    params: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<{ ok: true; context: ToolExecutionContext } | { ok: false; result: ToolResult }> => {
     if (defn.validate) {
       const vr = defn.validate(params)
-      if (!vr.ok) return Result.blocked(vr.message ?? "invalid input")
+      if (!vr.ok) return { ok: false, result: Result.blocked(vr.message ?? "invalid input") }
     }
     if (shouldRequireConfirmation(defn) && !params.confirm) {
-      return Result.blocked(`${defn.userFacingName ?? defn.name} requires confirmation — set confirm: true`)
+      return {
+        ok: false,
+        result: Result.blocked(`${defn.userFacingName ?? defn.name} requires confirmation — set confirm: true`),
+      }
     }
+    const freshness = await validateToolContractFreshness(contract, params, { abortSignal: context?.abortSignal })
+    if (!freshness.ok) {
+      return {
+        ok: false,
+        result: Result.freshnessBlocked(freshness.path, freshness.status, freshness.reason),
+      }
+    }
+    return {
+      ok: true,
+      context: { ...context, freshness: freshness.approval },
+    }
+  }
+
+  const execute = async (params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> => {
+    const prepared = await preflight(params, context)
+    if (!prepared.ok) return prepared.result
     try {
-      const result = await defn.execute(params, undefined, context)
+      const result = await defn.execute(params, undefined, prepared.context)
       return result
     } catch (e) {
       return Result.fail(e instanceof Error ? e.message : String(e))
     }
   }
+
+  const executeStream: ToolDef["executeStream"] = defn.executeStream
+    ? async function* (params: Record<string, unknown>, context?: ToolExecutionContext) {
+      const prepared = await preflight(params, context)
+      if (!prepared.ok) {
+        yield { type: "done", data: prepared.result }
+        return
+      }
+      yield* defn.executeStream!(params, prepared.context)
+    }
+    : undefined
 
   const toAnthropicSchema = () => {
     const inputSchema = JSON.parse(JSON.stringify(defn.inputSchema)) as Record<string, unknown>
@@ -124,7 +191,7 @@ export function buildTool(defn: ToolDef): ContractToolDescriptor {
     }
   }
 
-  return { defn, contract, execute, executeStream: defn.executeStream, toAnthropicSchema }
+  return { defn, contract, execute, executeStream, toAnthropicSchema }
 }
 
 export function buildTools(...defs: ToolDef[]): ContractToolDescriptor[] {

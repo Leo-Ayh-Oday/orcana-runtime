@@ -23,6 +23,8 @@ export function createDefaultHookSystem(options: DefaultHookSystemOptions): Hook
   }))
   hooks.onToolBefore(createWriteGuardBefore({
     cwd: options.projectRoot,
+    // Keep the public factory backward compatible. The canonical runtime opts
+    // into observe mode explicitly because FreshnessGate owns enforcement.
     mode: options.writeGuardMode ?? "strict",
     readFiles: writeGuardReadFiles,
   }))

@@ -9,6 +9,8 @@ export interface ToolLedgerEntry {
   success: boolean
   blocked: boolean
   changedFiles: string[]
+  gate?: string
+  gateStatus?: string
   error?: string
 }
 
@@ -24,6 +26,10 @@ export class ToolExecutionLedger {
     changedFiles?: string[]
   }): ToolLedgerEntry {
     const metadata = input.result.metadata ?? {}
+    const gate = typeof metadata.gate === "string" ? metadata.gate : undefined
+    const gateDetail = gate && metadata[gate] && typeof metadata[gate] === "object"
+      ? metadata[gate] as Record<string, unknown>
+      : undefined
     const entry: ToolLedgerEntry = {
       id: input.id,
       round: input.round,
@@ -33,6 +39,8 @@ export class ToolExecutionLedger {
       success: input.result.success,
       blocked: Boolean(metadata.blocked || metadata.hookBlocked || /\[blocked\]/i.test(input.result.content)),
       changedFiles: [...new Set(input.changedFiles ?? [])],
+      gate,
+      gateStatus: typeof gateDetail?.status === "string" ? gateDetail.status : undefined,
       error: input.result.success ? undefined : input.result.content.slice(0, 300),
     }
     this.entries.push(entry)
@@ -59,5 +67,7 @@ export class ToolExecutionLedger {
 export function formatToolLedgerStatus(entry: ToolLedgerEntry): string {
   const state = entry.blocked ? "blocked" : entry.success ? "ok" : "fail"
   const files = entry.changedFiles.length ? ` files=${entry.changedFiles.length}` : ""
-  return `tool-ledger: ${entry.tool} ${state} ${entry.durationMs}ms${files}`
+  const gate = entry.gate ? ` gate=${entry.gate}` : ""
+  const gateStatus = entry.gateStatus ? ` status=${entry.gateStatus}` : ""
+  return `tool-ledger: ${entry.tool} ${state} ${entry.durationMs}ms${files}${gate}${gateStatus}`
 }

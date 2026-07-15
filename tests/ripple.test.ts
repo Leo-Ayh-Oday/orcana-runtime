@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { tmpdir } from "node:os"
+import { resetRuntimeFileStateLedger } from "../src/file-state"
 import { buildTool } from "../src/tools/registry"
-import { EDIT_FILE, FILE_TOOLS, MULTI_EDIT, ROLLBACK_TRANSACTION, WRITE_FILE } from "../src/tools/file"
+import { EDIT_FILE, FILE_TOOLS, MULTI_EDIT, READ_FILE, ROLLBACK_TRANSACTION, WRITE_FILE } from "../src/tools/file"
 import { buildContextKernel } from "../src/context/kernel"
 import { HybridMemory } from "../src/memory/hybrid"
 import { formatCascadeSuggestion, previewEdit, tightenRippleDecision } from "../src/ripple/engine"
@@ -14,6 +15,7 @@ const tempRoots: string[] = []
 
 afterEach(() => {
   process.chdir(oldCwd)
+  resetRuntimeFileStateLedger()
   for (const root of tempRoots.splice(0)) {
     if (!existsSync(root)) continue
     // Windows file locks — retry cleanup up to 3 times with backoff
@@ -37,6 +39,13 @@ function project(files: Record<string, string>): string {
   }
   process.chdir(root)
   return root
+}
+
+async function recordFullBaselines(...paths: string[]): Promise<void> {
+  const read = buildTool(READ_FILE)
+  for (const path of paths) {
+    expect((await read.execute({ path })).success).toBe(true)
+  }
 }
 
 describe("Ripple Engine", () => {
@@ -126,6 +135,7 @@ describe("Ripple Engine", () => {
     const before = readFileSync(full, "utf-8")
     const tool = buildTool(EDIT_FILE)
 
+    await recordFullBaselines(full)
     const result = await tool.execute({
       path: full,
       old_string: "add(a: number, b: number)",
@@ -147,6 +157,7 @@ describe("Ripple Engine", () => {
     })
     const tool = buildTool(MULTI_EDIT)
 
+    await recordFullBaselines(join(root, "math.ts"), join(root, "cart.ts"))
     const result = await tool.execute({
       confirm: true,
       edits: [
@@ -177,6 +188,7 @@ describe("Ripple Engine", () => {
     const write = buildTool(WRITE_FILE)
     const edit = buildTool(EDIT_FILE)
 
+    await recordFullBaselines(join(root, "note.txt"))
     const writeResult = await write.execute({
       path: join(root, "created.txt"),
       content: "new\n",
@@ -205,6 +217,7 @@ describe("Ripple Engine", () => {
     const edit = buildTool(EDIT_FILE)
     const rollback = buildTool(ROLLBACK_TRANSACTION)
 
+    await recordFullBaselines(join(root, "note.txt"))
     const editResult = await edit.execute({
       path: join(root, "note.txt"),
       old_string: "before",
@@ -256,6 +269,7 @@ describe("Ripple Engine", () => {
     const multi = buildTool(MULTI_EDIT)
     const rollback = buildTool(ROLLBACK_TRANSACTION)
 
+    await recordFullBaselines(join(root, "a.ts"), join(root, "b.ts"))
     const editResult = await multi.execute({
       confirm: true,
       edits: [
@@ -291,6 +305,7 @@ describe("Ripple Engine", () => {
     const beforeB = readFileSync(join(root, "b.ts"), "utf-8")
     const tool = buildTool(MULTI_EDIT)
 
+    await recordFullBaselines(join(root, "a.ts"), join(root, "b.ts"))
     const result = await tool.execute({
       confirm: true,
       edits: [

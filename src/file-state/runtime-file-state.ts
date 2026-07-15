@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { resolve } from "node:path"
 import { FileStateLedger, type FileReadRange, type FileStateRecord } from "./file-state-ledger"
-import { fingerprintContent, fingerprintFile } from "./file-fingerprint"
+import { fingerprintContent, type FileFingerprint } from "./file-fingerprint"
 
 export interface RuntimeFileStateContext {
   ledger: FileStateLedger
@@ -67,18 +67,17 @@ export function recordRuntimeFileRead(input: {
   path: string
   range: FileReadRange
   content: string
+  fingerprint: FileFingerprint
   totalLines?: number
   truncated?: boolean
-}): FileStateRecord | undefined {
+}): FileStateRecord {
   const canonicalPath = resolve(input.path)
-  const fingerprint = fingerprintFile(canonicalPath)
-  if (!fingerprint) return undefined
   return getRuntimeFileStateContext().ledger.recordRead({
     path: canonicalPath,
     range: input.range,
     content: input.content,
     totalLines: input.totalLines,
-    fingerprint,
+    fingerprint: input.fingerprint,
     truncated: input.truncated,
   })
 }
@@ -88,7 +87,7 @@ export function recordRuntimeFileWrite(input: {
   content: string
 }): FileStateRecord {
   const canonicalPath = resolve(input.path)
-  const fingerprint = fingerprintFile(canonicalPath) ?? fingerprintContent(input.content)
+  const fingerprint = fingerprintContent(input.content)
   const context = getRuntimeFileStateContext()
   context.writeGeneration++
   return context.ledger.recordAgentWrite({

@@ -1,7 +1,7 @@
 /** Tests for PatchTransaction (PR 5). */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { createTransaction } from "../src/tools/transaction"
@@ -95,6 +95,25 @@ describe("checkBaseHash", () => {
     const result = checkBaseHash(join(testDir, "new.txt"), null)
     expect(result.match).toBe(true)
     expect(result.expected).toBeNull()
+  })
+
+  it("returns mismatch when a planned new file now exists", () => {
+    const p = writeTestFile("new-file-race.txt", "external content")
+    const result = checkBaseHash(p, null)
+
+    expect(result.match).toBe(false)
+    expect(result.expected).toBeNull()
+    expect(result.actual).toBe(computeBaseHash("external content"))
+  })
+
+  it("does not treat an existing non-file target as absent", () => {
+    const p = join(testDir, "new-file-directory-target")
+    mkdirSync(p, { recursive: true })
+    const result = checkBaseHash(p, null)
+
+    expect(result.match).toBe(false)
+    expect(result.actual).toBeNull()
+    expect(result.actualState).toBe("non_file")
   })
 
   it("returns match when hash matches", () => {
@@ -660,6 +679,68 @@ describe("ManagedPatchTransaction state machine", () => {
       expect(readFileSync(join(smTestDir, "multi/a.ts"), "utf-8")).toBe("a content\n")
       expect(readFileSync(join(smTestDir, "multi/b.ts"), "utf-8")).toBe("b content\n")
     })
+
+    it("does not overwrite a file created externally during a new-file transaction", () => {
+      const targetPath = join(smTestDir, "new-file-race.ts")
+      const mpt = initManagedTransaction({
+        tool: "write_file",
+        files: [makeFile("new-file-race.ts", null, "agent content\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      writeFileSync(targetPath, "external content\n", "utf-8")
+
+      expect(() => commitManagedTransaction(mpt)).toThrow("Base hash 不匹配")
+      expect(readFileSync(targetPath, "utf-8")).toBe("external content\n")
+    })
+
+    it("does not recreate an existing file deleted during the transaction", () => {
+      const targetPath = join(smTestDir, "deleted-during-transaction.ts")
+      writeFileSync(targetPath, "original content\n", "utf-8")
+      const mpt = initManagedTransaction({
+        tool: "edit_file",
+        files: [makeFile("deleted-during-transaction.ts", "original content\n", "agent content\n")],
+        cwd: smTestDir,
+      })
+      applyToTemp(mpt)
+      verifyManagedTransaction(mpt)
+      rmSync(targetPath)
+
+      expect(() => commitManagedTransaction(mpt)).toThrow("Base hash 不匹配")
+      expect(existsSync(targetPath)).toBe(false)
+    })
+  })
+
+  it("rejects a workspace path whose parent is a symbolic link", () => {
+    const outside = join(testDir, "symlink-outside")
+    const insideLink = join(testDir, "symlink-parent")
+    mkdirSync(outside, { recursive: true })
+    if (!existsSync(insideLink)) symlinkSync(outside, insideLink, "junction")
+
+    const result = checkForbiddenFile(join(insideLink, "escaped.ts"), testDir)
+
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toContain("symbolic link")
+  })
+
+  it("rechecks the path boundary when a parent becomes a junction before commit", () => {
+    const outside = join(testDir, "late-symlink-outside")
+    const parent = join(smTestDir, "late-parent")
+    mkdirSync(outside, { recursive: true })
+    mkdirSync(parent, { recursive: true })
+    const mpt = initManagedTransaction({
+      tool: "write_file",
+      files: [makeFile("late-parent/escaped.ts", null, "agent content\n")],
+      cwd: smTestDir,
+    })
+    applyToTemp(mpt)
+    verifyManagedTransaction(mpt)
+    rmSync(parent, { recursive: true, force: true })
+    symlinkSync(outside, parent, "junction")
+
+    expect(() => commitManagedTransaction(mpt)).toThrow("路径边界复核失败")
+    expect(existsSync(join(outside, "escaped.ts"))).toBe(false)
   })
 
   // ── rollbackManagedTransaction ──
@@ -805,6 +886,31 @@ describe("ManagedPatchTransaction state machine", () => {
       }
       expect(error).not.toBeNull()
       expect(error!.message).toContain("禁止写入")
+    })
+
+    it("rolls back only committed files when a later target has a freshness conflict", async () => {
+      const pathA = join(smTestDir, "partial-conflict-a.ts")
+      const pathB = join(smTestDir, "partial-conflict-b.ts")
+      writeFileSync(pathA, "a original\n", "utf-8")
+      writeFileSync(pathB, "b original\n", "utf-8")
+
+      await expect(applyAndCommit(
+        {
+          tool: "multi_edit",
+          cwd: smTestDir,
+          files: [
+            makeFile("partial-conflict-a.ts", "a original\n", "a agent\n"),
+            makeFile("partial-conflict-b.ts", "b original\n", "b agent\n"),
+          ],
+        },
+        async () => {
+          writeFileSync(pathB, "b external\n", "utf-8")
+          return true
+        },
+      )).rejects.toThrow("Base hash 不匹配")
+
+      expect(readFileSync(pathA, "utf-8")).toBe("a original\n")
+      expect(readFileSync(pathB, "utf-8")).toBe("b external\n")
     })
   })
 

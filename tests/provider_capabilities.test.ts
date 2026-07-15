@@ -43,6 +43,13 @@ describe("ProviderRegistry — capabilities on built-in models", () => {
     }
   })
 
+  test("built-in thinking contracts agree with their declared capabilities", () => {
+    const r = makeRegistry()
+    for (const spec of r.allModels) {
+      expect(spec.thinking.supported).toBe(spec.capabilities.thinking)
+    }
+  })
+
   test("deepseek-v4-pro has thinking, fim, and context caching", () => {
     const r = makeRegistry()
     const cap = r.getCapabilities("deepseek-v4-pro")!
@@ -181,7 +188,7 @@ describe("listModelsByCapability", () => {
   test("empty requirements returns all models", () => {
     const r = makeRegistry()
     const models = r.listModelsByCapability({})
-    expect(models.length).toBe(6)
+    expect(models.sort()).toEqual(r.allModels.map(spec => spec.id).sort())
   })
 })
 
@@ -207,12 +214,16 @@ describe("modelHasCapability", () => {
 // ── Capability presets are correct ──
 
 describe("capability presets consistency", () => {
-  test("all models have toolUse and streaming as true", () => {
+  test("all built-in models support streaming", () => {
     const r = makeRegistry()
     for (const spec of r.allModels) {
-      expect(spec.capabilities.toolUse).toBe(true)
       expect(spec.capabilities.streaming).toBe(true)
     }
+  })
+
+  test("preserves catalog models that are not agent tool-call models", () => {
+    const r = makeRegistry()
+    expect(r.resolveModel("deepseek-reasoner")?.capabilities.toolUse).toBe(false)
   })
 
   test("contextWindow matches capability maxContextWindow for built-in models", () => {

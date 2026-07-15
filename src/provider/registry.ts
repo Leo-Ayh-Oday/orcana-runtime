@@ -1,6 +1,7 @@
 /** Provider Registry — stores LLMProvider instances and ModelSpec metadata.
  *
- *  Single source of truth for all available models. The registry owns:
+ *  Runtime index for all available models. Model metadata is derived from the
+ *  canonical config catalog and any user overrides; the registry owns:
  *    - Provider instances (keyed by ProviderID)
  *    - Model metadata (keyed by ModelID)
  *    - Default models per tier / purpose
@@ -18,142 +19,9 @@ import type {
   ProviderID,
   ProviderRegistration,
   ResolvedModel,
-  ThinkingCapability,
 } from "./types"
-
-// ── Built-in model definitions ──
-
-const NO_THINKING: ThinkingCapability = {
-  supported: false,
-  effortLevels: [],
-}
-
-function thinking(
-  budget: number,
-  defaultBudget?: number,
-  mode: "manual" | "adaptive" = "manual",
-): ThinkingCapability {
-  return {
-    supported: true,
-    mode,
-    maxBudgetTokens: budget,
-    defaultBudget: defaultBudget ?? budget,
-    effortLevels: ["high", "max"],
-  }
-}
-
-// ── Capability presets (PR-6.2) ──
-
-const DEEPSEEK_CAPABILITIES: ModelCapabilities = {
-  thinking: true,
-  fim: true,
-  contextCaching: true,
-  vision: false,
-  structuredOutput: true,
-  toolUse: true,
-  streaming: true,
-  maxContextWindow: 1_048_576,
-}
-
-const ANTHROPIC_CAPABILITIES: ModelCapabilities = {
-  thinking: true,
-  fim: false,
-  contextCaching: true,
-  vision: true,
-  structuredOutput: false,
-  toolUse: true,
-  streaming: true,
-  maxContextWindow: 200_000,
-}
-
-const OPENAI_CAPABILITIES: ModelCapabilities = {
-  thinking: false,
-  fim: false,
-  contextCaching: false,
-  vision: true,
-  structuredOutput: true,
-  toolUse: true,
-  streaming: true,
-  maxContextWindow: 128_000,
-}
-
-const BUILTIN_MODELS: ModelSpec[] = [
-  // ── DeepSeek ──
-  {
-    id: "deepseek-v4-pro",
-    providerId: "deepseek",
-    displayName: "DeepSeek V4 Pro",
-    contextWindow: 1_048_576,
-    maxOutputTokens: 393216,
-    pricingTier: "standard",
-    thinking: thinking(32768, 16384),
-    capabilities: DEEPSEEK_CAPABILITIES,
-    tags: ["coding", "reasoning", "deep-thinking"],
-    isDefault: true,
-  },
-  {
-    id: "deepseek-v4-flash",
-    providerId: "deepseek",
-    displayName: "DeepSeek V4 Flash",
-    contextWindow: 1_048_576,
-    maxOutputTokens: 393216,
-    pricingTier: "cheap",
-    thinking: thinking(32768, 8192),
-    capabilities: DEEPSEEK_CAPABILITIES,
-    tags: ["fast", "coding", "reasoning", "agent"],
-    isDefault: true,
-  },
-  // ── Anthropic ──
-  {
-    id: "claude-opus-4-7",
-    providerId: "anthropic",
-    displayName: "Claude Opus 4.7",
-    contextWindow: 200_000,
-    maxOutputTokens: 32768,
-    pricingTier: "premium",
-    thinking: thinking(32768, 16384, "adaptive"),
-    capabilities: ANTHROPIC_CAPABILITIES,
-    tags: ["coding", "reasoning", "deep-thinking", "safety"],
-    isDefault: true,
-  },
-  {
-    id: "claude-sonnet-4-6",
-    providerId: "anthropic",
-    displayName: "Claude Sonnet 4.6",
-    contextWindow: 200_000,
-    maxOutputTokens: 16384,
-    pricingTier: "standard",
-    thinking: thinking(16384, 8192, "adaptive"),
-    capabilities: ANTHROPIC_CAPABILITIES,
-    tags: ["coding", "fast", "balanced"],
-    isDefault: true,
-  },
-  {
-    id: "claude-haiku-4-5",
-    providerId: "anthropic",
-    displayName: "Claude Haiku 4.5",
-    contextWindow: 200_000,
-    maxOutputTokens: 8192,
-    pricingTier: "cheap",
-    thinking: NO_THINKING,
-    capabilities: { ...ANTHROPIC_CAPABILITIES, thinking: false },
-    tags: ["fast", "chat", "simple"],
-    isDefault: true,
-  },
-  // ── OpenAI ──
-  {
-    id: "gpt-5",
-    providerId: "openai",
-    displayName: "GPT-5",
-    contextWindow: 128_000,
-    maxOutputTokens: 16384,
-    pricingTier: "premium",
-    thinking: thinking(16384),
-    capabilities: OPENAI_CAPABILITIES,
-    tags: ["coding", "reasoning", "vision"],
-    isDefault: true,
-  },
-]
+import { builtInProviders } from "../config/config-schema"
+import { toModelSpec } from "./capabilities"
 
 // ── Registry ──
 
@@ -192,11 +60,12 @@ export class ProviderRegistry {
     this.aliases.set(alias, target)
   }
 
-  /** Register all built-in models for registered providers. */
+  /** Register the canonical built-in catalog for providers available in this runtime. */
   registerBuiltinModels(): void {
-    for (const spec of BUILTIN_MODELS) {
-      if (this.providers.has(spec.providerId)) {
-        this.models.set(spec.id, spec)
+    for (const [providerId, providerConfig] of Object.entries(builtInProviders)) {
+      if (!this.providers.has(providerId)) continue
+      for (const [modelId, modelConfig] of Object.entries(providerConfig.models)) {
+        this.models.set(modelId, toModelSpec(modelId, providerId, modelConfig, providerConfig))
       }
     }
   }

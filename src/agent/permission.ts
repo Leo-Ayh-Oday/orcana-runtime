@@ -10,7 +10,7 @@
  *  for safe external use. Additional layers (sandbox, ML classifier) are P2 items.
  */
 
-import type { ToolDescriptor } from "../tools/registry"
+import type { ToolDef } from "../tools/registry"
 import type { PermissionRule } from "./permission-config"
 import { matchFirstRule } from "./permission-config"
 import { FORBIDDEN_SECRET_PATH_PATTERN } from "../sandbox/forbidden-patterns"
@@ -47,7 +47,7 @@ function categoryLabel(cat: ToolCategory): string {
   }
 }
 
-export function inferToolCategory(toolName: string, tool?: ToolDescriptor): ToolCategory {
+export function inferToolCategory(toolName: string, tool?: { defn: ToolDef }): ToolCategory {
   if (tool?.defn.category) return tool.defn.category
   if (["read_file", "find_symbol", "find_references", "project_structure", "lsp_diagnostics", "lsp_hover", "lsp_definition", "lsp_references", "typescript_no_emit"].includes(toolName)) return "safe"
   if (["write_file", "edit_file", "multi_edit", "edit_fim", "rollback_transaction"].includes(toolName)) return "file"
@@ -151,7 +151,7 @@ export class PermissionGate {
    *  @param opts.riskLevel — If provided and >= 4, session allow overrides
    *    (step 5) are ignored. Risk 4-5 tools require per-invocation confirmation.
    */
-  check(toolName: string, params: Record<string, unknown>, tool?: ToolDescriptor, opts?: { riskLevel?: number }): PermissionResult {
+  check(toolName: string, params: Record<string, unknown>, tool?: { defn: ToolDef }, opts?: { riskLevel?: number }): PermissionResult {
     // 1. Global deny rules (highest priority — physics)
     for (const rule of GLOBAL_DENY_RULES) {
       if (rule.toolName !== toolName) continue

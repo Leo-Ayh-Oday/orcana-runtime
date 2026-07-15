@@ -2,7 +2,7 @@
 
 Updated: 2026-07-15
 
-Snapshot: `fix/provider-runtime-hardening` through `b3efd0f` (local, unreleased). Published npm remains `0.3.4`.
+Snapshot: `codex/tool-contract-foundation` (local, unreleased implementation slice). Published npm remains `0.3.4`.
 
 This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is intentionally conservative: a module is `Done` only when the code, tests, and runtime wiring are present.
 
@@ -12,14 +12,14 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 |------|--------|------------------|-----|
 | Runtime bootstrap | Done | `src/runtime/bootstrap.ts`, shared CLI/TUI runtime assembly | Keep future UI entrypoints on this path |
 | Runtime event boundary | Partial | `src/runtime/event-bus.ts`, `src/runtime/controller.ts`, `src/runtime/control-plane.ts`, `tests/runtime_event_bus.test.ts` | Slash parsing/resolution is shared; command execution still needs full CLI/TUI runtime controller wiring |
-| File state / Freshness | Partial | `src/file-state/*`, `tests/file_state.test.ts`, `tests/file_tools_file_state.test.ts`, `tests/runtime_file_state_context.test.ts` | File tools observe read/write baselines and concurrent agent runs have isolated ledgers/generations; freshness enforcement through ToolContract is still pending |
+| File state / Freshness | Partial | `src/file-state/*`, `src/tools/tool-contract.ts`, `tests/file_state.test.ts`, `tests/file_tools_file_state.test.ts`, `tests/tool_contract.test.ts` | ToolContract now declares the built-in freshness requirements; enforcing stale/partial/truncated baselines remains the next slice |
 | HookSystem 2.0 | Done | `src/hooks/index.ts` accumulates warnings, chains replacements, fail-closes handler exceptions, and supports lifecycle events | Keep future hook events on this shared implementation |
 | Default hooks | Done | `src/hooks/defaults.ts` creates safety, side-effect, write, and journal hook stack; unread existing-file edits strict-block by default | Keep future runtime safety policies on the default hook stack |
 | TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts`, `tests/task_packet.test.ts` | Zod adapter is intentionally deferred while the project has no Zod dependency; keep future packet changes on the validated schema path |
 | ModeContract | Done | `src/agent/mode-contract.ts`, `src/agent/runtime-context.ts`, `src/agent/loop.ts`, `tests/mode_contract.test.ts`, `tests/runtime_agent_context.test.ts` | Active mode and adjacent runtime state are isolated per concurrent agent run; keep future mode changes routed through shared transition context |
 | Completion / Evidence | Partial | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts`, `src/agent/evidence-staleness.test.ts`, `tests/completion_orchestrator.test.ts` | Latest-result and write-generation freshness are enforced; transaction binding and finer-grained invalidation remain incomplete |
 | PatchTransaction / Rewind | Partial | `src/agent/patch-transaction.ts`, `src/agent/rewind.ts`, related tests | Rewind UX and transaction evidence binding need hardening |
-| Tool risk / Permission | Partial | `src/agent/tool-risk.ts`, `src/agent/permission.ts`, `tests/tool_policy.test.ts` | Permission UX is not yet complete for all high-risk flows |
+| Tool contract / Risk / Permission | Partial | `src/tools/tool-contract.ts`, `src/tools/builtins.ts`, `src/agent/tool-risk.ts`, `src/agent/permission.ts`, `tests/tool_contract.test.ts`, `tests/tool_policy.test.ts` | The immutable ToolDef-derived projection is present; policy and freshness consumers have not yet migrated to it, and permission UX remains incomplete |
 | Provider / ModelRouter | Partial | `src/provider/router.ts`, `src/provider/capabilities.ts`, `src/provider/stream-lifecycle.ts`, runtime model config and provider tests | Built-in metadata now derives from the config catalog and provider aborts close safely; complete purpose/cost trace coverage is still pending |
 | Replay harness | Partial | `src/agent/replay-harness.ts`, `tests/replay_harness.test.ts`, 70 deterministic replay fixtures, CI core gate | E2E replay and mini benchmark are not complete |
 | TUI / CLI operator UX | Partial | TUI tests, command dispatcher, command shelf, composer, runtime panels | Plan approval and evidence report UX still need completion checks |
@@ -33,12 +33,13 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-0.1 Status Matrix | Done | This document is the baseline status matrix. |
 | PR-0.2 Baseline CI | Done | CI is split into `typecheck`, `core`, `test`, and `build`; `test:core` runs hook/runtime plus 70-case replay gates. |
 | PR-0.3 Runtime control boundary | Done | Runtime control-plane parsing/resolution is shared by controller, TUI dispatcher, and CLI command registry; unknown slash commands pass to the agent and unsafe local commands are blocked while running. |
+| SS-Next-1A Canonical ToolContract projection | Done | `buildTool()` derives one immutable, handler-free contract from each existing `ToolDef`; the frozen 24-tool catalog has full-contract fingerprints, MCP provenance defaults conservatively, and runtime order/behavior remain unchanged. This slice is descriptive only. |
 | Harness PR-2.1 FileState/Freshness core | Done | `FileStateLedger`, file fingerprinting, and `validateFreshnessForEdit()` cover fresh/full/partial/truncated/deleted/create cases without touching TUI. |
 | Harness PR-2.2 FileState tool observation | Done | `read_file` records full/partial/truncated baselines; `write_file`, `edit_file`, `multi_edit`, and `edit_fim` record fresh agent-write baselines after successful disk commits. |
 | Harness PR-2.3 FileState runtime isolation | Done | `agentLoop` binds its async generator lifecycle to a per-run file-state context; concurrent runs no longer share ledgers or write generations, while direct tool calls retain compatibility fallback state. |
 | Runtime active-state isolation | Done | A neutral async runtime context isolates ModeContract, shell sandbox, patch context, context-budget mode, cascade files, and checkpoint scheduling; early iterator close disposes the run sandbox through a single `finally` cleanup path. |
 | Runtime cancellation | Done | Run-level abort reaches providers and tools; pre-aborted runs skip work, legacy Promise/stream tools cannot retain the loop, shell abort kills its process tree, TUI cleanup actively aborts, and Stop hooks receive one terminal reason. Third-party tools should cooperatively consume `ToolExecutionContext.abortSignal` to release their own resources. |
-| Harness PR-2.x FileState/Freshness enforcement | Partial | Observation is present; next slice should enforce stale/partial/truncated baselines through ToolContract/FreshnessGate instead of changing tool behavior ad hoc. |
+| Harness PR-2.x FileState/Freshness enforcement | Partial | Observation and canonical contract requirements are present; the next slice should enforce stale/partial/truncated baselines through a shared FreshnessGate instead of changing tool behavior ad hoc. |
 | PR-1.1 HookOutput semantics | Done | `HookSystem` supports warning accumulation, block/replace priority, chained Pre/Post replacements, fail-closed handler exceptions, and dedicated regressions. |
 | PR-1.2 writeGuard before/after | Done | Default runtime hook stack strict-blocks unread existing-file edits and `multi_edit`; warn mode remains available as an explicit compatibility option. |
 | PR-1.3 CLI/TUI default hooks | Done | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Future CLI/TUI entrypoints should keep using runtime bootstrap instead of manual hook assembly. |
@@ -79,5 +80,5 @@ bun test tests/agent_loop.test.ts -t "non-retryable provider stream failure bloc
 
 - Multi-agent/T3R split: Strong Single v1.0 must stabilize single-agent runtime first.
 - SkillForge or plugin marketplace: defer until ToolPolicy, Evidence, Replay, and sandbox behavior are hard-gated.
-- Full ToolContractRegistry: do after default hooks and writeGuard block semantics are stable.
+- Separate ToolContractRegistry: do not add one; future consumers should use the immutable projection derived from the existing `ToolDef` catalog.
 - Replacing the existing TUI track: current work should reuse the TUI command/composer/runtime-panel surface already in the codebase.

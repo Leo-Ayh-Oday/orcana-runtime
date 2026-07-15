@@ -2,6 +2,10 @@
 
 import type { ToolCategory, PermissionLevel } from "../agent/permission"
 
+export interface ToolExecutionContext {
+  abortSignal?: AbortSignal
+}
+
 export interface ToolDef {
   name: string
   description: string
@@ -15,9 +19,16 @@ export interface ToolDef {
   permission?: PermissionLevel
   inputSchema: Record<string, unknown>
   validate?: (params: Record<string, unknown>) => { ok: boolean; message?: string }
-  execute: (params: Record<string, unknown>, onProgress?: (chunk: string) => void) => Promise<ToolResult> | ToolResult
+  execute: (
+    params: Record<string, unknown>,
+    onProgress?: (chunk: string) => void,
+    context?: ToolExecutionContext,
+  ) => Promise<ToolResult> | ToolResult
   /** Optional: streaming variant that yields chunks during execution */
-  executeStream?: (params: Record<string, unknown>) => AsyncGenerator<{ type: "progress"; data: string } | { type: "done"; data: ToolResult }>
+  executeStream?: (
+    params: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ) => AsyncGenerator<{ type: "progress"; data: string } | { type: "done"; data: ToolResult }>
 }
 
 export type ToolResult =
@@ -38,7 +49,7 @@ export const Result = {
 
 export interface ToolDescriptor {
   defn: ToolDef
-  execute: (params: Record<string, unknown>) => Promise<ToolResult>
+  execute: (params: Record<string, unknown>, context?: ToolExecutionContext) => Promise<ToolResult>
   executeStream?: ToolDef["executeStream"]
   toAnthropicSchema: () => Record<string, unknown>
 }
@@ -69,7 +80,7 @@ function shouldRequireConfirmation(defn: ToolDef): boolean {
 }
 
 export function buildTool(defn: ToolDef): ToolDescriptor {
-  const execute = async (params: Record<string, unknown>): Promise<ToolResult> => {
+  const execute = async (params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> => {
     if (defn.validate) {
       const vr = defn.validate(params)
       if (!vr.ok) return Result.blocked(vr.message ?? "invalid input")
@@ -78,7 +89,7 @@ export function buildTool(defn: ToolDef): ToolDescriptor {
       return Result.blocked(`${defn.userFacingName ?? defn.name} requires confirmation — set confirm: true`)
     }
     try {
-      const result = await defn.execute(params)
+      const result = await defn.execute(params, undefined, context)
       return result
     } catch (e) {
       return Result.fail(e instanceof Error ? e.message : String(e))

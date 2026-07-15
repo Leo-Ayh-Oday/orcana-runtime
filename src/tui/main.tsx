@@ -255,6 +255,7 @@ function useAgentStream(
     const historySnapshot = historyRef.current.slice()
 
     let cancelled = false
+    const runAbort = new AbortController()
     let textBuf = ""
     let assistantText = ""
     let lastFlush = 0
@@ -284,6 +285,7 @@ function useAgentStream(
         tools: runtime.tools,
         thinkEffort: thinkEffort === "auto" ? undefined : thinkEffort,
         conversationHistory: historySnapshot,
+        abortSignal: runAbort.signal,
         gateTelemetryFile: ".wolf/gate-telemetry.json",
         runTrace: runtime.startRunTrace(p),
       })
@@ -294,7 +296,10 @@ function useAgentStream(
       store.dispatch({ type: "ui.done", done: true })
       store.dispatch({ type: "ui.status", text: "error" })
       finishRun()
-      return () => { cancelled = true }
+      return () => {
+        cancelled = true
+        runAbort.abort("agent setup cancelled")
+      }
     }
 
     const flush = () => {
@@ -395,7 +400,10 @@ function useAgentStream(
       finishRun()
     })
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      runAbort.abort("agent run cancelled")
+    }
   }, [runtime, store, adapter, thinkEffort])
 
   const setThinkEffort = useCallback((value: ThinkEffort) => {

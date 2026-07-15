@@ -14,12 +14,7 @@ import type { StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
 import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs } from "./retry"
-
-interface ClosableAsyncIterable extends AsyncIterable<unknown> {
-  controller?: { abort?: () => void }
-  abort?: () => void
-  return?: () => Promise<unknown>
-}
+import { bindProviderAbort, type ClosableAsyncIterable } from "./stream-lifecycle"
 
 interface AnthropicLikeClient {
   messages: { stream(params: Anthropic.MessageCreateParams): AsyncIterable<unknown> }
@@ -104,11 +99,12 @@ export class AnthropicProvider implements LLMProvider {
     let toolCallError = ""
 
     const stream = this.client.messages.stream(params) as ClosableAsyncIterable
-    const abortStream = () => closeProviderStream(stream)
-    options.abortSignal?.addEventListener("abort", abortStream, { once: true })
+    const abortBinding = bindProviderAbort(stream, options.abortSignal)
 
     try {
       for await (const event of stream) {
+        if (abortBinding.isAborted()) break
+
         const providerUsage = extractProviderTokenUsage(event)
         if (providerUsage) {
           yield {
@@ -203,10 +199,16 @@ export class AnthropicProvider implements LLMProvider {
           }
         }
       }
+    } catch (error) {
+      if (!abortBinding.isAborted()) throw error
     } finally {
-      options.abortSignal?.removeEventListener("abort", abortStream)
+      abortBinding.dispose()
     }
 
+    if (abortBinding.isAborted() && !stopReason) {
+      yield { type: "status", data: "provider-stream: aborted by local budget guard" }
+      return
+    }
     if (!stopReason) {
       yield { type: "error", data: "provider stream ended unexpectedly without stop_reason" }
       return
@@ -247,10 +249,4 @@ const NORMAL_STOP_REASONS = new Set(["end_turn", "stop_sequence", "tool_use"])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
-}
-
-function closeProviderStream(stream: ClosableAsyncIterable): void {
-  try { stream.controller?.abort?.() } catch { /* best effort */ }
-  try { stream.abort?.() } catch { /* best effort */ }
-  try { void stream.return?.() } catch { /* best effort */ }
 }

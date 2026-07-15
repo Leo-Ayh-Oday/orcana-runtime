@@ -135,6 +135,7 @@ export class MCPClientV2 {
           description: `[MCP:${serverName}] ${(t.description as string) ?? ""}`.slice(0, 300),
           isReadonly: true,
           isConcurrencySafe: true,
+          contract: { provenance: "mcp" },
           inputSchema: (t.inputSchema ?? t.input_schema ?? { type: "object", properties: {} }) as Record<string, unknown>,
           execute: async (params: Record<string, unknown>): Promise<ToolResult> => {
             try {

@@ -100,6 +100,7 @@ export async function bootstrapMCP(
           isReadonly: true,
           isConcurrencySafe: true,
           category: "safe",
+          contract: { provenance: "mcp" },
           inputSchema: (mt.inputSchema ?? mt.input_schema ?? { type: "object", properties: {} }) as Record<string, unknown>,
           execute: async (params: Record<string, unknown>): Promise<ToolResult> => {
             try {

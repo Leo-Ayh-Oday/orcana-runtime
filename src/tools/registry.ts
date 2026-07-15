@@ -1,6 +1,7 @@
 /** Tool system — single factory, zero external deps. Port from Python tool_system.py. */
 
 import type { ToolCategory, PermissionLevel } from "../agent/permission"
+import { projectToolContract, type ToolContract, type ToolContractMetadata } from "./tool-contract"
 
 export interface ToolExecutionContext {
   abortSignal?: AbortSignal
@@ -17,6 +18,8 @@ export interface ToolDef {
   category?: ToolCategory
   /** Override default permission level for this tool */
   permission?: PermissionLevel
+  /** Declarative metadata used by the canonical, handler-free ToolContract projection. */
+  contract?: ToolContractMetadata
   inputSchema: Record<string, unknown>
   validate?: (params: Record<string, unknown>) => { ok: boolean; message?: string }
   execute: (
@@ -49,6 +52,8 @@ export const Result = {
 
 export interface ToolDescriptor {
   defn: ToolDef
+  /** Present on descriptors created by buildTool/buildTools. Optional for legacy structural mocks. */
+  readonly contract?: ToolContract
   execute: (params: Record<string, unknown>, context?: ToolExecutionContext) => Promise<ToolResult>
   executeStream?: ToolDef["executeStream"]
   toAnthropicSchema: () => Record<string, unknown>
@@ -79,7 +84,10 @@ function shouldRequireConfirmation(defn: ToolDef): boolean {
   return true
 }
 
-export function buildTool(defn: ToolDef): ToolDescriptor {
+export type ContractToolDescriptor = ToolDescriptor & { readonly contract: ToolContract }
+
+export function buildTool(defn: ToolDef): ContractToolDescriptor {
+  const contract = projectToolContract(defn)
   const execute = async (params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> => {
     if (defn.validate) {
       const vr = defn.validate(params)
@@ -116,9 +124,12 @@ export function buildTool(defn: ToolDef): ToolDescriptor {
     }
   }
 
-  return { defn, execute, executeStream: defn.executeStream, toAnthropicSchema }
+  return { defn, contract, execute, executeStream: defn.executeStream, toAnthropicSchema }
 }
 
-export function buildTools(...defs: ToolDef[]): ToolDescriptor[] {
+export function buildTools(...defs: ToolDef[]): ContractToolDescriptor[] {
   return defs.map(buildTool)
 }
+
+export type { ToolContract, ToolContractMetadata } from "./tool-contract"
+export { projectToolContract } from "./tool-contract"

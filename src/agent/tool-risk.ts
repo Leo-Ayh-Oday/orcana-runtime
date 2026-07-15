@@ -18,7 +18,7 @@
  *   override is ignored for these tools.
  */
 
-import type { ToolDescriptor } from "../tools/registry"
+import type { ToolDef } from "../tools/registry"
 import type { ToolCategory } from "./permission"
 import { redactForToolOutput } from "./secret-redactor"
 import { isForbiddenSecretPath } from "../sandbox/forbidden-patterns"
@@ -152,7 +152,7 @@ const CATEGORY_DEFAULT_RISK: Record<ToolCategory, RiskProfile> = {
 export function getToolRisk(
   toolName: string,
   params: Record<string, unknown>,
-  tool?: ToolDescriptor,
+  tool?: { defn: ToolDef },
 ): RiskProfile {
   const targetPath = params.path ?? params.file_path
   if (toolName === "write_file" && typeof targetPath === "string" && isForbiddenSecretPath(targetPath)) {
@@ -212,6 +212,13 @@ export function getToolRisk(
  */
 export function canAutoAllow(risk: RiskProfile): boolean {
   return risk.sessionAllowable
+}
+
+/** True when invocation parameters can elevate the tool above its base risk. */
+export function isToolRiskInvocationSensitive(toolName: string): boolean {
+  return toolName === "write_file"
+    || toolName === "start_service"
+    || RISK_5_PARAM_PATTERNS.some(rule => rule.toolName === toolName)
 }
 
 function summarizeRiskParams(params: Record<string, unknown>): Record<string, unknown> {

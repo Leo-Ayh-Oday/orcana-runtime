@@ -139,6 +139,10 @@ export const START_SERVICE_TOOL: ToolDef = {
   category: "shell" as const,
   requiresConfirmation: true,
   userFacingName: "Start service",
+  contract: {
+    sideEffects: ["shell", "external_process", "network"],
+    stateUpdates: ["runtime_state"],
+  },
   inputSchema: {
     type: "object",
     properties: {

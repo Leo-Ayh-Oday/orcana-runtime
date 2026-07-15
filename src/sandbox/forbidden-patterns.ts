@@ -25,6 +25,17 @@ export const FORBIDDEN_SECRET_FILES = [
   /secret\.ya?ml$/i,        // Kubernetes secret manifests
 ]
 
+/** RegExp form for policy layers. Derived from the canonical list so fast-fail
+ * gates cannot drift from transaction enforcement. */
+export const FORBIDDEN_SECRET_PATH_PATTERN = new RegExp(
+  FORBIDDEN_SECRET_FILES.map(pattern => `(?:${pattern.source})`).join("|"),
+  "i",
+)
+
+export function isForbiddenSecretPath(filePath: string): boolean {
+  return FORBIDDEN_SECRET_PATH_PATTERN.test(filePath.replace(/\\/g, "/"))
+}
+
 // ── Runtime / internal directories ──
 
 /** Directories that belong to the agent or package ecosystem —

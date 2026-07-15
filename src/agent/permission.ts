@@ -13,6 +13,7 @@
 import type { ToolDescriptor } from "../tools/registry"
 import type { PermissionRule } from "./permission-config"
 import { matchFirstRule } from "./permission-config"
+import { FORBIDDEN_SECRET_PATH_PATTERN } from "../sandbox/forbidden-patterns"
 
 // ── Types ──
 
@@ -81,8 +82,12 @@ const GLOBAL_DENY_RULES: DenyRule[] = [
   },
   {
     toolName: "write_file",
-    paramKey: "file_path",
-    paramPattern: /\.env$|\.env\.local$|credentials\.json$|\.pem$/i,
+    // write_file 的参数键是 `path`（见 tools/file.ts write_file 与其 inputSchema），
+    // 早前误写成 `file_path` 导致此 deny 规则永不匹配（死规则）。改回 `path` 恢复
+    // 权限层的第一道拦截。注：真正的强制拦截在 transaction 层 checkForbiddenFile
+    // (patch-transaction.ts) 引用的 canonical FORBIDDEN_SECRET_FILES，此处为快速失败层。
+    paramKey: "path",
+    paramPattern: FORBIDDEN_SECRET_PATH_PATTERN,
     reason: "禁止覆盖敏感配置文件（.env / credentials / .pem）",
   },
 ]

@@ -37,6 +37,34 @@ describe("DeepSeekProvider stop_reason handling", () => {
     expect(events.some(ev => ev.type === "done")).toBe(false)
   })
 
+  test("reports a local abort without misclassifying it as a missing stop_reason", async () => {
+    const controller = new AbortController()
+    const provider = new DeepSeekProvider("test-key", {
+      client: fakeClient([
+        { type: "content_block_delta", delta: { type: "text_delta", text: "partial answer" } },
+      ]),
+      maxRetries: 0,
+    })
+    const events = []
+
+    for await (const event of provider.streamChat({
+      model: "deepseek-v4-flash",
+      purpose: "agent_main",
+      system: "system",
+      messages: [{ role: "user", content: "hello" }],
+      tools: [],
+      maxTokens: 1024,
+      abortSignal: controller.signal,
+    })) {
+      events.push(event)
+      if (event.type === "text") controller.abort()
+    }
+
+    expect(events.some(event => event.type === "status" && String(event.data).includes("aborted"))).toBe(true)
+    expect(events.some(event => event.type === "error" && String(event.data).includes("without stop_reason"))).toBe(false)
+    expect(events.some(event => event.type === "done")).toBe(false)
+  })
+
   test("emits a recoverable error when the provider stops at max_tokens", async () => {
     const events = await collect([
       { type: "content_block_delta", delta: { type: "text_delta", text: "partial table" } },

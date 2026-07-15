@@ -23,6 +23,36 @@ describe("AnthropicProvider stop reason handling", () => {
     expect(events.some(event => event.type === "done")).toBe(false)
   })
 
+  test("reports a local abort without misclassifying it as a missing stop_reason", async () => {
+    const controller = new AbortController()
+    const provider = new AnthropicProvider("test", {
+      maxRetries: 0,
+      client: {
+        messages: {
+          async *stream() {
+            yield { type: "content_block_delta", delta: { type: "text_delta", text: "partial" } }
+          },
+        },
+      },
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "claude-test",
+      system: "",
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 10,
+      abortSignal: controller.signal,
+    })) {
+      events.push(event)
+      if (event.type === "text") controller.abort()
+    }
+
+    expect(events.some(event => event.type === "status" && String(event.data).includes("aborted"))).toBe(true)
+    expect(events.some(event => event.type === "error" && String(event.data).includes("without stop_reason"))).toBe(false)
+    expect(events.some(event => event.type === "done")).toBe(false)
+  })
+
   test("does not report a max-token response as normal completion", async () => {
     const provider = new AnthropicProvider("test", {
       maxRetries: 0,

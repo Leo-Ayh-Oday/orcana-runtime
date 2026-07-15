@@ -1293,7 +1293,18 @@ describe("Agent loop greedy tool execution", () => {
         isReadonly: false,
         inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
         execute(params) {
-          return Result.ok(`edited ${String(params.path)}`, { path: String(params.path) })
+          return Result.ok(`edited ${String(params.path)}`, {
+            path: String(params.path),
+            verification: {
+              kind: "typecheck",
+              command: "typecheck",
+              passed: true,
+              issues: 0,
+              durationMs: 1,
+              summary: "ok",
+              exitCode: 0,
+            },
+          })
         },
       },
       {

@@ -72,7 +72,7 @@ import { createPreRoundChain } from "./gates/pre-round"
 import { processGateOverflow } from "./gates/overflow"
 import { createEpochState, buildPlanStateContext, classifyEpochAction, epochThresholdsForContext, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
 import { clearActivePatchContext, setActivePatchContext } from "./patch-transaction"
-import { createEvidenceLedger, type EvidenceLedger } from "./evidence-ledger"
+import { createEvidenceLedger, ingestVerificationResults, type EvidenceLedger } from "./evidence-ledger"
 import {
   createRuntimeFileStateContext,
   getWriteGeneration,
@@ -1511,6 +1511,10 @@ async function* runAgentLoop(
       resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(resultContent, 4000) })
     }
 
+    // Completion gates run before TaskTracker updates later in the round, so bind
+    // structured verification to the canonical ledger as soon as tool execution ends.
+    ingestVerificationResults(evidenceLedger, verificationResultsThisRound, undefined, getWriteGeneration())
+
     // ── Microcompact: forward pass — compact fresh tool results before they enter history ──
     // PR 4: use epoch compress threshold in addition to legacy heuristics
     const shouldMicrocompact = preRoundCtx.contextBudgetPercent >= 35
@@ -1702,7 +1706,6 @@ async function* runAgentLoop(
       verificationPassed: verificationPassedThisRound,
       verificationResults: verificationResultsThisRound,
       skipLegacyStepIds: !!masterPlan,
-      evidenceLedger,
     })
     if (taskTracker) {
       const status = formatTaskTrackerStatus(taskTracker)

@@ -6,6 +6,7 @@ import { fingerprintContent, type FileFingerprint } from "./file-fingerprint"
 export interface RuntimeFileStateContext {
   ledger: FileStateLedger
   writeGeneration: number
+  unmanagedWriteObserved: boolean
 }
 
 const runtimeFileStateStorage = new AsyncLocalStorage<RuntimeFileStateContext>()
@@ -13,7 +14,7 @@ const runtimeFileStateStorage = new AsyncLocalStorage<RuntimeFileStateContext>()
 export function createRuntimeFileStateContext(
   ledger = new FileStateLedger(),
 ): RuntimeFileStateContext {
-  return { ledger, writeGeneration: 0 }
+  return { ledger, writeGeneration: 0, unmanagedWriteObserved: false }
 }
 
 let fallbackRuntimeFileState = createRuntimeFileStateContext()
@@ -30,6 +31,11 @@ export function getWriteGeneration(): number {
   return getRuntimeFileStateContext().writeGeneration
 }
 
+/** True once this run observes a write that did not advance PatchTransaction history. */
+export function hasRuntimeUnmanagedWrites(): boolean {
+  return getRuntimeFileStateContext().unmanagedWriteObserved
+}
+
 export function runWithRuntimeFileStateContext<T>(
   context: RuntimeFileStateContext,
   callback: () => T,
@@ -42,8 +48,15 @@ export function runWithRuntimeFileStateContext<T>(
  * callers only need freshness invalidation, not a per-file counter. */
 export function recordRuntimeObservedWrites(paths: string[]): number {
   const changed = new Set(paths.map(path => resolve(path)))
+  if (changed.size === 0) return getRuntimeFileStateContext().writeGeneration
+  return recordRuntimeUnmanagedWrite()
+}
+
+/** Mark one unmanaged write transition even when the changed paths are unknown. */
+export function recordRuntimeUnmanagedWrite(): number {
   const context = getRuntimeFileStateContext()
-  if (changed.size > 0) context.writeGeneration++
+  context.writeGeneration++
+  context.unmanagedWriteObserved = true
   return context.writeGeneration
 }
 
@@ -56,6 +69,7 @@ export function resetRuntimeFileStateLedger(ledger = new FileStateLedger()): Fil
   if (activeContext) {
     activeContext.ledger = ledger
     activeContext.writeGeneration = 0
+    activeContext.unmanagedWriteObserved = false
     return activeContext.ledger
   }
 

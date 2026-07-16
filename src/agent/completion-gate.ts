@@ -1,5 +1,5 @@
 import { getBlockingObligations, type RippleObligation } from "../ripple/obligations"
-import type { VerificationResult } from "../verification/result"
+import type { TransactionEvidenceBinding, VerificationResult } from "../verification/result"
 import type { TaskTracker } from "./task-tracker"
 import type { UILanguage } from "./language"
 import type { EvidenceLedger } from "./evidence-ledger"
@@ -19,6 +19,7 @@ export interface CompletionGateInput {
   evidenceLedger?: EvidenceLedger
   /** Runtime write-generation used to reject evidence collected for older code. */
   currentGeneration?: number
+  evidenceBinding?: TransactionEvidenceBinding
 }
 
 export interface CompletionGateReport {
@@ -97,6 +98,8 @@ export function evaluateCompletionGate(input: CompletionGateInput): CompletionGa
     finalText: input.finalText,
     evidenceLedger: input.evidenceLedger,
     currentGeneration: input.currentGeneration,
+    evidenceBinding: input.evidenceBinding,
+    requireEvidenceBinding: input.taskHadWrite || (input.currentGeneration ?? 0) > 0,
   })
   if (!modeExitResult.met) {
     for (const unmet of modeExitResult.unmet) {

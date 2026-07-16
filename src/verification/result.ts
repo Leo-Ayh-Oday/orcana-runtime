@@ -1,5 +1,14 @@
 export type VerificationKind = "typecheck" | "test" | "build" | "lint" | "smoke" | "unknown"
 
+/** Constant-size identity of the run's committed PatchTransaction history when verification ran. */
+export interface TransactionEvidenceBinding {
+  /** 128-bit rolling SHA-256 state identifier derived from authoritative commit IDs. */
+  stateId: string
+  transactionCount: number
+  /** Retained for diagnostics without weakening hard-gate state matching. */
+  latestTransactionId: string
+}
+
 export interface VerificationResult {
   kind: VerificationKind
   command: string
@@ -9,15 +18,138 @@ export interface VerificationResult {
   durationMs: number
   summary: string
   generation?: number
+  transaction?: TransactionEvidenceBinding
+}
+
+const VERIFICATION_KINDS = new Set<VerificationKind>(["typecheck", "test", "build", "lint", "smoke", "unknown"])
+const NON_EXECUTING_VERIFIER_ARGS = new Set([
+  "--help",
+  "-h",
+  "--version",
+  "--showconfig",
+  "--init",
+  "--print-config",
+  "--listtests",
+  "--list-tests",
+  "--list",
+  "--listfilesonly",
+  "--collect-only",
+  "--no-run",
+  "--if-present",
+])
+
+/** Parse untrusted tool metadata into the core verification shape; runtime stamps are never accepted here. */
+export function parseVerificationResult(value: unknown): VerificationResult | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const candidate = value as Record<string, unknown>
+  if (
+    typeof candidate.kind !== "string"
+    || !VERIFICATION_KINDS.has(candidate.kind as VerificationKind)
+    || typeof candidate.command !== "string"
+    || candidate.command.trim().length === 0
+    || typeof candidate.passed !== "boolean"
+    || typeof candidate.issues !== "number"
+    || !Number.isInteger(candidate.issues)
+    || candidate.issues < 0
+    || typeof candidate.durationMs !== "number"
+    || !Number.isFinite(candidate.durationMs)
+    || candidate.durationMs < 0
+    || typeof candidate.summary !== "string"
+    || (candidate.exitCode !== undefined && (typeof candidate.exitCode !== "number" || !Number.isInteger(candidate.exitCode)))
+  ) {
+    return undefined
+  }
+
+  const result: VerificationResult = {
+    kind: candidate.kind as VerificationKind,
+    command: candidate.command,
+    passed: candidate.passed,
+    issues: candidate.issues,
+    durationMs: candidate.durationMs,
+    summary: candidate.summary,
+  }
+  if (typeof candidate.exitCode === "number") result.exitCode = candidate.exitCode
+  return result
+}
+
+function executableAndArgs(segment: string): { executable: string; args: string[] } | undefined {
+  const normalized = segment.trim().replace(/^&\s+/, "")
+  const match = normalized.match(/^(?:"([^"]+)"|'([^']+)'|([^\s]+))(?:\s+([\s\S]*))?$/)
+  if (!match) return undefined
+  const rawExecutable = match[1] ?? match[2] ?? match[3] ?? ""
+  const executable = rawExecutable
+    .split(/[\\/]/)
+    .pop()!
+    .toLowerCase()
+    .replace(/\.(?:cmd|exe|ps1)$/, "")
+  const args = (match[4] ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(arg => arg.replace(/^['"]|['"]$/g, "").toLowerCase())
+  return { executable, args }
+}
+
+function scriptVerificationKind(script: string | undefined): VerificationKind {
+  if (!script) return "unknown"
+  if (/^(?:typecheck|check:types|types)(?::|$)/.test(script)) return "typecheck"
+  if (/^lint(?::|$)/.test(script)) return "lint"
+  if (/^test(?::|$)/.test(script)) return "test"
+  if (/^build(?::|$)/.test(script)) return "build"
+  return "unknown"
+}
+
+function isNonExecutingVerifierInvocation(executable: string, args: string[]): boolean {
+  const normalizedArgs = args.map(arg => arg.split("=", 1)[0]!)
+  if (normalizedArgs.some(arg => NON_EXECUTING_VERIFIER_ARGS.has(arg))) return true
+  if (executable === "tsc" && normalizedArgs.includes("-v")) return true
+  if (executable === "pytest" && normalizedArgs.includes("--co")) return true
+  if (executable === "go" && args[0] === "test" && normalizedArgs.includes("-list")) return true
+  return false
+}
+
+function detectVerificationSegment(segment: string): VerificationKind {
+  const parsed = executableAndArgs(segment)
+  if (!parsed) return "unknown"
+  const { executable, args } = parsed
+  if (isNonExecutingVerifierInvocation(executable, args)) return "unknown"
+
+  if (["bun", "npm", "pnpm", "yarn"].includes(executable)) {
+    if (executable === "bun" && args[0] === "test") return "test"
+    if (["npm", "pnpm", "yarn"].includes(executable) && args[0] === "test") return "test"
+    if (args[0] === "run") return scriptVerificationKind(args[1])
+    if (["exec", "x", "dlx"].includes(args[0] ?? "")) {
+      return detectVerificationSegment(args.slice(1).join(" "))
+    }
+    return scriptVerificationKind(args[0])
+  }
+
+  if (["bunx", "npx"].includes(executable)) {
+    return detectVerificationSegment(args.join(" "))
+  }
+
+  if (executable === "tsc") return "typecheck"
+  if (executable === "eslint") return "lint"
+  if (["vitest", "jest", "pytest"].includes(executable)) return "test"
+  if (executable === "cargo" && args[0] === "test") return "test"
+  if (executable === "go" && args[0] === "test") return "test"
+  if (["vite", "next"].includes(executable) && args[0] === "build") return "build"
+  if (["tsup", "rollup"].includes(executable)) return "build"
+  if (["curl", "wget", "invoke-webrequest"].includes(executable)) {
+    const target = args.join(" ")
+    if (/\blocalhost\b|127\.0\.0\.1/.test(target)) return "smoke"
+  }
+  return "unknown"
 }
 
 export function detectVerificationKind(command: string): VerificationKind {
-  const normalized = command.toLowerCase()
-  if (/\b(?:eslint|lint)\b/.test(normalized)) return "lint"
-  if (/\b(?:tsc|typecheck)\b/.test(normalized)) return "typecheck"
-  if (/\b(?:test|vitest|jest|pytest|cargo test|go test|bun test|npm test)\b/.test(normalized)) return "test"
-  if (/\b(?:build|vite build|next build|tsup|rollup)\b/.test(normalized)) return "build"
-  if (/\b(?:curl|invoke-webrequest|wget)\b/.test(normalized) && /\blocalhost\b|127\.0\.0\.1/.test(normalized)) return "smoke"
+  // The shell adapter only observes the final exit code. Reject constructs that
+  // can mask a failed verifier (pipes, sequential commands, backgrounding).
+  if (/[;|\r\n]/.test(command) || /(^|[^&])&([^&]|$)/.test(command)) return "unknown"
+  for (const segment of command.split(/&&|\|\||[;\r\n]+/)) {
+    const kind = detectVerificationSegment(segment)
+    if (kind !== "unknown") return kind
+  }
   return "unknown"
 }
 

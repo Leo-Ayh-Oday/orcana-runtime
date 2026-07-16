@@ -260,6 +260,39 @@ describe("checkModeExitCriteria", () => {
     expect(result.unmet).toContain("类型检查通过")
   })
 
+  it("fails repair has_evidence when evidence binds to a different patch transaction", () => {
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "evi_wrong_transaction",
+      kind: "typecheck",
+      command: "tsc --noEmit",
+      output: "0 errors",
+      passed: true,
+      timestamp: Date.now(),
+      generation: 1,
+      transaction: {
+        stateId: "txstate_other",
+        transactionCount: 1,
+        latestTransactionId: "ptxn_other",
+      },
+    })
+
+    const result = checkModeExitCriteria(MODES.repair, {
+      toolErrors: 0,
+      finalText: "done",
+      evidenceLedger: ledger,
+      currentGeneration: 1,
+      evidenceBinding: {
+        stateId: "txstate_current",
+        transactionCount: 1,
+        latestTransactionId: "ptxn_current",
+      },
+    })
+
+    expect(result.met).toBe(false)
+    expect(result.unmet).toContain("类型检查通过")
+  })
+
   it("fails when typecheck evidence doesn't exist", () => {
     const ledger = createEvidenceLedger()
     addEvidence(ledger, {

@@ -1,7 +1,7 @@
 import { CODEGRAPH_TOOLS } from "./codegraph"
 import { FILE_TOOLS } from "./file"
 import { GIT_TOOLS } from "./git"
-import { LSP_TOOLS } from "./lsp"
+import { LSP_DIAGNOSTICS, LSP_TOOLS } from "./lsp"
 import { META_BUILTIN_TOOL_DEFS } from "./meta"
 import type { ToolDef } from "./registry"
 import { WEB_SEARCH } from "./search"
@@ -21,6 +21,25 @@ const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
   ...LSP_TOOLS,
   TYPECHECK_TOOL,
 ])
+
+const TRUSTED_VERIFICATION_PRODUCERS = new Map<ToolDef, {
+  execute: ToolDef["execute"]
+  executeStream: ToolDef["executeStream"]
+}>([
+  [SHELL_TOOL, { execute: SHELL_TOOL.execute, executeStream: SHELL_TOOL.executeStream }],
+  [TYPECHECK_TOOL, { execute: TYPECHECK_TOOL.execute, executeStream: TYPECHECK_TOOL.executeStream }],
+  [LSP_DIAGNOSTICS, { execute: LSP_DIAGNOSTICS.execute, executeStream: LSP_DIAGNOSTICS.executeStream }],
+])
+
+/** Fixed identity allowlist for runtime-owned verification producers. */
+export function isBuiltinVerificationProducer(defn: ToolDef): boolean {
+  const trusted = TRUSTED_VERIFICATION_PRODUCERS.get(defn)
+  return Boolean(
+    trusted
+    && trusted.execute === defn.execute
+    && trusted.executeStream === defn.executeStream,
+  )
+}
 
 /** Static built-ins in stable disclosure order. The array itself is immutable. */
 export const BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([

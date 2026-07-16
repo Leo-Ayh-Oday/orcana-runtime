@@ -84,6 +84,13 @@ export interface ToolDescriptor {
   toAnthropicSchema: () => Record<string, unknown>
 }
 
+const runtimeBuiltToolExecutors = new WeakMap<object, ToolDescriptor["execute"]>()
+
+/** True only for an untampered descriptor created by this runtime's buildTool(). */
+export function isRuntimeBuiltToolDescriptor(tool: ToolDescriptor): boolean {
+  return runtimeBuiltToolExecutors.get(tool) === tool.execute
+}
+
 /** True when running non-interactively — CLI one-shot mode, CI, tests. */
 export function isNonInteractive(): boolean {
   try {
@@ -191,7 +198,9 @@ export function buildTool(defn: ToolDef): ContractToolDescriptor {
     }
   }
 
-  return { defn, contract, execute, executeStream, toAnthropicSchema }
+  const descriptor: ContractToolDescriptor = { defn, contract, execute, executeStream, toAnthropicSchema }
+  runtimeBuiltToolExecutors.set(descriptor, execute)
+  return descriptor
 }
 
 export function buildTools(...defs: ToolDef[]): ContractToolDescriptor[] {

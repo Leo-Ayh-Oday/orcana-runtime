@@ -403,6 +403,7 @@ export const SHELL_TOOL: ToolDef = {
   requiresConfirmation: true,
   userFacingName: "Shell",
   contract: {
+    provenance: "local",
     sideEffects: ["shell", "external_process", "workspace_write"],
     stateUpdates: ["file_state", "evidence"],
     resultBudget: { maxChars: SHELL_RESULT_MAX_CHARS, overflow: "clip" },

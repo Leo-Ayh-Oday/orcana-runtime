@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { CompletionOrchestrator, checkNarrowEditCompletion } from "../src/agent/completion-orchestrator"
 import { createEvidenceLedger, addEvidence } from "../src/agent/evidence-ledger"
 import { FlashJudge, TestimonyLedger } from "../src/agent/flash-judge"
@@ -7,7 +7,11 @@ import { ConfidenceEvaluator } from "../src/evaluator/confidence"
 import type { CompletionOrchestratorInput } from "../src/agent/completion-orchestrator"
 import type { TaskTracker } from "../src/agent/task-tracker"
 import type { LLMProvider, StreamEvent } from "../src/provider/types"
-import { recordRuntimeFileWrite, resetRuntimeFileStateLedger } from "../src/file-state"
+import { getWriteGeneration, recordRuntimeFileWrite, recordRuntimeObservedWrites, resetRuntimeFileStateLedger } from "../src/file-state"
+
+afterEach(() => {
+  resetRuntimeFileStateLedger()
+})
 
 const quietProvider: LLMProvider = {
   async *streamChat(): AsyncGenerator<StreamEvent> {
@@ -80,6 +84,11 @@ describe("CompletionOrchestrator truthfulness gate", () => {
 
   test("allows implementation and verification claims when backed by runtime evidence", async () => {
     const ledger = createEvidenceLedger()
+    const evidenceBinding = {
+      stateId: "txstate_0123456789abcdef0123456789abcdef",
+      transactionCount: 1,
+      latestTransactionId: "ptxn_current",
+    }
     addEvidence(ledger, {
       id: "evi_typecheck",
       kind: "typecheck",
@@ -88,6 +97,7 @@ describe("CompletionOrchestrator truthfulness gate", () => {
       passed: true,
       timestamp: Date.now(),
       generation: 0,
+      transaction: evidenceBinding,
     })
 
     const result = await new CompletionOrchestrator().evaluate(input({
@@ -98,6 +108,7 @@ describe("CompletionOrchestrator truthfulness gate", () => {
       verificationResults: [{ kind: "typecheck", command: "typecheck", passed: true, issues: 0, durationMs: 1, summary: "ok" }],
       lastTypecheck: { passed: true, issues: 0 },
       evidenceLedger: ledger,
+      evidenceBinding,
     }))
 
     expect(result.decision).toBe("done")
@@ -125,6 +136,35 @@ describe("CompletionOrchestrator truthfulness gate", () => {
 
     expect(result.decision).toBe("break_blocked")
     expect(result.statusMessages).toContain("truthfulness-gate: blocked (1 contradictions)")
+  })
+
+  test("fails closed when an observed shell write has no PatchTransaction binding", async () => {
+    const ledger = createEvidenceLedger()
+    recordRuntimeObservedWrites(["src/shell-write.ts"])
+    addEvidence(ledger, {
+      id: "evi_shell_typecheck",
+      kind: "typecheck",
+      command: "bun run typecheck",
+      output: "ok",
+      passed: true,
+      timestamp: Date.now(),
+      generation: getWriteGeneration(),
+    })
+
+    const result = await new CompletionOrchestrator().evaluate(input({
+      finalText: "Typecheck passed.",
+      taskTracker: tracker(),
+      taskHadWrite: false,
+      verificationResults: [{
+        kind: "typecheck", command: "bun run typecheck", passed: true,
+        issues: 0, durationMs: 1, summary: "ok",
+      }],
+      lastTypecheck: { passed: true, issues: 0 },
+      evidenceLedger: ledger,
+    }))
+
+    expect(result.decision).toBe("break_blocked")
+    expect(result.statusMessages.some(message => message.includes("blocked"))).toBe(true)
   })
 })
 
@@ -176,6 +216,45 @@ describe("checkNarrowEditCompletion", () => {
     expect(result.evidenceStatus).toBe("evidence-gate: narrow_edit blocked (1 missing)")
     expect(result.evidencePrompt).not.toBeNull()
     expect(result.evidenceMissing).toHaveLength(1)
+  })
+
+  test("blocks current-generation evidence bound to a different transaction", () => {
+    resetRuntimeFileStateLedger()
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "evi_wrong_transaction",
+      kind: "typecheck",
+      command: "typecheck",
+      output: "ok",
+      passed: true,
+      timestamp: Date.now(),
+      generation: 0,
+      transaction: {
+        stateId: "txstate_other",
+        transactionCount: 1,
+        latestTransactionId: "ptxn_other",
+      },
+    })
+
+    const result = checkNarrowEditCompletion({
+      autoFinishOnVerifiedWrite: true,
+      intentMode: "narrow_edit",
+      hadTsWriteThisRound: true,
+      blockingObligations: 0,
+      lastTypecheckPassed: true,
+      missingNarrowFiles: [],
+      modifiedFilesThisRound: new Set(["src/current.ts"]),
+      taskTracker: null,
+      evidenceLedger: ledger,
+      evidenceBinding: {
+        stateId: "txstate_current",
+        transactionCount: 1,
+        latestTransactionId: "ptxn_current",
+      },
+    })
+
+    expect(result.completionText).toBeNull()
+    expect(result.evidenceMissing).toContain("缺少验证证据: 类型检查")
   })
 
   test("allows verified-write auto-complete when structured evidence is present", () => {

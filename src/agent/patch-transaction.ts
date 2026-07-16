@@ -19,10 +19,11 @@ import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync, mkdir
 import { dirname, join, relative, resolve } from "node:path"
 import { createHash, randomBytes } from "node:crypto"
 import { FORBIDDEN_SECRET_FILES } from "../sandbox/forbidden-patterns"
-import type { VerificationKind } from "../verification/result"
+import type { TransactionEvidenceBinding, VerificationKind } from "../verification/result"
 import type { FileTransaction, TransactionSnapshot } from "../tools/transaction"
 import { createTransaction, rollbackTransaction, rollbackTransactionPaths } from "../tools/transaction"
 import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { hasRuntimeUnmanagedWrites } from "../file-state/runtime-file-state"
 
 // ── PatchTransaction types ──
 
@@ -613,6 +614,41 @@ export interface ManagedPatchTransaction {
 // ── Transaction registry (module-level, cleared per session) ──
 
 const txRegistry = new Map<string, ManagedPatchTransaction>()
+const COMMITTED_TRANSACTION_EVIDENCE = Symbol("committed-transaction-evidence")
+
+interface CommittedTransactionEvidenceState {
+  stateId: string
+  transactionCount: number
+  latestTransactionId?: string
+}
+
+function emptyCommittedTransactionEvidenceState(): CommittedTransactionEvidenceState {
+  return { stateId: "txstate_empty", transactionCount: 0 }
+}
+
+function committedTransactionEvidenceState(): CommittedTransactionEvidenceState {
+  let state = getRuntimeContextValue<CommittedTransactionEvidenceState | undefined>(
+    COMMITTED_TRANSACTION_EVIDENCE,
+    undefined,
+  )
+  if (!state) {
+    state = emptyCommittedTransactionEvidenceState()
+    setRuntimeContextValue(COMMITTED_TRANSACTION_EVIDENCE, state)
+  }
+  return state
+}
+
+/** Snapshot the successful PatchTransaction commit history in this runtime context. */
+export function currentTransactionEvidenceBinding(): TransactionEvidenceBinding | undefined {
+  if (hasRuntimeUnmanagedWrites()) return undefined
+  const state = committedTransactionEvidenceState()
+  if (state.transactionCount === 0 || !state.latestTransactionId) return undefined
+  return {
+    stateId: state.stateId,
+    transactionCount: state.transactionCount,
+    latestTransactionId: state.latestTransactionId,
+  }
+}
 
 /** Get all managed transactions (active and completed). */
 export function getAllManagedTransactions(): ManagedPatchTransaction[] {
@@ -624,9 +660,10 @@ export function getManagedTransaction(txId: string): ManagedPatchTransaction | u
   return txRegistry.get(txId)
 }
 
-/** Clear the transaction registry (for test teardown). */
+/** Reset active transactions and committed-history evidence (for session/test teardown). */
 export function clearTransactionRegistry(): void {
   txRegistry.clear()
+  setRuntimeContextValue(COMMITTED_TRANSACTION_EVIDENCE, emptyCommittedTransactionEvidenceState())
 }
 
 // ── Temp directory helpers ──
@@ -873,11 +910,18 @@ export function commitManagedTransaction(mpt: ManagedPatchTransaction): ManagedP
     }
   }
 
-  // Auto-purge from registry after commit (keep last N via telemetry if needed later)
-  txRegistry.delete(mpt.txId)
-
   mpt.state = "committed"
   mpt.stateTimestamps.committed = Date.now()
+  const evidenceState = committedTransactionEvidenceState()
+  evidenceState.stateId = `txstate_${createHash("sha256")
+    .update(`${evidenceState.stateId}\0${mpt.txId}`)
+    .digest("hex")
+    .slice(0, 32)}`
+  evidenceState.transactionCount += 1
+  evidenceState.latestTransactionId = mpt.txId
+
+  // Auto-purge from registry after commit (keep last N via telemetry if needed later)
+  txRegistry.delete(mpt.txId)
   return mpt
 }
 

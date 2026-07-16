@@ -63,6 +63,7 @@ export const TYPECHECK_TOOL: ToolDef = {
   isConcurrencySafe: false,
   category: "safe",
   contract: {
+    provenance: "local",
     stateUpdates: ["evidence"],
     resultBudget: { maxChars: TYPECHECK_RESULT_MAX_CHARS, overflow: "clip" },
   },
@@ -71,8 +72,17 @@ export const TYPECHECK_TOOL: ToolDef = {
     properties: {},
   },
   execute: async (): Promise<ToolResult> => {
+    const startedAt = Date.now()
     const result = runTypeScriptNoEmit()
-    if (result.passed) return Result.ok("typecheck passed", { verification: { kind: "typecheck", command: "tsc --noEmit", passed: true, issues: 0 } })
-    return Result.ok(`typecheck found ${result.issues} issue(s):\n${result.output.slice(0, TYPECHECK_RESULT_MAX_CHARS)}`, { verification: { kind: "typecheck", command: "tsc --noEmit", passed: false, issues: result.issues } })
+    const verification = {
+      kind: "typecheck" as const,
+      command: "tsc --noEmit",
+      passed: result.passed,
+      issues: result.issues,
+      durationMs: Date.now() - startedAt,
+      summary: result.output.slice(0, 1000) || (result.passed ? "typecheck passed" : "typecheck failed"),
+    }
+    if (result.passed) return Result.ok("typecheck passed", { verification })
+    return Result.ok(`typecheck found ${result.issues} issue(s):\n${result.output.slice(0, TYPECHECK_RESULT_MAX_CHARS)}`, { verification })
   },
 }

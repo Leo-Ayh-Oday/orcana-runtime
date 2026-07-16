@@ -22,6 +22,10 @@ export const LSP_DIAGNOSTICS: ToolDef = {
   isReadonly: true,
   isConcurrencySafe: true,
   category: "safe",
+  contract: {
+    provenance: "local",
+    stateUpdates: ["evidence"],
+  },
   inputSchema: {
     type: "object",
     properties: {

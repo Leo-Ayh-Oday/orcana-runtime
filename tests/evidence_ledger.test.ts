@@ -24,12 +24,20 @@ import {
   type EvidenceEntry,
   type EvidenceKind,
 } from "../src/agent/evidence-ledger"
-import type { VerificationResult } from "../src/verification/result"
+import type { TransactionEvidenceBinding, VerificationResult } from "../src/verification/result"
 import type { TaskTracker } from "../src/agent/task-tracker"
 
 beforeEach(() => {
   resetEvidenceIdCounter()
 })
+
+function transactionBinding(
+  stateId: string,
+  transactionCount: number,
+  latestTransactionId: string,
+): TransactionEvidenceBinding {
+  return { stateId, transactionCount, latestTransactionId }
+}
 
 // ── toEvidenceKind ──
 
@@ -247,6 +255,19 @@ describe("ingestVerificationResult", () => {
     const entry = ingestVerificationResult(ledger, vr, "ptxn_abc123")
     expect(entry!.txId).toBe("ptxn_abc123")
   })
+
+  it("preserves transaction evidence binding from verification results", () => {
+    const vr: VerificationResult = {
+      kind: "test", command: "bun test", passed: true,
+      exitCode: 0, issues: 0, durationMs: 2000, summary: "Tests ok",
+      transaction: transactionBinding("txstate_ab", 2, "ptxn_b"),
+    }
+
+    const entry = ingestVerificationResult(ledger, vr)
+
+    expect(entry?.transaction).toEqual(vr.transaction)
+    expect(entry?.transaction).not.toBe(vr.transaction)
+  })
 })
 
 // ── ingestVerificationResults (batch) ──
@@ -396,6 +417,153 @@ describe("canClaimDone", () => {
     expect(result.unsatisfiedKinds).toHaveLength(0)
   })
 
+  it("rejects current-generation evidence bound to a different patch transaction", () => {
+    const tracker = makeTracker({
+      steps: [{ id: "s1", title: "step 1", status: "done" }],
+      requiredVerificationKinds: ["typecheck"],
+    })
+    addEvidence(ledger, {
+      id: "evi_1", kind: "typecheck", command: "tsc", output: "ok",
+      passed: true, timestamp: 1000, generation: 3,
+      transaction: transactionBinding("txstate_other", 1, "ptxn_other"),
+    })
+
+    const result = canClaimDone({
+      tracker,
+      evidence: ledger,
+      currentGeneration: 3,
+      evidenceBinding: transactionBinding("txstate_current", 1, "ptxn_current"),
+    })
+
+    expect(result.canClaim).toBe(false)
+    expect(result.unsatisfiedKinds).toContain("typecheck")
+  })
+
+  it("rejects unbound current-generation evidence when a transaction binding is required", () => {
+    const tracker = makeTracker({
+      steps: [{ id: "s1", title: "step 1", status: "done" }],
+      requiredVerificationKinds: ["typecheck"],
+    })
+    addEvidence(ledger, {
+      id: "evi_1", kind: "typecheck", command: "tsc", output: "ok",
+      passed: true, timestamp: 1000, generation: 3,
+    })
+
+    const result = canClaimDone({
+      tracker,
+      evidence: ledger,
+      currentGeneration: 3,
+      evidenceBinding: transactionBinding("txstate_current", 1, "ptxn_current"),
+    })
+
+    expect(result.canClaim).toBe(false)
+    expect(result.unsatisfiedKinds).toContain("typecheck")
+  })
+
+  it("fails closed after a write when the runtime has no transaction binding", () => {
+    const tracker = makeTracker({
+      steps: [{ id: "s1", title: "step 1", status: "done" }],
+      requiredVerificationKinds: ["typecheck"],
+    })
+    addEvidence(ledger, {
+      id: "evi_1", kind: "typecheck", command: "tsc", output: "ok",
+      passed: true, timestamp: 1000, generation: 3,
+    })
+
+    const result = canClaimDone({
+      tracker,
+      evidence: ledger,
+      currentGeneration: 3,
+      requireEvidenceBinding: true,
+    })
+
+    expect(result.canClaim).toBe(false)
+    expect(result.unsatisfiedKinds).toContain("typecheck")
+  })
+
+  it("accepts evidence bound to every required transaction", () => {
+    const tracker = makeTracker({
+      steps: [{ id: "s1", title: "step 1", status: "done" }],
+      requiredVerificationKinds: ["typecheck"],
+    })
+    addEvidence(ledger, {
+      id: "evi_1", kind: "typecheck", command: "tsc", output: "ok",
+      passed: true, timestamp: 1000, generation: 3,
+      transaction: transactionBinding("txstate_ab", 2, "ptxn_b"),
+    })
+
+    const result = canClaimDone({
+      tracker,
+      evidence: ledger,
+      currentGeneration: 3,
+      evidenceBinding: transactionBinding("txstate_ab", 2, "ptxn_b"),
+    })
+
+    expect(result.canClaim).toBe(true)
+  })
+
+  it("rejects evidence bound to a different commit-history snapshot", () => {
+    const tracker = makeTracker({
+      steps: [{ id: "s1", title: "step 1", status: "done" }],
+      requiredVerificationKinds: ["typecheck"],
+    })
+    addEvidence(ledger, {
+      id: "evi_1", kind: "typecheck", command: "tsc", output: "ok",
+      passed: true, timestamp: 1000, generation: 3,
+      transaction: transactionBinding("txstate_extra", 2, "ptxn_extra"),
+    })
+
+    const result = canClaimDone({
+      tracker,
+      evidence: ledger,
+      currentGeneration: 3,
+      evidenceBinding: transactionBinding("txstate_current", 1, "ptxn_current"),
+    })
+
+    expect(result.canClaim).toBe(false)
+    expect(result.unsatisfiedKinds).toContain("typecheck")
+  })
+
+  it("rejects a legacy txId even for a matching single-transaction history", () => {
+    const tracker = makeTracker({
+      steps: [{ id: "s1", title: "step 1", status: "done" }],
+      requiredVerificationKinds: ["typecheck"],
+    })
+    addEvidence(ledger, {
+      id: "evi_legacy", kind: "typecheck", command: "tsc", output: "ok",
+      passed: true, timestamp: 1000, generation: 3, txId: "ptxn_current",
+    })
+
+    const result = canClaimDone({
+      tracker,
+      evidence: ledger,
+      currentGeneration: 3,
+      evidenceBinding: transactionBinding("txstate_current", 1, "ptxn_current"),
+    })
+
+    expect(result.canClaim).toBe(false)
+  })
+
+  it("rejects a legacy txId for a multi-transaction history", () => {
+    const tracker = makeTracker({
+      steps: [{ id: "s1", title: "step 1", status: "done" }],
+      requiredVerificationKinds: ["typecheck"],
+    })
+    addEvidence(ledger, {
+      id: "evi_legacy", kind: "typecheck", command: "tsc", output: "ok",
+      passed: true, timestamp: 1000, generation: 3, txId: "ptxn_latest",
+    })
+
+    const result = canClaimDone({
+      tracker,
+      evidence: ledger,
+      currentGeneration: 3,
+      evidenceBinding: transactionBinding("txstate_two", 2, "ptxn_latest"),
+    })
+
+    expect(result.canClaim).toBe(false)
+  })
+
   it("cannot claim when evidence exists but all failed", () => {
     const tracker = makeTracker({
       steps: [{ id: "s1", title: "step 1", status: "done" }],
@@ -516,6 +684,7 @@ describe("serialization", () => {
     addEvidence(ledger, {
       id: "evi_1", kind: "typecheck", command: "tsc", output: "ok",
       passed: true, timestamp: 1000, txId: "ptxn_abc",
+      transaction: transactionBinding("txstate_abcdef", 2, "ptxn_def"),
     })
     addEvidence(ledger, {
       id: "evi_2", kind: "test", command: "bun test", output: "5 passed",
@@ -526,6 +695,11 @@ describe("serialization", () => {
     expect(restored.entries).toHaveLength(2)
     expect(restored.entries[0]!.id).toBe("evi_1")
     expect(restored.entries[0]!.txId).toBe("ptxn_abc")
+    expect(restored.entries[0]!.transaction).toEqual({
+      stateId: "txstate_abcdef",
+      transactionCount: 2,
+      latestTransactionId: "ptxn_def",
+    })
     expect(restored.entries[1]!.kind).toBe("test")
     expect(hasEvidence(restored, "typecheck")).toBe(true)
     expect(hasEvidence(restored, "test")).toBe(true)
@@ -540,5 +714,27 @@ describe("serialization", () => {
     // Original should still have 1 entry
     expect(ledger.entries).toHaveLength(1)
     expect(restored.entries).toHaveLength(2)
+  })
+
+  it("deserializes legacy entries without transaction history", () => {
+    const restored = deserializeLedger({
+      entries: [{
+        id: "evi_legacy",
+        kind: "typecheck",
+        command: "tsc",
+        output: "ok",
+        passed: true,
+        timestamp: 1000,
+        txId: "ptxn_legacy",
+        generation: 1,
+      }],
+    })
+
+    expect(restored.entries[0]).toMatchObject({
+      id: "evi_legacy",
+      txId: "ptxn_legacy",
+      generation: 1,
+    })
+    expect(restored.entries[0]?.transaction).toBeUndefined()
   })
 })

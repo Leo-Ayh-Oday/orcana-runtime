@@ -21,6 +21,7 @@ import type { CompletionGateInput } from "./completion-gate"
 import type { EvidenceLedger } from "./evidence-ledger"
 import { hasFreshPassingEvidence } from "./evidence-ledger"
 import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import type { TransactionEvidenceBinding } from "../verification/result"
 
 // ── Types ──
 
@@ -211,6 +212,8 @@ export function checkModeExitCriteria(
     finalText: string
     evidenceLedger?: EvidenceLedger
     currentGeneration?: number
+    evidenceBinding?: TransactionEvidenceBinding
+    requireEvidenceBinding?: boolean
   },
 ): ModeExitResult {
   const unmet: string[] = []
@@ -231,7 +234,13 @@ export function checkModeExitCriteria(
       }
       case "has_evidence": {
         if (criterion.evidenceKind && context.evidenceLedger) {
-          if (!hasFreshPassingEvidence(context.evidenceLedger, criterion.evidenceKind, context.currentGeneration)) {
+          if (!hasFreshPassingEvidence(
+            context.evidenceLedger,
+            criterion.evidenceKind,
+            context.currentGeneration,
+            context.evidenceBinding,
+            context.requireEvidenceBinding,
+          )) {
             unmet.push(criterion.description)
           }
         } else if (criterion.evidenceKind && !context.evidenceLedger) {

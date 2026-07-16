@@ -331,6 +331,7 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
       path,
       lines,
       transactionId: mpt.patch.fileTransaction.id,
+      patchTransactionId: mpt.txId,
       rippleReport: ripple,
       checkpoint: checkpointMetadata(path, existedBefore ? oldContent : null, baseHash),
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
@@ -390,6 +391,7 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
       path,
       occurrences: 1,
       transactionId: mpt.patch.fileTransaction.id,
+      patchTransactionId: mpt.txId,
       rippleReport: ripple,
       checkpoint: checkpointMetadata(path, content, baseHash),
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
@@ -475,6 +477,7 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
     return Result.ok(`Applied ${edits.length} atomic edit(s) across ${proposed.size} file(s)${diag}`, {
       paths: displayPaths,
       transactionId: mpt.patch.fileTransaction.id,
+      patchTransactionId: mpt.txId,
       rippleReports: reports,
       checkpoints: displayPaths.map(path => {
         const canonicalPath = resolve(path)
@@ -662,6 +665,7 @@ async function edit_fim(params: Record<string, unknown>, context?: ToolExecution
       path,
       mode: "fim",
       transactionId: mpt.patch.fileTransaction.id,
+      patchTransactionId: mpt.txId,
       rippleReport: ripple,
       checkpoint: checkpointMetadata(path, oldContent, baseHash),
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },

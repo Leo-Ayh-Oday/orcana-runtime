@@ -4,8 +4,10 @@ import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { getToolRisk } from "../src/agent/tool-risk"
-import { assembleRuntimeToolDefs, BUILTIN_TOOL_DEFS } from "../src/tools/builtins"
+import { assembleRuntimeToolDefs, BUILTIN_TOOL_DEFS, isBuiltinVerificationProducer } from "../src/tools/builtins"
 import { buildTool, Result, type ToolContractMetadata, type ToolDef } from "../src/tools/registry"
+import { SHELL_TOOL } from "../src/tools/shell"
+import { TYPECHECK_TOOL } from "../src/tools/typescript"
 
 function contractHash(defn: ToolDef): string {
   const contract = buildTool(defn).contract
@@ -24,6 +26,12 @@ function readonlyTool(inputSchema: Record<string, unknown>, contract?: ToolContr
 }
 
 describe("ToolContract projection", () => {
+  test("trusted verification producers use fixed built-in identity", () => {
+    expect(isBuiltinVerificationProducer(SHELL_TOOL)).toBe(true)
+    expect(isBuiltinVerificationProducer(TYPECHECK_TOOL)).toBe(true)
+    expect(isBuiltinVerificationProducer({ ...TYPECHECK_TOOL })).toBe(false)
+  })
+
   test("buildTool exposes one detached, deeply immutable contract without changing execution", async () => {
     const inputSchema: Record<string, unknown> = {
       type: "object",
@@ -297,7 +305,7 @@ describe("ToolContract projection", () => {
       "find_symbol:a98ea218fc64e3de3ae325e2ac553b4e31a2c61237e1999b7a74ac61581b6de3",
       "find_references:0bae3b44d68cd0ee400f32a6ac0ee3c86edb0f32c861b1f146d9447766f846db",
       "project_structure:9a1b48e2672ecc604ddc51e6d5a089de91ea4fa74fe37e4987f7f955dda7dcbd",
-      "lsp_diagnostics:d986b96c2347989c49f5dd4c32615e825c36857fe282b3f40aab1774fa132c99",
+      "lsp_diagnostics:134b5b1c2a8e85e2593cb6f7f870c100522c3a00919559f4e59101c1d41ad1c4",
       "lsp_hover:e34068cc9085964da281c7ab79c5a2f6edc487bf113c416e280af3818a9a6e1b",
       "lsp_definition:c2c070697bf5a58538155b9ab990a0824322f020eef2f80822dd1b95070f6e2f",
       "lsp_references:5c90731b68387837636e725b831bb9dddf11400ccaf1a479403d3f899e6f85da",

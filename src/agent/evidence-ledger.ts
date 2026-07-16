@@ -11,7 +11,7 @@
  *  for a required kind → cannot claim done.
  */
 
-import type { VerificationKind, VerificationResult } from "../verification/result"
+import type { TransactionEvidenceBinding, VerificationKind, VerificationResult } from "../verification/result"
 import type { TaskTracker } from "./task-tracker"
 
 // ── Evidence types ──
@@ -37,6 +37,8 @@ export interface EvidenceEntry {
    *  runtime write-generation past this value, this evidence verified an older code
    *  state and is considered stale by the completion gate. */
   generation?: number
+  /** Constant-size snapshot of successful commit history at collection time. */
+  transaction?: TransactionEvidenceBinding
 }
 
 /** Collection of all evidence gathered during a task. */
@@ -153,24 +155,48 @@ export function latestEvidence(ledger: EvidenceLedger, kind: EvidenceKind): Evid
 
 /** [PR-2 / I-2] The state-aware evidence check used by the completion gate.
  *
- *  Unlike `hasEvidence` ("any passed entry EVER"), this enforces that evidence is
- *  bound to the current code state:
+ *  Unlike `hasEvidence` ("any passed entry EVER"), this enforces the latest runtime
+ *  state the gate can authoritatively identify:
  *    L1 — the MOST RECENT entry of the kind must be passed (a later failed
  *         re-verification invalidates an earlier pass).
  *    L2 — if `currentGeneration` is provided and the entry carries a generation,
  *         they must match (no writes since it was verified; otherwise it's stale).
+ *    L3 — if a transaction binding is required, the evidence must carry the same
+ *         successful PatchTransaction commit-history identity. This history is
+ *         append-only in this slice; rollback invalidation is handled separately.
  *
  *  Backward compatible for callers that omit `currentGeneration`: those enforce L1
  *  only. Once the current generation is known, evidence must carry the same generation;
  *  an unstamped legacy entry cannot prove freshness and fails closed.
  */
-export function hasFreshPassingEvidence(ledger: EvidenceLedger, kind: EvidenceKind, currentGeneration?: number): boolean {
+export function hasFreshPassingEvidence(
+  ledger: EvidenceLedger,
+  kind: EvidenceKind,
+  currentGeneration?: number,
+  evidenceBinding?: TransactionEvidenceBinding,
+  requireEvidenceBinding = false,
+): boolean {
   const latest = latestEvidence(ledger, kind)
   if (!latest || !latest.passed) return false // L1
   if (currentGeneration !== undefined && latest.generation !== currentGeneration) {
     return false // L2 — code changed since this evidence was collected
   }
+  if (requireEvidenceBinding && !evidenceBinding) return false // L3 — observed write bypassed PatchTransaction
+  if (evidenceBinding) {
+    const transactionMatches = latest.transaction?.stateId === evidenceBinding.stateId
+      && latest.transaction.transactionCount === evidenceBinding.transactionCount
+      && latest.transaction.latestTransactionId === evidenceBinding.latestTransactionId
+    if (!transactionMatches) {
+      return false // L3 — verification belongs to a different committed transaction state
+    }
+  }
   return true
+}
+
+function cloneTransactionEvidenceBinding(
+  binding: TransactionEvidenceBinding | undefined,
+): TransactionEvidenceBinding | undefined {
+  return binding ? { ...binding } : undefined
 }
 
 // ── Ingestion: VerificationResult → EvidenceEntry ──
@@ -193,6 +219,7 @@ export function ingestVerificationResult(ledger: EvidenceLedger, result: Verific
     timestamp: Date.now(),
     txId,
     generation: result.generation ?? generation,
+    transaction: cloneTransactionEvidenceBinding(result.transaction),
   }
   addEvidence(ledger, entry)
   return entry
@@ -214,6 +241,7 @@ export function addManualEvidence(ledger: EvidenceLedger, opts: {
   passed: boolean
   txId?: string
   generation?: number
+  transaction?: TransactionEvidenceBinding
 }): EvidenceEntry {
   const entry: EvidenceEntry = {
     id: generateEvidenceId(),
@@ -224,6 +252,7 @@ export function addManualEvidence(ledger: EvidenceLedger, opts: {
     timestamp: Date.now(),
     txId: opts.txId,
     generation: opts.generation,
+    transaction: cloneTransactionEvidenceBinding(opts.transaction),
   }
   addEvidence(ledger, entry)
   return entry
@@ -263,8 +292,20 @@ export function canClaimDone(params: {
   /** [PR-2 / I-2] Current write-generation. When provided, required evidence must
    *  have been collected at this generation (no writes since) — else it is stale. */
   currentGeneration?: number
+  /** Commit-history identity that required evidence must match. */
+  evidenceBinding?: TransactionEvidenceBinding
+  /** Fail closed when writes occurred but no authoritative commit history exists. */
+  requireEvidenceBinding?: boolean
 }): CanClaimDoneResult {
-  const { tracker, evidence, cwd, requiredKinds: explicitRequiredKinds = [], currentGeneration } = params
+  const {
+    tracker,
+    evidence,
+    cwd,
+    requiredKinds: explicitRequiredKinds = [],
+    currentGeneration,
+    evidenceBinding,
+    requireEvidenceBinding = false,
+  } = params
   const missing: string[] = []
   const blocked: string[] = []
 
@@ -308,7 +349,7 @@ export function canClaimDone(params: {
   const unsatisfied: EvidenceKind[] = []
 
   for (const kind of required) {
-    if (hasFreshPassingEvidence(evidence, kind, currentGeneration)) {
+    if (hasFreshPassingEvidence(evidence, kind, currentGeneration, evidenceBinding, requireEvidenceBinding)) {
       satisfied.push(kind)
     } else {
       unsatisfied.push(kind)
@@ -412,6 +453,7 @@ export interface SerializedEvidenceEntry {
   timestamp: number
   txId?: string
   generation?: number
+  transaction?: TransactionEvidenceBinding
 }
 
 export interface SerializedLedger {
@@ -430,6 +472,7 @@ export function serializeLedger(ledger: EvidenceLedger): SerializedLedger {
       timestamp: e.timestamp,
       txId: e.txId,
       generation: e.generation,
+      transaction: cloneTransactionEvidenceBinding(e.transaction),
     })),
   }
 }
@@ -446,6 +489,7 @@ export function deserializeLedger(data: SerializedLedger): EvidenceLedger {
       timestamp: e.timestamp,
       txId: e.txId,
       generation: e.generation,
+      transaction: cloneTransactionEvidenceBinding(e.transaction),
     })),
   }
 }

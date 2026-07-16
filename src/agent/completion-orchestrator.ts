@@ -32,7 +32,7 @@ import { FlashJudge, type TestimonyLedger } from "./flash-judge"
 import { extractPromises } from "./round/post-loop"
 import { canClaimDone, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
 import { getWriteGeneration } from "../file-state"
-import type { VerificationResult } from "../verification/result"
+import type { TransactionEvidenceBinding, VerificationResult } from "../verification/result"
 import type { RippleObligation } from "../ripple/obligations"
 import type { RippleReport } from "../ripple/types"
 import type { TaskTracker } from "./task-tracker"
@@ -64,6 +64,7 @@ export interface CompletionOrchestratorInput {
   priorFiles: Set<string>
   confidenceEvaluator: ConfidenceEvaluator
   evidenceLedger?: EvidenceLedger
+  evidenceBinding?: TransactionEvidenceBinding
   testimonyLedger: TestimonyLedger
   flashJudge: FlashJudge
   masterPlan: MasterPlan | null
@@ -260,6 +261,7 @@ export class CompletionOrchestrator {
       lastTypecheck: input.lastTypecheck,
       evidenceLedger: input.evidenceLedger,
       currentGeneration: getWriteGeneration(),
+      evidenceBinding: input.evidenceBinding,
     })
 
     if (!completionReport.allowed && input.round + 1 < input.maxRounds) {
@@ -355,6 +357,8 @@ export class CompletionOrchestrator {
       tracker: input.taskTracker,
       evidence: input.evidenceLedger,
       currentGeneration: getWriteGeneration(),
+      evidenceBinding: input.evidenceBinding,
+      requireEvidenceBinding: input.taskHadWrite || getWriteGeneration() > 0,
     })
 
     out.evidenceResult = evidenceResult
@@ -509,7 +513,7 @@ export class CompletionOrchestrator {
         case "lint_passed": {
           // Check typecheck evidence
           const hasTypecheckEvidence = input.evidenceLedger
-            ? hasFreshPassingEvidence(input.evidenceLedger, "typecheck", getWriteGeneration())
+        ? hasFreshPassingEvidence(input.evidenceLedger, "typecheck", getWriteGeneration(), input.evidenceBinding, input.taskHadWrite || getWriteGeneration() > 0)
             : input.verificationResults.some(v => (v.kind === "typecheck" || v.kind === "lint") && v.passed)
           const hasLastTypecheck = !input.evidenceLedger && input.lastTypecheck?.passed === true
 
@@ -524,7 +528,7 @@ export class CompletionOrchestrator {
         case "tests_passed":
         case "all_verification_passed": {
           const hasTestEvidence = input.evidenceLedger
-            ? hasFreshPassingEvidence(input.evidenceLedger, "test", getWriteGeneration())
+        ? hasFreshPassingEvidence(input.evidenceLedger, "test", getWriteGeneration(), input.evidenceBinding, input.taskHadWrite || getWriteGeneration() > 0)
             : input.verificationResults.some(v => (v.kind === "test" || v.kind === "smoke") && v.passed)
 
           if (!hasTestEvidence) {
@@ -537,7 +541,7 @@ export class CompletionOrchestrator {
         }
         case "build_passed": {
           const hasBuildEvidence = input.evidenceLedger
-            ? hasFreshPassingEvidence(input.evidenceLedger, "build", getWriteGeneration())
+        ? hasFreshPassingEvidence(input.evidenceLedger, "build", getWriteGeneration(), input.evidenceBinding, input.taskHadWrite || getWriteGeneration() > 0)
             : input.verificationResults.some(v => v.kind === "build" && v.passed)
 
           if (!hasBuildEvidence) {
@@ -621,6 +625,8 @@ export interface NarrowEditCheckInput {
   modifiedFilesThisRound: Set<string>
   taskTracker?: TaskTracker | null
   evidenceLedger?: EvidenceLedger
+  evidenceBinding?: TransactionEvidenceBinding
+  requireEvidenceBinding?: boolean
 }
 
 export interface NarrowEditCheckResult {
@@ -663,6 +669,8 @@ export function checkNarrowEditCompletion(input: NarrowEditCheckInput): NarrowEd
         evidence: input.evidenceLedger,
         requiredKinds: ["typecheck"],
         currentGeneration: getWriteGeneration(),
+        evidenceBinding: input.evidenceBinding,
+        requireEvidenceBinding: input.requireEvidenceBinding,
       })
       if (!evidenceResult.canClaim) {
         return {

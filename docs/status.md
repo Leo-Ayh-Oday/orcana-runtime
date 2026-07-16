@@ -1,8 +1,8 @@
 # Orcana Strong Single v1.0 Status Matrix
 
-Updated: 2026-07-15
+Updated: 2026-07-16
 
-Snapshot: `codex/freshness-contract-enforcement` (local, unreleased implementation slice). Published npm remains `0.3.4`.
+Snapshot: `codex/transaction-evidence-binding` (local, unreleased implementation slice). Published npm remains `0.3.4`.
 
 This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is intentionally conservative: a module is `Done` only when the code, tests, and runtime wiring are present.
 
@@ -17,8 +17,8 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | Default hooks | Done | `src/hooks/defaults.ts` creates safety, side-effect, write-observation, and journal hooks; the public factory keeps its strict default, while runtime bootstrap explicitly selects warn mode because FreshnessGate owns enforcement | Keep noncanonical callers on strict unless they install the contract gate |
 | TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts`, `tests/task_packet.test.ts` | Zod adapter is intentionally deferred while the project has no Zod dependency; keep future packet changes on the validated schema path |
 | ModeContract | Done | `src/agent/mode-contract.ts`, `src/agent/runtime-context.ts`, `src/agent/loop.ts`, `tests/mode_contract.test.ts`, `tests/runtime_agent_context.test.ts` | Active mode and adjacent runtime state are isolated per concurrent agent run; keep future mode changes routed through shared transition context |
-| Completion / Evidence | Partial | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts`, `src/agent/evidence-staleness.test.ts`, `tests/completion_orchestrator.test.ts` | Latest-result and write-generation freshness are enforced; transaction binding and finer-grained invalidation remain incomplete |
-| PatchTransaction / Rewind | Partial | `src/agent/patch-transaction.ts`, `src/tools/transaction.ts`, `src/agent/rewind.ts`, related tests | Approved base hashes, new-file absence, non-file targets, symlink parents, and partial-conflict rollback are guarded; rewind UX and transaction-evidence binding still need hardening |
+| Completion / Evidence | Partial | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts`, `src/agent/evidence-staleness.test.ts`, `tests/completion_orchestrator.test.ts` | Latest-result, write-generation freshness, fixed built-in verifier identity, unmanaged-write invalidation, and authoritative commit-history identity are enforced; command-to-file coverage, rollback-aware invalidation, and finer-grained invalidation remain incomplete |
+| PatchTransaction / Rewind | Partial | `src/agent/patch-transaction.ts`, `src/tools/transaction.ts`, `src/agent/rewind.ts`, related tests | Approved base hashes, new-file absence, non-file targets, symlink parents, partial-conflict rollback, and committed transaction evidence snapshots are guarded; `rollback_transaction` can still leave pre-rollback evidence eligible because it advances neither write generation nor history fingerprint, so rollback-aware invalidation is a hard SS-Next-2B gap |
 | Tool contract / Risk / Permission | Partial | `src/tools/tool-contract.ts`, `src/tools/builtins.ts`, `src/agent/tool-risk.ts`, `src/agent/permission.ts`, `tests/tool_contract.test.ts`, `tests/tool_policy.test.ts` | The immutable ToolDef-derived projection now drives freshness preflight; broader ToolPolicy migration and permission UX remain incomplete |
 | Provider / ModelRouter | Partial | `src/provider/router.ts`, `src/provider/capabilities.ts`, `src/provider/stream-lifecycle.ts`, runtime model config and provider tests | Built-in metadata now derives from the config catalog and provider aborts close safely; complete purpose/cost trace coverage is still pending |
 | Replay harness | Partial | `src/agent/replay-harness.ts`, `tests/replay_harness.test.ts`, 70 deterministic replay fixtures, CI core gate | E2E replay and mini benchmark are not complete |
@@ -35,6 +35,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-0.3 Runtime control boundary | Done | Runtime control-plane parsing/resolution is shared by controller, TUI dispatcher, and CLI command registry; unknown slash commands pass to the agent and unsafe local commands are blocked while running. |
 | SS-Next-1A Canonical ToolContract projection | Done | `buildTool()` derives one immutable, handler-free contract from each existing `ToolDef`; the frozen 24-tool catalog has full-contract fingerprints, MCP provenance defaults conservatively, and runtime order/behavior remain unchanged. This slice is descriptive only. |
 | SS-Next-1B Canonical FreshnessGate enforcement | Done | `buildTool()` fail-closes malformed/unread/partial/truncated/stale/deleted targets, carries an async approved content/hash snapshot into managed writes, blocks unsupported streaming freshness tools, and emits structured gate metadata into ToolExecutionLedger. `edit_fim` now enters PatchTransaction before disk commit. |
+| SS-Next-2A Authoritative transaction identity binding | Done | Successful `PatchTransaction` commits update a constant-size, runtime-owned history fingerprint in the per-run execution context. Only untampered descriptors backed by the fixed built-in verifier allowlist can emit verification; the runtime parses their core result and overwrites all authority stamps. Any observed runtime write requires the exact commit-history snapshot, including shell/shadow writes that bypass PatchTransaction. Command-to-file coverage and rollback-aware invalidation are intentionally deferred to SS-Next-2B. |
 | Harness PR-2.1 FileState/Freshness core | Done | `FileStateLedger`, file fingerprinting, and `validateFreshnessForEdit()` cover fresh/full/partial/truncated/deleted/create cases without touching TUI. |
 | Harness PR-2.2 FileState tool observation | Done | `read_file` records full/partial/truncated baselines; `write_file`, `edit_file`, `multi_edit`, and `edit_fim` record fresh agent-write baselines after successful disk commits. |
 | Harness PR-2.3 FileState runtime isolation | Done | `agentLoop` binds its async generator lifecycle to a per-run file-state context; concurrent runs no longer share ledgers or write generations, while direct tool calls retain compatibility fallback state. |
@@ -50,8 +51,8 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-2.x MasterPlan / TaskPacket / ModeContract | Done | TaskPacket schema validation, MasterPlan packet wiring, plan validation, and ModeContract auto-flow are present. Zod adapter remains intentionally deferred because the project does not depend on Zod. |
 | PR-3.1 Final truthfulness gate | Done | `CompletionOrchestrator` now fail-closes final-round truthfulness contradictions and checks implementation claims against write/changed-file evidence. |
 | PR-3.2 narrow_edit evidence path | Done | Verified-write auto-complete now checks structured evidence inside `checkNarrowEditCompletion()` before returning completion text; `loop.ts` no longer has a separate `canClaimDone()` handoff. |
-| PR-3.x Completion / Evidence | Partial | Final completion routes through `CompletionOrchestrator`; latest failed re-verification and post-verification writes invalidate old evidence. Transaction binding and scoped invalidation remain incomplete. |
-| PR-4.x Patch / Rewind | Partial | State machine and rewind modules exist; end-user rewind flows and evidence binding remain incomplete. |
+| PR-3.x Completion / Evidence | Partial | Final completion routes through `CompletionOrchestrator`; latest failed re-verification, post-verification writes, unmanaged observed writes, and commit-history fingerprint mismatches invalidate old evidence. Fixed built-in verifier identity and conservative shell command recognition are enforced; command-to-file coverage, rollback-aware invalidation, and scoped invalidation remain incomplete. |
+| PR-4.x Patch / Rewind | Partial | State machine and rewind modules exist, and successful commits feed the authoritative evidence snapshot; end-user rewind flows and rollback-aware evidence invalidation remain incomplete. |
 | PR-5.x Safety | Partial | Secret-path rules now share the transaction-layer canonical patterns and risk messages omit sensitive payloads. Permission UX, redaction persistence coverage, and sandbox capability still need unification. |
 | PR-6.x Provider | Partial | Registry metadata derives from the canonical config catalog and provider streams close cleanly on abort. Structured output, transcript, and purpose/cost trace enforcement remain incomplete. |
 | PR-7.x Replay / CI | Partial | 70-case deterministic replay exists and CI has a core gate; E2E replay and mini benchmark remain planned. |
@@ -69,6 +70,7 @@ bun test tests/hooks_system.test.ts
 bun run test:core
 bun run test:replay
 bun test tests/runtime_model_config.test.ts tests/config/config-loader.test.ts
+bun test tests/verification_result.test.ts tests/registry.test.ts tests/tool_contract.test.ts tests/evidence_ledger.test.ts tests/completion_orchestrator.test.ts tests/mode_contract.test.ts tests/file_tools_file_state.test.ts tests/patch_transaction.test.ts tests/agent_loop.test.ts
 bun run typecheck
 bun run build
 bun run test

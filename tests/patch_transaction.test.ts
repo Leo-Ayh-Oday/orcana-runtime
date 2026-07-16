@@ -28,9 +28,11 @@ import {
   getManagedTransaction,
   getAllManagedTransactions,
   clearTransactionRegistry,
+  currentTransactionEvidenceBinding,
   type ManagedPatchTransaction,
   type PatchState,
 } from "../src/agent/patch-transaction"
+import { recordRuntimeObservedWrites, resetRuntimeFileStateLedger } from "../src/file-state"
 
 // ── Temp dir setup ──
 
@@ -445,6 +447,7 @@ describe("ManagedPatchTransaction state machine", () => {
   beforeEach(() => {
     clearTransactionRegistry()
     clearActivePatchContext()
+    resetRuntimeFileStateLedger()
   })
 
   function makeFile(name: string, oldContent: string | null, newContent: string) {
@@ -831,6 +834,11 @@ describe("ManagedPatchTransaction state machine", () => {
       )
       expect(mpt.state).toBe("committed")
       expect(existsSync(join(smTestDir, "full.ts"))).toBe(true)
+      expect(currentTransactionEvidenceBinding()).toMatchObject({
+        stateId: expect.stringMatching(/^txstate_[0-9a-f]{32}$/),
+        transactionCount: 1,
+        latestTransactionId: mpt.txId,
+      })
     })
 
     it("rolls back on failed verification", async () => {
@@ -845,8 +853,54 @@ describe("ManagedPatchTransaction state machine", () => {
       )
       expect(mpt.state).toBe("rolled_back")
       expect(mpt.rollbackReason).toBe("verification failed")
+      expect(currentTransactionEvidenceBinding()).toBeUndefined()
       // Target file should NOT exist
       expect(existsSync(targetPath)).toBe(false)
+    })
+
+    it("accumulates only successfully committed transactions", async () => {
+      const first = await applyAndCommit(
+        {
+          tool: "write_file",
+          files: [makeFile("binding-first.ts", null, "first\n")],
+          cwd: smTestDir,
+        },
+        async () => true,
+      )
+      const firstStateId = currentTransactionEvidenceBinding()?.stateId
+      const second = await applyAndCommit(
+        {
+          tool: "write_file",
+          files: [makeFile("binding-second.ts", null, "second\n")],
+          cwd: smTestDir,
+        },
+        async () => true,
+      )
+
+      expect(firstStateId).toMatch(/^txstate_[0-9a-f]{32}$/)
+      const secondBinding = currentTransactionEvidenceBinding()
+      expect(secondBinding?.stateId).not.toBe(firstStateId)
+      expect(secondBinding).toMatchObject({
+        transactionCount: 2,
+        latestTransactionId: second.txId,
+      })
+      expect(first.txId).not.toBe(second.txId)
+    })
+
+    it("invalidates committed history after an unmanaged observed write", async () => {
+      await applyAndCommit(
+        {
+          tool: "write_file",
+          files: [makeFile("binding-before-shell.ts", null, "managed\n")],
+          cwd: smTestDir,
+        },
+        async () => true,
+      )
+      expect(currentTransactionEvidenceBinding()).toBeDefined()
+
+      recordRuntimeObservedWrites([join(smTestDir, "shell-write.ts")])
+
+      expect(currentTransactionEvidenceBinding()).toBeUndefined()
     })
 
     it("re-throws on verification exception (no silent success)", async () => {

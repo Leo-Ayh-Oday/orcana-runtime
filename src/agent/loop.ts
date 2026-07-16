@@ -2,7 +2,8 @@
 
 import type { LLMProvider, ProviderMessage, ProviderTokenUsage, StreamEvent } from "../provider/types"
 import { classifyProviderError } from "../provider/retry"
-import type { ToolDescriptor, ToolResult } from "../tools/registry"
+import { isRuntimeBuiltToolDescriptor, type ToolDescriptor } from "../tools/registry"
+import { isBuiltinVerificationProducer } from "../tools/builtins"
 import { createState, decideThinkingPlan, updateState } from "./router"
 import { buildSystemPrompt } from "./prompts"
 import { CacheTracker } from "../provider/cache-tracker"
@@ -38,7 +39,7 @@ import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../prov
 import { formatToolLedgerStatus, ToolExecutionLedger } from "./tool-ledger"
 import { runTypeScriptNoEmit } from "../tools/typescript"
 
-import { formatServiceTestGuidance, hasServiceTestFailure, type VerificationResult } from "../verification/result"
+import { formatServiceTestGuidance, hasServiceTestFailure, parseVerificationResult, type VerificationResult } from "../verification/result"
 import type { AgentRunTrace } from "./run-trace"
 import {
   createTaskTracker,
@@ -71,11 +72,13 @@ import { buildContextMessages, buildRoundProviderRequest, cacheStableProviderToo
 import { createPreRoundChain } from "./gates/pre-round"
 import { processGateOverflow } from "./gates/overflow"
 import { createEpochState, buildPlanStateContext, classifyEpochAction, epochThresholdsForContext, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
-import { clearActivePatchContext, setActivePatchContext } from "./patch-transaction"
+import { clearActivePatchContext, currentTransactionEvidenceBinding, setActivePatchContext } from "./patch-transaction"
 import { createEvidenceLedger, ingestVerificationResults, type EvidenceLedger } from "./evidence-ledger"
 import {
   createRuntimeFileStateContext,
   getWriteGeneration,
+  recordRuntimeObservedWrites,
+  recordRuntimeUnmanagedWrite,
   runWithRuntimeFileStateContext,
 } from "../file-state"
 import { setActiveMode, getActiveMode, formatModePrompt, shouldTransitionMode } from "./mode-contract"
@@ -85,6 +88,22 @@ import { clipProviderContext } from "../context/staged"
 
 import type { UsageStats, AgentOptions } from "./loop-types"
 export type { UsageStats, AgentOptions }
+
+function trustedVerificationFromTool(
+  tool: ToolDescriptor | undefined,
+  result: { success: boolean; metadata?: Record<string, unknown> },
+): VerificationResult | undefined {
+  if (
+    !tool
+    || !isRuntimeBuiltToolDescriptor(tool)
+    || !isBuiltinVerificationProducer(tool.defn)
+    || tool.contract?.provenance !== "local"
+    || !tool.contract?.state.updates.includes("evidence")
+  ) {
+    return undefined
+  }
+  return parseVerificationResult(result.metadata?.verification)
+}
 
 export async function* agentLoop(
   prompt: string,
@@ -1055,6 +1074,7 @@ async function* runAgentLoop(
         priorFiles: taskFiles,
         confidenceEvaluator,
         evidenceLedger,
+        evidenceBinding: currentTransactionEvidenceBinding(),
         testimonyLedger,
         flashJudge,
         masterPlan: masterPlan ?? null,
@@ -1235,6 +1255,7 @@ async function* runAgentLoop(
       let resultContent = "Unknown tool"
       let resultObj: { success: boolean; content: string; metadata?: Record<string, unknown> } = { success: false, content: "" }
       let toolStartedAt = Date.now()
+      const transactionBindingBeforeTool = currentTransactionEvidenceBinding()
 
       if (preRoundCtx.taskPlanning && round > 0) {
         resultContent = `任务追踪已阻止：当前是计划专用回合，只允许输出计划，不允许调用 ${tc.name}。下一轮将进入执行阶段。`
@@ -1424,11 +1445,12 @@ async function* runAgentLoop(
             output: resultContent.slice(0, 1000),
           }
         }
-        const verification = resultObj.metadata?.verification as VerificationResult | undefined
+        const verification = trustedVerificationFromTool(tool, resultObj)
         if (verification) {
           const stampedVerification: VerificationResult = {
             ...verification,
-            generation: verification.generation ?? getWriteGeneration(),
+            generation: getWriteGeneration(),
+            transaction: currentTransactionEvidenceBinding(),
           }
           verificationResultsThisRound.push(stampedVerification)
           options.runTrace?.record("verification_result", stampedVerification)
@@ -1494,6 +1516,20 @@ async function* runAgentLoop(
             const normalized = normalizeProjectPath((report as RippleReport).targetFile)
             modifiedFilesThisRound.add(normalized)
             changedFilesForLedger.add(normalized)
+          }
+        }
+
+        const namedManagedWrite = tc.name === "write_file"
+          || tc.name === "edit_file"
+          || tc.name === "edit_fim"
+          || tc.name === "multi_edit"
+        if (resultObj.success && namedManagedWrite) {
+          const transactionBindingAfterTool = currentTransactionEvidenceBinding()
+          const transactionAdvanced = transactionBindingAfterTool?.stateId !== transactionBindingBeforeTool?.stateId
+            || transactionBindingAfterTool?.transactionCount !== transactionBindingBeforeTool?.transactionCount
+          if (!transactionAdvanced) {
+            if (changedFilesForLedger.size > 0) recordRuntimeObservedWrites([...changedFilesForLedger])
+            else recordRuntimeUnmanagedWrite()
           }
         }
 
@@ -1575,6 +1611,8 @@ async function* runAgentLoop(
         modifiedFilesThisRound,
         taskTracker,
         evidenceLedger,
+        evidenceBinding: currentTransactionEvidenceBinding(),
+        requireEvidenceBinding: taskHadWrite || getWriteGeneration() > 0,
       })
       if (narrowResult.completionText) {
         completionGateText = narrowResult.completionText

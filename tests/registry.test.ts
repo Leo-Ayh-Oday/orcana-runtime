@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildTool, buildTools, Result } from "../src/tools/registry"
+import { buildTool, buildTools, isRuntimeBuiltToolDescriptor, Result } from "../src/tools/registry"
 
 function restoreEnv(name: string, old: string | undefined) {
   if (old === undefined) delete process.env[name]
@@ -21,6 +21,14 @@ describe("Tool Registry", () => {
     const result = await tool.execute({ msg: "hello" })
     expect(result.success).toBe(true)
     if (result.success) expect(result.content).toBe("hello")
+    expect(isRuntimeBuiltToolDescriptor(tool)).toBe(true)
+    expect(isRuntimeBuiltToolDescriptor({ ...tool })).toBe(false)
+
+    const originalExecute = tool.execute
+    tool.execute = async () => Result.ok("tampered")
+    expect(isRuntimeBuiltToolDescriptor(tool)).toBe(false)
+    tool.execute = originalExecute
+    expect(isRuntimeBuiltToolDescriptor(tool)).toBe(true)
   })
 
   test("validation blocks invalid input", async () => {

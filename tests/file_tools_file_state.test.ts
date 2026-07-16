@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { getRuntimeFileStateLedger, resetRuntimeFileStateLedger } from "../src/file-state"
 import { resetRippleProgram } from "../src/ripple/engine"
+import { clearTransactionRegistry, currentTransactionEvidenceBinding } from "../src/agent/patch-transaction"
 import { buildTool } from "../src/tools/registry"
 import { EDIT_FILE, EDIT_FIM, MULTI_EDIT, READ_FILE, WRITE_FILE } from "../src/tools/file"
 
@@ -14,6 +15,7 @@ afterEach(() => {
   process.chdir(oldCwd)
   resetRuntimeFileStateLedger()
   resetRippleProgram()
+  clearTransactionRegistry()
   for (const root of tempRoots.splice(0)) {
     if (!existsSync(root)) continue
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -97,6 +99,13 @@ describe("file tools runtime FileState observation", () => {
     expect(record?.status).toBe("fresh")
     expect(record?.source).toBe("agent_write")
     expect(result.metadata?.fileState).toMatchObject({ status: "fresh", source: "agent_write" })
+    expect(result.metadata?.transactionId).toMatch(/^txn_/)
+    expect(result.metadata?.patchTransactionId).toMatch(/^ptxn_/)
+    expect(currentTransactionEvidenceBinding()).toMatchObject({
+      transactionCount: 1,
+      latestTransactionId: result.metadata?.patchTransactionId,
+    })
+    expect(currentTransactionEvidenceBinding()?.stateId).toMatch(/^txstate_[0-9a-f]{32}$/)
   })
 
   test("write_file blocks overwriting an existing file without a full baseline", async () => {
@@ -311,6 +320,7 @@ describe("file tools runtime FileState observation", () => {
       expect.objectContaining({ status: "fresh", source: "agent_write" }),
       expect.objectContaining({ status: "fresh", source: "agent_write" }),
     ])
+    expect(result.metadata?.patchTransactionId).toMatch(/^ptxn_/)
   })
 
   test("edit_file blocks when disk content changed after the full-file baseline", async () => {

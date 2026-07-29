@@ -15,10 +15,14 @@
   "homepage": "https://github.com/Leo-Ayh-Oday/deepseek-orcana#readme",
   "keywords": [
     "deepseek",
+    "orcana",
     "coding-agent",
     "terminal-ai",
-    "bun",
-    "typescript"
+    "tui",
+    "cli",
+    "typescript",
+    "developer-tools",
+    "code-quality"
   ],
   "main": "dist/index.js",
   "exports": {

@@ -41,6 +41,8 @@ import {
 } from "../memory/compactor"
 import type { CompactionState } from "../memory/compactor"
 import { AgentRunTrace } from "../agent/run-trace"
+import { createAgentHarness } from "../harness/runtime/agent-harness"
+import type { AgentHarness } from "../harness/contracts/harness"
 import { getLSPClient } from "../lsp/client"
 import { bootstrapMCP, type MCPBridgeResult } from "../mcp/bridge"
 import type { AgentOptions } from "../agent/loop-types"
@@ -127,6 +129,9 @@ export interface Runtime {
 
   /** Build AgentOptions suitable for agentLoop(), with runtime defaults applied. */
   buildAgentOptions: (overrides?: Partial<AgentOptions>) => AgentOptions
+
+  // Harness (H1): the single production entry to runs.
+  harness: AgentHarness
 
   /** Register the session's checkpoint store (called when sessionId is known). */
   registerSessionCheckpointStore: (sid: string) => SessionStore
@@ -483,6 +488,25 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   // ── 12. RunTrace factory ──
   const startRunTrace = (prompt: string) => AgentRunTrace.start(projectRoot, prompt)
 
+  // ── 13. Harness facade (H1): single production entry — CLI/TUI drive runs
+  // through AgentHarness → LegacyLoopAdapter → agentLoop. Runtime-stable
+  // deps are injected here; per-invocation options travel via run metadata. ──
+  const harness: AgentHarness = createAgentHarness({
+    deps: {
+      provider: multiProvider,
+      tools,
+      modelRouter,
+      hooks,
+      stagedContext: stagedCtx,
+      thinkingStore,
+      knowledgeBase,
+      gateTelemetryFile,
+      contextMapPolicy,
+    },
+    sessionId: activeSessionId,
+    projectRoot,
+  })
+
   const dispose = () => {
     // LSP cleanup
     try { lspClient.shutdown() } catch { /* ignore */ }
@@ -520,6 +544,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
 
     startRunTrace,
     buildAgentOptions,
+    harness,
     registerSessionCheckpointStore: (sid: string) => {
       const store = new SessionStore(sid)
       if (sid !== activeSessionId) {

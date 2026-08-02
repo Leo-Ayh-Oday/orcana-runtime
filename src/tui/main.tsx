@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { render, useInput, useStdout } from "ink"
-import { agentLoop } from "../agent/loop"
-import type { AgentOptions } from "../agent/loop-types"
+import {
+  LEGACY_CONVERSATION_HISTORY,
+  LEGACY_RUN_TRACE,
+  LEGACY_THINK_EFFORT,
+} from "../harness/runtime/legacy-loop-adapter"
 import type { Runtime } from "../runtime/bootstrap"
 import { type ClarificationReady } from "../agent/clarification"
 import { TuiStore } from "./state/tui-store"
@@ -255,7 +258,7 @@ function useAgentStream(
     const historySnapshot = historyRef.current.slice()
 
     let cancelled = false
-    const runAbort = new AbortController()
+    let runId: string | undefined
     let textBuf = ""
     let assistantText = ""
     let lastFlush = 0
@@ -272,34 +275,16 @@ function useAgentStream(
       }
     }
 
-    // Bug 修复：user.message 必须在 buildAgentOptions 之前 dispatch，
-    // 确保 user message 总是显示（即使 buildAgentOptions 抛错）。
-    // 之前顺序：buildAgentOptions → user.message，若前者抛错则用户消息不可见。
+    // Bug 修复：user.message 必须在 run 启动前 dispatch，
+    // 确保 user message 总是显示（即使后续抛错）。
     store.dispatch({ type: "user.message", text: p })
 
-    // 构建 AgentOptions，若失败则显示错误并结束本轮（不启动 async agentLoop）
-    let opts: AgentOptions
-    try {
-      opts = runtime.buildAgentOptions({
-        model: runtime.modelRouter.selectForPurpose("agent_main"),
-        tools: runtime.tools,
-        thinkEffort: thinkEffort === "auto" ? undefined : thinkEffort,
-        conversationHistory: historySnapshot,
-        abortSignal: runAbort.signal,
-        gateTelemetryFile: ".wolf/gate-telemetry.json",
-        runTrace: runtime.startRunTrace(p),
-      })
-    } catch (err) {
-      const message = cleanAgentError(err instanceof Error ? err.message : String(err))
-      store.dispatch({ type: "ui.error_line", text: message })
-      store.dispatch({ type: "assistant.final", text: `Failed to start agent: ${message}` })
-      store.dispatch({ type: "ui.done", done: true })
-      store.dispatch({ type: "ui.status", text: "error" })
-      finishRun()
-      return () => {
-        cancelled = true
-        runAbort.abort("agent setup cancelled")
-      }
+    // H1: 动态选项走 run metadata；运行时依赖由 harness 注入。
+    // 取消通过 harness.cancel(runId)（runId 取自首个事件）。
+    const metadata: Record<string, unknown> = {
+      [LEGACY_CONVERSATION_HISTORY]: historySnapshot,
+      [LEGACY_THINK_EFFORT]: thinkEffort === "auto" ? undefined : thinkEffort,
+      [LEGACY_RUN_TRACE]: runtime.startRunTrace(p),
     }
 
     const flush = () => {
@@ -315,15 +300,17 @@ function useAgentStream(
     traceStartRound(traceRef.current, state.round + 1)
 
     ;(async () => {
-      for await (const ev of agentLoop(p, opts)) {
+      for await (const ev of runtime.harness.run(runtime.sessionId, { prompt: p, metadata })) {
         if (cancelled) return
+        runId ??= ev.runId
+        const payload = ev.payload
 
-        // clarification_ready needs local side effects (history, wizard state)
-        if (ev.type === "clarification_ready") {
-          const d = ev.data as ClarificationReady
+        // clarification needs local side effects (history, wizard state)
+        if ("clarification" in payload) {
+          const d = payload.clarification.questions as ClarificationReady
           flush()
           // Dispatch clarification.ready to TuiStore (sets status, done, pending message)
-          store.dispatchMany(adapter.adapt(ev))
+          store.dispatchMany(adapter.adaptHarnessEvent(ev))
           // Set local wizard state for interactive navigation
           setClarification({
             originalPrompt: d.originalPrompt,
@@ -345,16 +332,16 @@ function useAgentStream(
         }
 
         // Text buffering: preserve 120ms flush optimization
-        if (ev.type === "text" && typeof ev.data === "string") {
-          assistantText += ev.data
-          textBuf += ev.data
+        if ("text" in payload) {
+          assistantText += payload.text
+          textBuf += payload.text
           markTokenActivity() // Phase 5: stalled detection
           if (Date.now() - lastFlush > TUI_STREAM_FLUSH_MS) flush()
           continue
         }
 
         // All other events: translate via adapter and batch-dispatch
-        const tuiEvents = adapter.adapt(ev)
+        const tuiEvents = adapter.adaptHarnessEvent(ev)
         if (tuiEvents.length > 0) {
           // Phase 5: stalled detection — tool events keep the watchdog alive
           if (tuiEvents.some(e => e.type.startsWith("tool."))) {
@@ -364,12 +351,12 @@ function useAgentStream(
         }
 
         // Phase 0: capture provider stop_reason + stream error in TUI trace
-        if (ev.type === "status" && typeof ev.data === "string") {
-          const stopMatch = ev.data.match(/^provider-stop:\s*(.+)/)
+        if ("display" in payload && payload.display.kind === "status" && typeof payload.display.data === "string") {
+          const stopMatch = payload.display.data.match(/^provider-stop:\s*(.+)/)
           if (stopMatch) traceSetStopReason(traceRef.current, stopMatch[1]!)
         }
-        if (ev.type === "error" && typeof ev.data === "string") {
-          traceSetStreamError(traceRef.current, ev.data)
+        if ("error" in payload) {
+          traceSetStreamError(traceRef.current, payload.error)
         }
       }
 
@@ -402,7 +389,7 @@ function useAgentStream(
 
     return () => {
       cancelled = true
-      runAbort.abort("agent run cancelled")
+      if (runId) void runtime.harness.cancel(runId, "agent run cancelled")
     }
   }, [runtime, store, adapter, thinkEffort])
 

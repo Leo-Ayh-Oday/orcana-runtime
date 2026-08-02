@@ -65,9 +65,25 @@ export const HARNESS_EVENT_TYPES = {
   interruptCreated: "interrupt.created",
   interruptAnswered: "interrupt.answered",
   checkpointSaved: "checkpoint.saved",
+
+  // H1: legacy-loop bridge surface (transparent UI/flow events; the
+  // plan/clarification variants become real interrupts in H7).
+  textEmitted: "text.emitted",
+  displayChanged: "display.changed",
+  errorRaised: "error.raised",
+  planReady: "plan.ready",
+  clarificationReady: "clarification.ready",
 } as const
 
 export type HarnessEventType = (typeof HARNESS_EVENT_TYPES)[keyof typeof HARNESS_EVENT_TYPES]
+
+/** UI-facing display payload carried by the "display" bridge variant. */
+export type HarnessDisplayKind =
+  | "status"
+  | "task_progress"
+  | "thinking_blocks"
+  | "confirm"
+  | "user_question"
 
 /** The event union surfaced by AgentHarness.run()/resume(). */
 export type HarnessEvent =
@@ -77,3 +93,12 @@ export type HarnessEvent =
   | EventEnvelope<{ usage: unknown }>
   | EventEnvelope<{ error: string }>
   | EventEnvelope<{ interrupt: unknown }>
+  // H1 bridge variants — kept independent of the legacy StreamEvent type so
+  // the contract stays free of provider/loop dependencies.
+  | EventEnvelope<{ toolCall: { id: string; name: string; input: unknown } }>
+  | EventEnvelope<{ display: { kind: HarnessDisplayKind; data: unknown } }>
+  // plan/clarification payloads are opaque in H1 (the legacy loop's own plan
+  // artifact shape) and get formal schemas when they become real interrupts
+  // in H7.
+  | EventEnvelope<{ planReady: { plan: unknown } }>
+  | EventEnvelope<{ clarification: { questions: unknown } }>

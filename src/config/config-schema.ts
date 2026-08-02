@@ -28,6 +28,11 @@ export interface OrcanaConfig {
     /** 默认 false：Orcana 的 key/config 与用户系统环境变量隔离。 */
     allowEnvKeys?: boolean
   }
+
+  /** Harness 2.0 接线模式（H1：仅 legacy；shadow/enabled 后续阶段）。 */
+  harness?: {
+    mode?: "legacy" | "shadow" | "enabled"
+  }
 }
 
 // ── 角色 → 模型 路由 ──

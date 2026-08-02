@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { createAgentHarness } from "../src/harness/runtime/agent-harness"
-import { assembleRunScope, createRunCancellation, createNoopTraceWriter } from "../src/harness/runtime/run-scope"
+import { assembleRunScope, createNoopTraceWriter } from "../src/harness/runtime/run-scope"
+import { createRunCancellation } from "../src/harness/runtime/cancellation"
 import { createPlanStore, setCurrentPlan } from "../src/agent/run/plan-store"
 import { SandboxManager } from "../src/sandbox/sandbox"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
@@ -94,7 +95,11 @@ describe("Harness H3 typed run scope", () => {
 
     expect((snapshot.planState as { revision: number }).revision).toBe(0)
     expect((snapshot.modeState as { mode: string }).mode).toBe("coder")
-    expect(snapshot.budgetState).toEqual({})
+    // H4: budget snapshot carries limits/used/remaining.
+    const budget = snapshot.budgetState as { limits: { maxModelCalls: number }; used: { modelCalls: number }; remaining: { modelCalls: number } }
+    expect(budget.limits.maxModelCalls).toBeGreaterThan(0)
+    expect(budget.used.modelCalls).toBeGreaterThanOrEqual(0)
+    expect(budget.remaining.modelCalls).toBeGreaterThanOrEqual(0)
     expect((snapshot.evidenceState as { entries: number }).entries).toBeGreaterThanOrEqual(0)
   })
 

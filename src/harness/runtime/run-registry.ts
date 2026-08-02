@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto"
 import type { ModeName } from "../../agent/mode-contract"
 import { RunNotFoundError } from "../contracts/errors"
 import type { AgentRun } from "../contracts/run"
+import { createBudgetLedger, mergeRunBudget } from "./budget-ledger"
 import { assembleRunScope } from "./run-scope"
 
 export interface RegisteredRun {
@@ -32,14 +33,19 @@ export class RunRegistry {
     const runId = randomUUID()
     const now = Date.now()
     const controller = new AbortController()
+    // H4: budget limits — maxRounds maps to maxModelCalls unless the caller
+    // set an explicit budget.
+    const budget = mergeRunBudget(input.input.budget)
+    if (input.input.maxRounds !== undefined && input.input.budget?.maxModelCalls === undefined) {
+      budget.maxModelCalls = input.input.maxRounds
+    }
     const run: AgentRun = {
       runId,
       sessionId: input.sessionId,
       status: "created",
       input: input.input,
       // H3: typed run-scope — planStore/sandbox/evidenceLedger owned here and
-      // wired into the legacy kernel (single source of truth); budget ledger
-      // lands in H4.
+      // wired into the legacy kernel (single source of truth).
       scope: assembleRunScope({
         runId,
         sessionId: input.sessionId,
@@ -47,7 +53,7 @@ export class RunRegistry {
         controller,
         activeMode: input.activeMode,
       }),
-      budget: undefined as never,
+      budget: createBudgetLedger(budget),
       createdAt: now,
       eventSequence: 0,
       schemaVersion: 1,

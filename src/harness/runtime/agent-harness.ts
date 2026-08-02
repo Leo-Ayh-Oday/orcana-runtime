@@ -128,7 +128,12 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
             : null,
         },
         modeState: { mode: scope.modeStore.mode },
-        budgetState: {}, // H4 BudgetLedger
+        // H4: serializable budget snapshot (limits/used/remaining).
+        budgetState: {
+          limits: run.budget.limits,
+          used: run.budget.used,
+          remaining: run.budget.remaining(),
+        },
         evidenceState: { entries: scope.evidenceLedger.entries.length },
         artifactRefs: [],
         conversationRef: "",

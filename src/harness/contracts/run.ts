@@ -50,6 +50,8 @@ export interface AgentRunInput {
   prompt: string
   tools?: Array<{ name: string; description?: string }>
   maxRounds?: number
+  /** H4: per-run budget limits (fields default to unlimited; maxRounds maps to maxModelCalls). */
+  budget?: Partial<import("./budget").RunBudget>
   metadata?: Record<string, unknown>
 }
 

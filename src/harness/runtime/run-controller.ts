@@ -9,11 +9,14 @@
  *  finally). Exceptions map to failed and still propagate to the caller.
  */
 
+import { randomUUID } from "node:crypto"
 import type { EventEnvelope, HarnessEvent } from "../contracts/events"
+import { HARNESS_EVENT_SCHEMA_VERSION, HARNESS_EVENT_TYPES } from "../contracts/events"
 import type { AgentRun } from "../contracts/run"
 import type { AgentRunInput } from "../contracts/run"
 import type { AgentSession } from "../contracts/session"
 import type { LoopDecision } from "../../agent/kernel/types"
+import { createInterruptForDecision } from "../interrupts/interrupt-manager"
 import { cleanupRun } from "./cleanup"
 import { failureOutcome, mapDecisionToOutcome } from "./outcome-mapper"
 import { RunLifecycleMachine } from "./lifecycle-machine"
@@ -27,27 +30,57 @@ export interface RunControllerInput {
   runInput: AgentRunInput
   session: AgentSession
   controller: AbortController
+  /** H7: continuation input for a resume (waiting → resuming → running). */
+  resumeInput?: AgentRunInput
 }
 
 export async function* runControlledRun(
   input: RunControllerInput,
 ): AsyncGenerator<HarnessEvent> {
-  const { adapter, run, runInput, session, controller } = input
+  const { adapter, run, runInput, session, controller, resumeInput } = input
   const pending: HarnessEvent[] = []
   const machine = new RunLifecycleMachine(run, event => pending.push(event))
   // H4: wall-time watchdog + harness-layer budget guard (model/tool/token).
   const timed = createRunCancellationWithTimeout(controller, run.budget.limits.maxWallTimeMs)
   const guard = new BudgetGuard(run.budget, reason => controller.abort(reason))
 
-  // created → initializing → running (with run.* lifecycle events).
-  machine.transition("initializing")
-  machine.transition("running")
+  if (resumeInput) {
+    // H7 resume path: waiting → resuming → running (no initializing).
+    machine.transition("resuming")
+    machine.transition("running")
+  } else {
+    // Fresh run: created → initializing → running.
+    machine.transition("initializing")
+    machine.transition("running")
+  }
   yield* traceAndYield(pending, run)
   pending.length = 0
 
   try {
-    const decision = yield* runGuardedLoop(adapter, run, runInput, controller, guard)
+    const decision = yield* runGuardedLoop(adapter, run, resumeInput ?? runInput, controller, guard)
     const mapped = mapDecisionToOutcome(decision, undefined, controller.signal.reason)
+    // H7: waiting decisions create a real pending interrupt (plan_approval /
+    // clarification) and surface interrupt.created.
+    if (mapped.status === "waiting") {
+      const kind = decision.kind === "return" && decision.reason === "clarification"
+        ? "clarification"
+        : "plan_approval"
+      const interrupt = createInterruptForDecision(run, kind)
+      run.interrupt = interrupt
+      if (mapped.outcome.kind === "waiting") {
+        mapped.outcome.interruptId = interrupt.interruptId
+      }
+      pending.push({
+        schemaVersion: HARNESS_EVENT_SCHEMA_VERSION,
+        eventId: randomUUID(),
+        sequence: ++run.eventSequence,
+        runId: run.runId,
+        sessionId: run.sessionId,
+        type: HARNESS_EVENT_TYPES.interruptCreated,
+        timestamp: new Date().toISOString(),
+        payload: { interrupt },
+      } as HarnessEvent)
+    }
     machine.transitionTo(mapped.status)
     run.outcome = mapped.outcome
     // Terminal lifecycle event (run.completed / run.waiting / run.blocked /

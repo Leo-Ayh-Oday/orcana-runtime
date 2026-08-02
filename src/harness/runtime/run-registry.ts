@@ -73,6 +73,21 @@ export class RunRegistry {
     return found
   }
 
+  /** H7: replace the run's cancellation controller (waiting runs were aborted
+   *  on cleanup; resume installs a fresh one). */
+  replaceController(runId: string, controller: AbortController): RegisteredRun {
+    const registered = this.requireRun(runId)
+    registered.controller = controller
+    return registered
+  }
+
+  /** H7: register a restored run (cross-instance resume). */
+  registerRestored(run: AgentRun, controller: AbortController): RegisteredRun {
+    const registered: RegisteredRun = { run, controller }
+    this.runs.set(run.runId, registered)
+    return registered
+  }
+
   remove(runId: string): void {
     this.runs.delete(runId)
   }

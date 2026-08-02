@@ -17,10 +17,16 @@ export function createRuntimeFileStateContext(
   return { ledger, writeGeneration: 0, unmanagedWriteObserved: false }
 }
 
-let fallbackRuntimeFileState = createRuntimeFileStateContext()
+// Compatibility-only state for direct tool/unit-test calls. Production Agent
+// execution always enters runWithRuntimeFileStateContext via AgentRunScope.
+let legacyCompatibilityFileState = createRuntimeFileStateContext()
 
 function getRuntimeFileStateContext(): RuntimeFileStateContext {
-  return runtimeFileStateStorage.getStore() ?? fallbackRuntimeFileState
+  return runtimeFileStateStorage.getStore() ?? legacyCompatibilityFileState
+}
+
+export function hasActiveRuntimeFileStateContext(): boolean {
+  return runtimeFileStateStorage.getStore() !== undefined
 }
 
 /** [PR-2 / I-2] Monotonic per-run write-generation counter. Bumped on every agent write.
@@ -73,8 +79,8 @@ export function resetRuntimeFileStateLedger(ledger = new FileStateLedger()): Fil
     return activeContext.ledger
   }
 
-  fallbackRuntimeFileState = createRuntimeFileStateContext(ledger)
-  return fallbackRuntimeFileState.ledger
+  legacyCompatibilityFileState = createRuntimeFileStateContext(ledger)
+  return legacyCompatibilityFileState.ledger
 }
 
 export function recordRuntimeFileRead(input: {

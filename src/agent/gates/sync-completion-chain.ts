@@ -1,16 +1,20 @@
-/** Completion gates: evaluated in sequence when agent has no tool calls + finalText.
+/** Sync Completion Chain (Phase 1) — synchronous gates evaluated in sequence
+ *  when agent has no tool calls + finalText.
  *
  *  Each gate can:
  *    - PASS (action="pass"): proceed to next gate
  *    - CONTINUE (action="continue"): inject messages into rawMessages, yield status, restart while loop
  *    - BREAK (action="break"): exit the agent loop
  *
- *  The orchestration layer (loop.ts) reads ctx.injectMessages, ctx.statusMessage,
- *  ctx.traceEvent, and ctx.breakEvent and performs the side effects.
+ *  The orchestration layer (CompletionOrchestrator) reads ctx.injectMessages,
+ *  ctx.statusMessage, ctx.traceEvent, and ctx.breakEvent and performs the side effects.
  *
- *  Gates NOT included (kept inline in loop.ts due to async/complex yield):
+ *  Gates NOT included (kept in CompletionOrchestrator due to async/complex yield):
  *    - CompletionEvidenceGate + FlashJudge (async, complex yield/break)
  *    - Plan approval yield/break (yields plan_ready with structured data)
+ *
+ *  Renamed from gates/completion.ts to distinguish from completion-gate.ts
+ *  (which is now external-completion-gate.ts).
  */
 
 import type { Gate } from "./types"

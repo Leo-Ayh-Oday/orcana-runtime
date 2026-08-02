@@ -13,7 +13,7 @@
 
 import { readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
-import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 import { SessionStore, type CheckpointRecord } from "./sqlite-session"
 
 // ═══════════════════════════════════════════════════════════
@@ -155,7 +155,12 @@ export function fileSHA(filePath: string): string | null {
 // Save / load — now backed by SessionStore
 // ═══════════════════════════════════════════════════════════
 
-/** Active SessionStore instances cached by sessionId for checkpoint writes. */
+/**
+ * Process-level service registry keyed by persistent session identity.
+ * This is not active-Run state: checkpoint scheduling state lives in the
+ * RuntimeExecutionContext below, while stores intentionally survive runs
+ * that resume the same session.
+ */
 const activeStores = new Map<string, SessionStore>()
 
 /** Register a SessionStore for checkpoint operations. Called by cli.ts at session start. */
@@ -239,11 +244,11 @@ const CP_THRESHOLDS = [
   { percent: 70, label: "compact", description: "精简 checkpoint — 建议压缩上下文" },
 ]
 
-const LAST_CHECKPOINT_PERCENT = Symbol("last-checkpoint-percent")
-const LAST_CHECKPOINT_ROUND = Symbol("last-checkpoint-round")
+const LAST_CHECKPOINT_PERCENT = createRuntimeContextKey("last-checkpoint-percent", () => 0)
+const LAST_CHECKPOINT_ROUND = createRuntimeContextKey("last-checkpoint-round", () => 0)
 
 function getLastCheckpointPercent(): number {
-  return getRuntimeContextValue(LAST_CHECKPOINT_PERCENT, 0)
+  return getRuntimeContextValue(LAST_CHECKPOINT_PERCENT)
 }
 
 function setLastCheckpointPercent(percent: number): void {
@@ -306,7 +311,7 @@ export function adaptiveCheckpointThreshold(
 }
 
 export function shouldSkipCheckpointThisRound(round: number): boolean {
-  return round - getRuntimeContextValue(LAST_CHECKPOINT_ROUND, 0) < 3
+  return round - getRuntimeContextValue(LAST_CHECKPOINT_ROUND) < 3
 }
 
 export function recordCheckpointTaken(round: number): void {

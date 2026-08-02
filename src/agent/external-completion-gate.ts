@@ -1,3 +1,13 @@
+/** External Completion Gate (Phase 2) — checks missing items, ripple obligations,
+ *  typecheck status, and mode contract exit criteria.
+ *
+ *  This is the "external" gate: it checks external evidence and obligations
+ *  after the sync gate chain (Phase 1) has passed.
+ *
+ *  Renamed from completion-gate.ts to distinguish from gates/completion.ts
+ *  (which is now gates/sync-completion-chain.ts).
+ */
+
 import { getBlockingObligations, type RippleObligation } from "../ripple/obligations"
 import type { TransactionEvidenceBinding, VerificationResult } from "../verification/result"
 import type { TaskTracker } from "./task-tracker"

@@ -11,7 +11,7 @@ export interface ProviderMessage {
 }
 
 export interface StreamEvent {
-  type: "text" | "tool_call" | "tool_result" | "thinking_blocks" | "status" | "error" | "done" | "confirm" | "token_usage" | "plan_ready" | "task_progress" | "clarification_ready"
+  type: "text" | "tool_call" | "tool_result" | "thinking_blocks" | "status" | "error" | "done" | "confirm" | "token_usage" | "plan_ready" | "task_progress" | "clarification_ready" | "user_question"
   /** For confirm: { tool: string, params: Record<string,unknown>, message: string } */
   data?: unknown
 }

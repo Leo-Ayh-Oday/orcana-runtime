@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test"
+import { afterAll, describe, expect, spyOn, test } from "bun:test"
 import { agentLoop } from "../src/agent/loop"
 import { getActiveMode, setActiveMode, type ModeName } from "../src/agent/mode-contract"
 import {
@@ -22,7 +22,12 @@ import {
 import { buildTools, Result } from "../src/tools/registry"
 import { getShellSandbox, setShellSandbox } from "../src/tools/shell"
 
+const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
 process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+afterAll(() => {
+  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
+  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+})
 
 class ModeProbeProvider implements LLMProvider {
   rounds = 0

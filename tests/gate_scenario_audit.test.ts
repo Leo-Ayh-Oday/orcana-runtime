@@ -12,7 +12,7 @@ import { evaluateToolPolicy, type ToolPolicyInput } from "../src/agent/tool-exec
 import { PermissionGate } from "../src/agent/permission"
 import type { ToolDescriptor } from "../src/tools/registry"
 import { createPreRoundChain } from "../src/agent/gates/pre-round"
-import { createCompletionChain } from "../src/agent/gates/completion"
+import { createCompletionChain } from "../src/agent/gates/sync-completion-chain"
 import type { PreRoundContext, CompletionContext } from "../src/agent/gates/contexts"
 import { GateTelemetry } from "../src/agent/gates/telemetry"
 import { enforceModeTools, MODES } from "../src/agent/mode-contract"

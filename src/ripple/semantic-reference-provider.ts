@@ -20,6 +20,7 @@
 import { relative, resolve } from "node:path"
 import type { RippleCaller } from "./types"
 import { ProjectProgram } from "./program"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -134,21 +135,25 @@ export class SemanticReferenceProvider {
   }
 }
 
-// ── Global singleton (lazy, cached) ─────────────────────────────────
+// ── Run-scoped provider (lazy, cached) ──────────────────────────────
 
-let _provider: SemanticReferenceProvider | null = null
+const SEMANTIC_REFERENCE_PROVIDER = createRuntimeContextKey<
+  SemanticReferenceProvider | null
+>("semantic-reference-provider", () => null)
 
-/** Get or create the shared SemanticReferenceProvider. */
+/** Get or create the current Run's SemanticReferenceProvider. */
 export function getSemanticReferenceProvider(projectRoot?: string): SemanticReferenceProvider {
   const root = projectRoot ?? process.cwd()
-  if (!_provider) {
-    _provider = new SemanticReferenceProvider(root)
+  let provider = getRuntimeContextValue(SEMANTIC_REFERENCE_PROVIDER)
+  if (!provider) {
+    provider = new SemanticReferenceProvider(root)
+    setRuntimeContextValue(SEMANTIC_REFERENCE_PROVIDER, provider)
   }
-  return _provider
+  return provider
 }
 
 /** Reset the provider (e.g. after project root changes). */
 export function resetSemanticReferenceProvider(): void {
-  _provider?.invalidate()
-  _provider = null
+  getRuntimeContextValue(SEMANTIC_REFERENCE_PROVIDER)?.invalidate()
+  setRuntimeContextValue(SEMANTIC_REFERENCE_PROVIDER, null)
 }

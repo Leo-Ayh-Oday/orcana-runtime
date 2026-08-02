@@ -96,6 +96,8 @@ export class StreamEventAdapter {
         return this.adaptPlanReady(ev)
       case "clarification_ready":
         return this.adaptClarificationReady(ev)
+      case "user_question":
+        return this.adaptUserQuestion(ev)
       case "error":
         return this.adaptError(ev)
       // thinking_blocks / confirm / done —— TUI 不消费
@@ -265,6 +267,17 @@ export class StreamEventAdapter {
     const d = ev.data as ClarificationReady
     if (!d) return []
     return [{ type: "clarification.ready", data: d }]
+  }
+
+  private adaptUserQuestion(ev: StreamEvent): TuiEvent[] {
+    const d = ev.data as { question?: string; options?: Array<{ label: string; description?: string }>; multiSelect?: boolean }
+    if (!d?.question) return []
+    return [{
+      type: "user.question",
+      question: d.question,
+      options: d.options,
+      multiSelect: d.multiSelect,
+    }]
   }
 
   private adaptError(ev: StreamEvent): TuiEvent[] {

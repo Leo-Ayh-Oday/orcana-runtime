@@ -6,7 +6,7 @@ import { GateTelemetry } from "../src/agent/gates/telemetry"
 import { GateChain } from "../src/agent/gates/chain"
 import type { Gate, GateResult } from "../src/agent/gates/types"
 import { createPreRoundChain } from "../src/agent/gates/pre-round"
-import { createCompletionChain } from "../src/agent/gates/completion"
+import { createCompletionChain } from "../src/agent/gates/sync-completion-chain"
 import { ContextBudgetGate } from "../src/agent/gates/context-budget"
 
 // ── Helpers ──

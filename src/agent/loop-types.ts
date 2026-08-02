@@ -7,6 +7,7 @@ import type { HookSystem } from "../hooks"
 import type { AgentRunTrace } from "./run-trace"
 import type { SessionCheckpoint } from "../session/checkpoint"
 import type { ModeName } from "./mode-contract"
+import type { PlanStore } from "./run/plan-store"
 
 export interface UsageStats {
   apiCalls: number
@@ -57,4 +58,6 @@ export interface AgentOptions {
   contextMapPolicy?: "off" | "auto" | "always"
   /** PR-7.2: Context injected by SessionStart hook handlers (e.g., project rules). */
   sessionStartContext?: string
+  /** L2: optional caller-provided run-scoped plan owner. */
+  planStore?: PlanStore
 }

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import ts from "typescript"
 import type { RuntimeContextBudgetMode } from "../agent/runtime-context"
-import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 import { buildContextKernel } from "../context/kernel"
 import { HybridMemory } from "../memory/hybrid"
 import { diffApiSurface, toSymbolShapes, changedSymbolNames, hasSeverity, type ApiChange } from "./api-diff"
@@ -20,37 +20,71 @@ import type {
   RippleReport,
 } from "./types"
 
-let _program: ProjectProgram | null = null
-const PENDING_CASCADE_FILES = Symbol("pending-cascade-files")
+const PENDING_CASCADE_FILES = createRuntimeContextKey(
+  "pending-cascade-files",
+  () => new Set<string>(),
+)
 
-/** Get or create the shared ProjectProgram (lazy, cached). */
+interface RippleRunCache {
+  program: ProjectProgram | null
+  parseCache: Map<string, { mtimeMs: number; source: ts.SourceFile; lines: string[] }>
+  fileListCache: { files: string[]; projectRoot: string; at: number } | null
+}
+
+const RIPPLE_RUN_CACHE = createRuntimeContextKey<RippleRunCache>(
+  "ripple-run-cache",
+  () => ({
+    program: null,
+    parseCache: new Map(),
+    fileListCache: null,
+  }),
+)
+
+function rippleRunCache(): RippleRunCache {
+  const cache = getRuntimeContextValue(RIPPLE_RUN_CACHE)
+  setRuntimeContextValue(RIPPLE_RUN_CACHE, cache)
+  return cache
+}
+
+/** Get or create the current Run's ProjectProgram (lazy, cached). */
 export function getRippleProgram(): ProjectProgram {
-  if (!_program) _program = new ProjectProgram(process.cwd())
-  return _program
+  const cache = rippleRunCache()
+  if (!cache.program) cache.program = new ProjectProgram(process.cwd())
+  return cache.program
 }
 
 /** Reset the program (e.g. after project root changes). */
 export function resetRippleProgram(): void {
-  _program?.invalidate()
-  _program = null
+  const cache = rippleRunCache()
+  cache.program?.invalidate()
+  cache.program = null
   resetSemanticReferenceProvider()
   resetAstGrepProvider()
   invalidateFileListCache()
-  parseCache.clear()
+  cache.parseCache.clear()
 }
 
 /** Invalidate the file list cache so the next call to cachedProjectFiles re-walks the project. */
 export function invalidateFileListCache(): void {
-  _fileListCache = null
+  rippleRunCache().fileListCache = null
 }
 
-/** Set files currently being cascaded (set by loop.ts when ripple obligations exist). */
+/**
+ * Set files currently being cascaded (set by loop.ts when obligations exist).
+ *
+ * @deprecated Compatibility adapter; prefer AgentRunScope-owned Ripple state.
+ */
 export function setCascadeFiles(files: Set<string>): void {
   setRuntimeContextValue(PENDING_CASCADE_FILES, files)
 }
 
 function getCascadeFiles(): Set<string> {
-  return getRuntimeContextValue(PENDING_CASCADE_FILES, new Set<string>())
+  return getRuntimeContextValue(PENDING_CASCADE_FILES)
+}
+
+/** Read-only diagnostic projection used by Run-scope isolation tests. */
+export function getCascadeFilesSnapshot(): ReadonlySet<string> {
+  return new Set(getCascadeFiles())
 }
 
 interface SymbolInfo {
@@ -70,18 +104,12 @@ interface SymbolInfo {
 
 const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".deepseek-code", "blog"])
 
-// Parse cache: cache SourceFile+lines keyed by mtime.
-// Even when mtime matches we still walk the AST — the *target* symbol
-// changed, not this file. Caching avoids re-reading and re-parsing.
-const parseCache = new Map<string, { mtimeMs: number; source: ts.SourceFile; lines: string[] }>()
-
-// File list cache: avoid full recursive walk every call
-let _fileListCache: { files: string[]; projectRoot: string; at: number } | null = null
 const FILE_LIST_CACHE_TTL_MS = 5000 // refresh at most every 5s
 
 function cachedProjectFiles(projectRoot: string): string[] {
-  if (_fileListCache && _fileListCache.projectRoot === projectRoot && Date.now() - _fileListCache.at < FILE_LIST_CACHE_TTL_MS) {
-    return _fileListCache.files
+  const cache = rippleRunCache()
+  if (cache.fileListCache && cache.fileListCache.projectRoot === projectRoot && Date.now() - cache.fileListCache.at < FILE_LIST_CACHE_TTL_MS) {
+    return cache.fileListCache.files
   }
   const files: string[] = []
   const walk = (dir: string) => {
@@ -97,7 +125,7 @@ function cachedProjectFiles(projectRoot: string): string[] {
     }
   }
   walk(projectRoot)
-  _fileListCache = { files, projectRoot, at: Date.now() }
+  cache.fileListCache = { files, projectRoot, at: Date.now() }
   return files
 }
 
@@ -297,6 +325,7 @@ function findCallers(projectRoot: string, targetFile: string, symbols: string[])
 
     let source: ts.SourceFile
     let lines: string[]
+    const parseCache = rippleRunCache().parseCache
     const cached = parseCache.get(file)
     if (cached && cached.mtimeMs === fileMtime) {
       source = cached.source

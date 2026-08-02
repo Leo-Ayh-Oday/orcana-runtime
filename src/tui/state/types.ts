@@ -124,6 +124,12 @@ export interface TuiDashToolHistoryEntry {
   status: "running" | "done" | "blocked" | "error"
 }
 
+export interface TuiPendingQuestion {
+  question: string
+  options?: Array<{ label: string; description?: string }>
+  multiSelect?: boolean
+}
+
 export interface TuiState {
   session: TuiSessionState
   mode: TuiMode
@@ -145,6 +151,7 @@ export interface TuiState {
   task?: unknown
   plan?: unknown
   clarification?: TuiClarificationState
+  pendingQuestion?: TuiPendingQuestion
   round: number
   cacheHitHistory: number[]
   rippleFindings: TuiRippleFinding[]

@@ -22,7 +22,7 @@ import { FORBIDDEN_SECRET_FILES } from "../sandbox/forbidden-patterns"
 import type { TransactionEvidenceBinding, VerificationKind } from "../verification/result"
 import type { FileTransaction, TransactionSnapshot } from "../tools/transaction"
 import { createTransaction, rollbackTransaction, rollbackTransactionPaths } from "../tools/transaction"
-import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 import { hasRuntimeUnmanagedWrites } from "../file-state/runtime-file-state"
 
 // ── PatchTransaction types ──
@@ -387,10 +387,17 @@ interface ActivePatchContext {
   nodeId: string
 }
 
-const ACTIVE_PATCH = Symbol("active-patch")
+const ACTIVE_PATCH = createRuntimeContextKey<ActivePatchContext | null>(
+  "active-patch",
+  () => null,
+)
 
-/** Set the active patch context from the current node's TaskPacket.
- *  Called by loop.ts when a node becomes active. */
+/**
+ * Set the active patch context from the current node's TaskPacket.
+ * Called by loop.ts when a node becomes active.
+ *
+ * @deprecated Compatibility adapter; prefer AgentRunScope-owned patch state.
+ */
 export function setActivePatchContext(opts: {
   scope: string[]
   verification: VerificationKind[]
@@ -399,12 +406,14 @@ export function setActivePatchContext(opts: {
   setRuntimeContextValue(ACTIVE_PATCH, { ...opts })
 }
 
+/** @deprecated Compatibility projection; prefer AgentRunScope-owned patch state. */
 export function getActivePatchContext(): ActivePatchContext | null {
-  return getRuntimeContextValue<ActivePatchContext | null>(ACTIVE_PATCH, null)
+  return getRuntimeContextValue(ACTIVE_PATCH)
 }
 
+/** @deprecated Compatibility adapter; prefer AgentRunScope-owned patch state. */
 export function clearActivePatchContext(): void {
-  setRuntimeContextValue<ActivePatchContext | null>(ACTIVE_PATCH, null)
+  setRuntimeContextValue(ACTIVE_PATCH, null)
 }
 
 // ── PatchTransaction factory ──
@@ -611,10 +620,15 @@ export interface ManagedPatchTransaction {
   rollbackReason?: string
 }
 
-// ── Transaction registry (module-level, cleared per session) ──
+// ── Run-scoped transaction registry ──
 
-const txRegistry = new Map<string, ManagedPatchTransaction>()
-const COMMITTED_TRANSACTION_EVIDENCE = Symbol("committed-transaction-evidence")
+const PATCH_TRANSACTION_REGISTRY = createRuntimeContextKey(
+  "patch-transaction-registry",
+  () => new Map<string, ManagedPatchTransaction>(),
+)
+const COMMITTED_TRANSACTION_EVIDENCE = createRuntimeContextKey<
+  CommittedTransactionEvidenceState | undefined
+>("committed-transaction-evidence", () => undefined)
 
 interface CommittedTransactionEvidenceState {
   stateId: string
@@ -626,11 +640,16 @@ function emptyCommittedTransactionEvidenceState(): CommittedTransactionEvidenceS
   return { stateId: "txstate_empty", transactionCount: 0 }
 }
 
+function transactionRegistry(): Map<string, ManagedPatchTransaction> {
+  const registry = getRuntimeContextValue(PATCH_TRANSACTION_REGISTRY)
+  // Defaults are intentionally not inserted by generic reads. Persist the Map
+  // on first access so every operation in this Run observes one owner.
+  setRuntimeContextValue(PATCH_TRANSACTION_REGISTRY, registry)
+  return registry
+}
+
 function committedTransactionEvidenceState(): CommittedTransactionEvidenceState {
-  let state = getRuntimeContextValue<CommittedTransactionEvidenceState | undefined>(
-    COMMITTED_TRANSACTION_EVIDENCE,
-    undefined,
-  )
+  let state = getRuntimeContextValue(COMMITTED_TRANSACTION_EVIDENCE)
   if (!state) {
     state = emptyCommittedTransactionEvidenceState()
     setRuntimeContextValue(COMMITTED_TRANSACTION_EVIDENCE, state)
@@ -652,17 +671,17 @@ export function currentTransactionEvidenceBinding(): TransactionEvidenceBinding 
 
 /** Get all managed transactions (active and completed). */
 export function getAllManagedTransactions(): ManagedPatchTransaction[] {
-  return [...txRegistry.values()]
+  return [...transactionRegistry().values()]
 }
 
 /** Get a managed transaction by ID. */
 export function getManagedTransaction(txId: string): ManagedPatchTransaction | undefined {
-  return txRegistry.get(txId)
+  return transactionRegistry().get(txId)
 }
 
 /** Reset active transactions and committed-history evidence (for session/test teardown). */
 export function clearTransactionRegistry(): void {
-  txRegistry.clear()
+  transactionRegistry().clear()
   setRuntimeContextValue(COMMITTED_TRANSACTION_EVIDENCE, emptyCommittedTransactionEvidenceState())
 }
 
@@ -774,7 +793,7 @@ export function initManagedTransaction(input: InitManagedTxInput): ManagedPatchT
     stateTimestamps: { proposed: Date.now() },
   }
 
-  txRegistry.set(mpt.txId, mpt)
+  transactionRegistry().set(mpt.txId, mpt)
   return mpt
 }
 
@@ -921,7 +940,7 @@ export function commitManagedTransaction(mpt: ManagedPatchTransaction): ManagedP
   evidenceState.latestTransactionId = mpt.txId
 
   // Auto-purge from registry after commit (keep last N via telemetry if needed later)
-  txRegistry.delete(mpt.txId)
+  transactionRegistry().delete(mpt.txId)
   return mpt
 }
 
@@ -960,7 +979,7 @@ export function rollbackManagedTransaction(
   }
 
   // Auto-purge from registry after rollback
-  txRegistry.delete(mpt.txId)
+  transactionRegistry().delete(mpt.txId)
 
   mpt.state = "rolled_back"
   mpt.stateTimestamps.rolled_back = Date.now()

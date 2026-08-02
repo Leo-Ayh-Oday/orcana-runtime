@@ -1,4 +1,4 @@
-import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 export {
   createRuntimeExecutionContext,
@@ -10,12 +10,17 @@ export type { RuntimeExecutionContext } from "../runtime/execution-context"
 
 export type RuntimeContextBudgetMode = "normal" | "degraded" | "block"
 
-const CONTEXT_BUDGET_MODE = Symbol("runtime-context-budget-mode")
+const CONTEXT_BUDGET_MODE = createRuntimeContextKey<RuntimeContextBudgetMode>(
+  "runtime-context-budget-mode",
+  () => "normal",
+)
 
+/** @deprecated Compatibility adapter; prefer AgentRunScope-owned budget state. */
 export function setRuntimeContextBudgetMode(mode: RuntimeContextBudgetMode) {
   setRuntimeContextValue(CONTEXT_BUDGET_MODE, mode)
 }
 
+/** @deprecated Compatibility projection; prefer AgentRunScope-owned budget state. */
 export function getRuntimeContextBudgetMode(): RuntimeContextBudgetMode {
-  return getRuntimeContextValue(CONTEXT_BUDGET_MODE, "normal")
+  return getRuntimeContextValue(CONTEXT_BUDGET_MODE)
 }

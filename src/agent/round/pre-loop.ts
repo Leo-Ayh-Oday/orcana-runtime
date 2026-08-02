@@ -4,7 +4,7 @@
 
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
-import type { StreamEvent, ProviderMessage } from "../../provider/types"
+import type { ProviderMessage } from "../../provider/types"
 import type { ToolDescriptor, ToolResult } from "../../tools/registry"
 import type { HookSystem } from "../../hooks"
 import type { VerificationResult } from "../../verification/result"
@@ -81,30 +81,6 @@ export async function withToolTimeout<T>(
     if (timer) clearTimeout(timer)
     if (abortHandler) abortSignal?.removeEventListener("abort", abortHandler)
   }
-}
-
-// ── Provider stream helpers ──
-
-export async function nextProviderEvent(
-  iterator: AsyncIterator<StreamEvent>,
-  timeoutMs: number,
-): Promise<IteratorResult<StreamEvent>> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      iterator.next(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`provider stream idle timeout after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-export function providerIdleTimeoutMs(): number {
-  const raw = Number(process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS)
-  return Number.isFinite(raw) && raw > 0 ? raw : 180_000
 }
 
 // ── Hook helpers ──

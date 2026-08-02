@@ -33,6 +33,7 @@ import { resolveActiveContext } from "../input/types"
 import { ModeContract, ModeBadge } from "./ModeContract"
 import { ConfirmModal } from "./ConfirmModal"
 import { RewindModal, type RewindModalState } from "./RewindModal"
+import { QuestionPanel } from "./QuestionPanel"
 import type { ConfirmRequest } from "../confirm-stubs"
 import { extractRuntimeCounters, formatRuntimeCounters } from "../format-runtime"
 import { useClock } from "../clock"
@@ -345,6 +346,8 @@ export interface AppShellProps {
   rewindModal: RewindModalState | null
   runtimeDialog: RuntimeDialogState | null
   thinkingEffort: ThinkEffort
+  /** PR-1: Answer pending question from agent */
+  onAnswerQuestion?: (answer: string) => void
 }
 
 // ── 布局计算（纯函数，便于测试） ──
@@ -549,7 +552,12 @@ export function AppShell(props: AppShellProps) {
 
       {/* Footer: PlanPanel/ClarificationPanel + ThinkingDock + ComposerFrame + FooterHints */}
       <Box flexDirection="column" height={layout.footerHeight}>
-        {clarification ? (
+        {state.pendingQuestion && props.onAnswerQuestion ? (
+          <QuestionPanel
+            question={state.pendingQuestion}
+            onAnswer={props.onAnswerQuestion}
+          />
+        ) : clarification ? (
           <ClarificationPanel wizard={clarification} width={cols} />
         ) : (
           <PlanPanel task={task} width={cols} />

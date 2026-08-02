@@ -3,7 +3,7 @@
  *  Status: IMPLEMENTED AND WIRED. loop.ts directly imports and calls:
  *    - activateMasterPlan (3 call sites: 2 activate + 1 tryNodeTransition)
  *    - tryNodeTransition (2 node-transition points)
- *    - planRef.current / planProgress (consumed by TASK_TOOL)
+ *    - Run-scoped PlanStore / planProgress (consumed by createTaskTool)
  *  MasterPlan nodes drive TaskPacket creation via buildPacketFromLine /
  *  createTaskTrackerFromPacket. setActivePatchContext is called at each
  *  node activation point. Plan state is serialized into cold memory for
@@ -28,6 +28,8 @@ import type { TaskTracker } from "./task-tracker"
 import { taskTrackerComplete, formatTaskTrackerStatus, formatTaskTrackerPrompt, updateTaskTrackerAfterTools, missingTaskRequirements, markPlanAccepted, type TaskIntent } from "./task-tracker"
 import { buildPacketFromLine, createTaskTrackerFromPacket, type TaskPacket } from "./task-packet"
 import { validatePlan } from "./plan-validator"
+import { getActiveRuntimeExecutionContext } from "../runtime/execution-context"
+import { createPlanStore, setCurrentPlan } from "./run/plan-store"
 
 // ── Plan status (MiMo-compatible icons) ──
 
@@ -650,9 +652,24 @@ export function formatPlanContext(plan: MasterPlan): string {
   ].join("\n")
 }
 
-// ── Global plan reference (shared between tool execution in cli.ts and loop.ts) ──
+// ── Legacy Plan reference compatibility adapter ──
 
-export const planRef: { current: MasterPlan | null } = { current: null }
+const legacyPlanStore = createPlanStore()
+
+/**
+ * @deprecated Use a run-scoped PlanStore. This adapter targets the active
+ * AgentRunScope when one exists and a compatibility-only store otherwise.
+ * Production tools and loop control do not import it.
+ */
+export const planRef: { current: MasterPlan | null } = {
+  get current(): MasterPlan | null {
+    return getActiveRuntimeExecutionContext()?.planStore.current ?? legacyPlanStore.current
+  },
+  set current(plan: MasterPlan | null) {
+    const store = getActiveRuntimeExecutionContext()?.planStore ?? legacyPlanStore
+    setCurrentPlan(store, plan)
+  },
+}
 
 // ── Serialization for session persistence ──
 

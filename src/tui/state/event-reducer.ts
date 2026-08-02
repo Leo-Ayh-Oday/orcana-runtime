@@ -544,6 +544,20 @@ export function reduceTuiEvent(
       }
     }
 
+    case "user.question": {
+      // 模型主动提问：设置 pendingQuestion 状态
+      return {
+        ...state,
+        pendingQuestion: {
+          question: event.question,
+          options: event.options,
+          multiSelect: event.multiSelect,
+        },
+        status: "question pending",
+        done: true,
+      }
+    }
+
     // ── 涟漪引擎阶段（PR-5） ──
 
     case "ripple.phase": {

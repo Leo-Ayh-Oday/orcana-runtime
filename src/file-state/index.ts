@@ -16,6 +16,7 @@ export {
   createRuntimeFileStateContext,
   getRuntimeFileStateLedger,
   getWriteGeneration,
+  hasActiveRuntimeFileStateContext,
   hasRuntimeUnmanagedWrites,
   recordRuntimeObservedWrites,
   recordRuntimeUnmanagedWrite,

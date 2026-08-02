@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -15,7 +15,12 @@ import { applyAndCommit } from "../src/agent/patch-transaction"
 
 // Disable FlashTriage in integration tests: mock LLM providers don't model triage calls,
 // and FlashTriage is independently tested in src/agent/flash-triage.test.ts.
+const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
 process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+afterAll(() => {
+  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
+  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+})
 
 class ParallelToolProvider implements LLMProvider {
   rounds = 0
@@ -243,7 +248,9 @@ class RuntimeSelfEditProvider implements LLMProvider {
     this.messages.push(options.messages)
     const round = this.rounds++
     if (round === 0) {
-      yield { type: "tool_call", data: { id: "edit-runtime", name: "edit_file", input: { path: "src/agent/task-tracker.ts" } } }
+      // A non-TypeScript runtime path still exercises the self-edit gate without
+      // launching an unrelated repository-wide tsc subprocess in this contract test.
+      yield { type: "tool_call", data: { id: "edit-runtime", name: "edit_file", input: { path: "src/agent/runtime-baseline.txt" } } }
       return
     }
     yield { type: "tool_call", data: { id: "typecheck", name: "shell", input: { command: "bun run typecheck" } } }
@@ -258,7 +265,7 @@ class RippleExitGateProvider implements LLMProvider {
     this.messages.push(options.messages)
     const round = this.rounds++
     if (round === 0) {
-      yield { type: "tool_call", data: { id: "edit-api", name: "edit_file", input: { path: "api.ts" } } }
+      yield { type: "tool_call", data: { id: "edit-api", name: "edit_file", input: { path: "api.baseline.txt" } } }
       return
     }
     if (round === 1) {
@@ -266,7 +273,7 @@ class RippleExitGateProvider implements LLMProvider {
       return
     }
     if (round === 2) {
-      yield { type: "tool_call", data: { id: "edit-cart", name: "edit_file", input: { path: "cart.ts" } } }
+      yield { type: "tool_call", data: { id: "edit-cart", name: "edit_file", input: { path: "cart.baseline.txt" } } }
       return
     }
     yield { type: "text", data: "done" }
@@ -306,11 +313,14 @@ class VerifiedWriteProvider implements LLMProvider {
 
 class MissingRequestedTestProvider implements LLMProvider {
   rounds = 0
-  constructor(private readonly testPath = "tests/calc.test.ts") {}
+  constructor(
+    private readonly testPath = "tests/calc.test.ts",
+    private readonly sourcePath = "src/calc.ts",
+  ) {}
 
   async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
     if (this.rounds++ === 0) {
-      yield { type: "tool_call", data: { id: "edit", name: "edit_file", input: { path: "src/calc.ts" } } }
+      yield { type: "tool_call", data: { id: "edit", name: "edit_file", input: { path: this.sourcePath } } }
       return
     }
     yield { type: "tool_call", data: { id: "test", name: "write_file", input: { path: this.testPath } } }
@@ -322,7 +332,7 @@ class LongTaskWriteDuringPlanProvider implements LLMProvider {
 
   async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
     if (this.rounds++ === 0) {
-      yield { type: "tool_call", data: { id: "w1", name: "write_file", input: { path: "server/index.ts" } } }
+      yield { type: "tool_call", data: { id: "w1", name: "write_file", input: { path: "server/index.baseline.txt" } } }
       return
     }
     yield { type: "text", data: "Plan first." }
@@ -1383,8 +1393,9 @@ describe("Agent loop greedy tool execution", () => {
     expect(allMessages).toContain("not hard-coded commands")
   })
 
-  test("stops after verified runtime self-edit and requires restart", async () => {
+  test("routes runtime self-edit through root verification before continuing", async () => {
     const provider = new RuntimeSelfEditProvider()
+    const trace = new MemoryTrace()
     const tools = buildTools(
       {
         name: "edit_file",
@@ -1422,24 +1433,33 @@ describe("Agent loop greedy tool execution", () => {
       provider,
       model: "test",
       tools,
-      maxRounds: 5,
+      runTrace: trace as unknown as AgentRunTrace,
+      maxRounds: 2,
     })) {
       events.push(event)
     }
 
-    // Gate chain blocks runtime self-edit; loop stops without producing final text
-    expect(provider.rounds).toBeGreaterThanOrEqual(1)
+    expect(provider.rounds).toBe(2)
     const allMessages = JSON.stringify(provider.messages)
-    expect(allMessages.toLowerCase()).toContain("self")  // self-edit gate message
+    expect(allMessages).toContain("Runtime Self-Edit Gate")
+    expect(events.filter(event =>
+      event.type === "status" && String(event.data).includes("runtime-self-edit-gate: run root typecheck then stop")
+    )).toHaveLength(1)
+    expect(trace.events.filter(event => {
+      const data = event.data as { gate?: string; decision?: string } | undefined
+      return event.type === "gate_decision"
+        && data?.gate === "runtime_self_edit"
+        && data.decision === "verify_then_restart"
+    })).toHaveLength(1)
   }, 15000)
 
   test("does not stop when ripple obligations still have unsynchronized callers", async () => {
     const report: RippleReport = {
-      targetFile: "api.ts",
+      targetFile: "api.baseline.txt",
       changedSymbols: ["loadUser"],
       apiChanges: [],
       usageImpacts: [],
-      callers: [{ file: "cart.ts", line: 3, symbol: "loadUser", text: "const user = loadUser()" }],
+      callers: [{ file: "cart.baseline.txt", line: 3, symbol: "loadUser", text: "const user = loadUser()" }],
       findings: [],
       decision: "allow",
       memoryHits: [],
@@ -1453,7 +1473,7 @@ describe("Agent loop greedy tool execution", () => {
         const path = String(params.path)
         return Result.ok(`edited ${path}`, {
           path,
-          rippleReport: path === "api.ts"
+          rippleReport: path === "api.baseline.txt"
             ? report
             : { ...report, targetFile: path, changedSymbols: [], apiChanges: [], callers: [] },
         })
@@ -1475,7 +1495,7 @@ describe("Agent loop greedy tool execution", () => {
     expect(provider.rounds).toBeGreaterThanOrEqual(2)
     expect(events.some(e => e.type === "status" && String(e.data).includes("ripple"))).toBe(true)
     // Messages now include ContextMap content; Ripple Exit Gate prompt is embedded in large prefix
-    expect(JSON.stringify(provider.messages)).toContain("cart.ts")
+    expect(JSON.stringify(provider.messages)).toContain("cart.baseline.txt")
   }, 15000)
 
   test("quality gate prevents final answer when diagnostics are unresolved", async () => {
@@ -1602,13 +1622,17 @@ describe("Agent loop greedy tool execution", () => {
         },
       },
     )
-    const provider = new MissingRequestedTestProvider("feature-eval/tests/calc.test.ts")
+    const provider = new MissingRequestedTestProvider(
+      "feature-eval/tests/calc.test.ts",
+      "feature-eval/src/calc-baseline.txt",
+    )
     const events: StreamEvent[] = []
 
     for await (const event of agentLoop("Fix divide. Add feature-eval/tests/calc.test.ts with bun test.", {
       provider,
       model: "test",
       tools,
+      contextMapPolicy: "off",
       maxRounds: 2,
       autoFinishOnVerifiedWrite: true,
     })) {
@@ -1669,6 +1693,7 @@ describe("Agent loop greedy tool execution", () => {
       provider: new LongTaskWriteDuringPlanProvider(),
       model: "test",
       tools,
+      contextMapPolicy: "off",
       maxRounds: 2,
       conversationHistory: [
         { role: "user", content: "Build a full-stack personal blog with React/Vite, Bun API, tests, responsive design, and build verification." },

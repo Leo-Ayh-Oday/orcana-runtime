@@ -1,3 +1,4 @@
+import { ASK_USER_TOOL } from "./ask-user"
 import { CODEGRAPH_TOOLS } from "./codegraph"
 import { FILE_TOOLS } from "./file"
 import { GIT_TOOLS } from "./git"
@@ -7,6 +8,7 @@ import type { ToolDef } from "./registry"
 import { WEB_SEARCH } from "./search"
 import { START_SERVICE_TOOL } from "./service"
 import { SHELL_TOOL } from "./shell"
+import { TODO_WRITE_TOOL } from "./todo"
 import { TYPECHECK_TOOL } from "./typescript"
 import { WEB_FETCH_TOOL } from "./webfetch"
 
@@ -20,6 +22,8 @@ const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
   ...CODEGRAPH_TOOLS,
   ...LSP_TOOLS,
   TYPECHECK_TOOL,
+  TODO_WRITE_TOOL,
+  ASK_USER_TOOL,
 ])
 
 const TRUSTED_VERIFICATION_PRODUCERS = new Map<ToolDef, {

@@ -19,15 +19,25 @@
 | L4 ToolBatchExecutor | 完成 | 2026-08-02 | `src/agent/tool-execution/{batch-executor,single-executor,result-normalizer}.ts` 抽出；并行只读、8 层 Policy、Hook、timeout/abort、ToolLedger 与结果规范化统一到一个执行入口；hard-block 也写入 Ledger；`loop.ts` 由 2077 行降至 **1726 行**（净减 351，低于 400–500 预估）；`tests/tool_batch_executor.test.ts` 9 项；门禁绿色 |
 | L5 VerificationCoordinator | 完成 | 2026-08-02 | `src/agent/verification/coordinator.ts` 抽出 `bindVerificationToLedger` / `runRippleVerificationPhase` / `runBatchTypecheckAndTaskTracker`；Ripple 验证、义务解析、cascade、narrow-edit 完成、批量 typecheck、TaskTracker 验证投影、lastResults 全部移出 `loop.ts`；`loop.ts` 不再直接运行 typecheck 或操作 Ripple obligation；`loop.ts` 降至 **1647 行**（净减 79，远低于 250–350 预估）；门禁绿色 |
 | L6 MaintenanceCoordinator | 完成 | 2026-08-02 | `src/agent/maintenance/coordinator.ts`（389 行）包含全部 7 项维护操作：forward/historical microcompact、thinking compaction、semantic recall、adaptive checkpoint、knowledge distillation、knowledge reconcile；提供组合式 `runMaintenance()`；`loop.ts` 降至 **1446 行**（2077 → 1446，累计净减 631）；`tests/maintenance_coordinator.test.ts` 5 项；门禁绿色 |
-| L7 LoopDecision | 未开始 | — | 不提前实施 |
+| L7 LoopDecision | 完成 | 2026-08-02 | 新增 `src/agent/kernel/`（`types/effects/context/prepare/master-plan/round/finalize`）：阶段退出统一为 `LoopDecision`（continue/break/return 三类）、事件/Trace/状态提交统一为 `RunEffect`（stream/trace/state，字段级提交走 `AgentRunStatePatch`）、唯一终态 switch + `finalizeRun(decision)`、Stop Hook 与资源清理入统一 finally 生命周期；`loop.ts` 收敛为阶段编排器（2077 → **132 行**）；L0 Golden Trace 保持一致；`tests/agent_loop_l7_kernel.test.ts` 5 项（Final text once、round-budget、empty-round、drainPhase 关闭协议、wrapEvents 透传）；门禁全绿（typecheck/test/build/npm pack --dry-run） |
 
 ## 重启续作点
 
 **记录日期：** 2026-08-02  
-**当前边界：** L0—L6 已完成（L6 全部 7 项维护操作已抽入 `maintenance/coordinator.ts`，含组合式 `runMaintenance()`；`loop.ts` 1446 行）；L7 尚未开始。  
-**下次入口：** `PR-L7：引入 LoopDecision` 收束 Agent Kernel（目标 `loop.ts` 300–500 行，当前 1446 行）。注意：单一 `runMaintenance()` 调用点受控制流位置约束（forward microcompact 须在 history push 前、semantic recall 须在 router state update 前），loop.ts 仍按位置逐个调用；组合式 `runMaintenance()` 已提供。
+**当前边界：** L0—L7 全部完成（`loop.ts` 132 行编排器；`kernel/` 内含 prepare/round/finalize 阶段与 effect 通道；L7 专项测试 5 项）。
+**下次入口：** `Graph Runtime G0`（见 §10.4 协议：Workflow Node Executor → `createAgentRun` → Agent Kernel → `LoopDecision/NodeResult` → ResultStore）。注意：L7 的终态 switch 已固定 `finalizeRun()` 语义，G0 只能通过该协议调用 Kernel，不得直接调底层 Tool、直写 EvidenceLedger、改 Run flags、绕过 `disposeAgentRun()` 或建第二套完成判断。
 
 ### 审计遗留偏差（2026-08-02，严格对照本计划审核后记录）
+
+**L7 新增：**
+
+1. **行数承诺修正（追加）**：实际 `loop.ts` L7 = 132 行，低于 300–500 目标下限——编排器只含 Run 生命周期、主 Round 循环、终态分发与统一 finally，阶段体全部移入 `kernel/`（round.ts 929 行、context.ts 293 行、prepare.ts 183 行）。
+2. **Setup 异常路径修复（行为面）**：L7 前 triage/runState 装配异常（`loop.ts` try 块之外）会泄漏 Sandbox 且不发 Stop Hook；L7 后 `buildRunContext` 纳入统一 try，异常 → `stopReason="error"` + 清理 + Hook。属缺陷修复，未记录为 Golden Trace 差异（Golden 仅覆盖 completed 路径）。
+3. **Stop Hook 相对清理顺序调整**：L7 前澄清/阻断等提前退出在清理**之前**派发 Stop Hook（在 `try` 内提前 dispatch），L7 后统一为 finally 内**清理完成后**派发；reason 与 totalRounds 不变。L0 测试只断言 reason 序列与单次性，未断言与清理的先后。
+4. **状态提交边界**：`kernel/types.ts` 头注释文档化——字段级 runState 提交走 `RunEffect "state"`（`applyAgentRunStatePatch`）；被引用捕获的容器（rawMessages/usage/epochState/taskFiles/lifecycle）与控制器模块（MasterPlan、L4–L6 协调器）的原地变更保持原样（对象身份不能替换）。patch 原语自身语义未改。
+5. **prompt_blocked 预状态退出**：hook 阻断发生在上下文装配之前（ctx 为 null），终态 switch 仍经 `finalizeRun(ctx=null, decision)` 处理 error 事件与 `stopReason="blocked"`；abort-at-start 保持 try 前直接派发（无任何状态可收尾）。
+
+**L7 前遗留（延续）：**
 
 1. **L0–L3（`385a275`）单 commit 打包 + 行为面变更**：L0–L3 四个阶段合并为一个 commit，无法独立回退；且该 commit 除结构重构外还包含行为面改动——系统提示词重写（`src/agent/prompts.ts`）、新增 `ask_user`/`todo_write`/`git_show`/`git_add`/`git_commit` 工具与 `user_question` 事件、TUI `QuestionPanel`、`runPostEditDiagnostics` 的 existsSync 守卫。这些违反"行为冻结"原则（Provider 消息序列 / tool_use 表面已变），且 Golden Trace 基线（`tests/fixtures/agent-loop-l0-golden.json`）创建于这些改动**之后**，冻结的是新行为而非重构前行为。**处置待定**：拆分为独立 feature commit，或正式补一份行为面变更说明并重订基线声明。
 2. **L4 hard-block 记 Ledger** 是真实 StreamEvent 行为变化（新增 status 事件），属 L4 验收授权，但未上报 Golden Trace 差异；`planOnlyRound` 阻断仍未记 Ledger，"blocked 均有记录"只部分满足；abort 的在途工具不记 Ledger。
@@ -35,15 +45,14 @@
 4. **L6**：checkpoint/reconcile 失败仍会传播中断主任务（`maintenance/coordinator.ts` 头注释承诺与实现不符）；无 per-capability 配置开关；无专项测试。
 5. **行数承诺修正**：实际 `loop.ts` 行数 L4=1726、L5=1647、L6=1595，均低于计划预估；本计划此前记录的数字已更正。
 
-重启后：
+L7 重启已实施完毕（2026-08-02）。G0 重启时：
 
-1. 不重复实施 L0—L3；
+1. 不重复实施 L0—L7；
 2. 保留工作树中的既有用户改动，不做 reset/checkout；
-3. 先运行 `git diff --check`、Provider Runner/L0 Golden 定向测试和
+3. 先运行 `git diff --check`、L0 Golden/L7 Kernel 定向测试和
    `bun run typecheck`；
-4. 从 Tool Policy、并行只读执行、Hook、timeout/abort、ToolLedger 和结果
-   规范化的现有内联边界开始审计；
-5. 不提前迁移 L5 VerificationPipeline 或 L6 MaintenancePipeline。
+4. 按 §10.4 协议接线 Graph Runtime，不得绕过 `finalizeRun()` 或新建
+   第二套完成判断。
 
 L1 ownership 决议：`AgentRunState` 是可持久化运行事实的所有者；
 Router State 暂时保留 thinking/routing 行为驱动权；`StateMachine` 明确为只读

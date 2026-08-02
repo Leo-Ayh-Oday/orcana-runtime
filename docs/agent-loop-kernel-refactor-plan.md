@@ -17,13 +17,14 @@
 | L2 Run Scope 与并发隔离 | 完成 | 2026-07-30 | Plan/Todo/Tool Registry 与 Runtime/File State 绑定到单一 AgentRunScope；Patch registry、Ripple cache、Checkpoint scheduler 均按 Run 隔离，重叠双 Run 测试通过 |
 | L3 ProviderRoundRunner | 完成 | 2026-07-30 | Provider 请求、流解析、usage、文本缓冲、idle timeout、abort、iterator cleanup 和失败恢复策略已抽出；`loop.ts` 不再直接调用 Provider |
 | L4 ToolBatchExecutor | 完成 | 2026-08-02 | `src/agent/tool-execution/{batch-executor,single-executor,result-normalizer}.ts` 抽出；并行只读、8 层 Policy、Hook、timeout/abort、ToolLedger 与结果规范化统一到一个执行入口；hard-block 也写入 Ledger；`loop.ts` 由 2077 行降至 1694 行；`tests/tool_batch_executor.test.ts` 9 项；门禁绿色 |
-| L5—L7 | 未开始 | — | 不提前实施 |
+| L5 VerificationCoordinator | 完成 | 2026-08-02 | `src/agent/verification/coordinator.ts` 抽出 `bindVerificationToLedger` / `runRippleVerificationPhase` / `runBatchTypecheckAndTaskTracker`；Ripple 验证、义务解析、cascade、narrow-edit 完成、批量 typecheck、TaskTracker 验证投影、lastResults 全部移出 `loop.ts`；`loop.ts` 不再直接运行 typecheck 或操作 Ripple obligation；`loop.ts` 降至 ~1614 行；门禁绿色 |
+| L6—L7 | 未开始 | — | 不提前实施 |
 
 ## 重启续作点
 
 **记录日期：** 2026-08-02  
-**当前边界：** L0—L4 已完成，尚未开始 L5。  
-**下次入口：** `PR-L5：抽出 VerificationCoordinator`。
+**当前边界：** L0—L5 已完成，尚未开始 L6。  
+**下次入口：** `PR-L6：抽出 MaintenanceCoordinator`。
 
 重启后：
 

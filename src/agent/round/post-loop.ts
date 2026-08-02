@@ -13,6 +13,10 @@ import { AgentState, StateMachine } from "../state-machine"
 
 export function runPostEditDiagnostics(path: string, result: { success: boolean; content: string }) {
   if (!path.endsWith(".py") && !path.endsWith(".ts") && !path.endsWith(".tsx")) return
+  // A custom or failed write adapter may report a path without materializing it.
+  // There can be no file-local diagnostics in that case, and a full-project tsc
+  // fallback would add seconds of work without changing the result.
+  if (!existsSync(resolve(path))) return
   try {
     let diagnostics = ""
     if (path.endsWith(".py")) {

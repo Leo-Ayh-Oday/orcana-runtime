@@ -6,20 +6,25 @@ import { Result, isNonInteractive } from "./registry"
 import { buildVerificationResult } from "../verification/result"
 import type { SandboxManager } from "../sandbox/sandbox"
 import { recordRuntimeObservedWrites } from "../file-state"
-import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 const SHELL_RESULT_MAX_CHARS = 8000
 
 // ── Sandbox injection (set by loop.ts at startup) ──
 
-const SHELL_SANDBOX = Symbol("shell-sandbox")
+const SHELL_SANDBOX = createRuntimeContextKey<SandboxManager | null>(
+  "shell-sandbox",
+  () => null,
+)
 
+/** @deprecated Compatibility adapter; prefer the Sandbox owned by AgentRunScope. */
 export function setShellSandbox(sandbox: SandboxManager | null) {
   setRuntimeContextValue(SHELL_SANDBOX, sandbox)
 }
 
+/** @deprecated Compatibility projection; prefer the Sandbox owned by AgentRunScope. */
 export function getShellSandbox(): SandboxManager | null {
-  return getRuntimeContextValue<SandboxManager | null>(SHELL_SANDBOX, null)
+  return getRuntimeContextValue(SHELL_SANDBOX)
 }
 
 const BLOCKLIST = new Set([

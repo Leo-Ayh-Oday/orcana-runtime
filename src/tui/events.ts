@@ -102,3 +102,9 @@ export type TuiEvent =
     }
   | { type: "clarification.ready"; data: ClarificationReady }
   | { type: "ripple.phase"; phase: TuiRipplePhase }
+  | {
+      type: "user.question"
+      question: string
+      options?: Array<{ label: string; description?: string }>
+      multiSelect?: boolean
+    }

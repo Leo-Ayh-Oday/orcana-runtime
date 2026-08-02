@@ -455,6 +455,20 @@ function useAgentStream(
     addSystemMessage("Clarification cancelled. Add more detail in the input box when you are ready.")
   }, [addSystemMessage])
 
+  const answerQuestion = useCallback((answer: string) => {
+    store.dispatch({ type: "user.message", text: answer })
+    store.dispatch({
+      type: "ui.event_message",
+      kind: "activity",
+      text: `用户回答了问题：${answer.slice(0, 50)}${answer.length > 50 ? "..." : ""}`,
+      minIntervalMs: 0,
+    })
+    // 清除 pendingQuestion 状态
+    store.dispatch({ type: "ui.status", text: "processing answer..." })
+    // 将回答作为新的用户消息注入 agent loop
+    setTimeout(() => runAgent(answer), 0)
+  }, [store, runAgent])
+
   useEffect(() => {
     runAgentRef.current = runAgent
   }, [runAgent])
@@ -503,7 +517,7 @@ function useAgentStream(
     return runAgent(prompt)
   }, [prompt, runAgent])
 
-  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store, thinkEffort, setThinkEffort }
+  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, store, thinkEffort, setThinkEffort }
 }
 
 export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime }) {
@@ -540,7 +554,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       },
     }))
   }, [])
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, store, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, { openModels, openEffort })
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, store, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, { openModels, openEffort })
   thinkEffortRef.current = thinkEffort
   const [tick, setTick] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
@@ -1065,6 +1079,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
         rewindModal={modal.rewind}
         runtimeDialog={modal.runtime}
         thinkingEffort={thinkEffort}
+        onAnswerQuestion={answerQuestion}
       />
     </ClockContext.Provider>
   )

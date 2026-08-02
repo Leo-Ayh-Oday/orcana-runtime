@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -17,7 +17,12 @@ import {
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
 import { buildTools, Result } from "../src/tools/registry"
 
+const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
 process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+afterAll(() => {
+  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
+  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+})
 
 class FileStateProbeProvider implements LLMProvider {
   rounds = 0

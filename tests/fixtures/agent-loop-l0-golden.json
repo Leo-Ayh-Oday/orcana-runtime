@@ -1,0 +1,32 @@
+{
+  "criticalEvents": [
+    "status:context-kernel",
+    "status:intent-gate",
+    "status:working",
+    "tool_call:baseline_probe:golden-read",
+    "tool_result:baseline_probe:true",
+    "status:tool-ledger",
+    "text:Golden final response.",
+    "status:gate-telemetry"
+  ],
+  "providerToolChain": [
+    "assistant:tool_use:golden-read",
+    "user:tool_result:golden-read"
+  ],
+  "hookAndExecutionOrder": [
+    "hook:prompt",
+    "provider:round-0",
+    "hook:pre:baseline_probe",
+    "tool:baseline_probe",
+    "hook:post:baseline_probe",
+    "provider:round-1",
+    "hook:stop:completed"
+  ],
+  "traceSequence": [
+    "round_started:0",
+    "tool_call:baseline_probe",
+    "tool_result:baseline_probe:success",
+    "round_started:1",
+    "agent_loop_finished"
+  ]
+}

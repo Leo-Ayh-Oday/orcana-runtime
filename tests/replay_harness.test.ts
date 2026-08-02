@@ -17,7 +17,7 @@ import { checkAssertions } from "../src/agent/replay-harness"
 import { createMasterPlan, nodesFromPlanText, planComplete, activateNode, markNodeDone, planRef } from "../src/agent/master-plan"
 import { validatePlan, evaluatePlanForcePass } from "../src/agent/plan-validator"
 import { classifyEpochAction, hasUnclosedToolChain, epochRollover, createEpochState, msgCharLen } from "../src/agent/context-epoch"
-import { evaluateCompletionGate, needsExternalCompletionGate } from "../src/agent/completion-gate"
+import { evaluateCompletionGate, needsExternalCompletionGate } from "../src/agent/external-completion-gate"
 import {
   obligationsFromReport,
   waiveObligation,

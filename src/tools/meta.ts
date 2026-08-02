@@ -1,4 +1,5 @@
-import { addNode, planProgress, planRef, removeNode, skipNode } from "../agent/master-plan"
+import { addNode, planProgress, removeNode, skipNode } from "../agent/master-plan"
+import { createPlanStore, type PlanStore } from "../agent/run/plan-store"
 import type { ToolDef } from "./registry"
 
 const REQUEST_DEEPER_THINKING: ToolDef = {
@@ -26,7 +27,14 @@ const REQUEST_DEEPER_THINKING: ToolDef = {
   },
 }
 
-const TASK_TOOL: ToolDef = {
+const taskToolDefinitions = new WeakSet<ToolDef>()
+
+/**
+ * Bind the task tool to one Agent Run's PlanStore. The handler never reads a
+ * module-global active plan.
+ */
+export function createTaskTool(planStore: PlanStore): ToolDef {
+  const taskTool: ToolDef = {
   name: "task",
   description:
     "管理主计划的任务树。当一个长任务被分解为多个阶段时，用它追踪进度。\n" +
@@ -62,7 +70,7 @@ const TASK_TOOL: ToolDef = {
     required: ["operation"],
   },
   execute: async (params: Record<string, unknown>) => {
-    const plan = planRef.current
+    const plan = planStore.current
     if (!plan) return { success: false, content: "没有活跃的主计划。长任务启动后主计划会自动创建。", error: "no active plan" }
 
     const op = String(params.operation ?? "")
@@ -111,9 +119,21 @@ const TASK_TOOL: ToolDef = {
         return { success: false, content: `未知操作: ${op}。支持: list | add | done | remove | skip`, error: "unknown operation" }
     }
   },
+  }
+  taskToolDefinitions.add(taskTool)
+  return taskTool
 }
 
+/** True only for task definitions created by createTaskTool(). */
+export function isTaskToolDefinition(defn: ToolDef): boolean {
+  return taskToolDefinitions.has(defn)
+}
+
+// Catalog-only definition. AgentRunScope replaces it with a run-bound instance
+// before any production execution; direct execution outside a run fails closed.
+const DETACHED_TASK_TOOL = createTaskTool(createPlanStore())
+
 export const META_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
-  TASK_TOOL,
+  DETACHED_TASK_TOOL,
   REQUEST_DEEPER_THINKING,
 ])

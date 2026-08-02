@@ -300,6 +300,9 @@ describe("ToolContract projection", () => {
       "git_diff:4ba26f60a84a579be5f4ab90e5258470061fa6ce1dc9239669e03fcd88d90fef",
       "git_log:866a6ce10058db55e50a7b426fa9e8fdb519b31665e1ce1e9289f99f417f2fa5",
       "git_blame:1150bcb635d35bd17bf2254a6d73d0796f18cfa2c848d70796137a4aa458749b",
+      "git_show:3cae39dcb6fcb383ae447daa6504c00d61624d652fe02a369b5795c94bf287cb",
+      "git_add:9a0d7771b43202d99af5db7b7e9fe5e7088b6f227d3594d14abae780ce4a347b",
+      "git_commit:514834d96cd82b8cd84883e8db3a5d43bf14982d926671b6c783981e44a84e69",
       "web_search:7948eb13fabc637739a6abc0176e635404e3ad30776e14cc1f5e05f52ed117b0",
       "web_fetch:e58f5947a76b35bd7bf1013812e3a374fcc070c1659ee8eb2aca18cecca58ed8",
       "find_symbol:a98ea218fc64e3de3ae325e2ac553b4e31a2c61237e1999b7a74ac61581b6de3",
@@ -310,6 +313,8 @@ describe("ToolContract projection", () => {
       "lsp_definition:c2c070697bf5a58538155b9ab990a0824322f020eef2f80822dd1b95070f6e2f",
       "lsp_references:5c90731b68387837636e725b831bb9dddf11400ccaf1a479403d3f899e6f85da",
       "typecheck:988b2d28102d1855754fb4992112700eed5b2e3694415eb62164ac9c9f79212b",
+      "todo_write:83c856ad9f049954503075059a5733bff3ab3b3ea3f5be45b451442973d915c7",
+      "ask_user:4fa0bfcb5dae3d6c85ae94f8f57453525c1eb743f7a94e245f2f6e4945ab09dd",
       "task:6e2c71b5c3f9ac407b80832d68ca44538c3bc924fb93425ed3be4356aabc2b7d",
       "request_deeper_thinking:8e3e934be816e9410ac9b196e2cdf1099def6b74f6a89ec5028d6702cb316184",
     ])

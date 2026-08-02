@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { evaluateCompletionGate, formatCompletionEvidenceReport, formatCompletionGatePrompt } from "../src/agent/completion-gate"
+import { evaluateCompletionGate, formatCompletionEvidenceReport, formatCompletionGatePrompt } from "../src/agent/external-completion-gate"
 import { createTaskTracker, markPlanAccepted, updateTaskTrackerAfterTools } from "../src/agent/task-tracker"
 
 describe("External Completion Gate", () => {

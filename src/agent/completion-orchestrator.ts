@@ -24,10 +24,10 @@
 
 import type { GateTelemetry } from "./gates/telemetry"
 import type { CompletionContext } from "./gates/contexts"
-import { createCompletionChain } from "./gates/completion"
+import { createCompletionChain } from "./gates/sync-completion-chain"
 import { compactAssistantContext } from "./round/helpers"
 import { markPlanAccepted, missingTaskRequirements, formatTaskTrackerPrompt } from "./task-tracker"
-import { evaluateCompletionGate, formatBlockedCompletion, formatCompletionEvidenceReport, formatCompletionGatePrompt, needsExternalCompletionGate } from "./completion-gate"
+import { evaluateCompletionGate, formatBlockedCompletion, formatCompletionEvidenceReport, formatCompletionGatePrompt, needsExternalCompletionGate } from "./external-completion-gate"
 import { FlashJudge, type TestimonyLedger } from "./flash-judge"
 import { extractPromises } from "./round/post-loop"
 import { canClaimDone, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"

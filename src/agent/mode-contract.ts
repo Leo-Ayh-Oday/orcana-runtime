@@ -17,10 +17,10 @@
 import type { EvidenceKind } from "./evidence-ledger"
 
 import type { ToolPolicyInput } from "./tool-execution/policy"
-import type { CompletionGateInput } from "./completion-gate"
+import type { CompletionGateInput } from "./external-completion-gate"
 import type { EvidenceLedger } from "./evidence-ledger"
 import { hasFreshPassingEvidence } from "./evidence-ledger"
-import { getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 import type { TransactionEvidenceBinding } from "../verification/result"
 
 // ── Types ──
@@ -153,14 +153,22 @@ export const MODES: Record<ModeName, ModeContract> = {
 
 // ── Module-level active mode (same pattern as patch-transaction.ts) ──
 
-const ACTIVE_MODE = Symbol("active-mode")
+const ACTIVE_MODE = createRuntimeContextKey("active-mode", () => MODES.coder)
 
+/**
+ * @deprecated Compatibility adapter for the pre-RunStore API. New kernel code
+ * should mutate mode through its AgentRunScope-owned state.
+ */
 export function setActiveMode(mode: ModeName): void {
   setRuntimeContextValue(ACTIVE_MODE, MODES[mode])
 }
 
+/**
+ * @deprecated Compatibility projection for the pre-RunStore API. New kernel
+ * code should read mode from its AgentRunScope-owned state.
+ */
 export function getActiveMode(): ModeContract {
-  return getRuntimeContextValue(ACTIVE_MODE, MODES.coder)
+  return getRuntimeContextValue(ACTIVE_MODE)
 }
 
 // ── Tool enforcement ──

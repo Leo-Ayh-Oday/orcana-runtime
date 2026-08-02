@@ -19,6 +19,7 @@
 import { execSync } from "node:child_process"
 import { resolve, relative } from "node:path"
 import type { RippleCaller } from "./types"
+import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -257,18 +258,23 @@ export class AstGrepProvider {
   }
 }
 
-// ── Global singleton ─────────────────────────────────────────────────
+// ── Run-scoped provider ──────────────────────────────────────────────
 
-let _astGrep: AstGrepProvider | null = null
+const AST_GREP_PROVIDER = createRuntimeContextKey<AstGrepProvider | null>(
+  "ast-grep-provider",
+  () => null,
+)
 
 export function getAstGrepProvider(projectRoot?: string): AstGrepProvider {
   const root = projectRoot ?? process.cwd()
-  if (!_astGrep || _astGrep.stats.available === null) {
-    _astGrep = new AstGrepProvider(root)
+  let provider = getRuntimeContextValue(AST_GREP_PROVIDER)
+  if (!provider) {
+    provider = new AstGrepProvider(root)
+    setRuntimeContextValue(AST_GREP_PROVIDER, provider)
   }
-  return _astGrep
+  return provider
 }
 
 export function resetAstGrepProvider(): void {
-  _astGrep = null
+  setRuntimeContextValue(AST_GREP_PROVIDER, null)
 }

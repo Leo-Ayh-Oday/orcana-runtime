@@ -222,7 +222,7 @@ describe("agent runtime context", () => {
       })
 
       await iterator.next()
-      await iterator.return(undefined)
+      await iterator.return(undefined as never)
 
       expect(dispose).toHaveBeenCalledTimes(1)
     } finally {
@@ -243,7 +243,7 @@ describe("agent runtime context", () => {
       const event = await iterator.next()
       if (event.done || (event.value.type === "status" && event.value.data === "provider-ready")) break
     }
-    await iterator.return(undefined)
+    await iterator.return(undefined as never)
 
     expect(provider.aborted).toBe(true)
   })
@@ -268,7 +268,7 @@ describe("agent runtime context", () => {
       const event = await iterator.next()
       if (event.done || (event.value.type === "status" && event.value.data === "provider-ready")) break
     }
-    await iterator.return(undefined)
+    await iterator.return(undefined as never)
 
     expect(stopReasons).toEqual(["aborted"])
   })
@@ -298,7 +298,7 @@ describe("agent runtime context", () => {
     ])
 
     expect(provider.aborted).toBe(true)
-    await iterator.return(undefined)
+    await iterator.return(undefined as never)
   })
 
   test("a pre-aborted run never calls the provider", async () => {

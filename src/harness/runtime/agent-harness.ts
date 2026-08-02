@@ -22,6 +22,7 @@ import type { AgentSession, CreateSessionInput } from "../contracts/session"
 import type { InterruptResponse } from "../contracts/interrupt"
 import type { RunSnapshot } from "../contracts/snapshot"
 import { RunRegistry } from "./run-registry"
+import { runControlledRun } from "./run-controller"
 import { createLegacyLoopAdapter, type LegacyLoopAdapter, type LegacyLoopAdapterDeps } from "./legacy-loop-adapter"
 
 export interface AgentHarnessInput {
@@ -78,26 +79,18 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         projectRoot,
         input: runInput,
       })
-      const { run, controller } = registered
-      session.activeRunIds.push(run.runId)
+      session.activeRunIds.push(registered.run.runId)
       session.updatedAt = Date.now()
 
-      registry.setStatus(run.runId, "running")
-      try {
-        for await (const event of adapter.execute(run, runInput, controller.signal)) {
-          if (controller.signal.aborted) break
-          yield event
-        }
-        // Cancellation surfaces as a clean generator end once the abort
-        // signal reaches the legacy loop; distinguish it from completion.
-        registry.setStatus(run.runId, controller.signal.aborted ? "cancelled" : "completed")
-      } catch (error) {
-        registry.setStatus(run.runId, "failed")
-        throw error
-      } finally {
-        session.activeRunIds = session.activeRunIds.filter(id => id !== run.runId)
-        session.updatedAt = Date.now()
-      }
+      // H2: RunController drives the lifecycle machine, maps the kernel's
+      // final LoopDecision to a RunOutcome, and cleans up exactly once.
+      yield* runControlledRun({
+        adapter,
+        run: registered.run,
+        runInput,
+        session,
+        controller: registered.controller,
+      })
     },
 
     async *resume(_runId: string, _response: InterruptResponse): AsyncIterable<HarnessEvent> {

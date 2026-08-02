@@ -11,9 +11,10 @@
 | --- | --- | --- | --- |
 | H0 Contracts | 完成 | 2026-08-02 | `src/harness/contracts/*`（harness/session/run/outcome/events/interrupt/artifact/capability/budget/errors/schema/snapshot/lifecycle）+ `src/harness/index.ts`；类型完整、无 `any`、不依赖 UI/具体 Provider、不导入 `loop.ts`；`tests/harness_contracts.test.ts` / `harness_outcome.test.ts` / `harness_status_transition_types.test.ts` 共 17 项；门禁绿色。**技术债：** `AgentRunScope` 的 7 个字段（planStore/modeStore/patchContext/sandbox/rippleSession/evidenceLedger/artifactStore/cancellation/trace）与 `RunSnapshot` 的 plan/mode/budget/evidence state 当前以 `unknown` 占位——这是有意为之（避免触发 H0"停止条件"：Contract 引用遗留内部类型即停止接线），H3 Run Scope 时须替换为真实、可序列化类型 |
 | H1 Facade / Adapter | 完成 | 2026-08-02 | `src/harness/runtime/{agent-harness,legacy-loop-adapter,run-registry}.ts`；CLI/TUI 生产入口改走 `AgentHarness.run()`（`agentLoop` 直接调用清零）；`cancel` 桥接 abortSignal、`inspect` 返回 RunSnapshot、`resume` H7 占位；`HarnessEvent` 契约扩展 4 个 bridge 变体（toolCall/display/planReady/clarification）；顺带修复 CLI plan 批准重跑 `planText` 未回传 bug；`tests/harness_legacy_adapter.test.ts` 8 项 + `harness_facade.test.ts` 5 项；全量 139 文件门禁绿色。**技术债：** 动态选项经 `AgentRunInput.metadata` 的 `LEGACY_*` key 传输（H1 过渡机制，H4/H7 正式化）；`AgentRunScope` 9 字段仍 `undefined` 占位（H3 替换）；run 终态仅 created→running→terminal 三档（H2 引入 LifecycleMachine） |
-| H2—H12 | 未开始 | — | 按依赖图顺序：H2 Lifecycle/Outcome → H3 Run Isolation → H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
+| H2 Lifecycle / Outcome | 完成 | 2026-08-02 | `agentLoop` 生成器返回值暴露 `LoopDecision`；新增 `src/harness/runtime/{outcome-mapper,lifecycle-machine,run-controller,cleanup}.ts`；`LoopDecision → RunOutcome` 穷尽映射（编译期保证无未分类退出）；`RunLifecycleMachine` 驱动 `run.status`（含 pausing 中间态）+ run.* 生命周期事件；事件流 sequence 统一（bridge 与 lifecycle 共享 `run.eventSequence`）；`tests/harness_lifecycle.test.ts` 7 场景 + `harness_lifecycle_machine.test.ts` 6 项；全量 141 文件门禁绿色。**技术债：** `completed.reportArtifactId`/`waiting.checkpointId` 仍占位（H7/H8 填充）；异常仍向调用方传播（outcome 已记录）；kernel 层 stopReason 与 harness outcome 并存（两层语义，行为冻结） |
+| H3—H12 | 未开始 | — | 按依赖图顺序：H3 Run Isolation → H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
 
-> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0、H1 已完成**（进度表见上），下一步为 **PR-H2 Lifecycle / 统一 Outcome**。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H2–H11 并行不冲突）。
+> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0、H1、H2 已完成**（进度表见上），下一步为 **PR-H3 Run Scope / 全局状态清除**（`AgentRunScope` 9 个 unknown 占位替换为真实可序列化类型）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H3–H11 并行不冲突）。
 
 ---
 
@@ -1825,6 +1826,23 @@ src/runtime/events.ts
 * 不存在无法分类的退出；
   -每个 Run 恰好一个终态；
   -Cleanup 恰好执行一次。
+
+## H2 实施记录（2026-08-02）
+
+**状态：完成。** 全部门禁绿色（typecheck / 141 文件测试 / build / npm pack / diff --check）。
+
+实现要点：
+
+1. **决策暴露（D1）**：`agentLoop` 生成器返回值从 void → `LoopDecision`（`runAgentLoop` try 末尾 `return decision`；abort-at-start 也返回 `{kind:"return", reason:"aborted"}`）。现有 for await 消费者不受影响（不取返回值）。
+2. **Adapter 收集决策（D2）**：`executeLoop` 手动 next 循环 + 关闭协议（finally 里 `iterator.return()` 保持 cancel 传播）；`execute` 返回 `AsyncGenerator<HarnessEvent, LoopDecision>`。
+3. **Outcome 映射（D3）**：`outcome-mapper.ts` 对 `LoopDecision` 联合做穷尽 switch —— 新增分支未映射会编译失败（"无未分类退出"由类型系统保证）。映射表：orchestrator_done/verified_write/self_edit→completed；plan_ready→waiting(plan-approval)；clarification→waiting(clarification)；round_budget→paused；context_budget/orchestrator_blocked/empty_round/gate_overflow/prompt_blocked→blocked；aborted/tool_batch_aborted→cancelled；provider_failure→failed。
+4. **LifecycleMachine（D4）**：包装 H0 的 `assertTransition`，每次转换更新 `run.status` + 发 `run.*` 事件；同状态幂等；非法转换抛 `InvalidStateTransitionError`；`run-registry.setStatus` 移除。**发现并修复 H0 契约缺口**：`running → paused` 必须经 `pausing` 中间态（H0 的 `LEGAL_TRANSITIONS` 未含 pausing 事件名）——契约增补 `run.pausing` 常量，machine 提供 `transitionTo()` 处理中间态。
+5. **RunController（D5）**：created→initializing→running→（bridge 事件）→终态；异常→failed + `run.failed` 事件 + **继续传播**（CLI/TUI 现有 catch 依赖）；`cleanupRun()` 在 finally 恰好执行一次（session detach + controller 兜底 abort）。
+6. **统一事件序列**：bridge 事件改用 `run.eventSequence`（不再本地计数），生命周期与桥接事件构成单一连续序列（`EventEnvelope.sequence` 全局有序，H5 Trace 前置）。
+7. **cancel reason 透传**：`mapDecisionToOutcome(decision, error, abortReason)` —— cancelled outcome 的 reason 来自 `controller.signal.reason`（如 "user hit cancel"）。
+8. **测试**：`harness_lifecycle.test.ts` 7 场景（completed/waiting×2/blocked/paused/failed/cancelled，全部经 `inspect()` 断言 status + outcome.kind + 事件）+ `harness_lifecycle_machine.test.ts` 6 项（合法链/非法/幂等/终态/中间态/事件名）。
+
+**H3 入口：** `AgentRunScope` 9 个 `unknown` 占位 → 真实类型（PlanStore/ModeStore/PatchContext/Sandbox/RippleSession/EvidenceLedger/ArtifactStore/Cancellation/Trace），迁移 `AgentRunState` 字段与 legacy setter 到 run-scoped 所有权。
 
 ---
 

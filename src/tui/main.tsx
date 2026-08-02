@@ -463,11 +463,17 @@ function useAgentStream(
       text: `用户回答了问题：${answer.slice(0, 50)}${answer.length > 50 ? "..." : ""}`,
       minIntervalMs: 0,
     })
-    // 清除 pendingQuestion 状态
+    // user.message reducer 会清除 pendingQuestion 状态
     store.dispatch({ type: "ui.status", text: "processing answer..." })
     // 将回答作为新的用户消息注入 agent loop
     setTimeout(() => runAgent(answer), 0)
   }, [store, runAgent])
+
+  const cancelQuestion = useCallback(() => {
+    // 仅清除挂起的问题面板，不重置 run（agent 循环软暂停后自行继续）
+    store.dispatch({ type: "user.question.cancel" })
+    addSystemMessage("问题已取消，继续当前任务。")
+  }, [store, addSystemMessage])
 
   useEffect(() => {
     runAgentRef.current = runAgent
@@ -517,7 +523,7 @@ function useAgentStream(
     return runAgent(prompt)
   }, [prompt, runAgent])
 
-  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, store, thinkEffort, setThinkEffort }
+  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, store, thinkEffort, setThinkEffort }
 }
 
 export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime }) {
@@ -554,7 +560,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       },
     }))
   }, [])
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, store, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, { openModels, openEffort })
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, store, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, { openModels, openEffort })
   thinkEffortRef.current = thinkEffort
   const [tick, setTick] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
@@ -1080,6 +1086,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
         runtimeDialog={modal.runtime}
         thinkingEffort={thinkEffort}
         onAnswerQuestion={answerQuestion}
+        onCancelQuestion={cancelQuestion}
       />
     </ClockContext.Provider>
   )

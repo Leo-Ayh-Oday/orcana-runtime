@@ -16,7 +16,7 @@ export type {
 export { TERMINAL_RUN_STATUSES, isTerminalRunStatus } from "./contracts/run"
 export type { RunOutcome, RunOutcomeKind, RunBlocker, RunFailure } from "./contracts/outcome"
 export { outcomeKind } from "./contracts/outcome"
-export type { HarnessEvent, HarnessEventType } from "./contracts/events"
+export type { HarnessEvent, HarnessEventType, HarnessDisplayKind } from "./contracts/events"
 export { HARNESS_EVENT_SCHEMA_VERSION, HARNESS_EVENT_TYPES } from "./contracts/events"
 export type { EventEnvelope } from "./contracts/events"
 export type { InterruptKind, InterruptStatus, HarnessInterrupt, InterruptResponse } from "./contracts/interrupt"

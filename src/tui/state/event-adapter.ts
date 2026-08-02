@@ -25,6 +25,7 @@
  */
 
 import type { StreamEvent } from "../../provider/types"
+import type { HarnessEvent } from "../../harness/contracts/events"
 import type { TuiEvent } from "../events"
 import type { ClarificationReady } from "../../agent/clarification"
 import {
@@ -108,6 +109,53 @@ export class StreamEventAdapter {
       default:
         return []
     }
+  }
+
+  /** 将一个 HarnessEvent（H1 bridge 变体）翻译为 0..N 个 TuiEvent。
+   *  把 payload 转回等价 StreamEvent 形状，复用上方的翻译与配对逻辑，
+   *  保证 H1 接线前后 TUI 渲染行为完全一致。生命周期 status 变体
+   *  （run.* 事件）在 H2 前由 harness 层面使用，TUI 不消费。 */
+  adaptHarnessEvent(ev: HarnessEvent): TuiEvent[] {
+    const payload = ev.payload
+    if ("text" in payload) {
+      return this.adaptText({ type: "text", data: payload.text })
+    }
+    if ("toolCall" in payload) {
+      return this.adaptToolCall({ type: "tool_call", data: { name: payload.toolCall.name } })
+    }
+    if ("toolName" in payload) {
+      return this.adaptToolResult({
+        type: "tool_result",
+        data: { name: payload.toolName, content: payload.content, success: payload.success },
+      })
+    }
+    if ("display" in payload) {
+      switch (payload.display.kind) {
+        case "status":
+          return this.adaptStatus({ type: "status", data: payload.display.data })
+        case "task_progress":
+          return this.adaptTaskProgress({ type: "task_progress", data: payload.display.data })
+        case "user_question":
+          return this.adaptUserQuestion({ type: "user_question", data: payload.display.data })
+        case "thinking_blocks":
+        case "confirm":
+          return []
+      }
+    }
+    if ("usage" in payload) {
+      return this.adaptTokenUsage({ type: "token_usage", data: payload.usage })
+    }
+    if ("planReady" in payload) {
+      return this.adaptPlanReady({ type: "plan_ready", data: payload.planReady.plan })
+    }
+    if ("clarification" in payload) {
+      return this.adaptClarificationReady({ type: "clarification_ready", data: payload.clarification.questions })
+    }
+    if ("error" in payload) {
+      return this.adaptError({ type: "error", data: payload.error })
+    }
+    // status: RunStatus lifecycle variant — not consumed by the TUI in H1.
+    return []
   }
 
   // ── 各事件类型的翻译 ──

@@ -10,9 +10,10 @@
 | PR | 状态 | 日期 | 备注 |
 | --- | --- | --- | --- |
 | H0 Contracts | 完成 | 2026-08-02 | `src/harness/contracts/*`（harness/session/run/outcome/events/interrupt/artifact/capability/budget/errors/schema/snapshot/lifecycle）+ `src/harness/index.ts`；类型完整、无 `any`、不依赖 UI/具体 Provider、不导入 `loop.ts`；`tests/harness_contracts.test.ts` / `harness_outcome.test.ts` / `harness_status_transition_types.test.ts` 共 17 项；门禁绿色。**技术债：** `AgentRunScope` 的 7 个字段（planStore/modeStore/patchContext/sandbox/rippleSession/evidenceLedger/artifactStore/cancellation/trace）与 `RunSnapshot` 的 plan/mode/budget/evidence state 当前以 `unknown` 占位——这是有意为之（避免触发 H0"停止条件"：Contract 引用遗留内部类型即停止接线），H3 Run Scope 时须替换为真实、可序列化类型 |
-| H1—H12 | 未开始 | — | 按依赖图顺序：H1 Facade → H2 Lifecycle → H3 Run Isolation → H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
+| H1 Facade / Adapter | 完成 | 2026-08-02 | `src/harness/runtime/{agent-harness,legacy-loop-adapter,run-registry}.ts`；CLI/TUI 生产入口改走 `AgentHarness.run()`（`agentLoop` 直接调用清零）；`cancel` 桥接 abortSignal、`inspect` 返回 RunSnapshot、`resume` H7 占位；`HarnessEvent` 契约扩展 4 个 bridge 变体（toolCall/display/planReady/clarification）；顺带修复 CLI plan 批准重跑 `planText` 未回传 bug；`tests/harness_legacy_adapter.test.ts` 8 项 + `harness_facade.test.ts` 5 项；全量 139 文件门禁绿色。**技术债：** 动态选项经 `AgentRunInput.metadata` 的 `LEGACY_*` key 传输（H1 过渡机制，H4/H7 正式化）；`AgentRunScope` 9 字段仍 `undefined` 占位（H3 替换）；run 终态仅 created→running→terminal 三档（H2 引入 LifecycleMachine） |
+| H2—H12 | 未开始 | — | 按依赖图顺序：H2 Lifecycle/Outcome → H3 Run Isolation → H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
 
-> 前置状态：ALK 减重已完成 L0—L5；L6 部分完成（checkpoint/historical-microcompact/distill/reconcile 已抽入 `src/agent/maintenance/coordinator.ts`，thinking compaction + semantic recall + 单一 `runMaintenance()` 入口未做）；L7 LoopDecision 未开始。详见 `docs/agent-loop-kernel-refactor-plan.md` 重启续作点。
+> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0、H1 已完成**（进度表见上），下一步为 **PR-H2 Lifecycle / 统一 Outcome**。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H2–H11 并行不冲突）。
 
 ---
 
@@ -1758,6 +1759,23 @@ enabled
 ## 验收
 
 生产入口不再直接调用 Loop。
+
+## H1 实施记录（2026-08-02）
+
+**状态：完成。** 全部门禁绿色（typecheck / 139 文件测试 / build / npm pack / diff --check）。
+
+实现要点与过渡机制（技术债延续到后续阶段）：
+
+1. **HarnessEvent 契约扩展**（`contracts/events.ts`）：新增 4 个 bridge 变体——`toolCall`、`display`（status/task_progress/thinking_blocks/confirm/user_question 展示透传）、`planReady`（plan 负载 H1 阶段不透明，H7 正式化 plan-approval interrupt schema）、`clarification`；事件名常量增补 `text.emitted`/`display.changed`/`error.raised`/`plan.ready`/`clarification.ready`。契约保持不依赖 StreamEvent/Provider 类型。
+2. **动态选项传输**：运行时稳定依赖（provider/tools/hooks/stagedContext/thinkingStore/knowledgeBase/modelRouter/gateTelemetryFile/contextMapPolicy/flashTriagePolicy）由 `createRuntime` 注入 harness 构造；CLI/TUI 每轮动态选项（conversationHistory/thinkEffort/stableMemoryContext/autoApprovePlan/runTrace/initialPlanState/planText/resumeFromCheckpoint）经 `AgentRunInput.metadata` 的 `LEGACY_*` key 传输（`legacy-loop-adapter.ts` 导出常量）。H4/H7 正式化 budget 与 interrupt 时替换。
+3. **cancel/inspect/resume 最小实现**：`cancel` 经 run-registry 的 AbortController 桥接 `AgentOptions.abortSignal`（H4 完整化）；`inspect` 返回实时 RunSnapshot（H6 持久化）；`resume` 抛 `HarnessError`（H7 实现，签名按 H0 契约保留）。
+4. **run 生命周期三档**：created→running→terminal（completed/cancelled/failed），H2 替换为 LifecycleMachine（`contracts/lifecycle.ts` 已有 `canTransition`/`assertTransition`）。
+5. **session 语义**：CLI session 运行时创建/切换，`run()` 对未知 sessionId 自动建 session（H6 持久化后 `createSession()` 成为强入口并恢复 `SessionNotFoundError`）。
+6. **顺带修复**：CLI plan 批准重跑时 `planText` 未回传（现在从 plan_ready 记录并随 metadata 回传，`prepare.ts` 的 `activateMasterPlan` 得以生效）。
+7. **配置**：`orcana.jsonc` 新增 `harness.mode`（H1 仅 `legacy` 生效，shadow/enabled 留作后续开关）；`settings.example.json` 增加注释段。
+8. **测试**：`tests/harness_legacy_adapter.test.ts`（8 项：options 映射/工具过滤/abortSignal 透传/事件桥接全表/planReady/clarification/error/sequence 连续）+ `tests/harness_facade.test.ts`（5 项：全流程/final text 单次/cancel 中止 provider/inspect/resume 占位/双 run 隔离）；L0 Golden + L7 Kernel 回归全绿。
+
+**H2 入口：** LifecycleMachine 落地 + `LoopDecision → RunOutcome` 映射 + `finalizeRun` 级联（CLI/TUI 的"plan 批准重跑"循环届时可迁移为 waiting/resume）。
 
 ---
 

@@ -77,5 +77,10 @@
     "maxSteps": 100,
     "autoContinue": false,
     "planModeDefault": false
+  },
+
+  "harness": {
+    "_comment": "Harness 2.0 wiring mode (H1: 'legacy' is the only implemented mode — CLI/TUI run through AgentHarness → LegacyLoopAdapter → agentLoop, behavior identical to the direct loop). 'shadow'/'enabled' arrive in later H-stages as rollback/control switches.",
+    "mode": "legacy"
   }
 }

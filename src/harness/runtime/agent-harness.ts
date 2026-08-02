@@ -1,0 +1,144 @@
+/** AgentHarness facade (H1): the single production entry to runs.
+ *
+ *  CLI / TUI / tests / future Graph drive runs exclusively through this
+ *  interface. H1 implements the full facade surface with a legacy loop under
+ *  the hood:
+ *    - run()        → LegacyLoopAdapter → agentLoop, events as HarnessEvent;
+ *    - cancel()     → bridges into AgentOptions.abortSignal via the registry
+ *                     AbortController (full cancellation policy lands in H4);
+ *    - inspect()    → RunSnapshot from the registry's AgentRun (persistence
+ *                     lands in H6 — H1 snapshot is live-state only);
+ *    - resume()     → not implemented until H7 (persistent interrupts).
+ *
+ *  Sessions are held in memory (H6 adds the HarnessStore).
+ */
+
+import { randomUUID } from "node:crypto"
+import { HarnessError } from "../contracts/errors"
+import type { HarnessEvent } from "../contracts/events"
+import type { AgentHarness } from "../contracts/harness"
+import type { AgentRunInput } from "../contracts/run"
+import type { AgentSession, CreateSessionInput } from "../contracts/session"
+import type { InterruptResponse } from "../contracts/interrupt"
+import type { RunSnapshot } from "../contracts/snapshot"
+import { RunRegistry } from "./run-registry"
+import { createLegacyLoopAdapter, type LegacyLoopAdapter, type LegacyLoopAdapterDeps } from "./legacy-loop-adapter"
+
+export interface AgentHarnessInput {
+  deps: LegacyLoopAdapterDeps
+  /** Optional stable session id; otherwise created on first use. */
+  sessionId?: string
+  projectRoot?: string
+}
+
+export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
+  const registry = new RunRegistry()
+  const adapter: LegacyLoopAdapter = createLegacyLoopAdapter({ deps: input.deps })
+  const projectRoot = input.projectRoot ?? process.cwd()
+
+  const sessions = new Map<string, AgentSession>()
+  const primarySessionId = input.sessionId ?? randomUUID()
+
+  function ensureSession(sessionId: string): AgentSession {
+    const existing = sessions.get(sessionId)
+    if (existing) return existing
+    const session: AgentSession = {
+      sessionId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      activeRunIds: [],
+      projectRoot,
+      metadata: {},
+    }
+    sessions.set(sessionId, session)
+    return session
+  }
+
+  return {
+    async createSession(createInput?: CreateSessionInput): Promise<AgentSession> {
+      const session = ensureSession(primarySessionId)
+      if (createInput) {
+        session.projectRoot = createInput.projectRoot ?? session.projectRoot
+        if (createInput.conversationRef !== undefined) session.conversationRef = createInput.conversationRef
+        if (createInput.stableMemoryRef !== undefined) session.stableMemoryRef = createInput.stableMemoryRef
+        if (createInput.metadata) session.metadata = { ...session.metadata, ...createInput.metadata }
+        session.updatedAt = Date.now()
+      }
+      return session
+    },
+
+    async *run(sessionId: string, runInput: AgentRunInput): AsyncIterable<HarnessEvent> {
+      // H1 transition: CLI sessions are runtime-created and switchable, so
+      // run() auto-creates unknown sessions. H6 persistence turns
+      // createSession() into the mandatory entry and restores
+      // SessionNotFoundError semantics here.
+      const session = ensureSession(sessionId)
+      const registered = registry.create({
+        sessionId,
+        projectRoot,
+        input: runInput,
+      })
+      const { run, controller } = registered
+      session.activeRunIds.push(run.runId)
+      session.updatedAt = Date.now()
+
+      registry.setStatus(run.runId, "running")
+      try {
+        for await (const event of adapter.execute(run, runInput, controller.signal)) {
+          if (controller.signal.aborted) break
+          yield event
+        }
+        // Cancellation surfaces as a clean generator end once the abort
+        // signal reaches the legacy loop; distinguish it from completion.
+        registry.setStatus(run.runId, controller.signal.aborted ? "cancelled" : "completed")
+      } catch (error) {
+        registry.setStatus(run.runId, "failed")
+        throw error
+      } finally {
+        session.activeRunIds = session.activeRunIds.filter(id => id !== run.runId)
+        session.updatedAt = Date.now()
+      }
+    },
+
+    async *resume(_runId: string, _response: InterruptResponse): AsyncIterable<HarnessEvent> {
+      // H7 introduces persistent interrupts and resume; the H1 facade keeps
+      // the signature (per H0 contract) and fails loudly rather than
+      // pretending to resume a legacy re-invocation.
+      throw new HarnessError("internal", "resume() lands in H7 (persistent interrupts); H1 runs are re-invoked via run()")
+    },
+
+    async cancel(runId: string, reason?: string): Promise<void> {
+      const registered = registry.lookup(runId)
+      if (!registered) throw new HarnessError("run_not_found", `Harness run not found: ${runId}`, runId)
+      if (registered.controller.signal.aborted) return
+      registered.controller.abort(reason ?? "cancelled by user")
+    },
+
+    async inspect(runId: string): Promise<RunSnapshot> {
+      const registered = registry.requireRun(runId)
+      const { run } = registered
+      return {
+        schemaVersion: 1,
+        runId: run.runId,
+        sessionId: run.sessionId,
+        sequence: run.eventSequence,
+        status: run.status,
+        input: run.input,
+        // H1: no serializable run-bound state yet (H3/H6 fill these).
+        planState: undefined as never,
+        modeState: undefined as never,
+        budgetState: undefined as never,
+        evidenceState: undefined as never,
+        artifactRefs: [],
+        conversationRef: "",
+        createdAt: run.createdAt,
+        interrupt: run.interrupt,
+        outcome: run.outcome,
+      }
+    },
+
+    async dispose(): Promise<void> {
+      // H1: nothing to flush — sessions and runs are memory-only.
+    },
+  }
+}

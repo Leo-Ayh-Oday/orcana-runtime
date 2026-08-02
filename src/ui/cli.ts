@@ -3,7 +3,17 @@
  *  Assembly is delegated to createRuntime() — this file is now a thin UX layer.
  */
 
-import { agentLoop } from "../agent/loop"
+import type { AgentHarness } from "../harness/contracts/harness"
+import {
+  LEGACY_AUTO_APPROVE_PLAN,
+  LEGACY_CONVERSATION_HISTORY,
+  LEGACY_INITIAL_PLAN_STATE,
+  LEGACY_PLAN_TEXT,
+  LEGACY_RESUME_FROM_CHECKPOINT,
+  LEGACY_RUN_TRACE,
+  LEGACY_STABLE_MEMORY_CONTEXT,
+  LEGACY_THINK_EFFORT,
+} from "../harness/runtime/legacy-loop-adapter"
 import { ModelRouter } from "../provider/router"
 import type { ToolDescriptor } from "../tools/registry"
 import { StagedContextManager } from "../context/staged"
@@ -175,7 +185,7 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
     process.stdout.write(`${dim(">")}  ${cliPrompt}\n\n`)
     try {
       if (shouldUseChatLite(cliPrompt) && !shouldSkipProviderPurpose("chat_lite")) await runLiteTurn(multiProvider, modelRouter, cliPrompt, history, compactor)
-      else await runTurn(multiProvider, modelRouter, tools, cliPrompt, stagedCtx, thinkingStore, compactor, history, undoStack, knowledgeBase, thinkEffort, hooks, sessionId, resumeFromCheckpoint)
+      else await runTurn(runtime.harness, cliPrompt, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint)
     } finally {
       runtime.dispose()
     }
@@ -276,7 +286,7 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
 
     lastUsage = null
     if (shouldUseChatLite(input) && !shouldSkipProviderPurpose("chat_lite") && !findPendingClarification(history)) await runLiteTurn(multiProvider, modelRouter, input, history, compactor)
-    else await runTurn(multiProvider, modelRouter, tools, input, stagedCtx, thinkingStore, compactor, history, undoStack, knowledgeBase, thinkEffort, hooks, sessionId, resumeFromCheckpoint)
+    else await runTurn(runtime.harness, input, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint)
     if (history.length % 5 === 0 && history.length > 0) {
       setSessionId(persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId))
     }
@@ -396,18 +406,11 @@ async function runLiteTurn(
 }
 
 async function runTurn(
-  provider: MultiProvider,
-  router: ModelRouter,
-  tools: ToolDescriptor[],
+  harness: AgentHarness,
   prompt: string,
-  stagedCtx: StagedContextManager,
-  thinkingStore: ThinkingStore,
   compactor: CompactionState,
   history: Array<{ role: "user" | "assistant"; content: string }>,
-  _undoStack: Array<{ path: string; previousContent: string | null }>,
-  knowledgeBase: KnowledgeBase,
   thinkEffort: "auto" | "high" | "max",
-  hooks: HookSystem,
   sessionId: string,
   resumeFromCheckpoint: SessionCheckpoint | null,
 ) {
@@ -452,151 +455,146 @@ async function runTurn(
   const runTrace = AgentRunTrace.start(process.cwd(), prompt)
   let planNeedsReinvoke = false
 
-  const opts: Record<string, unknown> = {
-    provider,
-    model: router.selectForPurpose("agent_main"),
-    tools,
-    conversationHistory: warmHistory,
-    stagedContext: stagedCtx,
-    thinkingStore,
-    knowledgeBase,
-    thinkEffort: thinkEffort === "auto" ? undefined : thinkEffort,
-    stableMemoryContext,
-    hooks,
-    autoFinishOnVerifiedWrite: true,
-    autoApprovePlan: Boolean(prompt) || process.stdin?.isTTY !== true,
-    runTrace,
-    sessionId,
-    modelRouter: router,
-    gateTelemetryFile: ".wolf/gate-telemetry.json",
-    contextMapPolicy: "auto" as const,
-    ...(resumeFromCheckpoint ? { resumeFromCheckpoint } : {}),
+  // H1: per-invocation options travel via AgentRunInput.metadata; runtime
+  // deps (provider/tools/hooks/…) are injected into the harness at creation.
+  const metadata: Record<string, unknown> = {
+    [LEGACY_CONVERSATION_HISTORY]: warmHistory,
+    [LEGACY_THINK_EFFORT]: thinkEffort === "auto" ? undefined : thinkEffort,
+    [LEGACY_STABLE_MEMORY_CONTEXT]: stableMemoryContext,
+    [LEGACY_AUTO_APPROVE_PLAN]: Boolean(prompt) || process.stdin?.isTTY !== true,
+    [LEGACY_RUN_TRACE]: runTrace,
+    [LEGACY_RESUME_FROM_CHECKPOINT]: resumeFromCheckpoint ?? undefined,
   }
+  // Plan approval loop (H1): plan text captured on plan_ready is passed back
+  // on re-invocation so the loop can activate the MasterPlan (was dropped
+  // pre-H1).
+  let planText: string | undefined
 
   do {
   try {
     planNeedsReinvoke = false
-    for await (const event of agentLoop(prompt, opts as unknown as Parameters<typeof agentLoop>[1])) {
-      switch (event.type) {
-        case "text":
-          stopTransientStatus()
-          if (!streamedTextStarted) {
-            const closed = closeToolCalls(toolTrace)
-            if (closed) { process.stdout.write(closed); printedToolTrace = true }
-            if (printedToolTrace) process.stdout.write("\n")
-            process.stdout.write(dim("DS  "))
-            streamedTextStarted = true
-          }
-          process.stdout.write(renderStreamChunk(streamRender, String(event.data ?? "")))
-          lastText += String(event.data ?? "")
-          break
-
-        case "tool_call": {
-          stopTransientStatus()
-          const data = event.data as { name: string; input?: Record<string, unknown> }
-          const out = renderToolCall(toolTrace, data.name, data.input ?? {})
-          if (out) printedToolTrace = true
-          if (out) process.stdout.write(out + "\n")
-          if (isTTY) {
-            spinnerNote = "执行工具"
-            spinnerActive = true
-            renderSpinner()
-          }
-          break
+    for await (const event of harness.run(sessionId, { prompt, metadata })) {
+      const payload = event.payload
+      if ("text" in payload) {
+        stopTransientStatus()
+        if (!streamedTextStarted) {
+          const closed = closeToolCalls(toolTrace)
+          if (closed) { process.stdout.write(closed); printedToolTrace = true }
+          if (printedToolTrace) process.stdout.write("\n")
+          process.stdout.write(dim("DS  "))
+          streamedTextStarted = true
         }
+        process.stdout.write(renderStreamChunk(streamRender, payload.text))
+        lastText += payload.text
+        continue
+      }
 
-        case "tool_result": {
+      if ("toolCall" in payload) {
+        stopTransientStatus()
+        const out = renderToolCall(toolTrace, payload.toolCall.name, (payload.toolCall.input ?? {}) as Record<string, unknown>)
+        if (out) printedToolTrace = true
+        if (out) process.stdout.write(out + "\n")
+        if (isTTY) {
+          spinnerNote = "执行工具"
+          spinnerActive = true
+          renderSpinner()
+        }
+        continue
+      }
+
+      if ("toolName" in payload) {
+        stopTransientStatus()
+        const out = renderToolResult(toolTrace, payload.toolName, String(payload.content ?? ""))
+        if (out) printedToolTrace = true
+        process.stdout.write(out)
+        continue
+      }
+
+      if ("display" in payload && payload.display.kind === "status") {
+        const status = String(payload.display.data ?? "")
+        const out = renderToolStatus(toolTrace, status)
+        if (out) {
           stopTransientStatus()
-          const data = event.data as { name: string; content: string }
-          const out = renderToolResult(toolTrace, data.name, String(data.content ?? ""))
-          if (out) printedToolTrace = true
+          printedToolTrace = true
           process.stdout.write(out)
-          break
+        } else if (isTTY) {
+          spinnerNote = /^(thinking|working|continue)$/i.test(status) ? "" : status
+          spinnerActive = true
+          renderSpinner()
         }
+        continue
+      }
 
-        case "status": {
-          const status = String(event.data ?? "")
-          const out = renderToolStatus(toolTrace, status)
-          if (out) {
-            stopTransientStatus()
-            printedToolTrace = true
-            process.stdout.write(out)
-          } else if (isTTY) {
-            spinnerNote = /^(thinking|working|continue)$/i.test(status) ? "" : status
-            spinnerActive = true
-            renderSpinner()
-          }
-          break
+      if ("usage" in payload) {
+        tokenData = payload.usage as TokenUsageEvent
+        if (!tokenData) continue
+        if (tokenData.roundMs) totalMs += tokenData.roundMs
+        if (tokenData.roundMs && tokenData.cacheSource === "provider") {
+          cumulativeCacheRead += tokenData.cacheReadInputTokens ?? 0
+          cumulativeCacheMiss += tokenData.cacheMissInputTokens ?? 0
+          cumulativeCacheCreation += tokenData.cacheCreationInputTokens ?? 0
         }
+        const dInput = tokenData.inputTokens - prevInput
+        const dOutput = tokenData.outputTokens - prevOutput
+        if (dInput > 0) sessionInputTokens += dInput
+        if (dOutput > 0) sessionOutputTokens += dOutput
+        prevInput = tokenData.inputTokens
+        prevOutput = tokenData.outputTokens
+        continue
+      }
 
-        case "token_usage": {
-          tokenData = event.data as TokenUsageEvent
-          if (!tokenData) break
-          if (tokenData.roundMs) totalMs += tokenData.roundMs
-          if (tokenData.roundMs && tokenData.cacheSource === "provider") {
-            cumulativeCacheRead += tokenData.cacheReadInputTokens ?? 0
-            cumulativeCacheMiss += tokenData.cacheMissInputTokens ?? 0
-            cumulativeCacheCreation += tokenData.cacheCreationInputTokens ?? 0
-          }
-          const dInput = tokenData.inputTokens - prevInput
-          const dOutput = tokenData.outputTokens - prevOutput
-          if (dInput > 0) sessionInputTokens += dInput
-          if (dOutput > 0) sessionOutputTokens += dOutput
-          prevInput = tokenData.inputTokens
-          prevOutput = tokenData.outputTokens
-          break
+      if ("planReady" in payload) {
+        stopTransientStatus()
+        const data = payload.planReady.plan as {
+          planText: string; score: number; signals: string[];
+          goal: string; steps: Array<{ id: string; title: string }>;
+          requiredFiles: string[]; requiredVerificationKinds: string[];
+          missingItems: string[];
         }
-
-        case "plan_ready": {
-          stopTransientStatus()
-          const data = event.data as {
-            planText: string; score: number; signals: string[];
-            goal: string; steps: Array<{ id: string; title: string }>;
-            requiredFiles: string[]; requiredVerificationKinds: string[];
-            missingItems: string[];
-          }
-          process.stdout.write("\n" + yellow("=== 执行计划 (请审核) ===") + "\n")
-          process.stdout.write(`目标: ${data.goal}\n`)
-          process.stdout.write(`质量评分: ${data.score}/8\n`)
-          if (data.missingItems.length > 0) {
-            process.stdout.write(yellow("注意事项: " + data.missingItems.join("; ")) + "\n")
-          }
-          process.stdout.write("\n步骤:\n")
-          for (const step of data.steps) {
-            process.stdout.write(`  - ${step.title}\n`)
-          }
-          process.stdout.write(`\n交付文件: ${data.requiredFiles.join(", ")}\n`)
-          process.stdout.write(`验证: ${data.requiredVerificationKinds.join(", ")}\n`)
-          process.stdout.write("\n")
-          const answer = await new Promise<string>(resolve => {
-            const { stdin, stdout } = process
-            stdout.write(yellow("[Y] 批准执行  [n] 修改计划  [x] 取消] "))
-            const onData = (data: Buffer) => {
-              stdin.removeListener("data", onData)
-              if (stdin.isTTY) stdin.setRawMode(false)
-              resolve(data.toString().trim())
-            }
-            if (stdin.isTTY) stdin.setRawMode(true)
-            stdin.on("data", onData)
-          })
-          const normalized = answer.trim().toLowerCase()
-          if (normalized === "" || normalized === "y" || normalized === "yes") {
-            opts.initialPlanState = "approved"
-            planNeedsReinvoke = true
-          } else if (normalized === "x" || normalized === "cancel") {
-            process.stdout.write(red("计划已取消\n"))
-            return
-          } else {
-            warmHistory.push({ role: "user", content: `用户要求修改计划：${answer}` })
-            planNeedsReinvoke = true
-          }
-          break
+        planText = data.planText
+        process.stdout.write("\n" + yellow("=== 执行计划 (请审核) ===") + "\n")
+        process.stdout.write(`目标: ${data.goal}\n`)
+        process.stdout.write(`质量评分: ${data.score}/8\n`)
+        if (data.missingItems.length > 0) {
+          process.stdout.write(yellow("注意事项: " + data.missingItems.join("; ")) + "\n")
         }
+        process.stdout.write("\n步骤:\n")
+        for (const step of data.steps) {
+          process.stdout.write(`  - ${step.title}\n`)
+        }
+        process.stdout.write(`\n交付文件: ${data.requiredFiles.join(", ")}\n`)
+        process.stdout.write(`验证: ${data.requiredVerificationKinds.join(", ")}\n`)
+        process.stdout.write("\n")
+        const answer = await new Promise<string>(resolve => {
+          const { stdin, stdout } = process
+          stdout.write(yellow("[Y] 批准执行  [n] 修改计划  [x] 取消] "))
+          const onData = (data: Buffer) => {
+            stdin.removeListener("data", onData)
+            if (stdin.isTTY) stdin.setRawMode(false)
+            resolve(data.toString().trim())
+          }
+          if (stdin.isTTY) stdin.setRawMode(true)
+          stdin.on("data", onData)
+        })
+        const normalized = answer.trim().toLowerCase()
+        if (normalized === "" || normalized === "y" || normalized === "yes") {
+          metadata[LEGACY_INITIAL_PLAN_STATE] = "approved"
+          if (planText) metadata[LEGACY_PLAN_TEXT] = planText
+          planNeedsReinvoke = true
+        } else if (normalized === "x" || normalized === "cancel") {
+          process.stdout.write(red("计划已取消\n"))
+          return
+        } else {
+          warmHistory.push({ role: "user", content: `用户要求修改计划：${answer}` })
+          planNeedsReinvoke = true
+        }
+        continue
+      }
 
-        case "error":
-          stopTransientStatus()
-          process.stdout.write(red(`  ✗ ${event.data}\n`))
-          break
+      if ("error" in payload) {
+        stopTransientStatus()
+        process.stdout.write(red(`  ✗ ${payload.error}\n`))
+        continue
       }
     }
   } finally {

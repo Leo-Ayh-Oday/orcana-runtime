@@ -9,7 +9,7 @@
 
 import { randomUUID } from "node:crypto"
 import { RunNotFoundError } from "../contracts/errors"
-import { isTerminalRunStatus, type AgentRun, type RunStatus } from "../contracts/run"
+import type { AgentRun } from "../contracts/run"
 
 export interface RegisteredRun {
   run: AgentRun
@@ -67,18 +67,6 @@ export class RunRegistry {
     const found = this.lookup(runId)
     if (!found) throw new RunNotFoundError(runId)
     return found
-  }
-
-  /** H1 minimal transition helper; H2 replaces with LifecycleMachine. */
-  setStatus(runId: string, status: RunStatus): void {
-    const registered = this.requireRun(runId)
-    registered.run.status = status
-    if (status === "running" && !registered.run.startedAt) {
-      registered.run.startedAt = Date.now()
-    }
-    if (isTerminalRunStatus(status)) {
-      registered.run.finishedAt ??= Date.now()
-    }
   }
 
   remove(runId: string): void {

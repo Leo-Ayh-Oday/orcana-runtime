@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto"
 import { agentLoop } from "../../agent/loop"
 import type { AgentOptions } from "../../agent/loop-types"
+import type { LoopDecision } from "../../agent/kernel/types"
 import type { HookSystem } from "../../hooks"
 import type { StagedContextManager } from "../../context/staged"
 import type { ThinkingStore } from "../../memory/thinking-store"
@@ -57,7 +58,9 @@ export const LEGACY_PLAN_TEXT = "legacy.planText" as const
 export const LEGACY_RESUME_FROM_CHECKPOINT = "legacy.resumeFromCheckpoint" as const
 
 export interface LegacyLoopAdapter {
-  execute(run: AgentRun, input: AgentRunInput, abortSignal?: AbortSignal): AsyncIterable<HarnessEvent>
+  /** Yields bridged HarnessEvents; the generator return value is the
+   *  legacy kernel's final LoopDecision (H2 — no exit is unclassifiable). */
+  execute(run: AgentRun, input: AgentRunInput, abortSignal?: AbortSignal): AsyncGenerator<HarnessEvent, LoopDecision>
 }
 
 function readMetadata<T>(input: AgentRunInput, key: string): T | undefined {
@@ -120,15 +123,16 @@ async function* executeLoop(
   runInput: AgentRunInput,
   deps: LegacyLoopAdapterDeps,
   abortSignal?: AbortSignal,
-): AsyncGenerator<HarnessEvent> {
+): AsyncGenerator<HarnessEvent, LoopDecision> {
   const options = buildLoopOptions(run, runInput, deps, abortSignal)
-  let sequence = 0
+  // H2: bridge events share the run's eventSequence with lifecycle events,
+  // so the whole stream is one continuous, ordered sequence.
   const emit = <T>(type: string, payload: T): HarnessEvent => {
-    sequence++
+    run.eventSequence++
     return {
       schemaVersion: HARNESS_EVENT_SCHEMA_VERSION,
       eventId: randomUUID(),
-      sequence,
+      sequence: run.eventSequence,
       runId: run.runId,
       sessionId: run.sessionId,
       type,
@@ -137,9 +141,29 @@ async function* executeLoop(
     } as HarnessEvent
   }
 
-  for await (const event of agentLoop(runInput.prompt, options)) {
-    const translated = translateStreamEvent(event, emit)
-    if (translated) yield translated
+  const iterator = agentLoop(runInput.prompt, options)
+  let closed = false
+  try {
+    while (true) {
+      const step = await iterator.next()
+      if (step.done) {
+        closed = true
+        // H2: the kernel's final LoopDecision rides the generator return value.
+        return step.value as LoopDecision
+      }
+      const translated = translateStreamEvent(step.value, emit)
+      if (translated) yield translated
+    }
+  } finally {
+    // Close protocol: consumer close (cancel) propagates into the legacy loop
+    // so its provider/tool iterators are still cleaned up.
+    if (!closed) {
+      try {
+        await iterator.return(undefined as never)
+      } catch {
+        // Best-effort close.
+      }
+    }
   }
 }
 

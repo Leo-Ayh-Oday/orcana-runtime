@@ -426,7 +426,7 @@ describe("Agent loop L0 behavior baseline", () => {
       const next = await iterator.next()
       if (next.done || (next.value.type === "status" && next.value.data === "provider-ready")) break
     }
-    await iterator.return(undefined)
+    await iterator.return(undefined as never)
     expect(abortProvider.aborted).toBe(true)
     expect(aborted).toEqual(["aborted"])
     assertFallbackRuntimeIsClean()

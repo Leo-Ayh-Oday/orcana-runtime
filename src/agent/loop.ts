@@ -34,7 +34,7 @@ export type { UsageStats, AgentOptions }
 export async function* agentLoop(
   prompt: string,
   options: AgentOptions,
-): AsyncGenerator<StreamEvent> {
+): AsyncGenerator<StreamEvent, LoopDecision> {
   const scope = createAgentRunScope({
     tools: options.tools,
     planStore: options.planStore,
@@ -53,13 +53,15 @@ export async function* agentLoop(
       const step = await runWithAgentRunScope(scope, () => iterator.next())
       if (step.done) {
         completed = true
-        return
+        // H2: the kernel's final LoopDecision is the generator return value —
+        // the harness maps it to a RunOutcome (no exit is unclassifiable).
+        return step.value
       }
       yield step.value
     }
   } finally {
     if (!completed) {
-      await runWithAgentRunScope(scope, () => iterator.return(undefined))
+      await runWithAgentRunScope(scope, () => iterator.return(undefined as never))
     }
   }
 }
@@ -67,7 +69,7 @@ export async function* agentLoop(
 async function* runAgentLoop(
   prompt: string,
   options: AgentOptions,
-): AsyncGenerator<StreamEvent> {
+): AsyncGenerator<StreamEvent, LoopDecision> {
   const { hooks } = options
   const lifecycle: AgentRunLifecycleState = {
     startedAt: Date.now(),
@@ -85,7 +87,7 @@ async function* runAgentLoop(
   // exit that dispatches the Stop Hook directly (same as pre-L7).
   if (options.abortSignal?.aborted) {
     await dispatchStopHook("aborted", 0)
-    return
+    return { kind: "return", reason: "aborted" }
   }
 
   let ctx: Awaited<ReturnType<typeof buildRunContext>>["ctx"] = null
@@ -112,6 +114,7 @@ async function* runAgentLoop(
     // The single terminal switch: every exit routes through finalizeRun
     // (ctx may be null only for the pre-state prompt-blocked exit).
     yield* finalizeRun(ctx, decision, lifecycle)
+    return decision
   } catch (error) {
     lifecycle.stopReason = "error"
     throw error

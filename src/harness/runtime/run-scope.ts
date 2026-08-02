@@ -14,36 +14,14 @@ import { SandboxManager, type SandboxConfig } from "../../sandbox/sandbox"
 import type { HarnessArtifact } from "../contracts/artifact"
 import type { ArtifactStore } from "../contracts/artifact"
 import type { AgentRunScope } from "../contracts/run"
-import type { RunCancellation, TraceWriter } from "../contracts/scope"
+import type { TraceWriter } from "../contracts/scope"
+import { createRunCancellation } from "./cancellation"
 
 export function defaultSandboxConfig(projectRoot: string): SandboxConfig {
   return {
     projectRoot,
     maxRuntimeSec: Number(process.env.DEEPSEEK_SANDBOX_TIMEOUT_SEC) || 30,
     jobMemoryLimitMb: process.env.DEEPSEEK_SANDBOX_MEMORY_MB ? Number(process.env.DEEPSEEK_SANDBOX_MEMORY_MB) : 512,
-  }
-}
-
-/** RunCancellation bridging the run's AbortController (H4 adds policy). */
-export function createRunCancellation(controller: AbortController): RunCancellation {
-  return {
-    get signal() {
-      return controller.signal
-    },
-    get cancelled() {
-      return controller.signal.aborted
-    },
-    get reason() {
-      return controller.signal.reason === undefined ? undefined : String(controller.signal.reason)
-    },
-    cancel(reason: string) {
-      if (!controller.signal.aborted) controller.abort(reason)
-    },
-    throwIfCancelled() {
-      if (controller.signal.aborted) {
-        throw new Error(`Run cancelled: ${String(controller.signal.reason ?? "")}`)
-      }
-    },
   }
 }
 

@@ -13,9 +13,10 @@
 | H1 Facade / Adapter | 完成 | 2026-08-02 | `src/harness/runtime/{agent-harness,legacy-loop-adapter,run-registry}.ts`；CLI/TUI 生产入口改走 `AgentHarness.run()`（`agentLoop` 直接调用清零）；`cancel` 桥接 abortSignal、`inspect` 返回 RunSnapshot、`resume` H7 占位；`HarnessEvent` 契约扩展 4 个 bridge 变体（toolCall/display/planReady/clarification）；顺带修复 CLI plan 批准重跑 `planText` 未回传 bug；`tests/harness_legacy_adapter.test.ts` 8 项 + `harness_facade.test.ts` 5 项；全量 139 文件门禁绿色。**技术债：** 动态选项经 `AgentRunInput.metadata` 的 `LEGACY_*` key 传输（H1 过渡机制，H4/H7 正式化）；`AgentRunScope` 9 字段仍 `undefined` 占位（H3 替换）；run 终态仅 created→running→terminal 三档（H2 引入 LifecycleMachine） |
 | H2 Lifecycle / Outcome | 完成 | 2026-08-02 | `agentLoop` 生成器返回值暴露 `LoopDecision`；新增 `src/harness/runtime/{outcome-mapper,lifecycle-machine,run-controller,cleanup}.ts`；`LoopDecision → RunOutcome` 穷尽映射（编译期保证无未分类退出）；`RunLifecycleMachine` 驱动 `run.status`（含 pausing 中间态）+ run.* 生命周期事件；事件流 sequence 统一（bridge 与 lifecycle 共享 `run.eventSequence`）；`tests/harness_lifecycle.test.ts` 7 场景 + `harness_lifecycle_machine.test.ts` 6 项；全量 141 文件门禁绿色。**技术债：** `completed.reportArtifactId`/`waiting.checkpointId` 仍占位（H7/H8 填充）；异常仍向调用方传播（outcome 已记录）；kernel 层 stopReason 与 harness outcome 并存（两层语义，行为冻结） |
 | H3 Run Scope / Isolation | 完成 | 2026-08-02 | `AgentRunScope` 9 个 `unknown` 占位替换为真实类型（`contracts/scope.ts`：ModeStore/PatchContextStore/RippleSession/RunCancellation/TraceWriter + L2 的 PlanStore/EvidenceLedger/SandboxManager）；`run-registry` 每 run 装配完整 scope；**唯一所有权打通**：harness 的 planStore/sandbox 经 `AgentOptions.planStore/sandbox` 注入 kernel（同一实例）；`inspect` 返回可序列化 plan/mode 快照；`tests/harness_run_isolation.test.ts` 4 项 + `harness_scope.test.ts` 5 项（双 run 并行 plan/mode/patch/sandbox/cancel 不串）；全量 143 文件门禁绿色。**技术债：** mode/patch/ripple/budget 权威值仍在 kernel ALS（按 run 隔离），scope 快照为初始值——ALS→scope 迁移后续阶段；RunCancellation/TraceWriter 为桥接/占位（H4/H5 完整化）；`budgetState` 空（H4） |
-| H4—H12 | 未开始 | — | 按依赖图顺序：H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
+| H4 Cancellation / Budget | 完成 | 2026-08-02 | `AgentRun.budget` 占位清除（真实 `BudgetLedger` Reserve-Commit 实现）；`runtime/{budget-ledger,budget-guard,cancellation}.ts`；超限产生明确原因并取消（model_call/tool_call/token/wall_time_budget → cancelled outcome reason）；wall-time 看门狗兜底卡死 run；`maxRounds → maxModelCalls` 映射；`AgentRunInput.budget` 限额入口；`inspect.budgetState` 真实快照；**零 kernel 改动**（行为冻结，预算治理在 harness 控制面 §3.4）；`tests/budget_ledger.test.ts` 6 项 + `harness_budget.test.ts` 6 场景（超限即停无后续事件）；全量 145 文件门禁绿色。**技术债：** write/external_action/repair 限额字段就绪但未挂接（kernel 事件无工具分类，H8/H9 接入） |
+| H5—H12 | 未开始 | — | 按依赖图顺序：H5 Typed Trace（第一里程碑）→ H6 Persistence → H7 Interrupt |
 
-> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0–H3 已完成**（进度表见上），下一步为 **PR-H4 Cancellation / BudgetLedger**（`RunCancellation` 完整化 + Reserve-Commit 预算 + 超预算明确原因）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H4–H11 并行不冲突）。
+> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0–H4 已完成**（进度表见上），下一步为 **PR-H5 Typed Events / Trace V2**（Event Envelope + Sequence + 事件类型联合 + Trace Migration + 统一 Redaction，第一里程碑收官）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H5–H11 并行不冲突）。
 
 ---
 
@@ -1951,6 +1952,21 @@ src/harness/runtime/budget-ledger.ts
 ## 验收
 
 不再由各模块私自判断总预算。
+
+## H4 实施记录（2026-08-02）
+
+**状态：完成。** 全部门禁绿色（typecheck / 145 文件测试 / build / npm pack / diff --check）；**kernel 零改动**（git diff 验证）。
+
+实现要点：
+
+1. **BudgetLedger**（`runtime/budget-ledger.ts`）：H0 契约的 Reserve→Commit 实现——reserve 按 kind 校验（含未 commit 的 pending reservation 并发计数），commit 累计实际用量并校验 token 限额，release 恢复容量，全部幂等；超限抛 `HarnessError("budget_exhausted", <明确原因>)`。
+2. **Cancellation 完整化**（`runtime/cancellation.ts`）：`createRunCancellation` 从 run-scope 迁入；新增 `createRunCancellationWithTimeout` —— wall-time 看门狗，超时自动 `cancel("wall_time_budget")`，卡死 run 也能终止。
+3. **BudgetGuard**（`runtime/budget-guard.ts`）：harness 控制面观测事件流——modelCalls 按轮次**首个 usage 事件**计数（kernel 每轮先 estimate 后 provider-final，首个事件计数保证超限发生在该轮任何工具事件之前 → "取消后无继续事件"成立）；tokens 仅 provider 源（直写 ledger.used + 限额自检）；toolCalls 逐事件计数。超限 → `controller.abort(reason)` → 既有 cancel 链路（H2）产出 cancelled outcome，reason = BudgetExhaustionReason。
+4. **装配**：`AgentRunInput.budget?: Partial<RunBudget>` 限额入口；`maxRounds → maxModelCalls` 映射（显式 budget 优先）；`AgentRun.budget` 真实实现（H1 起占位清除）；`inspect.budgetState` 返回 limits/used/remaining 快照。
+5. **行为冻结**：预算治理完全在 harness 层（§3.4 控制面/§9.3 全局预算移交 Harness），kernel 无改动。
+6. **边界记录**：write/external_action/repair 限额在 ledger 中就绪但未挂接（kernel 事件流未桥接工具分类，H8/H9 接入）；token 记账直写 used（绕过 commit 的 token 校验路径，guard 自检等效）。
+
+**H5 入口：** Typed Events / Trace V2 —— EventEnvelope 序列化落盘（`run.eventSequence` 已全局连续，H2 前置就绪）、事件类型联合、`migrateLegacyTrace()`、统一 Redaction、TraceWriter 从 no-op 接真实现。
 
 ---
 

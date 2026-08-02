@@ -18,13 +18,14 @@
 | L3 ProviderRoundRunner | 完成 | 2026-07-30 | Provider 请求、流解析、usage、文本缓冲、idle timeout、abort、iterator cleanup 和失败恢复策略已抽出；`loop.ts` 不再直接调用 Provider |
 | L4 ToolBatchExecutor | 完成 | 2026-08-02 | `src/agent/tool-execution/{batch-executor,single-executor,result-normalizer}.ts` 抽出；并行只读、8 层 Policy、Hook、timeout/abort、ToolLedger 与结果规范化统一到一个执行入口；hard-block 也写入 Ledger；`loop.ts` 由 2077 行降至 1694 行；`tests/tool_batch_executor.test.ts` 9 项；门禁绿色 |
 | L5 VerificationCoordinator | 完成 | 2026-08-02 | `src/agent/verification/coordinator.ts` 抽出 `bindVerificationToLedger` / `runRippleVerificationPhase` / `runBatchTypecheckAndTaskTracker`；Ripple 验证、义务解析、cascade、narrow-edit 完成、批量 typecheck、TaskTracker 验证投影、lastResults 全部移出 `loop.ts`；`loop.ts` 不再直接运行 typecheck 或操作 Ripple obligation；`loop.ts` 降至 ~1614 行；门禁绿色 |
-| L6—L7 | 未开始 | — | 不提前实施 |
+| L6 MaintenanceCoordinator | 部分完成 | 2026-08-02 | `src/agent/maintenance/coordinator.ts` 抽出 `runHistoricalMicrocompact` / `runAdaptiveCheckpoint` / `runKnowledgeDistillation` / `runKnowledgeReconcile`；`loop.ts` 降至 ~1592 行；门禁绿色。**剩余：** thinking compaction 与 semantic recall 仍耦合 provider 流留在 `loop.ts`，尚未统一为单一 `runMaintenance()` 入口 |
+| L7 LoopDecision | 未开始 | — | 不提前实施 |
 
 ## 重启续作点
 
 **记录日期：** 2026-08-02  
-**当前边界：** L0—L5 已完成，尚未开始 L6。  
-**下次入口：** `PR-L6：抽出 MaintenanceCoordinator`。
+**当前边界：** L0—L5 已完成；L6 部分完成（Thinking compaction + Semantic Recall + 单一 `runMaintenance()` 入口仍未做）；L7 尚未开始。  
+**下次入口：** 1) 收尾 L6：把 thinking compaction 与 semantic recall 抽入 `maintenance/coordinator.ts`，提供组合式 `runMaintenance()`；2) 然后 `PR-L7：引入 LoopDecision` 收束 Agent Kernel。
 
 重启后：
 

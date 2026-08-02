@@ -26,6 +26,7 @@ import { runControlledRun } from "./run-controller"
 import { createLegacyLoopAdapter, type LegacyLoopAdapter, type LegacyLoopAdapterDeps } from "./legacy-loop-adapter"
 import { serializeRun, snapshotFromRun, restoreAgentRun } from "../persistence/serialization"
 import type { HarnessStore, SerializableRun } from "../persistence/harness-store"
+import { serializeLedger } from "../../agent/evidence-ledger"
 import { markInterruptAnswered, validateResume } from "../interrupts/interrupt-manager"
 import { applyPlanApprovalResponse } from "../interrupts/plan-approval"
 import { applyClarificationResponse } from "../interrupts/clarification"
@@ -106,10 +107,12 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         })
       } finally {
         // H6: persist the terminal state (best-effort, never fails the run).
+        // H8: artifact refs are collected from the run's store.
         if (store) {
           const hash = workspaceHash?.()
-          await store.saveRun(serializeRun({ run: registered.run, workspaceHash: hash })).catch(() => {})
-          await store.saveSnapshot(snapshotFromRun(registered.run, hash)).catch(() => {})
+          const artifactRefs = await collectArtifactRefs(registered.run)
+          await store.saveRun(serializeRun({ run: registered.run, workspaceHash: hash, artifactRefs })).catch(() => {})
+          await store.saveSnapshot(snapshotFromRun(registered.run, hash, artifactRefs)).catch(() => {})
         }
       }
     },
@@ -154,7 +157,8 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         run.finishedAt ??= Date.now()
         run.outcome = { kind: "cancelled", reason: "interrupt_rejected" }
         if (store) {
-          await store.saveRun(serializeRun({ run, workspaceHash: currentHash })).catch(() => {})
+          const artifactRefs = await collectArtifactRefs(run)
+          await store.saveRun(serializeRun({ run, workspaceHash: currentHash, artifactRefs })).catch(() => {})
         }
         return
       }
@@ -183,8 +187,9 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
       } finally {
         if (store) {
           const hash = workspaceHash?.()
-          await store.saveRun(serializeRun({ run, workspaceHash: hash })).catch(() => {})
-          await store.saveSnapshot(snapshotFromRun(run, hash)).catch(() => {})
+          const artifactRefs = await collectArtifactRefs(run)
+          await store.saveRun(serializeRun({ run, workspaceHash: hash, artifactRefs })).catch(() => {})
+          await store.saveSnapshot(snapshotFromRun(run, hash, artifactRefs)).catch(() => {})
         }
       }
     },
@@ -204,7 +209,7 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
           const serializable = await store.loadRun(runId).catch(() => null)
           if (serializable) {
             const restored = restoreAgentRun({ serializable, projectRoot })
-            return snapshotFromRun(restored, serializable.workspaceHash)
+            return snapshotFromRun(restored, serializable.workspaceHash, serializable.artifactRefs ?? [])
           }
         }
         registry.requireRun(runId) // throws RunNotFoundError
@@ -234,8 +239,9 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
           used: run.budget.used,
           remaining: run.budget.remaining(),
         },
-        evidenceState: { entries: scope.evidenceLedger.entries.length },
-        artifactRefs: [],
+        // H8: serialized evidence entries + the run's artifact refs.
+        evidenceState: { entries: serializeLedger(scope.evidenceLedger).entries },
+        artifactRefs: await collectArtifactRefs(run),
         conversationRef: "",
         createdAt: run.createdAt,
         interrupt: run.interrupt,
@@ -246,6 +252,16 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
     async dispose(): Promise<void> {
       // H1: nothing to flush — sessions and runs are memory-only.
     },
+  }
+}
+
+/** H8: collect the run's artifact ids (best-effort, never fails the run). */
+async function collectArtifactRefs(run: { scope: { artifactStore: import("../contracts/artifact").ArtifactStore } }): Promise<string[]> {
+  try {
+    const artifacts = await run.scope.artifactStore.entries()
+    return artifacts.map(a => a.artifactId)
+  } catch {
+    return []
   }
 }
 

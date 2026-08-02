@@ -9,6 +9,7 @@
 import type { RunStatus, AgentRunInput } from "./run"
 import type { HarnessInterrupt } from "./interrupt"
 import type { RunOutcome } from "./outcome"
+import type { SerializedEvidenceEntry } from "../../agent/evidence-ledger"
 
 export interface RunSnapshot {
   schemaVersion: number
@@ -23,7 +24,8 @@ export interface RunSnapshot {
   modeState: unknown
   budgetState: unknown
 
-  evidenceState: unknown
+  /** H8: serialized evidence entries (was a count in H0–H7 snapshots). */
+  evidenceState: { entries: SerializedEvidenceEntry[] }
   artifactRefs: string[]
 
   conversationRef: string

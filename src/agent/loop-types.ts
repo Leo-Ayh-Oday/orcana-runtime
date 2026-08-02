@@ -62,4 +62,9 @@ export interface AgentOptions {
   planStore?: PlanStore
   /** H3: optional caller-provided run-scoped sandbox (single ownership with the harness). */
   sandbox?: import("../sandbox/sandbox").SandboxManager
+  /** H8: optional caller-provided run-scoped artifact store (single ownership
+   *  with the harness). When present, verification produces bound artifacts. */
+  artifactStore?: import("../harness/contracts/artifact").ArtifactStore
+  /** H8: run id stamped on artifacts produced inside the kernel. */
+  runId?: string
 }

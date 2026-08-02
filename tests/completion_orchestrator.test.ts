@@ -106,7 +106,6 @@ describe("CompletionOrchestrator truthfulness gate", () => {
       taskModifiedFiles: 1,
       changedFiles: ["src/ok.ts"],
       verificationResults: [{ kind: "typecheck", command: "typecheck", passed: true, issues: 0, durationMs: 1, summary: "ok" }],
-      lastTypecheck: { passed: true, issues: 0 },
       evidenceLedger: ledger,
       evidenceBinding,
     }))
@@ -159,7 +158,6 @@ describe("CompletionOrchestrator truthfulness gate", () => {
         kind: "typecheck", command: "bun run typecheck", passed: true,
         issues: 0, durationMs: 1, summary: "ok",
       }],
-      lastTypecheck: { passed: true, issues: 0 },
       evidenceLedger: ledger,
     }))
 
@@ -188,7 +186,6 @@ describe("checkNarrowEditCompletion", () => {
       intentMode: "narrow_edit",
       hadTsWriteThisRound: true,
       blockingObligations: 0,
-      lastTypecheckPassed: true,
       missingNarrowFiles: [],
       modifiedFilesThisRound: new Set(["src/after-typecheck.ts"]),
       taskTracker: null,
@@ -199,23 +196,37 @@ describe("checkNarrowEditCompletion", () => {
     expect(result.evidenceMissing).toContain("缺少验证证据: 类型检查")
   })
 
-  test("blocks verified-write auto-complete when structured evidence is missing", () => {
+  test("blocks verified-write auto-complete when the latest typecheck failed", () => {
+    resetRuntimeFileStateLedger()
+    const ledger = createEvidenceLedger()
+    addEvidence(ledger, {
+      id: "evi_failed_typecheck",
+      kind: "typecheck",
+      command: "typecheck",
+      output: "err",
+      passed: false,
+      issues: 2,
+      timestamp: Date.now(),
+      generation: 0,
+    })
+
+    // H8: the derived typecheck view comes from the ledger — a failed entry
+    // means no auto-complete, and no evidence prompt is injected (fail-closed
+    // before the canClaimDone step).
     const result = checkNarrowEditCompletion({
       autoFinishOnVerifiedWrite: true,
       intentMode: "narrow_edit",
       hadTsWriteThisRound: true,
       blockingObligations: 0,
-      lastTypecheckPassed: true,
       missingNarrowFiles: [],
       modifiedFilesThisRound: new Set(["src/ok.ts"]),
       taskTracker: tracker(),
-      evidenceLedger: createEvidenceLedger(),
+      evidenceLedger: ledger,
     })
 
     expect(result.completionText).toBeNull()
-    expect(result.evidenceStatus).toBe("evidence-gate: narrow_edit blocked (1 missing)")
-    expect(result.evidencePrompt).not.toBeNull()
-    expect(result.evidenceMissing).toHaveLength(1)
+    expect(result.evidenceStatus).toBeNull()
+    expect(result.evidenceMissing).toHaveLength(0)
   })
 
   test("blocks current-generation evidence bound to a different transaction", () => {
@@ -241,7 +252,6 @@ describe("checkNarrowEditCompletion", () => {
       intentMode: "narrow_edit",
       hadTsWriteThisRound: true,
       blockingObligations: 0,
-      lastTypecheckPassed: true,
       missingNarrowFiles: [],
       modifiedFilesThisRound: new Set(["src/current.ts"]),
       taskTracker: null,
@@ -275,7 +285,6 @@ describe("checkNarrowEditCompletion", () => {
       intentMode: "narrow_edit",
       hadTsWriteThisRound: true,
       blockingObligations: 0,
-      lastTypecheckPassed: true,
       missingNarrowFiles: [],
       modifiedFilesThisRound: new Set(["src/ok.ts"]),
       taskTracker: null,

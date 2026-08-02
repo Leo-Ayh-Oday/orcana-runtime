@@ -42,4 +42,13 @@ export interface ArtifactStore {
   put(artifact: HarnessArtifact): Promise<void>
   get(artifactId: string): Promise<HarnessArtifact | null>
   markStale(artifactId: string): Promise<void>
+  /** H8: mark an artifact superseded (a newer artifact of the same kind replaced it). */
+  markSuperseded(artifactId: string): Promise<void>
+  /** H8: list artifacts of a kind in insertion order. */
+  findByKind(kind: HarnessArtifactKind): Promise<HarnessArtifact[]>
+  /** H8: all artifacts in insertion order (used for snapshot artifactRefs). */
+  entries(): Promise<HarnessArtifact[]>
+  /** H8: store large content by hash — artifacts keep only ref + hash (§14.2). */
+  storeContent(content: string): Promise<string>
+  getContent(ref: string): Promise<string | null>
 }

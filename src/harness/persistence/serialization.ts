@@ -11,6 +11,7 @@
 import { createMasterPlan } from "../../agent/master-plan"
 import { createTaskTracker } from "../../agent/task-tracker"
 import { createPlanStore, setCurrentPlan } from "../../agent/run/plan-store"
+import { deserializeLedger, serializeLedger } from "../../agent/evidence-ledger"
 import type { AgentRun, AgentRunInput } from "../contracts/run"
 import type { RunSnapshot } from "../contracts/snapshot"
 import type { ModeName } from "../../agent/mode-contract"
@@ -68,10 +69,13 @@ export function deserializePlanState(state: SerializablePlanState) {
 export interface SerializeRunInput {
   run: AgentRun
   workspaceHash?: string
+  /** H8: artifact ids produced by the run (collected by the caller — the
+   *  store interface is async and serializeRun stays synchronous). */
+  artifactRefs?: string[]
 }
 
 export function serializeRun(input: SerializeRunInput): SerializableRun {
-  const { run, workspaceHash } = input
+  const { run, workspaceHash, artifactRefs } = input
   return {
     schemaVersion: HARNESS_STORE_SCHEMA_VERSION,
     runId: run.runId,
@@ -87,7 +91,8 @@ export function serializeRun(input: SerializeRunInput): SerializableRun {
     planState: serializePlanState(run.scope.planStore),
     modeState: { mode: run.scope.modeStore.mode },
     budgetState: { limits: run.budget.limits, used: run.budget.used },
-    evidenceState: { entries: run.scope.evidenceLedger.entries.length },
+    evidenceState: { entries: serializeLedger(run.scope.evidenceLedger).entries },
+    artifactRefs: artifactRefs ?? [],
     workspaceHash,
   }
 }
@@ -112,6 +117,13 @@ export function restoreAgentRun(input: RestoreAgentRunInput): AgentRun {
   const plan = deserializePlanState(serializable.planState)
   if (plan) setCurrentPlan(scope.planStore, plan)
 
+  // H8: restore the evidence ledger; H6 files carried only a count — treat
+  // those as an empty ledger (artifact content is not restored, refs are).
+  const entries = serializable.evidenceState?.entries
+  if (Array.isArray(entries)) {
+    scope.evidenceLedger = deserializeLedger({ entries })
+  }
+
   const budget = createBudgetLedger(serializable.budgetState.limits)
   Object.assign(budget.used, serializable.budgetState.used)
 
@@ -133,7 +145,7 @@ export function restoreAgentRun(input: RestoreAgentRunInput): AgentRun {
 }
 
 /** Snapshot from a live run (same shape as inspect()). */
-export function snapshotFromRun(run: AgentRun, workspaceHash?: string): RunSnapshot {
+export function snapshotFromRun(run: AgentRun, workspaceHash?: string, artifactRefs?: string[]): RunSnapshot {
   return {
     schemaVersion: 1,
     runId: run.runId,
@@ -148,8 +160,8 @@ export function snapshotFromRun(run: AgentRun, workspaceHash?: string): RunSnaps
       used: run.budget.used,
       remaining: run.budget.remaining(),
     },
-    evidenceState: { entries: run.scope.evidenceLedger.entries.length },
-    artifactRefs: [],
+    evidenceState: { entries: serializeLedger(run.scope.evidenceLedger).entries },
+    artifactRefs: artifactRefs ?? [],
     conversationRef: "",
     workspaceHash,
     interrupt: run.interrupt,

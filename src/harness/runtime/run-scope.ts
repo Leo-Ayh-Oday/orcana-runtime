@@ -12,10 +12,9 @@ import { createPlanStore } from "../../agent/run/plan-store"
 import { createEvidenceLedger } from "../../agent/evidence-ledger"
 import type { ModeName } from "../../agent/mode-contract"
 import { SandboxManager, type SandboxConfig } from "../../sandbox/sandbox"
-import type { HarnessArtifact } from "../contracts/artifact"
-import type { ArtifactStore } from "../contracts/artifact"
 import type { AgentRunScope } from "../contracts/run"
 import type { TraceWriter } from "../contracts/scope"
+import { createArtifactStore } from "../artifacts/artifact-store"
 import { createJsonlTraceWriter } from "../telemetry/trace-writer"
 import { createRunCancellation } from "./cancellation"
 
@@ -49,23 +48,6 @@ export function createRunTraceWriter(
   })
 }
 
-/** H3 in-memory artifact store (full integration lands in H8). */
-export function createInMemoryArtifactStore(): ArtifactStore {
-  const artifacts = new Map<string, HarnessArtifact>()
-  return {
-    async put(artifact) {
-      artifacts.set(artifact.artifactId, artifact)
-    },
-    async get(artifactId) {
-      return artifacts.get(artifactId) ?? null
-    },
-    async markStale(artifactId) {
-      const artifact = artifacts.get(artifactId)
-      if (artifact) artifact.status = "stale"
-    },
-  }
-}
-
 export interface AssembleRunScopeInput {
   runId: string
   sessionId: string
@@ -86,7 +68,7 @@ export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
     sandbox: new SandboxManager(defaultSandboxConfig(projectRoot)),
     rippleSession: { obligations: [], cascadeFiles: [] },
     evidenceLedger: createEvidenceLedger(),
-    artifactStore: createInMemoryArtifactStore(),
+    artifactStore: createArtifactStore(),
     cancellation: createRunCancellation(controller),
     // H5: typed JSONL trace (H3 no-op replaced).
     trace: createRunTraceWriter(projectRoot, runId, sessionId),

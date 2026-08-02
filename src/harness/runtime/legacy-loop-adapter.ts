@@ -88,6 +88,9 @@ export function buildLoopOptions(
     // the same instances the legacy kernel operates on.
     planStore: run.scope.planStore,
     sandbox: run.scope.sandbox,
+    // H8: run-scoped artifact store (verification binds artifacts to it).
+    artifactStore: run.scope.artifactStore,
+    runId: run.runId,
     hooks: deps.hooks,
     stagedContext: deps.stagedContext,
     thinkingStore: deps.thinkingStore,

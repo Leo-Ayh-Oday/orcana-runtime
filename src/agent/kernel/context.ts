@@ -60,6 +60,8 @@ export async function buildRunContext(
 ): Promise<BuildRunContextResult> {
   const { provider, model, tools, stagedContext, hooks } = options
   const planStore = options.planStore ?? requireRuntimeExecutionContext().planStore
+  const artifactStore = options.artifactStore
+  const runId = options.runId
   const maxRounds = resolveMaxRounds(options.maxRounds, process.env.DEEPSEEK_MAX_ROUNDS)
 
   const effectivePrompt = buildEffectivePrompt(prompt, options.conversationHistory)
@@ -267,6 +269,8 @@ export async function buildRunContext(
     evidenceLedger,
     triageSkillPrompts,
     planStore,
+    artifactStore,
+    runId,
     confidenceEvaluator,
     flashJudge,
     testimonyLedger,

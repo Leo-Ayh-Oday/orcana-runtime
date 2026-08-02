@@ -131,6 +131,10 @@ export interface RunPhaseContext {
   evidenceLedger: EvidenceLedger
   triageSkillPrompts: string[]
   planStore: PlanStore
+  /** H8: harness-owned artifact store (verification binds artifacts when present). */
+  artifactStore?: import("../../harness/contracts/artifact").ArtifactStore
+  /** H8: run id stamped on artifacts produced inside the kernel. */
+  runId?: string
   confidenceEvaluator: ConfidenceEvaluator
   flashJudge: FlashJudge
   testimonyLedger: TestimonyLedger

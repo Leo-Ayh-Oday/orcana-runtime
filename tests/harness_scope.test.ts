@@ -109,7 +109,9 @@ describe("Harness H3 typed run scope", () => {
     expect(budget.limits.maxModelCalls).toBeGreaterThan(0)
     expect(budget.used.modelCalls).toBeGreaterThanOrEqual(0)
     expect(budget.remaining.modelCalls).toBeGreaterThanOrEqual(0)
-    expect((snapshot.evidenceState as { entries: number }).entries).toBeGreaterThanOrEqual(0)
+    // H8: evidence state carries the serialized ledger entries (array).
+    expect((snapshot.evidenceState as { entries: unknown[] }).entries).toBeInstanceOf(Array)
+    expect(snapshot.artifactRefs).toBeInstanceOf(Array)
   })
 
   test("plan store is a live single owner (setCurrentPlan reflects in inspect)", async () => {

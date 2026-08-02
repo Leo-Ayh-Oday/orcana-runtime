@@ -30,7 +30,7 @@ import { markPlanAccepted, missingTaskRequirements, formatTaskTrackerPrompt } fr
 import { evaluateCompletionGate, formatBlockedCompletion, formatCompletionEvidenceReport, formatCompletionGatePrompt, needsExternalCompletionGate } from "./external-completion-gate"
 import { FlashJudge, type TestimonyLedger } from "./flash-judge"
 import { extractPromises } from "./round/post-loop"
-import { canClaimDone, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
+import { canClaimDone, deriveLastTypecheck, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
 import { getWriteGeneration } from "../file-state"
 import type { TransactionEvidenceBinding, VerificationResult } from "../verification/result"
 import type { RippleObligation } from "../ripple/obligations"
@@ -55,7 +55,6 @@ export interface CompletionOrchestratorInput {
   taskHadWrite: boolean
   taskToolErrors: number
   taskModifiedFiles: number
-  lastTypecheck?: { passed: boolean; issues: number; output?: string }
   lastRippleReports: RippleReport[]
   planApproved: boolean
   planningRejections: number
@@ -258,7 +257,9 @@ export class CompletionOrchestrator {
       changedFiles: input.changedFiles,
       taskHadWrite: input.taskHadWrite,
       toolErrors: input.taskToolErrors,
-      lastTypecheck: input.lastTypecheck,
+      // H8: single source of truth — the typecheck view is derived from the
+      // evidence ledger, never passed around as a separate field.
+      lastTypecheck: input.evidenceLedger ? deriveLastTypecheck(input.evidenceLedger) : undefined,
       evidenceLedger: input.evidenceLedger,
       currentGeneration: getWriteGeneration(),
       evidenceBinding: input.evidenceBinding,
@@ -512,12 +513,13 @@ export class CompletionOrchestrator {
         case "no_errors":
         case "lint_passed": {
           // Check typecheck evidence
+          // H8: no separate lastTypecheck fallback — evidence (or the round's
+          // verification results, ledger-less callers) is the single source.
           const hasTypecheckEvidence = input.evidenceLedger
         ? hasFreshPassingEvidence(input.evidenceLedger, "typecheck", getWriteGeneration(), input.evidenceBinding, input.taskHadWrite || getWriteGeneration() > 0)
             : input.verificationResults.some(v => (v.kind === "typecheck" || v.kind === "lint") && v.passed)
-          const hasLastTypecheck = !input.evidenceLedger && input.lastTypecheck?.passed === true
 
-          if (!hasTypecheckEvidence && !hasLastTypecheck) {
+          if (!hasTypecheckEvidence) {
             contradictions.push({
               claim: claim.claim,
               contradiction: "声称类型检查通过，但 EvidenceLedger 中没有 typecheck 通过记录",
@@ -580,7 +582,8 @@ export class CompletionOrchestrator {
       taskHadWrite: input.taskHadWrite,
       taskToolErrors: input.taskToolErrors,
       taskModifiedFiles: input.taskModifiedFiles,
-      lastTypecheck: input.lastTypecheck,
+      // H8: derived from the ledger — completion facts have a single source.
+      lastTypecheck: input.evidenceLedger ? deriveLastTypecheck(input.evidenceLedger) : undefined,
       lastRippleReports: input.lastRippleReports,
       lastVerificationResults: input.verificationResults,
       planApproved: input.planApproved,
@@ -620,7 +623,6 @@ export interface NarrowEditCheckInput {
   intentMode: string
   hadTsWriteThisRound: boolean
   blockingObligations: number
-  lastTypecheckPassed?: boolean
   missingNarrowFiles: string[]
   modifiedFilesThisRound: Set<string>
   taskTracker?: TaskTracker | null
@@ -655,12 +657,18 @@ export function checkNarrowEditCompletion(input: NarrowEditCheckInput): NarrowEd
     evidenceMissing: [],
   }
 
+  // H8: the typecheck view is derived from the ledger (single source of
+  // truth) instead of a caller-supplied lastTypecheck field.
+  const lastTypecheckPassed = input.evidenceLedger
+    ? deriveLastTypecheck(input.evidenceLedger)?.passed
+    : undefined
+
   if (
     input.autoFinishOnVerifiedWrite &&
     input.intentMode === "narrow_edit" &&
     input.hadTsWriteThisRound &&
     input.blockingObligations === 0 &&
-    input.lastTypecheckPassed &&
+    lastTypecheckPassed &&
     input.missingNarrowFiles.length === 0
   ) {
     if (input.evidenceLedger) {

@@ -41,6 +41,12 @@ export interface EvidenceEntry {
   generation?: number
   /** Constant-size snapshot of successful commit history at collection time. */
   transaction?: TransactionEvidenceBinding
+  /** H8: the HarnessArtifact this evidence supports (§14.2 — artifact = produced
+   *  thing, evidence = the claim the artifact supports). */
+  artifactId?: string
+  /** H8: marked stale by artifact freshness invalidation (§14.3). A stale entry
+   *  can never satisfy the completion gate. */
+  stale?: boolean
 }
 
 /** Collection of all evidence gathered during a task. */
@@ -127,6 +133,13 @@ export function addEvidence(ledger: EvidenceLedger, entry: EvidenceEntry): void 
   ledger.entries.push(entry)
 }
 
+/** H8: mark every entry bound to the given artifact stale (§14.3). */
+export function markEvidenceStale(ledger: EvidenceLedger, artifactId: string): void {
+  for (const entry of ledger.entries) {
+    if (entry.artifactId === artifactId) entry.stale = true
+  }
+}
+
 /** Check whether the ledger has at least one passed evidence entry of the given kind. */
 export function hasEvidence(ledger: EvidenceLedger, kind: EvidenceKind): boolean {
   return ledger.entries.some(e => e.kind === kind && e.passed)
@@ -179,7 +192,7 @@ export function hasFreshPassingEvidence(
   requireEvidenceBinding = false,
 ): boolean {
   const latest = latestEvidence(ledger, kind)
-  if (!latest || !latest.passed) return false // L1
+  if (!latest || latest.stale || !latest.passed) return false // L1 (H8: stale entries never satisfy)
   if (currentGeneration !== undefined && latest.generation !== currentGeneration) {
     return false // L2 — code changed since this evidence was collected
   }
@@ -485,6 +498,8 @@ export interface SerializedEvidenceEntry {
   txId?: string
   generation?: number
   transaction?: TransactionEvidenceBinding
+  artifactId?: string
+  stale?: boolean
 }
 
 export interface SerializedLedger {
@@ -504,6 +519,8 @@ export function serializeLedger(ledger: EvidenceLedger): SerializedLedger {
       txId: e.txId,
       generation: e.generation,
       transaction: cloneTransactionEvidenceBinding(e.transaction),
+      artifactId: e.artifactId,
+      stale: e.stale,
     })),
   }
 }
@@ -521,6 +538,8 @@ export function deserializeLedger(data: SerializedLedger): EvidenceLedger {
       txId: e.txId,
       generation: e.generation,
       transaction: cloneTransactionEvidenceBinding(e.transaction),
+      artifactId: e.artifactId,
+      stale: e.stale,
     })),
   }
 }

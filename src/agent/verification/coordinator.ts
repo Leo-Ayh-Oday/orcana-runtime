@@ -25,6 +25,9 @@ import type { PlanStore } from "../run/plan-store"
 import type { AgentRunTrace } from "../run-trace"
 import type { EvidenceLedger } from "../evidence-ledger"
 import { deriveLastTypecheck, ingestTypecheck, ingestVerificationResults } from "../evidence-ledger"
+import type { ArtifactStore } from "../../harness/contracts/artifact"
+import { ingestTypecheckWithArtifact, ingestVerificationWithArtifact } from "../../harness/artifacts/evidence-adapter"
+import { computeRelevantFileHashes } from "../../harness/artifacts/freshness"
 import { runRippleVerification } from "../round/post-loop"
 import {
   getBlockingObligations,
@@ -55,6 +58,11 @@ export interface VerificationContext {
   verificationState: AgentRunState["verification"]
   roundState: RoundState
   evidenceLedger: EvidenceLedger
+  /** H8: harness-owned artifact store — when present, verification results are
+   *  ingested as artifacts bound to their evidence entries (§14.2). */
+  artifactStore?: ArtifactStore
+  /** H8: run id stamped on produced artifacts. */
+  runId?: string
 
   modifiedFilesThisRound: Set<string>
   rippleReportsThisRound: RippleReport[]
@@ -75,9 +83,30 @@ export interface VerificationContext {
 /**
  * Ingest this round's structured verification results into EvidenceLedger.
  * Ran immediately after tool execution so completion gates see fresh evidence.
+ * H8: with an artifact store present, each result also becomes a bound
+ * artifact (typecheck_result/test_result/build_result) so freshness
+ * invalidation can mark both sides stale (§14.2/§14.3).
  */
-export function bindVerificationToLedger(ctx: VerificationContext): void {
-  ingestVerificationResults(ctx.evidenceLedger, ctx.verificationResultsThisRound, undefined, getWriteGeneration())
+export async function bindVerificationToLedger(ctx: VerificationContext): Promise<void> {
+  const { artifactStore, evidenceLedger, verificationResultsThisRound, modifiedFilesThisRound, runId } = ctx
+  if (!artifactStore) {
+    ingestVerificationResults(evidenceLedger, verificationResultsThisRound, undefined, getWriteGeneration())
+    return
+  }
+  const relevantFileHashes = modifiedFilesThisRound.size > 0
+    ? computeRelevantFileHashes(process.cwd(), [...modifiedFilesThisRound])
+    : undefined
+  for (const result of verificationResultsThisRound) {
+    await ingestVerificationWithArtifact({
+      store: artifactStore,
+      ledger: evidenceLedger,
+      runId: runId ?? "",
+      result,
+      producedBy: result.command || "verification",
+      generation: getWriteGeneration(),
+      relevantFileHashes,
+    })
+  }
 }
 
 // ── Part 2: Ripple verification + obligation resolution + narrow-edit completion ──
@@ -136,7 +165,6 @@ export async function* runRippleVerificationPhase(
       intentMode: ctx.intentPolicy.mode,
       hadTsWriteThisRound,
       blockingObligations: getBlockingObligations(verificationState.rippleObligations).length,
-      lastTypecheckPassed: verificationState.lastTypecheck?.passed,
       missingNarrowFiles,
       modifiedFilesThisRound,
       taskTracker: ctx.planning.taskTracker,
@@ -185,13 +213,30 @@ export async function* runBatchTypecheckAndTaskTracker(
     // L5: the batch tsc result is the authoritative typecheck for the round —
     // ingest it into EvidenceLedger and derive the lastTypecheck compat view
     // from the ledger (single source of truth for completion).
-    ingestTypecheck(ctx.evidenceLedger, {
-      passed: tscResult.available ? tscResult.passed : true,
-      issues: tscResult.available ? tscResult.issues : 0,
-      output: tscResult.available ? tscResult.output : (tscResult.output || "tsc unavailable"),
-      command: "tsc --noEmit",
-      generation: getWriteGeneration(),
-    })
+    // H8: with an artifact store present the result also becomes a
+    // typecheck_result artifact bound to its evidence entry.
+    if (ctx.artifactStore) {
+      await ingestTypecheckWithArtifact({
+        store: ctx.artifactStore,
+        ledger: ctx.evidenceLedger,
+        runId: ctx.runId ?? "",
+        passed: tscResult.available ? tscResult.passed : true,
+        issues: tscResult.available ? tscResult.issues : 0,
+        output: tscResult.available ? tscResult.output : (tscResult.output || "tsc unavailable"),
+        command: "tsc --noEmit",
+        producedBy: "batch_typecheck",
+        generation: getWriteGeneration(),
+        relevantFileHashes: computeRelevantFileHashes(process.cwd(), tsFilesWritten),
+      })
+    } else {
+      ingestTypecheck(ctx.evidenceLedger, {
+        passed: tscResult.available ? tscResult.passed : true,
+        issues: tscResult.available ? tscResult.issues : 0,
+        output: tscResult.available ? tscResult.output : (tscResult.output || "tsc unavailable"),
+        command: "tsc --noEmit",
+        generation: getWriteGeneration(),
+      })
+    }
     const derivedTypecheck = deriveLastTypecheck(ctx.evidenceLedger)
     if (derivedTypecheck) verificationState.lastTypecheck = derivedTypecheck
     if (!tscResult.passed && tscResult.available) {

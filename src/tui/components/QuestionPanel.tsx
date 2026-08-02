@@ -5,9 +5,11 @@ import type { TuiPendingQuestion } from "../state/types"
 interface QuestionPanelProps {
   question: TuiPendingQuestion
   onAnswer: (answer: string) => void
+  /** Called on ESC in select mode — user dismisses the question. */
+  onCancel?: () => void
 }
 
-export const QuestionPanel: React.FC<QuestionPanelProps> = ({ question, onAnswer }) => {
+export const QuestionPanel: React.FC<QuestionPanelProps> = ({ question, onAnswer, onCancel }) => {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [customInput, setCustomInput] = useState("")
   const [mode, setMode] = useState<"select" | "input">("select")
@@ -41,7 +43,8 @@ export const QuestionPanel: React.FC<QuestionPanelProps> = ({ question, onAnswer
 
     // select mode
     if (key.escape) {
-      // ESC 取消，不回答
+      // ESC 取消问题（清除面板；agent 循环软暂停后自行继续）
+      onCancel?.()
       return
     }
 
@@ -59,8 +62,9 @@ export const QuestionPanel: React.FC<QuestionPanelProps> = ({ question, onAnswer
         setMode("input")
       }
     } else {
-      // 没有选项，直接进入输入模式
+      // 没有选项，直接进入输入模式（保留当前按键字符，避免首字符丢失）
       setMode("input")
+      if (input) setCustomInput(input)
     }
   })
 

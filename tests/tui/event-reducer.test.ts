@@ -399,6 +399,42 @@ describe("event-reducer: user.message resets run state", () => {
     expect(state.status).toBe("starting...")
     expect(state.done).toBe(false)
   })
+
+  test("user.message clears a pending question", () => {
+    let state = createInitialTuiState()
+    state = reduceTuiEvent(state, {
+      type: "user.question",
+      question: "选择目标",
+      options: [{ label: "A" }, { label: "B" }],
+    }, 1000)
+    expect(state.pendingQuestion).toBeDefined()
+
+    state = reduceTuiEvent(state, { type: "user.message", text: "A" }, 1001)
+    expect(state.pendingQuestion).toBeUndefined()
+  })
+
+  test("user.question.cancel clears the pending question without resetting the run", () => {
+    let state = createInitialTuiState()
+    state = reduceTuiEvent(state, {
+      type: "user.question",
+      question: "选择目标",
+      options: [{ label: "A" }],
+    }, 1000)
+    state = reduceTuiEvent(state, { type: "user.message", text: "first" }, 1001)
+    state = reduceTuiEvent(state, { type: "assistant.delta", text: "working" }, 1002)
+    state = reduceTuiEvent(state, {
+      type: "user.question",
+      question: "再确认",
+      options: [{ label: "X" }],
+    }, 1003)
+    expect(state.pendingQuestion).toBeDefined()
+
+    state = reduceTuiEvent(state, { type: "user.question.cancel" }, 1004)
+    expect(state.pendingQuestion).toBeUndefined()
+    // Run state is preserved — cancelling a question is not a new user message.
+    expect(state.streamingText).toBe("working")
+    expect(state.done).toBe(true)
+  })
 })
 
 // ── Additional coverage: token.updated ──

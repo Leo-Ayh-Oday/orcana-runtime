@@ -108,3 +108,4 @@ export type TuiEvent =
       options?: Array<{ label: string; description?: string }>
       multiSelect?: boolean
     }
+  | { type: "user.question.cancel" }

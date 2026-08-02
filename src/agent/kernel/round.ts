@@ -513,7 +513,6 @@ export async function* runRound(
       taskHadWrite: execution.taskHadWrite,
       taskToolErrors: execution.toolErrors,
       taskModifiedFiles: execution.modifiedFileCount,
-      lastTypecheck: verificationState.lastTypecheck,
       lastRippleReports: verificationState.lastRippleReports,
       planApproved: planning.planApproved,
       planningRejections: planning.planningRejections,
@@ -678,10 +677,12 @@ export async function* runRound(
     resultsContent,
     runTrace: ctx.runTrace,
     planStore,
+    artifactStore: ctx.artifactStore,
+    runId: ctx.runId,
     maxRounds: ctx.maxRounds,
   }
   // Bind structured verification to the canonical ledger as soon as tool execution ends.
-  bindVerificationToLedger(verificationCtx)
+  await bindVerificationToLedger(verificationCtx)
 
   // L6: MaintenanceCoordinator context — shared across low-frequency housekeeping.
   const maintenanceCtx = {

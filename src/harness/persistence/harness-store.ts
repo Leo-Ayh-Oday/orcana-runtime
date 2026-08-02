@@ -14,6 +14,7 @@ import type { RunOutcome } from "../contracts/outcome"
 import type { AgentRunInput, RunStatus } from "../contracts/run"
 import type { RunSnapshot } from "../contracts/snapshot"
 import type { ModeName } from "../../agent/mode-contract"
+import type { SerializedEvidenceEntry } from "../../agent/evidence-ledger"
 
 export interface SerializableSession {
   sessionId: string
@@ -59,7 +60,10 @@ export interface SerializableRun {
   planState: SerializablePlanState
   modeState: { mode: ModeName }
   budgetState: { limits: RunBudget; used: BudgetUsage }
-  evidenceState: { entries: number }
+  /** H8: serialized evidence ledger entries (was a count in H6). */
+  evidenceState: { entries: SerializedEvidenceEntry[] }
+  /** H8: artifact ids produced by the run (content lives in the run's store). */
+  artifactRefs: string[]
   workspaceHash?: string
 }
 

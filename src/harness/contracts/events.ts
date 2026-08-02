@@ -33,6 +33,7 @@ export const HARNESS_EVENT_TYPES = {
   runStarted: "run.started",
   runWaiting: "run.waiting",
   runResumed: "run.resumed",
+  runPausing: "run.pausing",
   runPaused: "run.paused",
   runBlocked: "run.blocked",
   runCompleted: "run.completed",

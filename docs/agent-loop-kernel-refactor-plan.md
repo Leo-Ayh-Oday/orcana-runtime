@@ -16,16 +16,24 @@
 | L1 AgentRunState | 完成 | 2026-07-30 | 新增 Run/Round State、只读序列化 Snapshot 和显式 StatePatch；运行级局部状态按 ownership 迁移，L0 Golden Trace 保持一致 |
 | L2 Run Scope 与并发隔离 | 完成 | 2026-07-30 | Plan/Todo/Tool Registry 与 Runtime/File State 绑定到单一 AgentRunScope；Patch registry、Ripple cache、Checkpoint scheduler 均按 Run 隔离，重叠双 Run 测试通过 |
 | L3 ProviderRoundRunner | 完成 | 2026-07-30 | Provider 请求、流解析、usage、文本缓冲、idle timeout、abort、iterator cleanup 和失败恢复策略已抽出；`loop.ts` 不再直接调用 Provider |
-| L4 ToolBatchExecutor | 完成 | 2026-08-02 | `src/agent/tool-execution/{batch-executor,single-executor,result-normalizer}.ts` 抽出；并行只读、8 层 Policy、Hook、timeout/abort、ToolLedger 与结果规范化统一到一个执行入口；hard-block 也写入 Ledger；`loop.ts` 由 2077 行降至 1694 行；`tests/tool_batch_executor.test.ts` 9 项；门禁绿色 |
-| L5 VerificationCoordinator | 完成 | 2026-08-02 | `src/agent/verification/coordinator.ts` 抽出 `bindVerificationToLedger` / `runRippleVerificationPhase` / `runBatchTypecheckAndTaskTracker`；Ripple 验证、义务解析、cascade、narrow-edit 完成、批量 typecheck、TaskTracker 验证投影、lastResults 全部移出 `loop.ts`；`loop.ts` 不再直接运行 typecheck 或操作 Ripple obligation；`loop.ts` 降至 ~1614 行；门禁绿色 |
-| L6 MaintenanceCoordinator | 部分完成 | 2026-08-02 | `src/agent/maintenance/coordinator.ts` 抽出 `runHistoricalMicrocompact` / `runAdaptiveCheckpoint` / `runKnowledgeDistillation` / `runKnowledgeReconcile`；`loop.ts` 降至 ~1592 行；门禁绿色。**剩余：** thinking compaction 与 semantic recall 仍耦合 provider 流留在 `loop.ts`，尚未统一为单一 `runMaintenance()` 入口 |
+| L4 ToolBatchExecutor | 完成 | 2026-08-02 | `src/agent/tool-execution/{batch-executor,single-executor,result-normalizer}.ts` 抽出；并行只读、8 层 Policy、Hook、timeout/abort、ToolLedger 与结果规范化统一到一个执行入口；hard-block 也写入 Ledger；`loop.ts` 由 2077 行降至 **1726 行**（净减 351，低于 400–500 预估）；`tests/tool_batch_executor.test.ts` 9 项；门禁绿色 |
+| L5 VerificationCoordinator | 完成 | 2026-08-02 | `src/agent/verification/coordinator.ts` 抽出 `bindVerificationToLedger` / `runRippleVerificationPhase` / `runBatchTypecheckAndTaskTracker`；Ripple 验证、义务解析、cascade、narrow-edit 完成、批量 typecheck、TaskTracker 验证投影、lastResults 全部移出 `loop.ts`；`loop.ts` 不再直接运行 typecheck 或操作 Ripple obligation；`loop.ts` 降至 **1647 行**（净减 79，远低于 250–350 预估）；门禁绿色 |
+| L6 MaintenanceCoordinator | 部分完成 | 2026-08-02 | `src/agent/maintenance/coordinator.ts` 抽出 `runHistoricalMicrocompact` / `runAdaptiveCheckpoint` / `runKnowledgeDistillation` / `runKnowledgeReconcile`；`loop.ts` 降至 **1595 行**（净减 52，远低于 ~250 预估）；门禁绿色。**剩余：** forward/historical microcompact 中 forward 部分（`loop.ts` 内联）仍在、thinking compaction 与 semantic recall 仍耦合 provider 流留在 `loop.ts`，尚未统一为单一 `runMaintenance()` 入口 |
 | L7 LoopDecision | 未开始 | — | 不提前实施 |
 
 ## 重启续作点
 
 **记录日期：** 2026-08-02  
-**当前边界：** L0—L5 已完成；L6 部分完成（Thinking compaction + Semantic Recall + 单一 `runMaintenance()` 入口仍未做）；L7 尚未开始。  
-**下次入口：** 1) 收尾 L6：把 thinking compaction 与 semantic recall 抽入 `maintenance/coordinator.ts`，提供组合式 `runMaintenance()`；2) 然后 `PR-L7：引入 LoopDecision` 收束 Agent Kernel。
+**当前边界：** L0—L5 已完成；L6 部分完成（forward microcompact、Thinking compaction + Semantic Recall + 单一 `runMaintenance()` 入口仍未做）；L7 尚未开始。  
+**下次入口：** 1) 收尾 L6：把 forward microcompact、thinking compaction 与 semantic recall 抽入 `maintenance/coordinator.ts`，提供组合式 `runMaintenance()`；2) 然后 `PR-L7：引入 LoopDecision` 收束 Agent Kernel。
+
+### 审计遗留偏差（2026-08-02，严格对照本计划审核后记录）
+
+1. **L0–L3（`385a275`）单 commit 打包 + 行为面变更**：L0–L3 四个阶段合并为一个 commit，无法独立回退；且该 commit 除结构重构外还包含行为面改动——系统提示词重写（`src/agent/prompts.ts`）、新增 `ask_user`/`todo_write`/`git_show`/`git_add`/`git_commit` 工具与 `user_question` 事件、TUI `QuestionPanel`、`runPostEditDiagnostics` 的 existsSync 守卫。这些违反"行为冻结"原则（Provider 消息序列 / tool_use 表面已变），且 Golden Trace 基线（`tests/fixtures/agent-loop-l0-golden.json`）创建于这些改动**之后**，冻结的是新行为而非重构前行为。**处置待定**：拆分为独立 feature commit，或正式补一份行为面变更说明并重订基线声明。
+2. **L4 hard-block 记 Ledger** 是真实 StreamEvent 行为变化（新增 status 事件），属 L4 验收授权，但未上报 Golden Trace 差异；`planOnlyRound` 阻断仍未记 Ledger，"blocked 均有记录"只部分满足；abort 的在途工具不记 Ledger。
+3. **L5**：`lastTypecheck`/`verificationEvidence` 仍被直接写（coordinator + batch-executor 共 7 处），未由 Ledger 派生（已注释为后续项）；shell unmanaged write 与 Runtime self-edit verification 未移入 coordinator；无专项测试。
+4. **L6**：checkpoint/reconcile 失败仍会传播中断主任务（`maintenance/coordinator.ts` 头注释承诺与实现不符）；无 per-capability 配置开关；无专项测试。
+5. **行数承诺修正**：实际 `loop.ts` 行数 L4=1726、L5=1647、L6=1595，均低于计划预估；本计划此前记录的数字已更正。
 
 重启后：
 

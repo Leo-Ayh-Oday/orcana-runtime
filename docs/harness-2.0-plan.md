@@ -9,7 +9,7 @@
 
 | PR | 状态 | 日期 | 备注 |
 | --- | --- | --- | --- |
-| H0 Contracts | 完成 | 2026-08-02 | `src/harness/contracts/*`（harness/session/run/outcome/events/interrupt/artifact/capability/budget/errors/schema/snapshot/lifecycle）+ `src/harness/index.ts`；类型完整、无 `any`、不依赖 UI/具体 Provider、不导入 `loop.ts`；`tests/harness_contracts.test.ts` / `harness_outcome.test.ts` / `harness_status_transition_types.test.ts` 共 17 项；门禁绿色 |
+| H0 Contracts | 完成 | 2026-08-02 | `src/harness/contracts/*`（harness/session/run/outcome/events/interrupt/artifact/capability/budget/errors/schema/snapshot/lifecycle）+ `src/harness/index.ts`；类型完整、无 `any`、不依赖 UI/具体 Provider、不导入 `loop.ts`；`tests/harness_contracts.test.ts` / `harness_outcome.test.ts` / `harness_status_transition_types.test.ts` 共 17 项；门禁绿色。**技术债：** `AgentRunScope` 的 7 个字段（planStore/modeStore/patchContext/sandbox/rippleSession/evidenceLedger/artifactStore/cancellation/trace）与 `RunSnapshot` 的 plan/mode/budget/evidence state 当前以 `unknown` 占位——这是有意为之（避免触发 H0"停止条件"：Contract 引用遗留内部类型即停止接线），H3 Run Scope 时须替换为真实、可序列化类型 |
 | H1—H12 | 未开始 | — | 按依赖图顺序：H1 Facade → H2 Lifecycle → H3 Run Isolation → H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
 
 > 前置状态：ALK 减重已完成 L0—L5；L6 部分完成（checkpoint/historical-microcompact/distill/reconcile 已抽入 `src/agent/maintenance/coordinator.ts`，thinking compaction + semantic recall + 单一 `runMaintenance()` 入口未做）；L7 LoopDecision 未开始。详见 `docs/agent-loop-kernel-refactor-plan.md` 重启续作点。

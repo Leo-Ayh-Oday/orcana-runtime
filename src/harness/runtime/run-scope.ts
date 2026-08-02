@@ -7,6 +7,7 @@
  *  ALS→scope migration is tracked for H4/H5.
  */
 
+import { join } from "node:path"
 import { createPlanStore } from "../../agent/run/plan-store"
 import { createEvidenceLedger } from "../../agent/evidence-ledger"
 import type { ModeName } from "../../agent/mode-contract"
@@ -15,6 +16,7 @@ import type { HarnessArtifact } from "../contracts/artifact"
 import type { ArtifactStore } from "../contracts/artifact"
 import type { AgentRunScope } from "../contracts/run"
 import type { TraceWriter } from "../contracts/scope"
+import { createJsonlTraceWriter } from "../telemetry/trace-writer"
 import { createRunCancellation } from "./cancellation"
 
 export function defaultSandboxConfig(projectRoot: string): SandboxConfig {
@@ -25,13 +27,26 @@ export function defaultSandboxConfig(projectRoot: string): SandboxConfig {
   }
 }
 
-/** H3 no-op trace bridge; the typed envelope writer lands in H5. */
+/** H3 no-op trace bridge (used by tests and callers without a trace dir). */
 export function createNoopTraceWriter(): TraceWriter {
   return {
     async append() {},
     async flush() {},
     async close() {},
   }
+}
+
+/** H5: JSONL typed trace under .deepseek-code/harness/events/. */
+export function createRunTraceWriter(
+  projectRoot: string,
+  runId: string,
+  sessionId: string,
+): TraceWriter {
+  return createJsonlTraceWriter({
+    dir: join(projectRoot, ".deepseek-code", "harness", "events"),
+    runId,
+    sessionId,
+  })
 }
 
 /** H3 in-memory artifact store (full integration lands in H8). */
@@ -73,6 +88,7 @@ export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
     evidenceLedger: createEvidenceLedger(),
     artifactStore: createInMemoryArtifactStore(),
     cancellation: createRunCancellation(controller),
-    trace: createNoopTraceWriter(),
+    // H5: typed JSONL trace (H3 no-op replaced).
+    trace: createRunTraceWriter(projectRoot, runId, sessionId),
   }
 }

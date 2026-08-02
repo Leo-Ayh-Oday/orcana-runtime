@@ -39,9 +39,11 @@ export interface RunCancellation {
   throwIfCancelled(): void
 }
 
-/** Run-scoped trace writer (plan §12.3; typed envelope lands in H5). */
+/** Run-scoped trace writer (plan §12.3). Appends typed event envelopes. */
 export interface TraceWriter {
-  append<T>(event: { type: string; payload: T; sequence: number }): Promise<void>
+  append<T>(event: EventEnvelope<T>): Promise<void>
   flush(): Promise<void>
   close(): Promise<void>
 }
+
+import type { EventEnvelope } from "./events"

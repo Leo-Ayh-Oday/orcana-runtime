@@ -76,7 +76,16 @@ describe("Harness H3 typed run scope", () => {
 
   test("no-op trace writer never throws", async () => {
     const trace = createNoopTraceWriter()
-    await trace.append({ type: "run.started", payload: { status: "running" }, sequence: 1 })
+    await trace.append({
+      schemaVersion: 1,
+      eventId: "e-1",
+      sequence: 1,
+      runId: "run-s-1",
+      sessionId: "sess-s",
+      type: "run.started",
+      timestamp: new Date().toISOString(),
+      payload: { status: "running" },
+    })
     await trace.flush()
     await trace.close()
   })

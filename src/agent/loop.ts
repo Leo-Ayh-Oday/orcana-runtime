@@ -21,20 +21,20 @@ import { validatePlan, validateNode, formatValidationReport } from "./plan-valid
 import { setRuntimeContextBudgetMode } from "./runtime-context"
 import { requireRuntimeExecutionContext } from "../runtime/execution-context"
 import type { RippleReport } from "../ripple/types"
-import { getBlockingObligations, mergeObligations, normalizeProjectPath, obligationsFromReport, resolveObligations } from "../ripple/obligations"
+import { getBlockingObligations, normalizeProjectPath } from "../ripple/obligations"
 import { resetRippleProgram, setCascadeFiles } from "../ripple/engine"
 import type { ModelRouter } from "../provider/router"
 import { ConfidenceEvaluator } from "../evaluator/confidence"
 import { AgentState, StateMachine } from "./state-machine"
 import { formatRoundBudgetExhausted, resolveMaxRounds, selectRecentHistoryWithinBudget } from "./round/helpers"
-import { runRippleVerification, collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
-import { ErrorTracker, buildVolatileContextMessage, collectResearchEvidence, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles, missingExplicitRequiredFiles } from "./round/pre-loop"
+import { collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
+import { ErrorTracker, buildVolatileContextMessage, collectResearchEvidence, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles } from "./round/pre-loop"
 import type { HookSystem } from "../hooks"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../provider/cost-policy"
 import { ToolExecutionLedger } from "./tool-ledger"
-import { runTypeScriptNoEmit } from "../tools/typescript"
 
 import { formatServiceTestGuidance, parseVerificationResult, type VerificationResult } from "../verification/result"
+import { bindVerificationToLedger, runBatchTypecheckAndTaskTracker, runRippleVerificationPhase } from "./verification/coordinator"
 import type { AgentRunTrace } from "./run-trace"
 import {
   createTaskTracker,
@@ -44,14 +44,13 @@ import {
   markPlanAccepted,
   missingTaskRequirements,
   snapshotTaskTracker,
-  updateTaskTrackerAfterTools,
 } from "./task-tracker"
 import { buildEffectivePrompt, buildModelClarificationCall, evaluateClarificationNeed, formatModelClarificationFailure, parseModelClarification } from "./clarification"
 import { buildExperienceKernelContext } from "../experience/kernel"
 import { compactThinkingChain } from "../memory/compactor"
 import { evaluatePlanningArtifact, forcePlanningPassAfterLimit, formatPlanningBlockedToolResult, formatPlanningGatePrompt } from "./planning-gate"
 import { detectLanguage, languageInstruction, type UILanguage } from "./language"
-import { CompletionOrchestrator, checkNarrowEditCompletion } from "./completion-orchestrator"
+import { CompletionOrchestrator } from "./completion-orchestrator"
 import { buildResearchEvidenceContext, buildResearchInsufficientEvidenceMessage } from "./research-answer"
 import { classifyResearchRoute, shouldRunResearch } from "./research-router"
 import { FlashJudge, TestimonyLedger } from "./flash-judge"
@@ -67,7 +66,7 @@ import { createPreRoundChain } from "./gates/pre-round"
 import { processGateOverflow } from "./gates/overflow"
 import { createEpochState, buildPlanStateContext, classifyEpochAction, epochThresholdsForContext, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
 import { clearActivePatchContext, clearTransactionRegistry, currentTransactionEvidenceBinding, setActivePatchContext } from "./patch-transaction"
-import { createEvidenceLedger, ingestVerificationResults } from "./evidence-ledger"
+import { createEvidenceLedger } from "./evidence-ledger"
 import { getWriteGeneration } from "../file-state"
 import { setActiveMode, getActiveMode, formatModePrompt, shouldTransitionMode } from "./mode-contract"
 import type { ModeTransitionContext } from "./mode-contract"
@@ -1143,9 +1142,28 @@ async function* runAgentLoop(
     })
     if (toolBatchAborted) return
 
-    // Completion gates run before TaskTracker updates later in the round, so bind
-    // structured verification to the canonical ledger as soon as tool execution ends.
-    ingestVerificationResults(evidenceLedger, verificationResultsThisRound, undefined, getWriteGeneration())
+    // L5: VerificationCoordinator context — shared across the verification phase.
+    const verificationCtx = {
+      round,
+      intentPolicy,
+      effectivePrompt,
+      options,
+      planning,
+      execution,
+      verificationState,
+      roundState,
+      evidenceLedger,
+      modifiedFilesThisRound,
+      rippleReportsThisRound,
+      verificationResultsThisRound,
+      toolNames,
+      rawMessages,
+      resultsContent,
+      runTrace: options.runTrace,
+      planStore,
+    }
+    // Bind structured verification to the canonical ledger as soon as tool execution ends.
+    bindVerificationToLedger(verificationCtx)
 
     // ── Microcompact: forward pass — compact fresh tool results before they enter history ──
     // PR 4: use epoch compress threshold in addition to legacy heuristics
@@ -1166,70 +1184,8 @@ async function* runAgentLoop(
 
     let postToolRequiredFilesPrompt = ""
     let postToolPlanningPrompt = ""
-    if (modifiedFilesThisRound.size > 0 || rippleReportsThisRound.length > 0) {
-      const rippleVerification = runRippleVerification(modifiedFilesThisRound)
-      const hadTsWriteThisRound = [...modifiedFilesThisRound].some(path => path.endsWith(".ts") || path.endsWith(".tsx"))
-      if (rippleVerification.passed) {
-        verificationState.rippleObligations = resolveObligations(verificationState.rippleObligations, modifiedFilesThisRound)
-        if (!verificationState.lastTypecheck || verificationState.lastTypecheck.passed) {
-          verificationState.lastTypecheck = { passed: true, issues: 0 }
-        }
-      } else if (modifiedFilesThisRound.size > 0 && rippleVerification.available) {
-        verificationState.lastTypecheck = { passed: false, issues: rippleVerification.issues, output: rippleVerification.output || "ripple verification failed" }
-        yield { type: "status", data: "ripple-verification: failed; obligations retained" }
-      } else if (modifiedFilesThisRound.size > 0) {
-        verificationState.lastTypecheck = { passed: true, issues: 0, output: rippleVerification.output || "tsc unavailable" }
-        yield { type: "status", data: "ripple-verification: skipped; tsc unavailable" }
-      }
-      for (const report of rippleReportsThisRound) {
-        verificationState.rippleObligations = mergeObligations(
-          verificationState.rippleObligations,
-          obligationsFromReport(report, modifiedFilesThisRound),
-        )
-      }
-      if (verificationState.rippleObligations.length > 0) {
-        // Let ripple engine know agent is cascading — promotes block→warn
-        setCascadeFiles(new Set(verificationState.rippleObligations.map(o => o.targetFile)))
-        yield { type: "status", data: `ripple-obligations: pending ${verificationState.rippleObligations.length}` }
-        options.runTrace?.record("gate_decision", { gate: "ripple_obligations", decision: "continue", pending: verificationState.rippleObligations.length })
-      } else {
-        setCascadeFiles(new Set())
-      }
-      const missingNarrowFiles = intentPolicy.mode === "narrow_edit"
-        ? missingExplicitRequiredFiles(effectivePrompt, modifiedFilesThisRound)
-        : []
-      // PR-3.1: narrow edit auto-complete extracted to CompletionOrchestrator helper
-      const narrowResult = checkNarrowEditCompletion({
-        autoFinishOnVerifiedWrite: options.autoFinishOnVerifiedWrite,
-        intentMode: intentPolicy.mode,
-        hadTsWriteThisRound,
-        blockingObligations: getBlockingObligations(verificationState.rippleObligations).length,
-        lastTypecheckPassed: verificationState.lastTypecheck?.passed,
-        missingNarrowFiles,
-        modifiedFilesThisRound,
-        taskTracker: planning.taskTracker,
-        evidenceLedger,
-        evidenceBinding: currentTransactionEvidenceBinding(),
-        requireEvidenceBinding: execution.taskHadWrite || getWriteGeneration() > 0,
-      })
-      if (narrowResult.completionText) {
-        roundState.completionGateText = narrowResult.completionText
-      } else if (narrowResult.evidencePrompt) {
-        rawMessages.push({ role: "user", content: narrowResult.evidencePrompt })
-        if (narrowResult.evidenceStatus) {
-          yield { type: "status", data: narrowResult.evidenceStatus }
-        }
-        options.runTrace?.record("gate_decision", { gate: "semantic:evidence", decision: "continue", missing: narrowResult.evidenceMissing })
-        roundState.narrowEditEvidenceBlocked = true
-      } else if (narrowResult.missingFilesPrompt) {
-        postToolRequiredFilesPrompt = narrowResult.missingFilesPrompt
-        if (narrowResult.missingFilesStatus) {
-          yield { type: "status", data: narrowResult.missingFilesStatus }
-        }
-        options.runTrace?.record("gate_decision", { gate: "explicit_required_files", decision: "continue", missing: missingNarrowFiles })
-      }
-    }
-    if (rippleReportsThisRound.length > 0) verificationState.lastRippleReports = [...rippleReportsThisRound]
+    const ripplePhase = yield* runRippleVerificationPhase(verificationCtx)
+    postToolRequiredFilesPrompt = ripplePhase.postToolRequiredFilesPrompt
 
     // ── Gate overflow: track cumulative blocks, force strategy switch at 3, BLOCKED at 5 ──
     sandbox.clearBlockedFiles()
@@ -1313,44 +1269,9 @@ async function* runAgentLoop(
       }
     }
 
-    // ── Batch typecheck: run tsc once per round instead of per-file ──
-    const tsFilesWritten = [...modifiedFilesThisRound].filter(f => f.endsWith(".ts") || f.endsWith(".tsx"))
-    if (tsFilesWritten.length > 0) {
-      const tscResult = runTypeScriptNoEmit(process.cwd())
-      verificationState.lastTypecheck = tscResult.available
-        ? { passed: tscResult.passed, issues: tscResult.issues, output: tscResult.output }
-        : { passed: true, issues: 0, output: tscResult.output || "tsc unavailable" }
-      if (!tscResult.passed && tscResult.available) {
-        const diagLines = tscResult.output
-          .split("\n")
-          .filter(l => tsFilesWritten.some(f => l.includes(f)))
-          .join("\n")
-        if (diagLines) {
-          const lastResult = resultsContent[resultsContent.length - 1]
-          if (lastResult) {
-            lastResult.content = String(lastResult.content) + `\n\n[post-round typecheck — fix in next round]\n${diagLines}`
-          }
-        }
-      }
-    }
+    // L5: batch typecheck + TaskTracker verification projection + lastResults
+    yield* runBatchTypecheckAndTaskTracker(verificationCtx)
 
-    updateTaskTrackerAfterTools({
-      tracker: planning.taskTracker,
-      changedFiles: [...modifiedFilesThisRound],
-      toolNames,
-      typecheckPassed: verificationState.lastTypecheck?.passed,
-      verificationPassed: roundState.verificationPassed,
-      verificationResults: verificationResultsThisRound,
-      skipLegacyStepIds: !!planStore.current,
-    })
-    if (planning.taskTracker) {
-      const status = formatTaskTrackerStatus(planning.taskTracker)
-      if (status) yield { type: "status", data: status }
-      yield { type: "task_progress", data: snapshotTaskTracker(planning.taskTracker) }
-    }
-    if (verificationResultsThisRound.length > 0) {
-      verificationState.lastResults = [...verificationState.lastResults, ...verificationResultsThisRound].slice(-20)
-    }
     // ── Inject gate overflow / revisePlan messages BEFORE tool results ──
     // Must go as CONTENT BLOCKS in the same user message as tool_results,
     // NOT as separate user messages (breaks Anthropic format: tool_use→tool_result adjacency).

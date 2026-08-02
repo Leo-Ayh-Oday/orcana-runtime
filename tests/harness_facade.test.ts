@@ -137,16 +137,16 @@ describe("AgentHarness facade (H1)", () => {
     await expect(harness.inspect("no-such-run")).rejects.toThrow(HarnessError)
   })
 
-  test("resume is a loud placeholder until H7", async () => {
+  test("resume rejects unknown runs (H7 implementation)", async () => {
     const harness = createAgentHarness({
       deps: { provider: new ProbeThenTextProvider(), tools: probeTool() },
       sessionId: "sess-resume",
     })
     await expect(async () => {
-      for await (const _ev of harness.resume("run-1", { interruptId: "i-1", response: {} } as never)) {
+      for await (const _ev of harness.resume("run-1", { interruptId: "i-1", payload: {}, accepted: true, answeredAt: Date.now() })) {
         // no-op
       }
-    }).toThrow(/H7/)
+    }).toThrow(/not found/)
   })
 
   test("multiple runs on one session are tracked independently", async () => {

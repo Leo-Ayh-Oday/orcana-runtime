@@ -27,13 +27,13 @@ import { ConfidenceEvaluator } from "../evaluator/confidence"
 import { AgentState, StateMachine } from "./state-machine"
 import { formatRoundBudgetExhausted, resolveMaxRounds, selectRecentHistoryWithinBudget } from "./round/helpers"
 import { collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
-import { ErrorTracker, buildVolatileContextMessage, collectResearchEvidence, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles } from "./round/pre-loop"
+import { ErrorTracker, buildVolatileContextMessage, collectResearchEvidence, explicitRequiredFiles } from "./round/pre-loop"
 import type { HookSystem } from "../hooks"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../provider/cost-policy"
 import { ToolExecutionLedger } from "./tool-ledger"
 
 import { formatServiceTestGuidance, parseVerificationResult, type VerificationResult } from "../verification/result"
-import { bindVerificationToLedger, runBatchTypecheckAndTaskTracker, runRippleVerificationPhase } from "./verification/coordinator"
+import { bindVerificationToLedger, runBatchTypecheckAndTaskTracker, runRippleVerificationPhase, runRuntimeSelfEditGate } from "./verification/coordinator"
 import { runAdaptiveCheckpoint, runHistoricalMicrocompact, runKnowledgeDistillation, runKnowledgeReconcile } from "./maintenance/coordinator"
 import type { AgentRunTrace } from "./run-trace"
 import {
@@ -1160,6 +1160,7 @@ async function* runAgentLoop(
       resultsContent,
       runTrace: options.runTrace,
       planStore,
+      maxRounds,
     }
     // Bind structured verification to the canonical ledger as soon as tool execution ends.
     bindVerificationToLedger(verificationCtx)
@@ -1476,28 +1477,10 @@ async function* runAgentLoop(
       continue
     }
 
-    const runtimeFilesThisRound = [...modifiedFilesThisRound].filter(path => isRuntimeSourceFile(path))
-    if (runtimeFilesThisRound.length > 0) {
-      execution.runtimeSelfEditFiles = new Set([...execution.runtimeSelfEditFiles, ...runtimeFilesThisRound])
-    }
-    if (execution.runtimeSelfEditFiles.size > 0) {
-      if (rootRuntimeVerificationPassed(verificationResultsThisRound) || rootRuntimeVerificationPassed(verificationState.lastResults)) {
-        const files = [...execution.runtimeSelfEditFiles].sort().join(", ")
-        yield { type: "status", data: "runtime-self-edit-gate: verified; restart required" }
-        yield {
-          type: "text",
-          data: `Runtime source changes were verified, but the current DeepSeek Code process cannot hot-load them. Restart DeepSeek Code before continuing. Changed runtime files: ${files}.`,
-        }
-        options.runTrace?.record("gate_decision", { gate: "runtime_self_edit", decision: "restart_required", files: [...execution.runtimeSelfEditFiles].sort() })
-        break
-      }
-      if (round + 1 < maxRounds) {
-        rawMessages.push({ role: "user", content: formatRuntimeSelfEditGate([...execution.runtimeSelfEditFiles].sort()) })
-        yield { type: "status", data: "runtime-self-edit-gate: run root typecheck then stop" }
-        options.runTrace?.record("gate_decision", { gate: "runtime_self_edit", decision: "verify_then_restart", files: [...execution.runtimeSelfEditFiles].sort() })
-        continue
-      }
-    }
+    // L5: runtime self-edit gate — moved into the VerificationCoordinator.
+    const selfEditResult = yield* runRuntimeSelfEditGate(verificationCtx)
+    if (selfEditResult.action === "break") break
+    if (selfEditResult.action === "continue") continue
 
     if (roundState.serviceTestGuidanceNeeded) {
       rawMessages.push({ role: "user", content: formatServiceTestGuidance() })

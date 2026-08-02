@@ -29,6 +29,8 @@ export interface EvidenceEntry {
   output: string
   /** Whether the verification passed. Only passed evidence counts toward canClaimDone. */
   passed: boolean
+  /** Number of typecheck issues in the output (typecheck kind only). */
+  issues?: number
   /** Unix timestamp (ms) when this evidence was collected. */
   timestamp: number
   /** Optional link to the PatchTransaction that produced the code under verification. */
@@ -233,6 +235,35 @@ export function ingestVerificationResults(ledger: EvidenceLedger, results: Verif
     if (entry) entries.push(entry)
   }
   return entries
+}
+
+/** Add a typecheck evidence entry (e.g. from the round's batch tsc run). */
+export function ingestTypecheck(ledger: EvidenceLedger, opts: {
+  passed: boolean
+  issues: number
+  output: string
+  command?: string
+  generation?: number
+}): EvidenceEntry {
+  const entry: EvidenceEntry = {
+    id: generateEvidenceId(),
+    kind: "typecheck",
+    command: opts.command,
+    output: opts.output,
+    passed: opts.passed,
+    issues: opts.issues,
+    timestamp: Date.now(),
+    generation: opts.generation,
+  }
+  addEvidence(ledger, entry)
+  return entry
+}
+
+/** Derive the lastTypecheck compatibility view from the ledger's latest typecheck entry. */
+export function deriveLastTypecheck(ledger: EvidenceLedger): { passed: boolean; issues: number; output?: string } | undefined {
+  const latest = latestEvidence(ledger, "typecheck")
+  if (!latest) return undefined
+  return { passed: latest.passed, issues: latest.issues ?? 0, output: latest.output }
 }
 
 /** Add a manual evidence entry (e.g. code review sign-off, manual QA). */

@@ -8,6 +8,18 @@
 import type { BudgetLedger } from "./budget"
 import type { HarnessInterrupt } from "./interrupt"
 import type { RunOutcome } from "./outcome"
+// H3: typed run-scope owners (contracts/scope.ts) + stable L2/agent types.
+import type { PlanStore } from "../../agent/run/plan-store"
+import type { EvidenceLedger } from "../../agent/evidence-ledger"
+import type { SandboxManager } from "../../sandbox/sandbox"
+import type { ArtifactStore } from "./artifact"
+import type {
+  ModeStore,
+  PatchContextStore,
+  RippleSession,
+  RunCancellation,
+  TraceWriter,
+} from "./scope"
 
 export type RunStatus =
   | "created"
@@ -65,22 +77,26 @@ export interface AgentRun {
 /**
  * Run-bound state. Every tool, gate or node reads run state only from an
  * explicit scope reference — never from module-level variables.
+ *
+ * H3: the H0 `unknown` placeholders are replaced with real, typed owners.
+ * The harness creates these instances per run; the legacy kernel is wired to
+ * the same planStore/sandbox so a run has a single source of truth (§3.1).
  */
 export interface AgentRunScope {
   runId: string
   sessionId: string
   projectRoot: string
 
-  planStore: unknown
-  modeStore: unknown
-  patchContext: unknown
+  planStore: PlanStore
+  modeStore: ModeStore
+  patchContext: PatchContextStore
 
-  sandbox: unknown
-  rippleSession: unknown
+  sandbox: SandboxManager
+  rippleSession: RippleSession
 
-  evidenceLedger: unknown
-  artifactStore: unknown
+  evidenceLedger: EvidenceLedger
+  artifactStore: ArtifactStore
 
-  cancellation: unknown
-  trace: unknown
+  cancellation: RunCancellation
+  trace: TraceWriter
 }

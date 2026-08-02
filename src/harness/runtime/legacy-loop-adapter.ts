@@ -84,6 +84,10 @@ export function buildLoopOptions(
     tools,
     abortSignal,
     sessionId: run.sessionId,
+    // H3: single ownership — the harness's run-scoped planStore/sandbox are
+    // the same instances the legacy kernel operates on.
+    planStore: run.scope.planStore,
+    sandbox: run.scope.sandbox,
     hooks: deps.hooks,
     stagedContext: deps.stagedContext,
     thinkingStore: deps.thinkingStore,

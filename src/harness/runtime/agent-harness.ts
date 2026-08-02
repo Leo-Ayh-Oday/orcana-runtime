@@ -110,6 +110,7 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
     async inspect(runId: string): Promise<RunSnapshot> {
       const registered = registry.requireRun(runId)
       const { run } = registered
+      const { scope } = run
       return {
         schemaVersion: 1,
         runId: run.runId,
@@ -117,11 +118,18 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         sequence: run.eventSequence,
         status: run.status,
         input: run.input,
-        // H1: no serializable run-bound state yet (H3/H6 fill these).
-        planState: undefined as never,
-        modeState: undefined as never,
-        budgetState: undefined as never,
-        evidenceState: undefined as never,
+        // H3: serializable snapshots of the typed run-scope state (sandbox/
+        // cancellation/trace instances are never serialized — H6 reinjects).
+        planState: {
+          revision: scope.planStore.revision,
+          goal: scope.planStore.current?.goal ?? null,
+          nodes: scope.planStore.current
+            ? scope.planStore.current.nodes.map(n => ({ id: n.id, title: n.title, status: n.status }))
+            : null,
+        },
+        modeState: { mode: scope.modeStore.mode },
+        budgetState: {}, // H4 BudgetLedger
+        evidenceState: { entries: scope.evidenceLedger.entries.length },
         artifactRefs: [],
         conversationRef: "",
         createdAt: run.createdAt,

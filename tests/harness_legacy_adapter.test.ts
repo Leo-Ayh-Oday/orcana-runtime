@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { createAgentHarness } from "../src/harness/runtime/agent-harness"
+import { assembleRunScope } from "../src/harness/runtime/run-scope"
 import {
   buildLoopOptions,
   createLegacyLoopAdapter,
@@ -53,20 +54,14 @@ class ProbeThenTextProvider implements LLMProvider {
 }
 
 function fakeRun(sessionId: string, input: { prompt: string; tools?: Array<{ name: string; description?: string }>; metadata?: Record<string, unknown> }): AgentRun {
+  const runId = "run-test-1"
+  const controller = new AbortController()
   return {
-    runId: "run-test-1",
+    runId,
     sessionId,
     status: "created",
     input: { prompt: input.prompt, tools: input.tools, metadata: input.metadata },
-    scope: {
-      runId: "run-test-1",
-      sessionId,
-      projectRoot: process.cwd(),
-      planStore: undefined, modeStore: undefined, patchContext: undefined,
-      sandbox: undefined, rippleSession: undefined,
-      evidenceLedger: undefined, artifactStore: undefined,
-      cancellation: undefined, trace: undefined,
-    },
+    scope: assembleRunScope({ runId, sessionId, projectRoot: process.cwd(), controller }),
     budget: undefined as never,
     createdAt: Date.now(),
     eventSequence: 0,

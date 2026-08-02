@@ -198,8 +198,10 @@ export async function buildRunContext(
   const userCfg = loadUserConfig()
   const projectCfg = loadProjectConfig(process.cwd())
   permissionGate.loadRules(userCfg?.rules ?? [], projectCfg?.rules ?? [])
-  // Sandbox init — shared Job Object for all shell commands in this agent run
-  const sandbox = new SandboxManager({
+  // Sandbox init — shared Job Object for all shell commands in this agent run.
+  // H3: the harness may inject its run-scoped sandbox so a run has a single
+  // owner; otherwise created here with the same defaults.
+  const sandbox = options.sandbox ?? new SandboxManager({
     projectRoot: process.cwd(),
     maxRuntimeSec: Number(process.env.DEEPSEEK_SANDBOX_TIMEOUT_SEC) || 30,
     jobMemoryLimitMb: process.env.DEEPSEEK_SANDBOX_MEMORY_MB ? Number(process.env.DEEPSEEK_SANDBOX_MEMORY_MB) : 512,

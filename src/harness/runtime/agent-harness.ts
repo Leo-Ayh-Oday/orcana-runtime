@@ -24,18 +24,27 @@ import type { RunSnapshot } from "../contracts/snapshot"
 import { RunRegistry } from "./run-registry"
 import { runControlledRun } from "./run-controller"
 import { createLegacyLoopAdapter, type LegacyLoopAdapter, type LegacyLoopAdapterDeps } from "./legacy-loop-adapter"
+import { serializeRun, snapshotFromRun, restoreAgentRun } from "../persistence/serialization"
+import type { HarnessStore } from "../persistence/harness-store"
 
 export interface AgentHarnessInput {
   deps: LegacyLoopAdapterDeps
   /** Optional stable session id; otherwise created on first use. */
   sessionId?: string
   projectRoot?: string
+  /** H6: optional persistent store — runs/snapshots saved on terminal states,
+   *  inspect falls back to the store for historical runs. */
+  store?: HarnessStore
+  /** Optional workspace-hash provider (computed lazily at terminal save). */
+  workspaceHash?: () => string
 }
 
 export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
   const registry = new RunRegistry()
   const adapter: LegacyLoopAdapter = createLegacyLoopAdapter({ deps: input.deps })
   const projectRoot = input.projectRoot ?? process.cwd()
+  const store = input.store
+  const workspaceHash = input.workspaceHash
 
   const sessions = new Map<string, AgentSession>()
   const primarySessionId = input.sessionId ?? randomUUID()
@@ -84,13 +93,22 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
 
       // H2: RunController drives the lifecycle machine, maps the kernel's
       // final LoopDecision to a RunOutcome, and cleans up exactly once.
-      yield* runControlledRun({
-        adapter,
-        run: registered.run,
-        runInput,
-        session,
-        controller: registered.controller,
-      })
+      try {
+        yield* runControlledRun({
+          adapter,
+          run: registered.run,
+          runInput,
+          session,
+          controller: registered.controller,
+        })
+      } finally {
+        // H6: persist the terminal state (best-effort, never fails the run).
+        if (store) {
+          const hash = workspaceHash?.()
+          await store.saveRun(serializeRun({ run: registered.run, workspaceHash: hash })).catch(() => {})
+          await store.saveSnapshot(snapshotFromRun(registered.run, hash)).catch(() => {})
+        }
+      }
     },
 
     async *resume(_runId: string, _response: InterruptResponse): AsyncIterable<HarnessEvent> {
@@ -108,8 +126,19 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
     },
 
     async inspect(runId: string): Promise<RunSnapshot> {
-      const registered = registry.requireRun(runId)
-      const { run } = registered
+      const registered = registry.lookup(runId)
+      if (!registered) {
+        // H6: historical run — fall back to the persistent store.
+        if (store) {
+          const serializable = await store.loadRun(runId).catch(() => null)
+          if (serializable) {
+            const restored = restoreAgentRun({ serializable, projectRoot })
+            return snapshotFromRun(restored, serializable.workspaceHash)
+          }
+        }
+        registry.requireRun(runId) // throws RunNotFoundError
+      }
+      const { run } = registered!
       const { scope } = run
       return {
         schemaVersion: 1,

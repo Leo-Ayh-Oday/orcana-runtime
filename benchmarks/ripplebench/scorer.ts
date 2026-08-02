@@ -14,6 +14,7 @@
 import { execSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
+import { migrateLegacyTraceLine } from "../../src/harness/telemetry/migration"
 
 const BENCH_DIR = resolve(import.meta.dirname ?? ".")
 
@@ -81,7 +82,16 @@ function resolveRunsDir(): string | null {
   return null
 }
 
-/** Read agent run traces from the runs directory. Returns parsed events. */
+/**
+ * Read agent run traces (H5: shared types, no field guessing).
+ *
+ * Legacy kernel traces (.deepseek-code/runs/*.jsonl, `{runId, timestamp,
+ * type, data}`) are parsed through migrateLegacyTraceLine() into typed
+ * EventEnvelopes; new harness traces (EventEnvelope JSONL) are used as-is.
+ * Events are normalized to `{ type, ...data }` so scorer dimensions keep
+ * reading the same facts — via the shared envelope, never by guessing raw
+ * JSON field positions.
+ */
 function readRunEvents(runsDir: string | null, maxFiles: number): Array<Record<string, unknown>> {
   if (!runsDir) return []
   const events: Array<Record<string, unknown>> = []
@@ -93,21 +103,50 @@ function readRunEvents(runsDir: string | null, maxFiles: number): Array<Record<s
       if (!f.endsWith(".json") && !f.endsWith(".jsonl")) continue
       try {
         const raw = readFileSync(resolve(runsDir, f), "utf-8")
-        // JSONL: read last line (most recent event)
         if (f.endsWith(".jsonl")) {
           const lines = raw.trim().split("\n")
           for (const line of lines.slice(-10)) {
-            try { events.push(JSON.parse(line)) } catch { /* */ }
+            const normalized = normalizeTraceLine(line)
+            if (normalized) events.push(normalized)
           }
         } else {
           const trace = JSON.parse(raw)
           const evs = Array.isArray(trace) ? trace : trace.events ?? []
-          events.push(...evs)
+          for (const ev of evs) {
+            const normalized = normalizeTraceLine(typeof ev === "string" ? ev : JSON.stringify(ev))
+            if (normalized) events.push(normalized)
+          }
         }
       } catch { /* skip corrupt */ }
     }
   } catch { /* best-effort */ }
   return events
+}
+
+/** Parse one trace line through shared envelope types (legacy or H5). */
+function normalizeTraceLine(line: string): Record<string, unknown> | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== "object" || parsed === null) return null
+  const record = parsed as Record<string, unknown>
+  // New H5 envelope: { schemaVersion, type, payload }.
+  if ("schemaVersion" in record && "payload" in record && typeof record.type === "string") {
+    const legacy = (record.payload as { legacy?: unknown } | undefined)?.legacy
+    return legacy && typeof legacy === "object"
+      ? { type: record.type, ...(legacy as Record<string, unknown>) }
+      : { type: record.type, payload: record.payload }
+  }
+  // Legacy kernel trace line: migrate through the shared type.
+  const envelope = migrateLegacyTraceLine(line)
+  if (!envelope) return null
+  const legacy = (envelope.payload as { legacy?: unknown }).legacy
+  return legacy && typeof legacy === "object"
+    ? { type: envelope.type, ...(legacy as Record<string, unknown>) }
+    : { type: envelope.type, data: legacy }
 }
 
 function scoreSafety(): { passed: boolean; score: number; rippleViolations: number } {

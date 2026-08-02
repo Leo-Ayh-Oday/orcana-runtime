@@ -12,9 +12,10 @@
 | H0 Contracts | 完成 | 2026-08-02 | `src/harness/contracts/*`（harness/session/run/outcome/events/interrupt/artifact/capability/budget/errors/schema/snapshot/lifecycle）+ `src/harness/index.ts`；类型完整、无 `any`、不依赖 UI/具体 Provider、不导入 `loop.ts`；`tests/harness_contracts.test.ts` / `harness_outcome.test.ts` / `harness_status_transition_types.test.ts` 共 17 项；门禁绿色。**技术债：** `AgentRunScope` 的 7 个字段（planStore/modeStore/patchContext/sandbox/rippleSession/evidenceLedger/artifactStore/cancellation/trace）与 `RunSnapshot` 的 plan/mode/budget/evidence state 当前以 `unknown` 占位——这是有意为之（避免触发 H0"停止条件"：Contract 引用遗留内部类型即停止接线），H3 Run Scope 时须替换为真实、可序列化类型 |
 | H1 Facade / Adapter | 完成 | 2026-08-02 | `src/harness/runtime/{agent-harness,legacy-loop-adapter,run-registry}.ts`；CLI/TUI 生产入口改走 `AgentHarness.run()`（`agentLoop` 直接调用清零）；`cancel` 桥接 abortSignal、`inspect` 返回 RunSnapshot、`resume` H7 占位；`HarnessEvent` 契约扩展 4 个 bridge 变体（toolCall/display/planReady/clarification）；顺带修复 CLI plan 批准重跑 `planText` 未回传 bug；`tests/harness_legacy_adapter.test.ts` 8 项 + `harness_facade.test.ts` 5 项；全量 139 文件门禁绿色。**技术债：** 动态选项经 `AgentRunInput.metadata` 的 `LEGACY_*` key 传输（H1 过渡机制，H4/H7 正式化）；`AgentRunScope` 9 字段仍 `undefined` 占位（H3 替换）；run 终态仅 created→running→terminal 三档（H2 引入 LifecycleMachine） |
 | H2 Lifecycle / Outcome | 完成 | 2026-08-02 | `agentLoop` 生成器返回值暴露 `LoopDecision`；新增 `src/harness/runtime/{outcome-mapper,lifecycle-machine,run-controller,cleanup}.ts`；`LoopDecision → RunOutcome` 穷尽映射（编译期保证无未分类退出）；`RunLifecycleMachine` 驱动 `run.status`（含 pausing 中间态）+ run.* 生命周期事件；事件流 sequence 统一（bridge 与 lifecycle 共享 `run.eventSequence`）；`tests/harness_lifecycle.test.ts` 7 场景 + `harness_lifecycle_machine.test.ts` 6 项；全量 141 文件门禁绿色。**技术债：** `completed.reportArtifactId`/`waiting.checkpointId` 仍占位（H7/H8 填充）；异常仍向调用方传播（outcome 已记录）；kernel 层 stopReason 与 harness outcome 并存（两层语义，行为冻结） |
-| H3—H12 | 未开始 | — | 按依赖图顺序：H3 Run Isolation → H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
+| H3 Run Scope / Isolation | 完成 | 2026-08-02 | `AgentRunScope` 9 个 `unknown` 占位替换为真实类型（`contracts/scope.ts`：ModeStore/PatchContextStore/RippleSession/RunCancellation/TraceWriter + L2 的 PlanStore/EvidenceLedger/SandboxManager）；`run-registry` 每 run 装配完整 scope；**唯一所有权打通**：harness 的 planStore/sandbox 经 `AgentOptions.planStore/sandbox` 注入 kernel（同一实例）；`inspect` 返回可序列化 plan/mode 快照；`tests/harness_run_isolation.test.ts` 4 项 + `harness_scope.test.ts` 5 项（双 run 并行 plan/mode/patch/sandbox/cancel 不串）；全量 143 文件门禁绿色。**技术债：** mode/patch/ripple/budget 权威值仍在 kernel ALS（按 run 隔离），scope 快照为初始值——ALS→scope 迁移后续阶段；RunCancellation/TraceWriter 为桥接/占位（H4/H5 完整化）；`budgetState` 空（H4） |
+| H4—H12 | 未开始 | — | 按依赖图顺序：H4 Cancellation/Budget → H5 Typed Trace（第一里程碑） |
 
-> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0、H1、H2 已完成**（进度表见上），下一步为 **PR-H3 Run Scope / 全局状态清除**（`AgentRunScope` 9 个 unknown 占位替换为真实可序列化类型）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H3–H11 并行不冲突）。
+> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0–H3 已完成**（进度表见上），下一步为 **PR-H4 Cancellation / BudgetLedger**（`RunCancellation` 完整化 + Reserve-Commit 预算 + 超预算明确原因）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H4–H11 并行不冲突）。
 
 ---
 
@@ -1897,6 +1898,20 @@ tests/harness_sandbox_isolation.test.ts
   -Ripple 不串。
 
 这是后续 Graph 的硬前置。
+
+## H3 实施记录（2026-08-02）
+
+**状态：完成。** 全部门禁绿色（typecheck / 143 文件测试 / build / npm pack / diff --check）。
+
+实现要点：
+
+1. **契约类型化**：`contracts/scope.ts` 新增 `ModeStore`/`PatchContextStore`/`RippleSession`/`RunCancellation`/`TraceWriter`；`AgentRunScope` 9 个 `unknown` 占位全部替换（planStore/modeStore/patchContext/sandbox/rippleSession/evidenceLedger/artifactStore/cancellation/trace）——H0 技术债清偿，`grep unknown` 无残留。
+2. **唯一所有权打通**：`run-registry` 每 run 用 `assembleRunScope`（`runtime/run-scope.ts`）装配 scope（planStore/sandbox/evidenceLedger 新建 + cancellation 桥接 controller + no-op trace + 内存 artifact store）；`AgentOptions` 新增 `sandbox` 字段，`kernel/context.ts` 改为 `options.sandbox ?? new SandboxManager(...)`；adapter 传 `planStore`/`sandbox` —— **harness scope 与 kernel 是同一实例**（测试用 run 内探针验证）。
+3. **inspect 快照**：`RunSnapshot.planState`/`modeState`/`evidenceState` 从占位填为可序列化真实快照（plan revision/goal/nodes、mode、evidence entries 数）——H6 持久化的前置形状。
+4. **隔离验证**（双 run 并行）：plan 写入各自快照不串（A 的 plan 出现在 B 的 inspect 中即失败）、mode 经 ALS 各自独立（A 设 planner 后 B 内仍 coder）、patch context 不串、cancel A 不影响 B（B 正常 completed）、kernel 层 planStore/sandbox 实例分离。
+5. **边界记录**：mode/patch/ripple/budget 的权威值仍在 kernel ALS（按 run 隔离已成立），scope 提供初始快照——ALS→scope 的读取点迁移（`getActiveMode()` 等调用方改造）留待后续阶段按计划迁移顺序进行；`RunCancellation` 保持 AbortController 桥接（H4 加预算/超时）；`TraceWriter` no-op（H5）。
+
+**H4 入口：** `RunCancellation` 完整化（超时/预算联动）+ `BudgetLedger` Reserve-Commit 实现 + 挂接 Provider/Tool/Verification/Checkpoint + 超预算明确原因（model_call/tool_call/token/wall_time/write/external_action/repair）。
 
 ---
 

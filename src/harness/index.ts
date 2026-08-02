@@ -14,6 +14,13 @@ export type {
   RunStatus,
 } from "./contracts/run"
 export { TERMINAL_RUN_STATUSES, isTerminalRunStatus } from "./contracts/run"
+export type {
+  ModeStore,
+  PatchContextStore,
+  RippleSession,
+  RunCancellation,
+  TraceWriter,
+} from "./contracts/scope"
 export type { RunOutcome, RunOutcomeKind, RunBlocker, RunFailure } from "./contracts/outcome"
 export { outcomeKind } from "./contracts/outcome"
 export type { HarnessEvent, HarnessEventType, HarnessDisplayKind } from "./contracts/events"

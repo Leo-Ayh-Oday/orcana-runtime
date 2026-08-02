@@ -3,25 +3,20 @@ import { InvalidStateTransitionError } from "../src/harness/contracts/errors"
 import type { AgentRun } from "../src/harness/contracts/run"
 import type { HarnessEvent } from "../src/harness/contracts/events"
 import { lifecycleEventName, RunLifecycleMachine } from "../src/harness/runtime/lifecycle-machine"
+import { assembleRunScope } from "../src/harness/runtime/run-scope"
 
 // H2: the lifecycle machine drives run.status exclusively — legal chains
 // emit run.* events, illegal transitions fail, terminals never re-move.
 
 function fakeRun(): AgentRun {
+  const runId = "run-m-1"
+  const controller = new AbortController()
   return {
-    runId: "run-m-1",
+    runId,
     sessionId: "sess-m",
     status: "created",
     input: { prompt: "inspect" },
-    scope: {
-      runId: "run-m-1",
-      sessionId: "sess-m",
-      projectRoot: process.cwd(),
-      planStore: undefined, modeStore: undefined, patchContext: undefined,
-      sandbox: undefined, rippleSession: undefined,
-      evidenceLedger: undefined, artifactStore: undefined,
-      cancellation: undefined, trace: undefined,
-    },
+    scope: assembleRunScope({ runId, sessionId: "sess-m", projectRoot: process.cwd(), controller }),
     budget: undefined as never,
     createdAt: Date.now(),
     eventSequence: 0,

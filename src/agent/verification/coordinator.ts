@@ -12,8 +12,11 @@
  * it calls these functions and consumes their structured outputs.
  *
  * NOTE (L1 ownership): `verificationState.lastTypecheck` remains a compatibility
- * projection. The canonical fact source is EvidenceLedger; deriving lastTypecheck
- * from the ledger instead of writing it here is a later follow-up.
+ * projection. The authoritative typecheck (round batch tsc) is ingested into
+ * EvidenceLedger and lastTypecheck is derived from the ledger for that path.
+ * Ripple "assume-pass" and per-tool output heuristics stay as compat projections
+ * because they are not authoritative verification evidence (ingesting them would
+ * let the completion gate pass on unverified claims).
  */
 
 import type { ProviderMessage, StreamEvent } from "../../provider/types"
@@ -21,7 +24,7 @@ import type { AgentRunState, RoundState } from "../run/types"
 import type { PlanStore } from "../run/plan-store"
 import type { AgentRunTrace } from "../run-trace"
 import type { EvidenceLedger } from "../evidence-ledger"
-import { ingestVerificationResults } from "../evidence-ledger"
+import { deriveLastTypecheck, ingestTypecheck, ingestVerificationResults } from "../evidence-ledger"
 import { runRippleVerification } from "../round/post-loop"
 import {
   getBlockingObligations,
@@ -31,7 +34,7 @@ import {
 } from "../../ripple/obligations"
 import { setCascadeFiles } from "../../ripple/engine"
 import { checkNarrowEditCompletion } from "../completion-orchestrator"
-import { missingExplicitRequiredFiles } from "../round/pre-loop"
+import { formatRuntimeSelfEditGate, isRuntimeSourceFile, missingExplicitRequiredFiles, rootRuntimeVerificationPassed } from "../round/pre-loop"
 import { runTypeScriptNoEmit } from "../../tools/typescript"
 import { formatTaskTrackerStatus, snapshotTaskTracker, updateTaskTrackerAfterTools } from "../task-tracker"
 import { getWriteGeneration } from "../../file-state"
@@ -63,6 +66,8 @@ export interface VerificationContext {
 
   runTrace?: AgentRunTrace
   planStore: PlanStore
+  /** Round budget for runtime-self-edit gate continuation decisions. */
+  maxRounds?: number
 }
 
 // ── Part 1: bind structured verification to the canonical ledger ──
@@ -177,9 +182,18 @@ export async function* runBatchTypecheckAndTaskTracker(
   const tsFilesWritten = [...modifiedFilesThisRound].filter(f => f.endsWith(".ts") || f.endsWith(".tsx"))
   if (tsFilesWritten.length > 0) {
     const tscResult = runTypeScriptNoEmit(process.cwd())
-    verificationState.lastTypecheck = tscResult.available
-      ? { passed: tscResult.passed, issues: tscResult.issues, output: tscResult.output }
-      : { passed: true, issues: 0, output: tscResult.output || "tsc unavailable" }
+    // L5: the batch tsc result is the authoritative typecheck for the round —
+    // ingest it into EvidenceLedger and derive the lastTypecheck compat view
+    // from the ledger (single source of truth for completion).
+    ingestTypecheck(ctx.evidenceLedger, {
+      passed: tscResult.available ? tscResult.passed : true,
+      issues: tscResult.available ? tscResult.issues : 0,
+      output: tscResult.available ? tscResult.output : (tscResult.output || "tsc unavailable"),
+      command: "tsc --noEmit",
+      generation: getWriteGeneration(),
+    })
+    const derivedTypecheck = deriveLastTypecheck(ctx.evidenceLedger)
+    if (derivedTypecheck) verificationState.lastTypecheck = derivedTypecheck
     if (!tscResult.passed && tscResult.available) {
       const diagLines = tscResult.output
         .split("\n")
@@ -211,4 +225,46 @@ export async function* runBatchTypecheckAndTaskTracker(
   if (verificationResultsThisRound.length > 0) {
     verificationState.lastResults = [...verificationState.lastResults, ...verificationResultsThisRound].slice(-20)
   }
+}
+
+// ── Part 4: Runtime self-edit gate ──
+
+export interface RuntimeSelfEditOutput {
+  /** Control signal back to loop.ts — "break"/"continue" mirror the original inline exits. */
+  action: "break" | "continue" | "next"
+}
+
+/**
+ * Runtime self-edit gate: if the agent modified files under src/agent, src/tools,
+ * etc., the running process cannot hot-load them. Once a root typecheck passes,
+ * the run must stop for a restart. Returns a control signal so loop.ts can
+ * `break` / `continue` exactly as the pre-extraction inline block did.
+ */
+export async function* runRuntimeSelfEditGate(
+  ctx: VerificationContext,
+): AsyncGenerator<StreamEvent, RuntimeSelfEditOutput, unknown> {
+  const { execution, verificationState, modifiedFilesThisRound, verificationResultsThisRound, round, maxRounds } = ctx
+  const runtimeFilesThisRound = [...modifiedFilesThisRound].filter(path => isRuntimeSourceFile(path))
+  if (runtimeFilesThisRound.length > 0) {
+    execution.runtimeSelfEditFiles = new Set([...execution.runtimeSelfEditFiles, ...runtimeFilesThisRound])
+  }
+  if (execution.runtimeSelfEditFiles.size > 0) {
+    if (rootRuntimeVerificationPassed(verificationResultsThisRound) || rootRuntimeVerificationPassed(verificationState.lastResults)) {
+      const files = [...execution.runtimeSelfEditFiles].sort().join(", ")
+      yield { type: "status", data: "runtime-self-edit-gate: verified; restart required" }
+      yield {
+        type: "text",
+        data: `Runtime source changes were verified, but the current DeepSeek Code process cannot hot-load them. Restart DeepSeek Code before continuing. Changed runtime files: ${files}.`,
+      }
+      ctx.runTrace?.record("gate_decision", { gate: "runtime_self_edit", decision: "restart_required", files: [...execution.runtimeSelfEditFiles].sort() })
+      return { action: "break" }
+    }
+    if ((maxRounds ?? Infinity) > round + 1) {
+      ctx.rawMessages.push({ role: "user", content: formatRuntimeSelfEditGate([...execution.runtimeSelfEditFiles].sort()) })
+      yield { type: "status", data: "runtime-self-edit-gate: run root typecheck then stop" }
+      ctx.runTrace?.record("gate_decision", { gate: "runtime_self_edit", decision: "verify_then_restart", files: [...execution.runtimeSelfEditFiles].sort() })
+      return { action: "continue" }
+    }
+  }
+  return { action: "next" }
 }

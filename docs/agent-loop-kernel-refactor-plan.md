@@ -18,14 +18,14 @@
 | L3 ProviderRoundRunner | 完成 | 2026-07-30 | Provider 请求、流解析、usage、文本缓冲、idle timeout、abort、iterator cleanup 和失败恢复策略已抽出；`loop.ts` 不再直接调用 Provider |
 | L4 ToolBatchExecutor | 完成 | 2026-08-02 | `src/agent/tool-execution/{batch-executor,single-executor,result-normalizer}.ts` 抽出；并行只读、8 层 Policy、Hook、timeout/abort、ToolLedger 与结果规范化统一到一个执行入口；hard-block 也写入 Ledger；`loop.ts` 由 2077 行降至 **1726 行**（净减 351，低于 400–500 预估）；`tests/tool_batch_executor.test.ts` 9 项；门禁绿色 |
 | L5 VerificationCoordinator | 完成 | 2026-08-02 | `src/agent/verification/coordinator.ts` 抽出 `bindVerificationToLedger` / `runRippleVerificationPhase` / `runBatchTypecheckAndTaskTracker`；Ripple 验证、义务解析、cascade、narrow-edit 完成、批量 typecheck、TaskTracker 验证投影、lastResults 全部移出 `loop.ts`；`loop.ts` 不再直接运行 typecheck 或操作 Ripple obligation；`loop.ts` 降至 **1647 行**（净减 79，远低于 250–350 预估）；门禁绿色 |
-| L6 MaintenanceCoordinator | 部分完成 | 2026-08-02 | `src/agent/maintenance/coordinator.ts` 抽出 `runHistoricalMicrocompact` / `runAdaptiveCheckpoint` / `runKnowledgeDistillation` / `runKnowledgeReconcile`；`loop.ts` 降至 **1595 行**（净减 52，远低于 ~250 预估）；门禁绿色。**剩余：** forward/historical microcompact 中 forward 部分（`loop.ts` 内联）仍在、thinking compaction 与 semantic recall 仍耦合 provider 流留在 `loop.ts`，尚未统一为单一 `runMaintenance()` 入口 |
+| L6 MaintenanceCoordinator | 完成 | 2026-08-02 | `src/agent/maintenance/coordinator.ts`（389 行）包含全部 7 项维护操作：forward/historical microcompact、thinking compaction、semantic recall、adaptive checkpoint、knowledge distillation、knowledge reconcile；提供组合式 `runMaintenance()`；`loop.ts` 降至 **1446 行**（2077 → 1446，累计净减 631）；`tests/maintenance_coordinator.test.ts` 5 项；门禁绿色 |
 | L7 LoopDecision | 未开始 | — | 不提前实施 |
 
 ## 重启续作点
 
 **记录日期：** 2026-08-02  
-**当前边界：** L0—L5 已完成；L6 部分完成（forward microcompact、Thinking compaction + Semantic Recall + 单一 `runMaintenance()` 入口仍未做）；L7 尚未开始。  
-**下次入口：** 1) 收尾 L6：把 forward microcompact、thinking compaction 与 semantic recall 抽入 `maintenance/coordinator.ts`，提供组合式 `runMaintenance()`；2) 然后 `PR-L7：引入 LoopDecision` 收束 Agent Kernel。
+**当前边界：** L0—L6 已完成（L6 全部 7 项维护操作已抽入 `maintenance/coordinator.ts`，含组合式 `runMaintenance()`；`loop.ts` 1446 行）；L7 尚未开始。  
+**下次入口：** `PR-L7：引入 LoopDecision` 收束 Agent Kernel（目标 `loop.ts` 300–500 行，当前 1446 行）。注意：单一 `runMaintenance()` 调用点受控制流位置约束（forward microcompact 须在 history push 前、semantic recall 须在 router state update 前），loop.ts 仍按位置逐个调用；组合式 `runMaintenance()` 已提供。
 
 ### 审计遗留偏差（2026-08-02，严格对照本计划审核后记录）
 

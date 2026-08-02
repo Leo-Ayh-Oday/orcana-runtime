@@ -26,15 +26,14 @@ import type { ModelRouter } from "../provider/router"
 import { ConfidenceEvaluator } from "../evaluator/confidence"
 import { AgentState, StateMachine } from "./state-machine"
 import { formatRoundBudgetExhausted, resolveMaxRounds, selectRecentHistoryWithinBudget } from "./round/helpers"
-import { collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
+import { isRecord, collectRecentTurns, mcThreshold, updateStateMachine, type StateMachineInput } from "./round/post-loop"
 import { ErrorTracker, buildVolatileContextMessage, collectResearchEvidence, explicitRequiredFiles } from "./round/pre-loop"
 import type { HookSystem } from "../hooks"
-import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../provider/cost-policy"
 import { ToolExecutionLedger } from "./tool-ledger"
 
 import { formatServiceTestGuidance, parseVerificationResult, type VerificationResult } from "../verification/result"
 import { bindVerificationToLedger, runBatchTypecheckAndTaskTracker, runRippleVerificationPhase, runRuntimeSelfEditGate } from "./verification/coordinator"
-import { runAdaptiveCheckpoint, runHistoricalMicrocompact, runKnowledgeDistillation, runKnowledgeReconcile } from "./maintenance/coordinator"
+import { runAdaptiveCheckpoint, runForwardMicrocompact, runHistoricalMicrocompact, runKnowledgeDistillation, runKnowledgeReconcile, runSemanticRecall, runThinkingCompaction } from "./maintenance/coordinator"
 import type { AgentRunTrace } from "./run-trace"
 import {
   createTaskTracker,
@@ -47,7 +46,6 @@ import {
 } from "./task-tracker"
 import { buildEffectivePrompt, buildModelClarificationCall, evaluateClarificationNeed, formatModelClarificationFailure, parseModelClarification } from "./clarification"
 import { buildExperienceKernelContext } from "../experience/kernel"
-import { compactThinkingChain } from "../memory/compactor"
 import { evaluatePlanningArtifact, forcePlanningPassAfterLimit, formatPlanningBlockedToolResult, formatPlanningGatePrompt } from "./planning-gate"
 import { detectLanguage, languageInstruction, type UILanguage } from "./language"
 import { CompletionOrchestrator } from "./completion-orchestrator"
@@ -1172,10 +1170,16 @@ async function* runAgentLoop(
       provider,
       modelRouter: options.modelRouter,
       knowledgeBase: options.knowledgeBase,
+      abortSignal: options.abortSignal,
+      thinkingStore: options.thinkingStore,
+      stableMemoryContext: options.stableMemoryContext,
+      effectivePrompt,
+      routerRoundNum: state.roundNum,
       execution,
       verificationState,
       runState,
       planning,
+      maintenance,
       budget,
       planStore,
       taskFiles,
@@ -1187,22 +1191,8 @@ async function* runAgentLoop(
       runTrace: options.runTrace,
     }
 
-    // ── Microcompact: forward pass — compact fresh tool results before they enter history ──
-    // PR 4: use epoch compress threshold in addition to legacy heuristics
-    const shouldMicrocompact = preRoundCtx.contextBudgetPercent >= 35
-      || rawMessages.length >= 40
-      || epochAction === "compress"
-      || epochAction === "forceCompress"
-      || epochAction === "rollover"
-    if (shouldMicrocompact) {
-      const mcResult = microcompactToolResults(resultsContent, completedToolCalls)
-      while (resultsContent.length > 0) resultsContent.pop()
-      for (const r of mcResult.results) resultsContent.push(r)
-      if (mcResult.compacted > 0) {
-        budget.microcompactCount += mcResult.compacted
-        yield { type: "status", data: `microcompact: ${mcResult.compacted} tool results compacted (${budget.microcompactCount} total)` }
-      }
-    }
+    // L6: forward microcompact (before history push)
+    yield* runForwardMicrocompact(maintenanceCtx)
 
     let postToolRequiredFilesPrompt = ""
     let postToolPlanningPrompt = ""
@@ -1343,133 +1333,11 @@ async function* runAgentLoop(
     // Reset one-shot thinking upgrade
     if (execution.requestedMaxThinking) execution.requestedMaxThinking = false
 
-    // ── Thinking compaction (one-shot per session, triggered by epoch force-compress or 40% budget) ──
-    if (
-      !maintenance.thinkingCompacted &&
-      preRoundCtx.contextBudgetMode === "normal" &&
-      (preRoundCtx.contextBudgetPercent >= 40 || epochAction === "forceCompress" || epochAction === "rollover") &&
-      options.thinkingStore
-    ) {
-      const thinkingRounds = collectThinkingRounds(rawMessages)
-      if (thinkingRounds.length >= 2) {
-        if (shouldSkipProviderPurpose("thinking_compaction")) {
-          yield { type: "status", data: formatSkippedProviderPurpose("thinking_compaction") }
-          options.runTrace?.record("gate_decision", { gate: "cost_mode", decision: "skip", purpose: "thinking_compaction" })
-        } else {
-        yield { type: "status", data: `thinking-compaction: ${thinkingRounds.length} rounds → analyzing...` }
-        try {
-          const compactResult = await compactThinkingChain(
-            thinkingRounds,
-            async function* (system, prompt) {
-              for await (const ev of streamProviderRoundEvents({
-                provider,
-                request: {
-                  model: options.modelRouter?.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash",
-                  purpose: "thinking_compaction",
-                  system,
-                  messages: [{ role: "user", content: prompt }],
-                  maxTokens: 1024,
-                },
-                abortSignal: options.abortSignal,
-              })) {
-                yield ev
-              }
-            },
-          )
-          if (compactResult.success) {
-            const mergeResult = options.thinkingStore!.mergeCompressedInsights(
-              options.stableMemoryContext ?? "",
-              compactResult.output,
-            )
-            const insightCount = compactResult.output.key_insights.length +
-              compactResult.output.discarded.length +
-              compactResult.output.verified.length +
-              compactResult.output.open.length
+    // L6: one-shot thinking compaction
+    yield* runThinkingCompaction(maintenanceCtx)
 
-            if (mergeResult.changed) {
-              // Inject updated cold memory as a user message — does NOT
-              // mutate rawMessages or invalidate the frozen stable prefix.
-              // Prefix cache continuity is preserved (system+tools+stable_prefix
-              // remain byte-identical; only a new user message is appended).
-              const compactSummary = [
-                "<system-reminder>",
-                "思考链已压实。以下是从本次会话推理中提取的关键洞察（已去重并存入冷记忆）：",
-                ...compactResult.output.key_insights.map((k, i) => `${i + 1}. [insight] ${k}`),
-                ...compactResult.output.verified.map((v, i) => `✓ [verified] ${v}`),
-                ...compactResult.output.open.map((o, i) => `? [open] ${o}`),
-                "</system-reminder>",
-              ].join("\n")
-              rawMessages.push({ role: "user", content: compactSummary })
-              options.stableMemoryContext = mergeResult.merged
-              // NOTE: frozenStablePrefix is NOT invalidated. The next round's
-              // cold memory diff is carried as a volatile message, preserving
-              // the system+tools+stable_prefix cache boundary.
-              yield { type: "status", data: `thinking-compaction: ${thinkingRounds.length} rounds → ${insightCount} insights (appended, cache preserved)` }
-            }
-
-            options.thinkingStore!.storeCompressed({
-              query: effectivePrompt,
-              compactOutput: compactResult.output,
-              roundRange: `r${thinkingRounds[0]?.roundNum ?? 0}-r${thinkingRounds[thinkingRounds.length - 1]?.roundNum ?? round}`,
-              filePattern: [...taskFiles].join(","),
-            })
-            maintenance.thinkingCompacted = true
-            yield { type: "status", data: `thinking-compaction: ${thinkingRounds.length} rounds → ${insightCount} insights` }
-          }
-        } catch {
-          yield { type: "status", data: "thinking-compaction: failed, keeping full chains" }
-        }
-        }
-      }
-    }
-
-    // ── Historical Context injection (L3 volatile, semantic recall) ──
-    if (options.thinkingStore && round > 0 && state.roundNum % 3 === 0) {
-      if (shouldSkipProviderPurpose("semantic_recall_score")) {
-        yield { type: "status", data: formatSkippedProviderPurpose("semantic_recall_score") }
-        options.runTrace?.record("gate_decision", { gate: "cost_mode", decision: "skip", purpose: "semantic_recall_score" })
-      } else {
-      try {
-        const semanticRecords = await options.thinkingStore.findSimilarSemantic(
-          effectivePrompt,
-          async (query, candidates) => {
-            const lines = candidates.map((c, i) => `候选${i + 1}: ${c.queryPreview.slice(0, 80)}`).join("\n")
-            const prompt = `当前问题: "${query.slice(0, 120)}"\n\n对以下每个候选与当前问题的相关性从0-10打分，只输出逗号分隔的数字:\n${lines}\n\n输出格式: 8,3,9,1,6,...`
-            const scores: number[] = []
-            try {
-              for await (const ev of streamProviderRoundEvents({
-                provider,
-                request: {
-                  model: options.modelRouter?.selectForPurpose("semantic_recall_score") ?? "deepseek-v4-flash",
-                  purpose: "semantic_recall_score",
-                  system: "你是相关性打分器。只输出数字。",
-                  messages: [{ role: "user", content: prompt }],
-                  maxTokens: 128,
-                },
-                abortSignal: options.abortSignal,
-              })) {
-                if (ev.type === "text" && typeof ev.data === "string") {
-                  for (const part of ev.data.split(",")) {
-                    const n = parseInt(part.trim(), 10)
-                    if (!isNaN(n)) scores.push(n)
-                  }
-                }
-              }
-            } catch { /* fall through to keyword results */ }
-            return scores
-          },
-        )
-        if (semanticRecords.length > 0) {
-          const historicalContext = options.thinkingStore.formatForVolatileContext(semanticRecords)
-          if (historicalContext) {
-            // Inject as an additional user message before the next round
-            // This goes into L3 volatile — does NOT affect prefix cache
-            rawMessages.push({ role: "user", content: historicalContext })
-          }
-        }
-      } catch { /* semantic recall is best-effort */ }
-      }
-    }
+    // L6: semantic recall (L3 volatile historical context)
+    yield* runSemanticRecall(maintenanceCtx)
     updateState(state, toolNames, filePaths, Boolean(roundState.providerFailure) || roundState.hadToolError)
     execution.lastToolNames = [...toolNames]
     if (postToolPlanningPrompt) {

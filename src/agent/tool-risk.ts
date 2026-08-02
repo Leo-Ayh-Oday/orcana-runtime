@@ -70,6 +70,9 @@ const TOOL_RISK_MAP: Record<string, RiskProfile> = {
   git_blame:             { level: 1, category: "git",     requiresConfirmation: false, sessionAllowable: true, description: "Git blame 查询" },
   task:                  { level: 1, category: "safe",    requiresConfirmation: false, sessionAllowable: true, description: "任务管理操作" },
 
+  // ── Risk 2: Git index mutation ──
+  git_add:               { level: 2, category: "git",     requiresConfirmation: false, sessionAllowable: true, description: "Git 暂存文件（修改 index）" },
+
   // ── Risk 2: File write ──
   write_file:            { level: 2, category: "file",    requiresConfirmation: false, sessionAllowable: true, description: "写入/覆盖文件" },
   edit_file:             { level: 2, category: "file",    requiresConfirmation: false, sessionAllowable: true, description: "编辑文件内容" },

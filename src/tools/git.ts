@@ -1,12 +1,16 @@
-/** Git tools — status, diff, log, blame. */
+/** Git tools — status, diff, log, blame, show, add, commit. */
 
-import { execSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 
+/**
+ * Run git with an argv array (never a shell string) so model- or repository-
+ * controlled arguments (commit message, ref, path) cannot inject shell commands.
+ */
 function runGit(args: string[], timeout = 30): { code: number; stdout: string; stderr: string } {
   try {
-    const out = execSync(`git ${args.join(" ")}`, { timeout: timeout * 1000, encoding: "utf-8" })
+    const out = execFileSync("git", args, { timeout: timeout * 1000, encoding: "utf-8" })
     return { code: 0, stdout: out, stderr: "" }
   } catch (e: any) {
     return { code: e.status ?? -1, stdout: e.stdout ?? "", stderr: e.stderr ?? "git command failed" }

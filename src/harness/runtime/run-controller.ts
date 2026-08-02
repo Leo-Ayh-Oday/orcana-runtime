@@ -9,7 +9,7 @@
  *  finally). Exceptions map to failed and still propagate to the caller.
  */
 
-import type { HarnessEvent } from "../contracts/events"
+import type { EventEnvelope, HarnessEvent } from "../contracts/events"
 import type { AgentRun } from "../contracts/run"
 import type { AgentRunInput } from "../contracts/run"
 import type { AgentSession } from "../contracts/session"
@@ -42,7 +42,7 @@ export async function* runControlledRun(
   // created → initializing → running (with run.* lifecycle events).
   machine.transition("initializing")
   machine.transition("running")
-  yield* pending
+  yield* traceAndYield(pending, run)
   pending.length = 0
 
   try {
@@ -50,20 +50,33 @@ export async function* runControlledRun(
     const mapped = mapDecisionToOutcome(decision, undefined, controller.signal.reason)
     machine.transitionTo(mapped.status)
     run.outcome = mapped.outcome
+    // Terminal lifecycle event (run.completed / run.waiting / run.blocked /
+    // run.paused / run.cancelled) — appended before the trace closes.
+    yield* traceAndYield(pending, run)
   } catch (error) {
     const mapped = failureOutcome(error)
     machine.transitionTo(mapped.status)
     run.outcome = mapped.outcome
-    yield* pending // run.failed lifecycle event before the error propagates
+    yield* traceAndYield(pending, run) // run.failed lifecycle event before the error propagates
     throw error
   } finally {
     timed.dispose()
+    // H5: flush + close the typed trace (best-effort, never fails the run).
+    await run.scope.trace.flush().catch(() => {})
+    await run.scope.trace.close().catch(() => {})
     cleanupRun({ session, runId: run.runId, controller })
   }
+}
 
-  // Terminal lifecycle event (run.completed / run.waiting / run.blocked /
-  // run.paused / run.cancelled) emitted after the bridge events.
-  yield* pending
+/** Yield lifecycle events while appending each to the typed trace. */
+async function* traceAndYield(
+  events: HarnessEvent[],
+  run: AgentRun,
+): AsyncGenerator<HarnessEvent> {
+  for (const event of events) {
+    await run.scope.trace.append(event as EventEnvelope<unknown>).catch(() => {})
+    yield event
+  }
 }
 
 /** Adapter event loop wrapped by the budget guard: on exhaustion the abort
@@ -90,6 +103,8 @@ async function* runGuardedLoop(
         closed = true
         return { kind: "return", reason: "aborted" }
       }
+      // H5: every bridged event lands in the typed trace (best-effort).
+      await run.scope.trace.append(step.value as EventEnvelope<unknown>).catch(() => {})
       yield step.value
     }
   } finally {

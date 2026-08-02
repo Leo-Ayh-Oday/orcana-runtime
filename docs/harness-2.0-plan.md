@@ -14,9 +14,10 @@
 | H2 Lifecycle / Outcome | 完成 | 2026-08-02 | `agentLoop` 生成器返回值暴露 `LoopDecision`；新增 `src/harness/runtime/{outcome-mapper,lifecycle-machine,run-controller,cleanup}.ts`；`LoopDecision → RunOutcome` 穷尽映射（编译期保证无未分类退出）；`RunLifecycleMachine` 驱动 `run.status`（含 pausing 中间态）+ run.* 生命周期事件；事件流 sequence 统一（bridge 与 lifecycle 共享 `run.eventSequence`）；`tests/harness_lifecycle.test.ts` 7 场景 + `harness_lifecycle_machine.test.ts` 6 项；全量 141 文件门禁绿色。**技术债：** `completed.reportArtifactId`/`waiting.checkpointId` 仍占位（H7/H8 填充）；异常仍向调用方传播（outcome 已记录）；kernel 层 stopReason 与 harness outcome 并存（两层语义，行为冻结） |
 | H3 Run Scope / Isolation | 完成 | 2026-08-02 | `AgentRunScope` 9 个 `unknown` 占位替换为真实类型（`contracts/scope.ts`：ModeStore/PatchContextStore/RippleSession/RunCancellation/TraceWriter + L2 的 PlanStore/EvidenceLedger/SandboxManager）；`run-registry` 每 run 装配完整 scope；**唯一所有权打通**：harness 的 planStore/sandbox 经 `AgentOptions.planStore/sandbox` 注入 kernel（同一实例）；`inspect` 返回可序列化 plan/mode 快照；`tests/harness_run_isolation.test.ts` 4 项 + `harness_scope.test.ts` 5 项（双 run 并行 plan/mode/patch/sandbox/cancel 不串）；全量 143 文件门禁绿色。**技术债：** mode/patch/ripple/budget 权威值仍在 kernel ALS（按 run 隔离），scope 快照为初始值——ALS→scope 迁移后续阶段；RunCancellation/TraceWriter 为桥接/占位（H4/H5 完整化）；`budgetState` 空（H4） |
 | H4 Cancellation / Budget | 完成 | 2026-08-02 | `AgentRun.budget` 占位清除（真实 `BudgetLedger` Reserve-Commit 实现）；`runtime/{budget-ledger,budget-guard,cancellation}.ts`；超限产生明确原因并取消（model_call/tool_call/token/wall_time_budget → cancelled outcome reason）；wall-time 看门狗兜底卡死 run；`maxRounds → maxModelCalls` 映射；`AgentRunInput.budget` 限额入口；`inspect.budgetState` 真实快照；**零 kernel 改动**（行为冻结，预算治理在 harness 控制面 §3.4）；`tests/budget_ledger.test.ts` 6 项 + `harness_budget.test.ts` 6 场景（超限即停无后续事件）；全量 145 文件门禁绿色。**技术债：** write/external_action/repair 限额字段就绪但未挂接（kernel 事件无工具分类，H8/H9 接入） |
-| H5—H12 | 未开始 | — | 按依赖图顺序：H5 Typed Trace（第一里程碑）→ H6 Persistence → H7 Interrupt |
+| H5 Typed Trace | 完成 | 2026-08-02 | **第一里程碑（H0–H5）收官。** `TraceWriter` 契约对齐 `EventEnvelope`；`src/harness/telemetry/{trace-writer,migration}.ts`：JSONL 类型化落盘（`.deepseek-code/harness/events/<runId>.jsonl`，队列+节流批量写、写失败静默不影响 run、redactForTrace 统一遮蔽）+ 旧格式迁移（`migrateLegacyTraceLine` → Envelope）；事件流全部接入 trace（lifecycle + bridge，sequence 连续）；scorer `readRunEvents` 改共享类型解析（不再猜测字段）；`tests/harness_trace.test.ts` 6 项；全量 146 文件门禁绿色。**里程碑成果：** 正式 Harness API + 统一生命周期 + 明确 Outcome + 真正 Run 隔离 + 统一取消/预算 + 可重放类型化 Trace |
+| H6—H12 | 未开始 | — | 第二里程碑：H6 Persistence → H7 Interrupt/Resume → H8 Artifact/Evidence |
 
-> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0–H4 已完成**（进度表见上），下一步为 **PR-H5 Typed Events / Trace V2**（Event Envelope + Sequence + 事件类型联合 + Trace Migration + 统一 Redaction，第一里程碑收官）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H5–H11 并行不冲突）。
+> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0–H5 全部完成，第一里程碑收官**（进度表见上），下一步为 **PR-H6 Store / Snapshot / 基础恢复**（FileHarnessStore + Run Snapshot + Schema Migration + Workspace Hash + Continuation Point，第二里程碑开始）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H6–H11 并行不冲突）。
 
 ---
 
@@ -2017,6 +2018,24 @@ event.payload
   -旧 Trace 可读取；
   -敏感值被遮蔽；
   -Trace 写入异常不导致 Run 失败。
+
+## H5 实施记录（2026-08-02）—— 第一里程碑收官声明
+
+**状态：完成。** 全部门禁绿色（typecheck / 146 文件测试 / build / npm pack / diff --check）。
+
+**里程碑成果（计划 §二十五）：** 正式 Harness API（H1）· 统一运行生命周期（H2）· 明确 Outcome（H2）· 真正 Run 隔离（H3）· 统一取消和预算（H4）· 可用于 Replay 的类型化 Trace（H5）。
+
+实现要点：
+
+1. **TraceWriter 契约对齐**：`append<T>(event: EventEnvelope<T>)`（§12.3 计划形状），no-op 实现同步。
+2. **JSONL TraceWriter**（`telemetry/trace-writer.ts`）：`.deepseek-code/harness/events/<runId>.jsonl`；队列 + `setImmediate` 节流批量写；写失败静默（回队重试不抛）；close 后 append no-op；flush/close 幂等。
+3. **全事件接入**：lifecycle 事件（run.*）与 bridge 事件都经 trace 落盘 —— 事件顺序 = 落盘顺序 = sequence 连续（`run.eventSequence`，H2 前置）。发现并修复时序问题：终态事件原先在 flush/close 之后 append 被丢弃，重排到 try 内。
+4. **Redaction**：复用 `secret-redactor.redactForTrace`（不重复实现），payload 落盘前遮蔽。
+5. **迁移**（`telemetry/migration.ts`）：`migrateLegacyTraceLine`/`migrateLegacyTrace` 旧 `{runId,timestamp,type,data}` → Envelope（payload.legacy 承载），损坏行跳过。
+6. **scorer 共享类型**（`benchmarks/ripplebench/scorer.ts`）：`readRunEvents` 优先识别新 Envelope、旧行走迁移函数，归一化为 `{type, ...data}` —— 不再裸 JSON 猜测字段。
+7. **边界**：kernel 旧 `AgentRunTrace`（`.deepseek-code/runs/`）保留（§22.3 H11 前不删）；H5 trace 与旧 trace 并行，均为共享类型可读。
+
+**H6 入口：** FileHarnessStore + RunSnapshot 持久化 + Schema Migration + Workspace Hash + Continuation Point（inspect 的 plan/mode/budget 快照形状已在 H3/H4 就绪）。
 
 ---
 

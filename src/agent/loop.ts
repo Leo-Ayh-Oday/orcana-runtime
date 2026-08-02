@@ -9,7 +9,6 @@ import { CacheTracker } from "../provider/cache-tracker"
 import type { StagedContextManager } from "../context/staged"
 import type { ThinkingStore } from "../memory/thinking-store"
 import type { KnowledgeBase } from "../memory/knowledge"
-import { distillAndStore, shouldDistill } from "../memory/distiller"
 import { buildContextKernel } from "../context/kernel"
 import { classifyIntent } from "./intent"
 import { FlashTriage, triageModeToIntent, triageToTaskIntent, buildTrackerFromTriage, activateSkillNamesByKeywords, resolveFlashTriagePolicy, shouldUseFlashTriage } from "./flash-triage"
@@ -27,7 +26,7 @@ import type { ModelRouter } from "../provider/router"
 import { ConfidenceEvaluator } from "../evaluator/confidence"
 import { AgentState, StateMachine } from "./state-machine"
 import { formatRoundBudgetExhausted, resolveMaxRounds, selectRecentHistoryWithinBudget } from "./round/helpers"
-import { collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
+import { collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
 import { ErrorTracker, buildVolatileContextMessage, collectResearchEvidence, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles } from "./round/pre-loop"
 import type { HookSystem } from "../hooks"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../provider/cost-policy"
@@ -35,6 +34,7 @@ import { ToolExecutionLedger } from "./tool-ledger"
 
 import { formatServiceTestGuidance, parseVerificationResult, type VerificationResult } from "../verification/result"
 import { bindVerificationToLedger, runBatchTypecheckAndTaskTracker, runRippleVerificationPhase } from "./verification/coordinator"
+import { runAdaptiveCheckpoint, runHistoricalMicrocompact, runKnowledgeDistillation, runKnowledgeReconcile } from "./maintenance/coordinator"
 import type { AgentRunTrace } from "./run-trace"
 import {
   createTaskTracker,
@@ -60,7 +60,6 @@ import { executeToolBatch } from "./tool-execution/batch-executor"
 import { GateTelemetry } from "./gates/telemetry"
 import { SandboxManager } from "../sandbox/sandbox"
 import { setShellSandbox } from "../tools/shell"
-import { saveCheckpoint, adaptiveCheckpointThreshold, shouldSkipCheckpointThisRound, recordCheckpointTaken, formatCheckpointSummary, generateCheckpointId, type ComplexityMetrics } from "../session/checkpoint"
 import { buildContextMessages, buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "./round/request-builder"
 import { createPreRoundChain } from "./gates/pre-round"
 import { processGateOverflow } from "./gates/overflow"
@@ -1165,6 +1164,28 @@ async function* runAgentLoop(
     // Bind structured verification to the canonical ledger as soon as tool execution ends.
     bindVerificationToLedger(verificationCtx)
 
+    // L6: MaintenanceCoordinator context — shared across low-frequency housekeeping.
+    const maintenanceCtx = {
+      round,
+      epochAction,
+      provider,
+      modelRouter: options.modelRouter,
+      knowledgeBase: options.knowledgeBase,
+      execution,
+      verificationState,
+      runState,
+      planning,
+      budget,
+      planStore,
+      taskFiles,
+      rawMessages,
+      resultsContent,
+      completedToolCalls,
+      learnPrompts,
+      preRoundCtx,
+      runTrace: options.runTrace,
+    }
+
     // ── Microcompact: forward pass — compact fresh tool results before they enter history ──
     // PR 4: use epoch compress threshold in addition to legacy heuristics
     const shouldMicrocompact = preRoundCtx.contextBudgetPercent >= 35
@@ -1306,14 +1327,8 @@ async function* runAgentLoop(
     }
     rawMessages.push({ role: "user", content: resultsContent })
 
-    // ── Microcompact: retrospective pass — compact historical tool results every 10 rounds, or on epoch force-compress ──
-    if (round >= 15 && round % 10 === 0 || epochAction === "forceCompress" || epochAction === "rollover") {
-      const histCompacted = compactHistoricalToolResults(rawMessages, 8)
-      if (histCompacted > 0) {
-        budget.microcompactCount += histCompacted
-        yield { type: "status", data: `microcompact: ${histCompacted} historical results compacted (${budget.microcompactCount} total)` }
-      }
-    }
+    // L6: retrospective historical microcompact
+    yield* runHistoricalMicrocompact(maintenanceCtx)
 
     // ── State machine transition (after tool results, before next round) ──
     updateStateMachine(sm, {
@@ -1523,82 +1538,15 @@ async function* runAgentLoop(
       stagedContext.advance()
     }
 
-    // ── Checkpoint (adaptive density) ──
-    const metrics: ComplexityMetrics = {
-      filesPerRound: round > 0 ? execution.modifiedFileCount / round : 0,
-      errorRate: round > 0 ? execution.toolErrors / round : 0,
-      round,
-    }
-    const cpDecision = adaptiveCheckpointThreshold(preRoundCtx.contextBudgetPercent, metrics)
-    if (cpDecision && !shouldSkipCheckpointThisRound(round)) {
-      yield { type: "status", data: `checkpoint: ${cpDecision.label} (${cpDecision.urgency})` }
-      saveCheckpoint({
-        version: 1,
-        checkpointId: generateCheckpointId(),
-        round,
-        timestamp: Date.now(),
-        sessionId: process.env.DEEPSEEK_SESSION_ID ?? "ds-default",
-        masterPlan: planStore.current ? {
-          goal: planStore.current.goal,
-          nodes: planStore.current.nodes.map(n => ({ id: n.id, title: n.title, status: n.status })),
-          current: planStore.current.current,
-          progress: planProgress(planStore.current),
-        } : (planning.taskTracker ? { goal: planning.taskTracker.goal, steps: planning.taskTracker.steps.map(s => ({ id: s.id, status: s.status, title: s.title })) } : {}),
-        taskSteps: planning.taskTracker?.steps.map(s => ({ id: s.id, status: s.status, title: s.title })) ?? [],
-        changedFiles: [...taskFiles],
-        fileSHAs: {},
-        coldMemorySHA: runState.conversation.stablePrefixHash,
-        knowledgeCount: 0,
-        lastVerification: verificationState.lastTypecheck ? { kind: "typecheck", passed: verificationState.lastTypecheck.passed, command: "tsc --noEmit" } : null,
-        conversationTokens: preRoundCtx.contextBudgetPercent > 0 ? Math.round(preRoundCtx.contextBudgetPercent * 1000) : 0,
-        prevRound: round,
-        summary: formatCheckpointSummary({
-          version: 1, checkpointId: generateCheckpointId(), round, timestamp: Date.now(), sessionId: "",
-          masterPlan: planning.taskTracker ? { goal: planning.taskTracker.goal, steps: planning.taskTracker.steps } : {},
-          taskSteps: planning.taskTracker?.steps ?? [],
-          changedFiles: [...taskFiles],
-          fileSHAs: {},
-          coldMemorySHA: runState.conversation.stablePrefixHash,
-          knowledgeCount: 0,
-          lastVerification: verificationState.lastTypecheck ? { kind: "typecheck", passed: verificationState.lastTypecheck.passed, command: "tsc --noEmit" } : null,
-          conversationTokens: Math.round(preRoundCtx.contextBudgetPercent * 1000),
-          prevRound: round,
-          summary: planStore.current
-            ? `Round ${round}: ${planProgress(planStore.current)}, ${execution.modifiedFileCount} files, ${execution.toolErrors} errors`
-            : `Round ${round}: ${execution.modifiedFileCount} files, ${execution.toolErrors} errors`,
-        }),
-      })
-      recordCheckpointTaken(round)
-      options.runTrace?.record("checkpoint", { label: cpDecision.label, round, metrics })
-    }
+    // L6: adaptive density checkpoint
+    yield* runAdaptiveCheckpoint(maintenanceCtx)
 
-    // ── Stage 2: distill web_search results into knowledge base ──
-    if (options.knowledgeBase && learnPrompts.length > 0) {
-      for (const tc of completedToolCalls) {
-        if (tc.name !== "web_search") continue
-        const query = (tc.input as Record<string, unknown>).query as string | undefined
-        if (!query || !shouldDistill(query, "error")) continue
-        const resultEntry = resultsContent.find(r => r.tool_use_id === tc.id)
-        if (!resultEntry) continue
-        const resultText = String(resultEntry.content ?? "")
-        if (!resultText.includes("[SearXNG]") && !resultText.includes("[DuckDuckGo]")) continue
-        // Fire distillation (best-effort, don't block next round if it fails)
-        distillAndStore(
-          { query, results: resultText, trigger: "error" },
-          provider,
-          options.knowledgeBase,
-          options.modelRouter?.selectForPurpose("knowledge_distill") ?? "deepseek-v4-flash",
-        ).catch(() => {})
-      }
-    }
+    // L6: best-effort web_search -> knowledge base distillation
+    runKnowledgeDistillation(maintenanceCtx)
 
-    // ── Memory reconcile: periodic prune + FTS5 rebuild every 50 rounds ──
-    if (options.knowledgeBase && round > 0 && round % 50 === 0) {
-      const recResult = options.knowledgeBase.reconcile()
-      if (recResult.pruned > 0) {
-        yield { type: "status", data: `knowledge-reconcile: pruned ${recResult.pruned} expired, ${recResult.indexed} active` }
-      }
-    }
+    // L6: periodic memory reconcile (prune + FTS5 rebuild)
+    yield* runKnowledgeReconcile(maintenanceCtx)
+
     if (round + 1 >= maxRounds) lifecycle.reachedRoundBudget = true
   }
 

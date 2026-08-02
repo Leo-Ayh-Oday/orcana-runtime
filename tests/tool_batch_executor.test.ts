@@ -206,6 +206,47 @@ describe("executeToolBatch", () => {
     const [events, result] = await drain(executeToolBatch(ctx))
     expect(result.aborted).toBe(true)
   })
+
+  test("aborted in-flight streaming tool is recorded as aborted in the ledger", async () => {
+    const controller = new AbortController()
+    // read_file is level-0 safe so it passes every policy gate and actually
+    // executes; the streaming variant holds the iterator open until abort.
+    const tools: ToolDescriptor[] = [{
+      defn: {
+        name: "read_file",
+        description: "read",
+        inputSchema: { type: "object", properties: {} },
+        isReadonly: true,
+        isConcurrencySafe: true,
+      },
+      executeStream: async function* () {
+        // Never yields — holds the iterator open until the run aborts.
+        await new Promise<void>(() => {})
+      },
+      execute: async () => ({ success: true, content: "unused" }),
+      toAnthropicSchema: () => ({}),
+    } as unknown as ToolDescriptor]
+    const ctx = buildContext({
+      completedToolCalls: [makeCall("1", "read_file")],
+      tools,
+      abortSignal: controller.signal,
+    })
+    const iter = executeToolBatch(ctx)[Symbol.asyncIterator]()
+    const pending = iter.next() // starts executing the hanging stream
+    await new Promise(resolve => setTimeout(resolve, 20)) // let it get in-flight
+    controller.abort() // abort mid-stream
+    const first = await pending
+    expect(first.done).toBe(true)
+    expect((first.value as { aborted: boolean }).aborted).toBe(true)
+    // Drain any remaining events; the ledger must record the aborted tool.
+    while (true) {
+      const next = await iter.next()
+      if (next.done) break
+    }
+    expect(ctx.toolLedger.snapshot()).toHaveLength(1)
+    expect(ctx.toolLedger.snapshot()[0]!.aborted).toBe(true)
+    expect(ctx.toolLedger.snapshot()[0]!.success).toBe(false)
+  })
 })
 
 describe("executeSingleTool", () => {

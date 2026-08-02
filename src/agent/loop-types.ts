@@ -60,4 +60,6 @@ export interface AgentOptions {
   sessionStartContext?: string
   /** L2: optional caller-provided run-scoped plan owner. */
   planStore?: PlanStore
+  /** H3: optional caller-provided run-scoped sandbox (single ownership with the harness). */
+  sandbox?: import("../sandbox/sandbox").SandboxManager
 }

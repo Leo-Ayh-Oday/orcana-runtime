@@ -8,8 +8,10 @@
  */
 
 import { randomUUID } from "node:crypto"
+import type { ModeName } from "../../agent/mode-contract"
 import { RunNotFoundError } from "../contracts/errors"
 import type { AgentRun } from "../contracts/run"
+import { assembleRunScope } from "./run-scope"
 
 export interface RegisteredRun {
   run: AgentRun
@@ -20,6 +22,7 @@ export interface CreateRegisteredRunInput {
   sessionId: string
   projectRoot: string
   input: AgentRun["input"]
+  activeMode?: ModeName
 }
 
 export class RunRegistry {
@@ -28,33 +31,28 @@ export class RunRegistry {
   create(input: CreateRegisteredRunInput): RegisteredRun {
     const runId = randomUUID()
     const now = Date.now()
+    const controller = new AbortController()
     const run: AgentRun = {
       runId,
       sessionId: input.sessionId,
       status: "created",
       input: input.input,
-      // H1: no run-bound state objects yet — scope fields are placeholders
-      // per H0 (unknown) and get real types in H3; budget ledger lands in H4.
-      scope: {
+      // H3: typed run-scope — planStore/sandbox/evidenceLedger owned here and
+      // wired into the legacy kernel (single source of truth); budget ledger
+      // lands in H4.
+      scope: assembleRunScope({
         runId,
         sessionId: input.sessionId,
         projectRoot: input.projectRoot,
-        planStore: undefined,
-        modeStore: undefined,
-        patchContext: undefined,
-        sandbox: undefined,
-        rippleSession: undefined,
-        evidenceLedger: undefined,
-        artifactStore: undefined,
-        cancellation: undefined,
-        trace: undefined,
-      },
+        controller,
+        activeMode: input.activeMode,
+      }),
       budget: undefined as never,
       createdAt: now,
       eventSequence: 0,
       schemaVersion: 1,
     }
-    const registered: RegisteredRun = { run, controller: new AbortController() }
+    const registered: RegisteredRun = { run, controller }
     this.runs.set(runId, registered)
     return registered
   }

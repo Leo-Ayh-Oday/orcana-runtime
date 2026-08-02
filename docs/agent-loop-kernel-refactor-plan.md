@@ -16,13 +16,14 @@
 | L1 AgentRunState | 完成 | 2026-07-30 | 新增 Run/Round State、只读序列化 Snapshot 和显式 StatePatch；运行级局部状态按 ownership 迁移，L0 Golden Trace 保持一致 |
 | L2 Run Scope 与并发隔离 | 完成 | 2026-07-30 | Plan/Todo/Tool Registry 与 Runtime/File State 绑定到单一 AgentRunScope；Patch registry、Ripple cache、Checkpoint scheduler 均按 Run 隔离，重叠双 Run 测试通过 |
 | L3 ProviderRoundRunner | 完成 | 2026-07-30 | Provider 请求、流解析、usage、文本缓冲、idle timeout、abort、iterator cleanup 和失败恢复策略已抽出；`loop.ts` 不再直接调用 Provider |
-| L4—L7 | 未开始 | — | 不提前实施 |
+| L4 ToolBatchExecutor | 完成 | 2026-08-02 | `src/agent/tool-execution/{batch-executor,single-executor,result-normalizer}.ts` 抽出；并行只读、8 层 Policy、Hook、timeout/abort、ToolLedger 与结果规范化统一到一个执行入口；hard-block 也写入 Ledger；`loop.ts` 由 2077 行降至 1694 行；`tests/tool_batch_executor.test.ts` 9 项；门禁绿色 |
+| L5—L7 | 未开始 | — | 不提前实施 |
 
 ## 重启续作点
 
-**记录日期：** 2026-07-31  
-**当前边界：** L0—L3 已完成，尚未开始 L4。  
-**下次入口：** `PR-L4：抽出 ToolBatchExecutor`。
+**记录日期：** 2026-08-02  
+**当前边界：** L0—L4 已完成，尚未开始 L5。  
+**下次入口：** `PR-L5：抽出 VerificationCoordinator`。
 
 重启后：
 

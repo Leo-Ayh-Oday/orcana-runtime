@@ -8,6 +8,8 @@ export interface ToolLedgerEntry {
   durationMs: number
   success: boolean
   blocked: boolean
+  /** True when the tool was interrupted by run abort before full post-processing. */
+  aborted: boolean
   changedFiles: string[]
   gate?: string
   gateStatus?: string
@@ -38,6 +40,7 @@ export class ToolExecutionLedger {
       durationMs: Math.max(0, Date.now() - input.startedAt),
       success: input.result.success,
       blocked: Boolean(metadata.blocked || metadata.hookBlocked || /\[blocked\]/i.test(input.result.content)),
+      aborted: Boolean(metadata.aborted),
       changedFiles: [...new Set(input.changedFiles ?? [])],
       gate,
       gateStatus: typeof gateDetail?.status === "string" ? gateDetail.status : undefined,

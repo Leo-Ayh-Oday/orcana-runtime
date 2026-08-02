@@ -19,13 +19,16 @@ import type { HarnessEvent } from "../contracts/events"
 import type { AgentHarness } from "../contracts/harness"
 import type { AgentRunInput } from "../contracts/run"
 import type { AgentSession, CreateSessionInput } from "../contracts/session"
-import type { InterruptResponse } from "../contracts/interrupt"
+import type { InterruptKind, InterruptResponse } from "../contracts/interrupt"
 import type { RunSnapshot } from "../contracts/snapshot"
 import { RunRegistry } from "./run-registry"
 import { runControlledRun } from "./run-controller"
 import { createLegacyLoopAdapter, type LegacyLoopAdapter, type LegacyLoopAdapterDeps } from "./legacy-loop-adapter"
 import { serializeRun, snapshotFromRun, restoreAgentRun } from "../persistence/serialization"
-import type { HarnessStore } from "../persistence/harness-store"
+import type { HarnessStore, SerializableRun } from "../persistence/harness-store"
+import { markInterruptAnswered, validateResume } from "../interrupts/interrupt-manager"
+import { applyPlanApprovalResponse } from "../interrupts/plan-approval"
+import { applyClarificationResponse } from "../interrupts/clarification"
 
 export interface AgentHarnessInput {
   deps: LegacyLoopAdapterDeps
@@ -111,11 +114,79 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
       }
     },
 
-    async *resume(_runId: string, _response: InterruptResponse): AsyncIterable<HarnessEvent> {
-      // H7 introduces persistent interrupts and resume; the H1 facade keeps
-      // the signature (per H0 contract) and fails loudly rather than
-      // pretending to resume a legacy re-invocation.
-      throw new HarnessError("internal", "resume() lands in H7 (persistent interrupts); H1 runs are re-invoked via run()")
+    async *resume(runId: string, response: InterruptResponse): AsyncIterable<HarnessEvent> {
+      // H7: resolve the run — in-memory registry or the persistent store.
+      let registered = registry.lookup(runId)
+      let savedWorkspaceHash: string | undefined
+      let restoreSerializable: SerializableRun | undefined
+      if (!registered && store) {
+        restoreSerializable = await store.loadRun(runId).catch(() => null) ?? undefined
+        if (restoreSerializable) {
+          const restored = restoreAgentRun({ serializable: restoreSerializable, projectRoot })
+          registered = registry.registerRestored(restored, new AbortController())
+          savedWorkspaceHash = restoreSerializable.workspaceHash
+        }
+      }
+      if (!registered) {
+        registry.requireRun(runId) // throws RunNotFoundError
+        return
+      }
+      const { run } = registered
+
+      // Validate: waiting + pending interrupt + id + schema + workspace.
+      const currentHash = savedWorkspaceHash !== undefined && workspaceHash
+        ? workspaceHash()
+        : undefined
+      const validation = validateResume({
+        run,
+        response,
+        savedWorkspaceHash,
+        currentWorkspaceHash: currentHash,
+      })
+      if (!validation.ok) throw validation.error
+      const interrupt = validation.interrupt
+
+      // Rejection is a formal branch: rejected → cancelled.
+      const payload = response.payload as { accepted?: boolean }
+      if (response.accepted === false || payload.accepted === false) {
+        markInterruptAnswered(interrupt, false)
+        run.status = "cancelled"
+        run.finishedAt ??= Date.now()
+        run.outcome = { kind: "cancelled", reason: "interrupt_rejected" }
+        if (store) {
+          await store.saveRun(serializeRun({ run, workspaceHash: currentHash })).catch(() => {})
+        }
+        return
+      }
+
+      markInterruptAnswered(interrupt, true)
+      // Continuation input: apply the response for the interrupt kind.
+      const resumeInput = applyResponseToInput(run, interrupt.kind, payload)
+
+      // Fresh controller (the waiting run's controller was aborted at cleanup).
+      const controller = new AbortController()
+      registry.replaceController(runId, controller)
+
+      const session = sessions.get(run.sessionId) ?? ensureSession(run.sessionId)
+      session.activeRunIds.push(runId)
+      session.updatedAt = Date.now()
+
+      try {
+        yield* runControlledRun({
+          adapter,
+          run,
+          runInput: run.input,
+          resumeInput,
+          session,
+          controller,
+        })
+      } finally {
+        if (store) {
+          const hash = workspaceHash?.()
+          await store.saveRun(serializeRun({ run, workspaceHash: hash })).catch(() => {})
+          await store.saveSnapshot(snapshotFromRun(run, hash)).catch(() => {})
+        }
+      }
     },
 
     async cancel(runId: string, reason?: string): Promise<void> {
@@ -175,5 +246,21 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
     async dispose(): Promise<void> {
       // H1: nothing to flush — sessions and runs are memory-only.
     },
+  }
+}
+
+/** Apply an interrupt response onto the run's continuation input. */
+function applyResponseToInput(
+  run: { input: AgentRunInput },
+  kind: InterruptKind,
+  payload: { accepted?: boolean; planText?: string; answers?: Array<{ questionId?: string; answer: string }> },
+): AgentRunInput {
+  switch (kind) {
+    case "plan_approval":
+      return applyPlanApprovalResponse(run.input, { accepted: payload.accepted ?? false, planText: payload.planText })
+    case "clarification":
+      return applyClarificationResponse(run.input, { answers: payload.answers ?? [] })
+    default:
+      return run.input
   }
 }

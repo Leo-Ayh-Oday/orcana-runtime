@@ -16,9 +16,10 @@
 | H4 Cancellation / Budget | 完成 | 2026-08-02 | `AgentRun.budget` 占位清除（真实 `BudgetLedger` Reserve-Commit 实现）；`runtime/{budget-ledger,budget-guard,cancellation}.ts`；超限产生明确原因并取消（model_call/tool_call/token/wall_time_budget → cancelled outcome reason）；wall-time 看门狗兜底卡死 run；`maxRounds → maxModelCalls` 映射；`AgentRunInput.budget` 限额入口；`inspect.budgetState` 真实快照；**零 kernel 改动**（行为冻结，预算治理在 harness 控制面 §3.4）；`tests/budget_ledger.test.ts` 6 项 + `harness_budget.test.ts` 6 场景（超限即停无后续事件）；全量 145 文件门禁绿色。**技术债：** write/external_action/repair 限额字段就绪但未挂接（kernel 事件无工具分类，H8/H9 接入） |
 | H5 Typed Trace | 完成 | 2026-08-02 | **第一里程碑（H0–H5）收官。** `TraceWriter` 契约对齐 `EventEnvelope`；`src/harness/telemetry/{trace-writer,migration}.ts`：JSONL 类型化落盘（`.deepseek-code/harness/events/<runId>.jsonl`，队列+节流批量写、写失败静默不影响 run、redactForTrace 统一遮蔽）+ 旧格式迁移（`migrateLegacyTraceLine` → Envelope）；事件流全部接入 trace（lifecycle + bridge，sequence 连续）；scorer `readRunEvents` 改共享类型解析（不再猜测字段）；`tests/harness_trace.test.ts` 6 项；全量 146 文件门禁绿色。**里程碑成果：** 正式 Harness API + 统一生命周期 + 明确 Outcome + 真正 Run 隔离 + 统一取消/预算 + 可重放类型化 Trace |
 | H6 Store / Snapshot | 完成 | 2026-08-02 | `src/harness/persistence/{harness-store,file-harness-store,serialization,workspace-hash}.ts`：HarnessStore 契约（SerializableRun/Session/PlanState）+ FileHarnessStore（`.deepseek-code/harness/{sessions,runs,snapshots,events}/`，损坏/版本拒绝返回 null）+ serialize/restore（scope→快照投影、plan 节点状态保留防重复执行、restoreAgentRun 重建 AgentRun）+ workspace hash（复用 fingerprintFile，排除 node_modules/.git/.deepseek-code/dist）；run 终态自动 saveRun+saveSnapshot（best-effort）；inspect 内存 miss 回退 store（历史 run 跨实例可查）；`tests/harness_persistence.test.ts` 6 项；全量 147 文件门禁绿色。**技术债：** tracker/_packet 恢复为占位（H7 resume 完整化）；snapshot 时机仅终态（§13.3 完整时机表后续补）；workspace hash 计算由调用方提供（大项目性能） |
-| H7—H12 | 未开始 | — | 第二里程碑：H7 Interrupt/Resume → H8 Artifact/Evidence |
+| H7 Interrupt / Resume | 完成 | 2026-08-02 | Plan Approval 与 Clarification 升级为**持久等待后恢复**：waiting 决策自动创建 pending `HarnessInterrupt`（kind/schema/prompt）+ `interrupt.created` 事件 + 落盘；`resume(runId, response)` 真实实现（校验链：waiting→pending→interruptId→schema→workspace hash；重复已答幂等拒绝；拒绝 `accepted:false` 形成 rejected→cancelled 正式分支）；续跑经 `waiting→resuming→running` + 响应应用（plan：initialPlanState/planText；clarification：history 注入标记+回答，kernel `findPendingClarification` 不再触发）；跨实例 resume（store restore + 新 controller）；`src/harness/interrupts/{response-validator,plan-approval,clarification,interrupt-manager}.ts`；`tests/harness_interrupt.test.ts` 8 项；全量 148 文件门禁绿色。**技术债：** CLI/TUI 仍走 do-while 重跑（legacy 模式），resume API 就绪后迁移为后续项；tool_approval/credential/manual_verification 未实现（第二批） |
+| H8—H12 | 未开始 | — | 第二里程碑：H8 Artifact/Evidence → H9 Capability |
 
-> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0–H6 已完成**（进度表见上：第一里程碑收官 + 第二里程碑起步），下一步为 **PR-H7 Interrupt / Resume**（Plan Approval 与 Clarification 从"结束后重启"升级为"持久等待后恢复"）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H7–H11 并行不冲突）。
+> 前置状态：ALK 减重 L0—L7 全部完成（2026-08-02）。Readiness Gate 复核：R1 统一清理 ✅（L7 统一 finally + `finalizeRun()`）；R2 RunState 集中 ✅（`AgentRunState` + `kernel/` RunPhaseContext）；R3 阶段边界 ✅（ProviderRoundRunner / ToolBatchExecutor / VerificationCoordinator / MaintenanceCoordinator 四个齐备）；R4 退出结构化 ✅（`LoopDecision` + 唯一终态 switch）；R5 全局状态消除 ✅（所有 legacy setter——mode/patch/sandbox/cascade/budget-mode——均为 deprecated 兼容层，底层写入 AsyncLocalStorage 的 RuntimeExecutionContext；L2 `AgentRunScope` 已隔离 Plan/Tool）。按 §4.2 结果表：R1–R5 全部完成，可直接开始 H0–H2。**H0–H7 已完成**（进度表见上：第一里程碑收官 + 第二里程碑过半），下一步为 **PR-H8 Artifact / Evidence Integration**（产物、证据、新鲜度统一；CompletionOrchestrator 不再依赖散落的 `lastTypecheck` 等重复事实）。详见 `docs/agent-loop-kernel-refactor-plan.md`（ALK 已收束，续作点指向 Graph Runtime G0，与 Harness H8–H11 并行不冲突）。
 
 ---
 
@@ -2120,6 +2121,22 @@ src/harness/persistence/*
 ## 验收
 
 WAITING 期间不持有 Provider、Sandbox 或子进程资源。
+
+## H7 实施记录（2026-08-02）
+
+**状态：完成。** 全部门禁绿色（typecheck / 148 文件测试 / build / npm pack / diff --check）。
+
+实现要点：
+
+1. **响应 Schema 校验**（`interrupts/response-validator.ts`）：JsonSchema 子集最小校验（type/properties/required/enum），返回错误列表。
+2. **Interrupt 处理器**（`interrupts/plan-approval.ts` + `clarification.ts`）：kind 专属 schema 与 prompt；`applyPlanApprovalResponse`（续跑 metadata：`LEGACY_INITIAL_PLAN_STATE` + `LEGACY_PLAN_TEXT` —— 与 CLI 预 H7 续跑输入一致）；`applyClarificationResponse`（history 注入：原 prompt → 标记 assistant 消息 → 回答 user 消息 —— `findPendingClarification` 要求标记前的 user 消息，注入顺序按此构造，续跑不再触发澄清）。
+3. **InterruptManager**（`interrupts/interrupt-manager.ts`）：waiting 决策自动创建 pending interrupt（run-controller 挂载 + `interrupt.created` 事件 + H6 落盘含 interrupt）；resume 校验链（§11.3）：waiting → pending（重复已答幂等拒绝 `interrupt_not_pending`）→ interruptId 匹配 → schema（`invalid_interrupt_response`）→ workspace hash（`workspace_changed`）。
+4. **resume() 续跑**：`runControlledRun` 支持 `resumeInput`（`waiting→resuming→running` 起点，不发 initializing）；budget guard/trace/终态保存全复用；新 AbortController（waiting 时旧 controller 已被 cleanup abort）；拒绝分支 `accepted:false` → rejected + cancelled（reason "interrupt_rejected"）正式 outcome。
+5. **跨实例 resume**：store.loadRun → restoreAgentRun → registerRestored + savedWorkspaceHash 校验；进程内重复 resume 由 interrupt.status 拦截。
+6. **验收确认**：WAITING 期间资源已释放（run 结束即 cleanup，测试验证 run 正常终态）；mock 环境无验证证据时续跑后为 completion-gate blocked —— kernel 合理行为（测试断言"离开 waiting + interrupt answered"）。
+7. **边界**：CLI/TUI 的 do-while 批准重跑保留（legacy 模式回滚开关），resume API 已就绪，CLI 迁移记为后续项；tool_approval/credential/manual_verification 属第二批（未实现）。
+
+**H8 入口：** Artifact/Evidence 统一 —— `ArtifactStore` 真实现（H3 内存版升级）+ EvidenceLedger 绑定 Artifact + 新鲜度（workspaceHash/relevantFileHashes/transactionId）+ CompletionOrchestrator 改从 Artifact/Evidence 派生完成事实（消除 `lastTypecheck` 重复事实）。
 
 ---
 

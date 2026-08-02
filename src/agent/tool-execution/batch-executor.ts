@@ -190,7 +190,23 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
       }
     }))
     for (const result of results) parallelResults.set(result.id, result)
-    if (abortSignal?.aborted) return { aborted: true }
+    if (abortSignal?.aborted) {
+      // L4: aborted parallel tools still get a ledger entry so every outcome
+      // (blocked/failed/success/aborted) is recorded.
+      for (const tc of completedToolCalls) {
+        const pr = parallelResults.get(tc.id)
+        if (!pr) continue
+        toolLedger.record({
+          id: tc.id,
+          round,
+          tool: tc.name,
+          startedAt: pr.startedAt,
+          result: { success: pr.success, content: pr.content, metadata: { ...pr.metadata, aborted: true } },
+          changedFiles: [],
+        })
+      }
+      return { aborted: true }
+    }
   }
 
   for (const tc of completedToolCalls) {
@@ -265,7 +281,9 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
       }
     }
 
+    let toolExecuted = false
     if (tool && policyResult.allowed) {
+      toolExecuted = true
       const parallelResult = parallelResults.get(tc.id)
       try {
         const executed = await executeSingleTool({
@@ -283,7 +301,23 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
         resultObj = { success: false, content: resultContent }
       }
     }
-    if (abortSignal?.aborted) return { aborted: true }
+    if (abortSignal?.aborted) {
+      // L4: an aborted in-flight tool still gets a ledger entry. Only executed
+      // tools are marked aborted; an unexecuted (soft-blocked) tool keeps its
+      // real outcome.
+      toolLedger.record({
+        id: tc.id,
+        round,
+        tool: tc.name,
+        startedAt: toolStartedAt,
+        result: {
+          ...resultObj,
+          metadata: { ...resultObj.metadata, ...(toolExecuted ? { aborted: true } : {}) },
+        },
+        changedFiles: [],
+      })
+      return { aborted: true }
+    }
     const changedFilesForLedger = new Set<string>()
     // ── Smart truncation: head+tail with error-aware allocation ──
     resultContent = normalizeToolResultContent(resultContent, resultObj.success)

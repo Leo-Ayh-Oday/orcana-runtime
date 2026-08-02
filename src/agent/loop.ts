@@ -27,14 +27,14 @@ import type { ModelRouter } from "../provider/router"
 import { ConfidenceEvaluator } from "../evaluator/confidence"
 import { AgentState, StateMachine } from "./state-machine"
 import { formatRoundBudgetExhausted, resolveMaxRounds, selectRecentHistoryWithinBudget } from "./round/helpers"
-import { runPostEditDiagnostics, runRippleVerification, collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
-import { ErrorTracker, withToolTimeout, runToolBeforeHook, runToolAfterHook, appendHookWarnings, executeToolWithHooks, buildVolatileContextMessage, collectResearchEvidence, containsTypecheckFailure, countTypecheckIssues, isVerificationUnavailable, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles, missingExplicitRequiredFiles } from "./round/pre-loop"
+import { runRippleVerification, collectThinkingRounds, isRecord, collectRecentTurns, mcThreshold, microcompactToolResults, compactHistoricalToolResults, updateStateMachine, type StateMachineInput } from "./round/post-loop"
+import { ErrorTracker, buildVolatileContextMessage, collectResearchEvidence, isRuntimeProjectRoot, isRuntimeSourceFile, rootRuntimeVerificationPassed, formatRuntimeSelfEditGate, normalizeExplicitFile, explicitRequiredFiles, missingExplicitRequiredFiles } from "./round/pre-loop"
 import type { HookSystem } from "../hooks"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../provider/cost-policy"
-import { formatToolLedgerStatus, ToolExecutionLedger } from "./tool-ledger"
+import { ToolExecutionLedger } from "./tool-ledger"
 import { runTypeScriptNoEmit } from "../tools/typescript"
 
-import { formatServiceTestGuidance, hasServiceTestFailure, parseVerificationResult, type VerificationResult } from "../verification/result"
+import { formatServiceTestGuidance, parseVerificationResult, type VerificationResult } from "../verification/result"
 import type { AgentRunTrace } from "./run-trace"
 import {
   createTaskTracker,
@@ -57,7 +57,7 @@ import { classifyResearchRoute, shouldRunResearch } from "./research-router"
 import { FlashJudge, TestimonyLedger } from "./flash-judge"
 import { PermissionGate } from "./permission"
 import { loadUserConfig, loadProjectConfig } from "./permission-config"
-import { evaluateToolPolicy } from "./tool-execution/policy"
+import { executeToolBatch } from "./tool-execution/batch-executor"
 import { GateTelemetry } from "./gates/telemetry"
 import { SandboxManager } from "../sandbox/sandbox"
 import { setShellSandbox } from "../tools/shell"
@@ -68,15 +68,10 @@ import { processGateOverflow } from "./gates/overflow"
 import { createEpochState, buildPlanStateContext, classifyEpochAction, epochThresholdsForContext, formatEpochBudgetWarning, formatEpochStatus, totalMessageChars, epochRollover, type PlanStateInput } from "./context-epoch"
 import { clearActivePatchContext, clearTransactionRegistry, currentTransactionEvidenceBinding, setActivePatchContext } from "./patch-transaction"
 import { createEvidenceLedger, ingestVerificationResults } from "./evidence-ledger"
-import {
-  getWriteGeneration,
-  recordRuntimeObservedWrites,
-  recordRuntimeUnmanagedWrite,
-} from "../file-state"
+import { getWriteGeneration } from "../file-state"
 import { setActiveMode, getActiveMode, formatModePrompt, shouldTransitionMode } from "./mode-contract"
 import type { ModeTransitionContext } from "./mode-contract"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMap, type ContextMapTaskLevel } from "../context/context-map"
-import { clipProviderContext } from "../context/staged"
 import { createAgentRunState, createRoundState } from "./run/state"
 import type { AgentRunLifecycleState } from "./run/types"
 import { createAgentRunScope, runWithAgentRunScope } from "./run/scope"
@@ -1109,7 +1104,7 @@ async function* runAgentLoop(
       })
     }
 
-    // ── Execute tools + self-learn tracking ──
+    // ── Execute tools + self-learn tracking (L4: ToolBatchExecutor) ──
     const toolNames = roundState.toolNames
     const filePaths = roundState.filePaths
     const resultsContent = roundState.toolResults
@@ -1118,381 +1113,35 @@ async function* runAgentLoop(
     const rippleReportsThisRound = roundState.rippleReports
     const verificationResultsThisRound = roundState.verificationResults
 
-    const parallelCandidate = !preRoundCtx.taskPlanning && completedToolCalls.length > 1 && completedToolCalls.every(tc => {
-      const tool = tools.find(t => t.defn.name === tc.name)
-      return Boolean(tc.name !== "web_search" && tool && tool.defn.isReadonly && !tool.executeStream && (tool.defn.isConcurrencySafe ?? true))
+    const { aborted: toolBatchAborted } = yield* executeToolBatch({
+      round,
+      completedToolCalls,
+      tools,
+      hooks,
+      abortSignal: options.abortSignal,
+      runTrace: options.runTrace,
+      thinkingStore: options.thinkingStore,
+      roundState,
+      planning,
+      execution,
+      verificationState,
+      notices,
+      intentPolicy,
+      permissionGate,
+      permissionMode: pmode,
+      preRoundCtx,
+      contextReadinessBlocked,
+      contextReadinessBlockers,
+      finalText,
+      toolLedger,
+      gateTelemetry,
+      errorTracker,
+      stagedContext,
+      prompt,
+      resultsContent,
+      trustedVerification: trustedVerificationFromTool,
     })
-    const parallelPolicies = new Map<string, ReturnType<typeof evaluateToolPolicy>>()
-    if (parallelCandidate) {
-      const previewRateLimits = {
-        safe: 0,
-        shell: roundState.rateLimits.shell,
-        file: roundState.rateLimits.file,
-        network: roundState.rateLimits.network,
-        git: 0,
-      }
-      for (const tc of completedToolCalls) {
-        const tool = tools.find(t => t.defn.name === tc.name)
-        const decision = evaluateToolPolicy({
-          toolCall: { id: tc.id, name: tc.name, input: tc.input },
-          tool,
-          intentPolicy,
-          taskTracker: planning.taskTracker,
-          rippleBlockActive: execution.rippleBlockActive,
-          pendingRippleObligations: verificationState.rippleObligations,
-          permissionGate,
-          permissionMode: pmode,
-          rateLimits: previewRateLimits,
-          webSearchFailedThisTurn: notices.webSearchFailedThisTurn,
-          webSearchFailReason: notices.webSearchFailReason,
-          finalText,
-          contextReadinessBlocked,
-          contextReadinessBlockers,
-          modeContract: getActiveMode(),
-        })
-        parallelPolicies.set(tc.id, decision)
-        if (decision.incrementRateLimit) previewRateLimits[decision.incrementRateLimit]++
-      }
-    }
-    const parallelReadonly = parallelCandidate
-      && completedToolCalls.every(tc => parallelPolicies.get(tc.id)?.allowed === true)
-    const parallelResults = new Map<string, { content: string; success: boolean; metadata?: Record<string, unknown>; startedAt: number }>()
-    if (parallelReadonly) {
-      yield { type: "status", data: `greedy-tools: ${completedToolCalls.length} readonly calls` }
-      const results = await Promise.all(completedToolCalls.map(async tc => {
-        const tool = tools.find(t => t.defn.name === tc.name)!
-        const startedAt = Date.now()
-        try {
-          const result = await executeToolWithHooks({
-            hooks,
-            tool,
-            params: tc.input,
-            execute: (_params) => withToolTimeout(
-              tc.name,
-              tool.execute(_params, { abortSignal: options.abortSignal }),
-              undefined,
-              options.abortSignal,
-            ),
-          })
-          return { id: tc.id, content: result.content, success: result.success, metadata: result.metadata, startedAt }
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e)
-          return { id: tc.id, content: message, success: false, metadata: undefined, startedAt }
-        }
-      }))
-      for (const result of results) parallelResults.set(result.id, result)
-      if (options.abortSignal?.aborted) return
-    }
-
-    for (const tc of completedToolCalls) {
-      toolNames.push(tc.name)
-      options.runTrace?.record("tool_call", { round, id: tc.id, tool: tc.name, input: tc.input })
-      const tool = tools.find(t => t.defn.name === tc.name)
-      let resultContent = "Unknown tool"
-      let resultObj: { success: boolean; content: string; metadata?: Record<string, unknown> } = { success: false, content: "" }
-      let toolStartedAt = Date.now()
-      const transactionBindingBeforeTool = currentTransactionEvidenceBinding()
-
-      if (preRoundCtx.taskPlanning && round > 0) {
-        resultContent = `任务追踪已阻止：当前是计划专用回合，只允许输出计划，不允许调用 ${tc.name}。下一轮将进入执行阶段。`
-        resultObj = { success: false, content: resultContent, metadata: { blocked: true, planOnlyRound: true } }
-        resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(resultContent, 4000) })
-        continue
-      }
-
-      // ── Unified tool execution policy — all gates in one pure function ──
-      const policyResult = parallelPolicies.get(tc.id) ?? evaluateToolPolicy({
-        toolCall: { id: tc.id, name: tc.name, input: tc.input },
-        tool,
-        intentPolicy,
-        taskTracker: planning.taskTracker,
-        rippleBlockActive: execution.rippleBlockActive,
-        pendingRippleObligations: verificationState.rippleObligations,
-        permissionGate,
-        permissionMode: pmode,
-        rateLimits: {
-          safe: 0,
-          shell: roundState.rateLimits.shell,
-          file: roundState.rateLimits.file,
-          network: roundState.rateLimits.network,
-          git: 0,
-        },
-        webSearchFailedThisTurn: notices.webSearchFailedThisTurn,
-        webSearchFailReason: notices.webSearchFailReason,
-        finalText,
-        contextReadinessBlocked,
-        contextReadinessBlockers,
-        modeContract: getActiveMode(),
-      })
-
-      // ── Gate telemetry for tool policy gates ──
-      // PR-7.1: layer-prefixed names for per-layer breakdown
-      const toolGateNames = ["policy:rate_limit", "policy:permission", "policy:readonly_intent", "policy:ripple_block", "policy:planning_phase", "policy:context_readiness", "policy:web_search_failed", "policy:mode_contract", "policy:tool_risk"]
-      const blockedGate = policyResult.allowed ? null
-        : policyResult.reason.startsWith("permission") ? "policy:permission"
-        : policyResult.reason.startsWith("tool_risk") ? "policy:tool_risk"
-        : `policy:${policyResult.reason}`
-      for (const gn of toolGateNames) {
-        if (gn === blockedGate) { gateTelemetry.record(gn, "block"); break }
-        gateTelemetry.record(gn, "pass")
-      }
-
-      // Track rate limits regardless of outcome
-      if (policyResult.incrementRateLimit === "shell") roundState.rateLimits.shell++
-      else if (policyResult.incrementRateLimit === "file") roundState.rateLimits.file++
-      else if (policyResult.incrementRateLimit === "network") roundState.rateLimits.network++
-
-      if (!policyResult.allowed) {
-        resultContent = policyResult.blockMessage
-        resultObj = { success: false, content: resultContent }
-        // Hard blocks (rate_limit, permission:deny) push immediately and skip yield.
-        // Soft blocks (readonly, ripple, planning, web_search) fall through to yield.
-        if (policyResult.reason === "rate_limit" || policyResult.reason.startsWith("permission:")) {
-          resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(resultContent, 4000) })
-          continue
-        }
-      }
-
-      if (tool && policyResult.allowed) {
-        const parallelResult = parallelResults.get(tc.id)
-        // Use streaming variant if available (shell, long-running commands)
-        if (parallelResult) {
-          resultContent = parallelResult.content
-          resultObj = { success: parallelResult.success, content: parallelResult.content, metadata: parallelResult.metadata }
-          toolStartedAt = parallelResult.startedAt
-        } else if (tool.executeStream) {
-          try {
-            const before = await runToolBeforeHook(hooks, tc.name, tc.input)
-            if (before.blocked) {
-              resultObj = appendHookWarnings(before.blocked, before.warnings)
-              resultContent = resultObj.content
-            } else {
-              const effectiveParams = before.replaceParams ?? tc.input
-              const toolIterator = tool.executeStream(
-                effectiveParams,
-                { abortSignal: options.abortSignal },
-              )[Symbol.asyncIterator]()
-              try {
-                while (true) {
-                  const next = await withToolTimeout(
-                    tc.name,
-                    toolIterator.next(),
-                    undefined,
-                    options.abortSignal,
-                  )
-                  if (next.done) break
-                  const ev = next.value
-                  if (ev.type === "progress") {
-                    // Raw shell stdout/stderr is often noisy progress output.
-                    // Keep it out of the spinner/status line; the final result
-                    // still carries command output for diagnostics.
-                    continue
-                  } else if (ev.type === "done") {
-                    const rawResult = ev.data
-                    const after = await runToolAfterHook(hooks, tc.name, effectiveParams, rawResult)
-                    const finalResult = appendHookWarnings(after.result, [...before.warnings, ...after.warnings])
-                    resultContent = finalResult.content
-                    resultObj = { success: finalResult.success, content: finalResult.content, metadata: finalResult.metadata }
-                  }
-                }
-              } finally {
-                try {
-                  const closing = toolIterator.return?.(undefined)
-                  if (closing) void closing.catch(() => {})
-                } catch { /* best-effort close for legacy streaming tools */ }
-              }
-            }
-          } catch (e) {
-            resultContent = e instanceof Error ? e.message : String(e)
-            resultObj = { success: false, content: resultContent }
-          }
-        } else {
-          try {
-            const result = await executeToolWithHooks({
-              hooks,
-              tool,
-              params: tc.input,
-              execute: (_params) => withToolTimeout(
-                tc.name,
-                tool.execute(_params, { abortSignal: options.abortSignal }),
-                undefined,
-                options.abortSignal,
-              ),
-            })
-            resultContent = result.content
-            resultObj = { success: result.success, content: result.content, metadata: result.metadata }
-          } catch (e) {
-            resultContent = e instanceof Error ? e.message : String(e)
-            resultObj = { success: false, content: resultContent }
-          }
-        }
-      }
-      if (options.abortSignal?.aborted) return
-        const changedFilesForLedger = new Set<string>()
-        // ── Smart truncation: head+tail with error-aware allocation ──
-        if (resultObj.success && resultContent.length > 1400) {
-          const lines = resultContent.split("\n")
-          const totalBytes = Buffer.byteLength(resultContent, "utf-8")
-          const MAX_LINES = 60; const MAX_BYTES = 12000
-          if (lines.length > MAX_LINES || totalBytes > MAX_BYTES) {
-            const tailScan = resultContent.slice(-2048)
-            const hasErrors = /error|exception|failed|fatal|traceback|panic|exit code|Error|FAIL/i.test(tailScan)
-            const headPct = hasErrors ? 0.7 : 0.85
-            const headMaxLines = Math.floor(MAX_LINES * headPct)
-            const tailMaxLines = MAX_LINES - headMaxLines
-            const head = lines.slice(0, headMaxLines)
-            const tail = lines.slice(-tailMaxLines)
-            const omitted = lines.length - head.length - tail.length
-            const marker = hasErrors
-              ? `\n... [${omitted} lines trimmed — errors detected in tail] ...\n`
-              : `\n... [${omitted} lines trimmed] ...\n`
-            resultContent = head.join("\n") + marker + tail.join("\n")
-          }
-        }
-
-        yield {
-          type: "tool_result",
-          data: { name: tc.name, content: resultContent.slice(0, 500), success: resultObj.success },
-        }
-        if (tc.name === "web_search" && !resultObj.success) {
-          notices.webSearchFailedThisTurn = true
-          notices.webSearchFailReason = resultContent.slice(0, 200)
-        }
-        if (tc.name === "request_deeper_thinking" && resultObj.success) {
-          execution.requestedMaxThinking = true
-          yield { type: "status", data: "深度思考: 模型请求升级到 max 32K" }
-        }
-
-        // AskUser tool: yield user_question event to pause agent loop
-        if (tc.name === "ask_user" && resultObj.success && resultObj.metadata?.pendingQuestion) {
-          yield { type: "user_question", data: resultObj.metadata.pendingQuestion }
-        }
-
-        // Self-learn: detect repeated errors
-        if (!resultObj.success || /[ef]ail|[ef]rr|blocked|not found|denied/i.test(resultContent)) {
-          roundState.hadToolError = true
-          execution.toolErrors += 1
-          execution.consecutiveErrors += 1
-          const learnPrompt = errorTracker.record(tc.name, resultContent)
-          if (learnPrompt) learnPrompts.push(learnPrompt)
-        } else {
-          execution.consecutiveErrors = 0
-        }
-        if (containsTypecheckFailure(resultContent)) {
-          verificationState.lastTypecheck = {
-            passed: isVerificationUnavailable(resultContent),
-            issues: countTypecheckIssues(resultContent),
-            output: resultContent.slice(0, 1000),
-          }
-        } else if (tc.name === "shell" && /\btsc\b|typescript|typecheck/i.test(String(tc.input.command ?? "")) && !resultObj.success) {
-          const unavailable = isVerificationUnavailable(resultContent)
-          verificationState.lastTypecheck = {
-            passed: unavailable,
-            issues: unavailable ? 0 : 1,
-            output: resultContent.slice(0, 1000),
-          }
-        }
-        const verification = trustedVerificationFromTool(tool, resultObj)
-        if (verification) {
-          const stampedVerification: VerificationResult = {
-            ...verification,
-            generation: getWriteGeneration(),
-            transaction: currentTransactionEvidenceBinding(),
-          }
-          verificationResultsThisRound.push(stampedVerification)
-          options.runTrace?.record("verification_result", stampedVerification)
-          if (stampedVerification.kind === "typecheck") {
-            verificationState.lastTypecheck = {
-              passed: stampedVerification.passed,
-              issues: stampedVerification.issues,
-              output: stampedVerification.summary,
-            }
-          }
-          if (stampedVerification.passed) roundState.verificationPassed = true
-          if (!stampedVerification.passed && stampedVerification.kind === "test" && hasServiceTestFailure(resultContent)) {
-            roundState.serviceTestGuidanceNeeded = true
-          }
-        }
-
-        const path = tc.input.path as string | undefined
-        if (path) {
-          filePaths.push(path)
-          taskFiles.add(normalizeProjectPath(path))
-          const isWriteTool = tc.name === "write_file" || tc.name === "edit_file" || tc.name === "edit_fim"
-          if (resultObj.success && isWriteTool) {
-            const normalizedPath = normalizeProjectPath(path)
-            modifiedFilesThisRound.add(normalizedPath)
-            changedFilesForLedger.add(normalizedPath)
-            execution.taskHadWrite = true
-            execution.modifiedFileCount += 1
-          }
-          const rippleReport = resultObj.metadata?.rippleReport as RippleReport | undefined
-          if (resultObj.success && rippleReport) {
-            rippleReportsThisRound.push(rippleReport)
-            modifiedFilesThisRound.add(normalizeProjectPath(rippleReport.targetFile))
-          }
-          if (stagedContext) {
-            if (tc.name === "read_file") stagedContext.markLoaded(path)
-            else if (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "edit_fim") {
-              stagedContext.markEdited(path)
-              runPostEditDiagnostics(path, resultObj)
-            }
-          }
-          if (options.thinkingStore && (tc.name === "shell" || tc.name === "edit_fim" || tc.name === "write_file")) {
-            options.thinkingStore.store(prompt, `Tool: ${tc.name}\nResult: ${resultContent.slice(0, 500)}`, resultContent.includes("error") || resultContent.includes("Error") ? "fix" : "implement")
-          }
-        }
-
-        if (resultObj.success && Array.isArray(resultObj.metadata?.paths)) {
-          for (const path of resultObj.metadata.paths) {
-            if (typeof path === "string") {
-              filePaths.push(path)
-              const normalized = normalizeProjectPath(path)
-              modifiedFilesThisRound.add(normalized)
-              changedFilesForLedger.add(normalized)
-              taskFiles.add(normalized)
-              execution.taskHadWrite = true
-              execution.modifiedFileCount += 1
-              if (stagedContext) stagedContext.markEdited(path)
-            }
-          }
-        }
-        if (resultObj.success && Array.isArray(resultObj.metadata?.rippleReports)) {
-          for (const report of resultObj.metadata.rippleReports) {
-            rippleReportsThisRound.push(report as RippleReport)
-            const normalized = normalizeProjectPath((report as RippleReport).targetFile)
-            modifiedFilesThisRound.add(normalized)
-            changedFilesForLedger.add(normalized)
-          }
-        }
-
-        const namedManagedWrite = tc.name === "write_file"
-          || tc.name === "edit_file"
-          || tc.name === "edit_fim"
-          || tc.name === "multi_edit"
-        if (resultObj.success && namedManagedWrite) {
-          const transactionBindingAfterTool = currentTransactionEvidenceBinding()
-          const transactionAdvanced = transactionBindingAfterTool?.stateId !== transactionBindingBeforeTool?.stateId
-            || transactionBindingAfterTool?.transactionCount !== transactionBindingBeforeTool?.transactionCount
-          if (!transactionAdvanced) {
-            if (changedFilesForLedger.size > 0) recordRuntimeObservedWrites([...changedFilesForLedger])
-            else recordRuntimeUnmanagedWrite()
-          }
-        }
-
-        const ledgerEntry = toolLedger.record({
-          id: tc.id,
-          round,
-          tool: tc.name,
-          startedAt: toolStartedAt,
-          result: resultObj,
-          changedFiles: [...changedFilesForLedger],
-        })
-        options.runTrace?.record("tool_result", ledgerEntry)
-        yield { type: "status", data: formatToolLedgerStatus(ledgerEntry) }
-
-      resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(resultContent, 4000) })
-    }
+    if (toolBatchAborted) return
 
     // Completion gates run before TaskTracker updates later in the round, so bind
     // structured verification to the canonical ledger as soon as tool execution ends.

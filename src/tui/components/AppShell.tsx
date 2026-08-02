@@ -348,6 +348,8 @@ export interface AppShellProps {
   thinkingEffort: ThinkEffort
   /** PR-1: Answer pending question from agent */
   onAnswerQuestion?: (answer: string) => void
+  /** Dismiss the pending question without answering. */
+  onCancelQuestion?: () => void
 }
 
 // ── 布局计算（纯函数，便于测试） ──
@@ -556,6 +558,7 @@ export function AppShell(props: AppShellProps) {
           <QuestionPanel
             question={state.pendingQuestion}
             onAnswer={props.onAnswerQuestion}
+            onCancel={props.onCancelQuestion}
           />
         ) : clarification ? (
           <ClarificationPanel wizard={clarification} width={cols} />
@@ -568,7 +571,7 @@ export function AppShell(props: AppShellProps) {
         <ComposerFrame width={cols - 2}>
           <OrcanaComposer
             onSubmit={props.submit}
-            disabled={showStartup || !!clarification || modalActive}
+            disabled={showStartup || !!clarification || modalActive || !!state.pendingQuestion}
             placeholder={
               modalActive ? "modal active" :
               clarification ? "Choose an option above..." :

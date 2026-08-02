@@ -149,6 +149,8 @@ export function reduceTuiEvent(
         errorLine: "",
         task: undefined,
         clarification: undefined,
+        // 新用户消息表明问题已回答 —— 清除挂起的问题面板
+        pendingQuestion: undefined,
         round: 0,
         tokens: { ...state.tokens, activeContextPercent: 0 },
         cacheHitHistory: [],
@@ -555,6 +557,15 @@ export function reduceTuiEvent(
         },
         status: "question pending",
         done: true,
+      }
+    }
+
+    case "user.question.cancel": {
+      // 用户取消问题：清除挂起的问题面板，不重置 run（agent 循环已软暂停后自行继续）
+      return {
+        ...state,
+        pendingQuestion: undefined,
+        status: "question cancelled",
       }
     }
 

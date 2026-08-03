@@ -15,6 +15,9 @@ export interface ContextMessageInput {
   planningContext: ProviderMessage | null
 }
 
+/** @deprecated H10 — the harness context pipeline (src/harness/context) is
+ *  now the single assembler; this legacy reference implementation is kept
+ *  for the byte-frozen regression test and removed with the next release. */
 /** Assemble all context messages that go BEFORE rawMessages in the provider request.
  *  Order matters: lang instruction first, then stable prefix (cacheable), then
  *  research, volatile, and planning context. Budget context is appended later. */

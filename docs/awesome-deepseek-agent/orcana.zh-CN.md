@@ -6,7 +6,7 @@ Orcana 是一个 DeepSeek-native 的终端 Coding Agent runtime，面向长时�
 
 它的核心方向是 constraint-first coding workflow：任务识别、计划门控、任务包、受控工具调用、补丁事务、证据化完成，以及用于编码会话的交互式 TUI。
 
-- GitHub: https://github.com/Leo-Ayh-Oday/deepseek-orcana
+- GitHub: https://github.com/Leo-Ayh-Oday/orcana-runtime
 
 ## 1. 安装 Orcana
 
@@ -15,14 +15,14 @@ Orcana 需要 Node.js 20+。
 通过 npm 安装：
 
 ```bash
-npm install -g deepseek-orcana
+npm install -g orcana-runtime
 ```
 
 或者从源码安装：
 
 ```bash
-git clone https://github.com/Leo-Ayh-Oday/deepseek-orcana.git
-cd deepseek-orcana
+git clone https://github.com/Leo-Ayh-Oday/orcana-runtime.git
+cd orcana-runtime
 bun install
 bun run build
 ```
@@ -238,4 +238,4 @@ DeepSeek V4 支持 1M token 上下文窗口。Orcana 通过 ContextEpoch 自动�
 
 ### 命令找不到
 
-可用命令：`orcana`、`deepseek-orcana`、`deepseek-code`、`deepseek`。如果 `orcana` 找不到，尝试 `npx deepseek-orcana`。
+可用命令：`orcana`、`orcana-runtime`、`deepseek-code`、`deepseek`。如果 `orcana` 找不到，尝试 `npx orcana-runtime`。

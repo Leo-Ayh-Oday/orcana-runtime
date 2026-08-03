@@ -1,13 +1,13 @@
-# DeepSeek Orcana
+# Orcana Runtime
 
 <p align="center">
   <strong>The coding agent that refuses to ship broken code.</strong><br>
-  Constraint-first runtime — every write checked for downstream impact, every completion backed by evidence.
+  Model-agnostic agent runtime for evidence-gated recursive self-evolution — every write checked for downstream impact, every completion backed by evidence.
 </p>
 
 <p align="center">
-  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana/actions/workflows/ci.yml"><img src="https://github.com/Leo-Ayh-Oday/deepseek-orcana/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm"></a>
+  <a href="https://github.com/Leo-Ayh-Oday/orcana-runtime/actions/workflows/ci.yml"><img src="https://github.com/Leo-Ayh-Oday/orcana-runtime/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.npmjs.com/package/orcana-runtime"><img src="https://img.shields.io/npm/v/orcana-runtime" alt="npm"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/runtime-Node.js-339933" alt="Node.js"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/dev-Bun-%23f9f1e4" alt="Bun"></a>
@@ -20,13 +20,13 @@
 
 ---
 
-A constraint-first terminal coding agent that verifies every change with typecheck, tests and an evidence ledger.
+A model-agnostic agent runtime that verifies every change with typecheck, tests and an evidence ledger. Supports DeepSeek, Anthropic, OpenAI and other providers.
 
 ## Quickstart
 
 ```bash
 # Install (global)
-npm install -g deepseek-orcana
+npm install -g orcana-runtime
 
 # One-shot example
 orcana "fix the failing test"
@@ -42,7 +42,7 @@ orcana
 Normal users need Node.js 20+ and npm. Bun is only required for contributors.
 
 ```bash
-npm install -g deepseek-orcana
+npm install -g orcana-runtime
 ```
 
 Set your key:
@@ -64,7 +64,7 @@ orcana "fix the failing test"   # one-shot task
 orcana list                     # saved sessions
 ```
 
-Also available as `deepseek-orcana`, `deepseek-code`, `deepseek`.
+Legacy aliases `deepseek-orcana`, `deepseek-code`, `deepseek` are deprecated — they print a warning and forward to `orcana`, and will be removed in a later release cycle.
 
 ---
 
@@ -135,7 +135,7 @@ Real trade-offs, not hidden:
 ## Uninstall
 
 ```bash
-npm uninstall -g deepseek-orcana
+npm uninstall -g orcana-runtime
 ```
 
 ---

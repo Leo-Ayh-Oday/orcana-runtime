@@ -1,13 +1,13 @@
-# DeepSeek Orcana
+# Orcana Runtime
 
 <p align="center">
   <strong>不允许交付烂代码的编码智能体。</strong><br>
-  约束优先运行时——每次写入检查下游影响，每次完成交付需要证据支撑。
+  面向证据闸递归自进化的模型无关 Agent Runtime——每次写入检查下游影响，每次完成交付需要证据支撑。
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm"></a>
-  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/deepseek-orcana?style=flat" alt="stars"></a>
+  <a href="https://www.npmjs.com/package/orcana-runtime"><img src="https://img.shields.io/npm/v/orcana-runtime" alt="npm"></a>
+  <a href="https://github.com/Leo-Ayh-Oday/orcana-runtime"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/orcana-runtime?style=flat" alt="stars"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/runtime-Node.js-339933" alt="Node.js"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/dev-Bun-%23f9f1e4" alt="Bun"></a>
@@ -25,7 +25,7 @@
 普通用户只需要 Node.js 20+ 和 npm。Bun 只在参与开发时需要。
 
 ```bash
-npm install -g deepseek-orcana
+npm install -g orcana-runtime
 ```
 
 配置密钥：
@@ -47,7 +47,7 @@ orcana "修复失败的测试"          # 单次任务
 orcana list                     # 历史会话
 ```
 
-可用命令：`orcana`、`deepseek-orcana`、`deepseek-code`、`deepseek`。
+主命令为 `orcana`。旧别名 `deepseek-orcana`、`deepseek-code`、`deepseek` 已废弃（会打印提示并转发到 `orcana`），将在后续发布周期移除。
 
 ---
 
@@ -118,7 +118,7 @@ Orcana 不会对所有任务一视同仁。一个简单问题和一次复杂重�
 ## 卸载
 
 ```bash
-npm uninstall -g deepseek-orcana
+npm uninstall -g orcana-runtime
 ```
 
 ---

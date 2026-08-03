@@ -53,7 +53,7 @@ const arg = process.argv[2] ?? ""
 
 function printHelp() {
   console.log([
-    "Orcana — DeepSeek-native terminal coding agent runtime",
+    "Orcana Runtime — model-agnostic agent runtime for evidence-gated recursive self-evolution",
     "",
     "Usage:",
     "  orcana [prompt]",
@@ -76,7 +76,7 @@ function printHelp() {
     "  Run /models in the TUI to select a model and save its key globally.",
     "  Environment keys are used only when runtime.allowEnvKeys is enabled.",
     "",
-    "Docs: https://github.com/Leo-Ayh-Oday/orcana",
+    "Docs: https://github.com/Leo-Ayh-Oday/orcana-runtime",
   ].join("\n"))
 }
 

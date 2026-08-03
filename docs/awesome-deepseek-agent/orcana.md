@@ -6,7 +6,7 @@ Orcana is a DeepSeek-native terminal Coding Agent runtime built for long-running
 
 Its core direction is constraint-first coding workflow: task triage, planning gates, task packets, controlled tool calls, patch transactions, evidence-based completion, and an interactive TUI for coding sessions.
 
-- GitHub: https://github.com/Leo-Ayh-Oday/deepseek-orcana
+- GitHub: https://github.com/Leo-Ayh-Oday/orcana-runtime
 
 ## 1. Install Orcana
 
@@ -15,14 +15,14 @@ Orcana requires Node.js 20+.
 Install via npm:
 
 ```bash
-npm install -g deepseek-orcana
+npm install -g orcana-runtime
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/Leo-Ayh-Oday/deepseek-orcana.git
-cd deepseek-orcana
+git clone https://github.com/Leo-Ayh-Oday/orcana-runtime.git
+cd orcana-runtime
 bun install
 bun run build
 ```
@@ -238,4 +238,4 @@ For complex coding tasks, Orcana uses max reasoning effort by default. You can v
 
 ### Commands not found
 
-Available commands: `orcana`, `deepseek-orcana`, `deepseek-code`, `deepseek`. If `orcana` is not found, try `npx deepseek-orcana`.
+Available commands: `orcana`, `orcana-runtime`, `deepseek-code`, `deepseek`. If `orcana` is not found, try `npx orcana-runtime`.

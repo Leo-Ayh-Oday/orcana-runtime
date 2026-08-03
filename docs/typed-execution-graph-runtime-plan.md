@@ -1,7 +1,7 @@
-# DeepSeek Orcana Typed Execution Graph Runtime 完整实施方案
+# Orcana Runtime Typed Execution Graph Runtime 完整实施方案
 
 **方案版本：** GEP-1.0  
-**仓库基线：** `Leo-Ayh-Oday/deepseek-orcana`  
+**仓库基线：** `Leo-Ayh-Oday/orcana-runtime`
 **基线提交：** `2207db20eb284d8b2f695c13951a3078bbff3682`  
 **当前包版本：** `0.4.0`
 **实施原则：** 增量演进、默认关闭、单写者优先、验证先于并行、多智能体延后。

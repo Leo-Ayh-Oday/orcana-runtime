@@ -1,6 +1,6 @@
 # CLAUDE.md — Orcana Project Instructions for AI Agents
 
-**If you are an AI agent reading this file**: you are working on DeepSeek Orcana, a constraint-first terminal coding agent runtime. Follow the OpenWolf protocol at `.wolf/OPENWOLF.md`.
+**If you are an AI agent reading this file**: you are working on Orcana Runtime, a constraint-first terminal coding agent runtime. Follow the OpenWolf protocol at `.wolf/OPENWOLF.md`.
 
 ## Critical Rules
 

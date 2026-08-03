@@ -2,7 +2,7 @@
 
 一个真正能长期写代码的 Agent，不应该只是"模型 + 工具调用 + 文件编辑"。
 
-过去一段时间，我一直在做一个终端 Coding Agent 项目：**DeepSeek Orcana**。它不是一个普通的聊天壳，也不是简单把 DeepSeek API 接到命令行里。我的目标是做一个 **DeepSeek-native、Constraint-first、Evidence-first 的终端编码智能体 runtime**。
+过去一段时间，我一直在做一个终端 Coding Agent 项目：**Orcana Runtime**。它不是一个普通的聊天壳，也不是简单把 DeepSeek API 接到命令行里。我的目标是做一个 **DeepSeek-native、Constraint-first、Evidence-first 的终端编码智能体 runtime**。
 
 简单说，Orcana 想解决的问题是：
 
@@ -278,8 +278,8 @@ Orcana 还不是成熟产品，也不是 Claude Code 的替代品。它更像是
 
 如果你也在做 Coding Agent、DeepSeek integration、终端开发工具，或者对 agent runtime 感兴趣，欢迎来看这个项目。
 
-- **GitHub**: https://github.com/Leo-Ayh-Oday/deepseek-orcana
-- **npm**: https://www.npmjs.com/package/deepseek-orcana
-- **架构文档**: https://github.com/Leo-Ayh-Oday/deepseek-orcana/blob/main/ARCHITECTURE.md
+- **GitHub**: https://github.com/Leo-Ayh-Oday/orcana-runtime
+- **npm**: https://www.npmjs.com/package/orcana-runtime
+- **架构文档**: https://github.com/Leo-Ayh-Oday/orcana-runtime/blob/main/ARCHITECTURE.md
 - **DeepSeek 官方生态 Guide PR**: https://github.com/deepseek-ai/awesome-deepseek-agent/pull/257
 - **Demo**: https://v.douyin.com/CXaZ5l0vW_Q/

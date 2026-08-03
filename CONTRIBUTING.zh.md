@@ -1,4 +1,4 @@
-# 贡献指南 — DeepSeek Orcana
+# 贡献指南 — Orcana Runtime
 
 感谢你考虑为这个项目做贡献！
 
@@ -6,8 +6,8 @@
 
 ```bash
 # 克隆并安装
-git clone https://github.com/Leo-Ayh-Oday/deepseek-orcana.git
-cd deepseek-orcana
+git clone https://github.com/Leo-Ayh-Oday/orcana-runtime.git
+cd orcana-runtime
 bun install
 ```
 

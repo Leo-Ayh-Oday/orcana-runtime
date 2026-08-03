@@ -135,6 +135,8 @@ export interface RunPhaseContext {
   artifactStore?: import("../../harness/contracts/artifact").ArtifactStore
   /** H8: run id stamped on artifacts produced inside the kernel. */
   runId?: string
+  /** H9: capability registry (tool executions route through the executor). */
+  capabilityRegistry?: import("../../harness/contracts/capability").CapabilityRegistry
   confidenceEvaluator: ConfidenceEvaluator
   flashJudge: FlashJudge
   testimonyLedger: TestimonyLedger

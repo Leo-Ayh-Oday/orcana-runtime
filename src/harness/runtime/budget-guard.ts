@@ -11,13 +11,15 @@
  *  BudgetExhaustionReason and observe() returns false so the event loop
  *  stops immediately (no further events are emitted after cancellation).
  *
- *  write / external_action / repair are reserved-capable in the ledger but
- *  not wired here — kernel events don't classify tools yet (H8/H9).
+ *  H9: tool call events carry the capability sideEffect classification, so
+ *  write / external_action budgets are consumed alongside tool_call. repair
+ *  stays unwired until a repair-cycle fact source exists in the event stream.
  */
 
 import { HarnessError } from "../contracts/errors"
 import type { BudgetExhaustionReason, BudgetLedger, BudgetRequest } from "../contracts/budget"
 import type { HarnessEvent } from "../contracts/events"
+import type { SideEffect } from "../contracts/capability"
 
 interface UsagePayload {
   round?: number
@@ -42,7 +44,14 @@ export class BudgetGuard {
       return this.observeUsage(payload.usage as UsagePayload)
     }
     if ("toolCall" in payload) {
-      return this.consume({ kind: "tool_call" })
+      if (!this.consume({ kind: "tool_call" })) return false
+      // H9: capability classification on the bridged event drives the
+      // write / external_action class limits (same descriptor source as the
+      // CapabilityExecutor — no double counting).
+      const sideEffect: SideEffect | undefined = payload.toolCall.sideEffect
+      if (sideEffect === "write") return this.consume({ kind: "write" })
+      if (sideEffect === "external") return this.consume({ kind: "external_action" })
+      return true
     }
     return true
   }

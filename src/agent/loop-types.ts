@@ -67,4 +67,7 @@ export interface AgentOptions {
   artifactStore?: import("../harness/contracts/artifact").ArtifactStore
   /** H8: run id stamped on artifacts produced inside the kernel. */
   runId?: string
+  /** H9: capability registry — the loop's tool executions route through the
+   *  CapabilityExecutor with this registry (shared with the Node Runtime). */
+  capabilityRegistry?: import("../harness/contracts/capability").CapabilityRegistry
 }

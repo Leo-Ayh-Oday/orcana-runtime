@@ -655,6 +655,11 @@ export async function* runRound(
     prompt: ctx.prompt,
     resultsContent,
     trustedVerification: trustedVerificationFromTool,
+    // H9: route tool executions through the CapabilityExecutor (same registry
+    // the Node Runtime will use) and stamp run-scoped artifact bindings.
+    capabilityRegistry: ctx.capabilityRegistry,
+    artifactStore: ctx.artifactStore,
+    runId: ctx.runId,
   }))
   if (batchResult.aborted) return { kind: "return", reason: "tool_batch_aborted" }
 

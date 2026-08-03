@@ -13,8 +13,9 @@
  *      HarnessEvents for the run event stream.
  */
 
+import { HarnessError } from "../contracts/errors"
 import type { BudgetLedger, BudgetUsage } from "../contracts/budget"
-import type { CapabilityDescriptor, CapabilityRegistry } from "../contracts/capability"
+import type { CapabilityDescriptor, CapabilityHandler, CapabilityRegistry } from "../contracts/capability"
 import type { HarnessEventType } from "../contracts/events"
 import type { ToolDescriptor, ToolResult } from "../../tools/registry"
 import type { HookSystem } from "../../hooks"
@@ -24,6 +25,7 @@ import { executeSingleTool, type ParallelToolResult } from "../../agent/tool-exe
 import { appendHookWarnings, runToolAfterHook, runToolBeforeHook } from "../../agent/round/pre-loop"
 import { validateJsonSchema } from "../interrupts/response-validator"
 import { budgetKindsFor } from "./descriptor"
+import { projectCapabilityDescriptor, toolCapabilityHandler } from "./tool-adapter"
 import { buildNodePolicyInput, type NodePolicyContext } from "./policy-adapter"
 
 /** Optional artifact hook (plan §15.3 "Artifact / Evidence" step). */
@@ -81,12 +83,37 @@ function blockedResult(message: string): ToolResult {
   return { success: false, content: `[blocked] ${message}`, error: message, metadata: { blocked: true } }
 }
 
+/** Resolve a capability, with a loop-mode fallback for un-migrated tools.
+ *
+ *  The registry only holds the first migration batch (§15.4); the loop may
+ *  execute any tool. When a tool descriptor is provided (loop mode) and the
+ *  id is unknown, the capability is projected from the canonical
+ *  ToolContract on the fly so the same 8-step chain covers every tool. Node
+ *  mode (no tool) keeps strict registry semantics: unknown ids are rejected.
+ */
+function resolveCapability(
+  registry: CapabilityRegistry,
+  input: CapabilityExecuteInput,
+): { descriptor: CapabilityDescriptor; handler: CapabilityHandler } {
+  try {
+    return registry.resolve(input.capabilityId)
+  } catch (error) {
+    if (input.tool && error instanceof HarnessError && error.kind === "capability_not_found") {
+      return {
+        descriptor: projectCapabilityDescriptor(input.tool),
+        handler: toolCapabilityHandler(input.tool),
+      }
+    }
+    throw error
+  }
+}
+
 /** Run the 8-step chain for one capability invocation. */
 export async function executeCapability(
   registry: CapabilityRegistry,
   input: CapabilityExecuteInput,
 ): Promise<CapabilityExecutionResult> {
-  const { descriptor, handler } = registry.resolve(input.capabilityId)
+  const { descriptor, handler } = resolveCapability(registry, input)
   const startedAt = Date.now()
   const reservations: string[] = []
 

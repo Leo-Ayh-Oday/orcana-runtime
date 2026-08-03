@@ -174,4 +174,64 @@ describe("Harness H4 budget enforcement", () => {
     const texts = result.events.filter(e => "text" in e.payload)
     expect(texts).toHaveLength(1)
   })
+
+  // H9: tool.call.requested events carry the capability sideEffect class, so
+  // write / external_action budgets are enforced at the harness control plane.
+
+  test("write budget: write-class tools consume maxWrites and cancel with write_budget", async () => {
+    const writeTool = buildTools({
+      name: "write_probe",
+      description: "write probe",
+      isReadonly: false,
+      category: "file",
+      inputSchema: { type: "object", properties: {}, required: [] },
+      execute() { return Result.ok("written") },
+    })
+    class WriteRoundProvider implements LLMProvider {
+      rounds = 0
+      async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        const round = this.rounds++
+        yield { type: "token_usage", data: { inputTokens: 10, outputTokens: 5, cacheSource: "provider", round } }
+        yield { type: "tool_call", data: { id: `w-${round}`, name: "write_probe", input: {} } }
+      }
+    }
+    const result = await runForOutcome(
+      { provider: new WriteRoundProvider(), tools: writeTool },
+      { prompt: "write", maxRounds: 5, budget: { maxWrites: 1 } },
+    )
+    expect(result.status).toBe("cancelled")
+    expect(result.reason).toBe("write_budget")
+    const toolCalls = result.events.filter(e => "toolCall" in e.payload)
+    expect(toolCalls).toHaveLength(1)
+    // The bridged event carries the classification that drove the budget.
+    expect((toolCalls[0]!.payload as { toolCall: { sideEffect?: string } }).toolCall.sideEffect).toBe("write")
+  })
+
+  test("external action budget: shell-class tools cancel with external_action_budget", async () => {
+    const shellTool = buildTools({
+      name: "shell_probe",
+      description: "shell probe",
+      isReadonly: false,
+      category: "shell",
+      inputSchema: { type: "object", properties: {}, required: [] },
+      execute() { return Result.ok("ran") },
+    })
+    class ShellRoundProvider implements LLMProvider {
+      rounds = 0
+      async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        const round = this.rounds++
+        yield { type: "token_usage", data: { inputTokens: 10, outputTokens: 5, cacheSource: "provider", round } }
+        yield { type: "tool_call", data: { id: `s-${round}`, name: "shell_probe", input: {} } }
+      }
+    }
+    const result = await runForOutcome(
+      { provider: new ShellRoundProvider(), tools: shellTool },
+      { prompt: "run", maxRounds: 5, budget: { maxExternalActions: 1 } },
+    )
+    expect(result.status).toBe("cancelled")
+    expect(result.reason).toBe("external_action_budget")
+    const toolCalls = result.events.filter(e => "toolCall" in e.payload)
+    expect(toolCalls).toHaveLength(1)
+    expect((toolCalls[0]!.payload as { toolCall: { sideEffect?: string } }).toolCall.sideEffect).toBe("external")
+  })
 })

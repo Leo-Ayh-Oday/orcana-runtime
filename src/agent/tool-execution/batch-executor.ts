@@ -5,7 +5,8 @@
  *  - parallel readonly detection + policy preview
  *  - per-tool unified policy (8-layer order preserved, see tool-execution/policy.ts)
  *  - gate telemetry for policy gates
- *  - single-tool execution (via executeSingleTool)
+ *  - single-tool execution (via the H9 CapabilityExecutor — the shared entry
+ *    the Node Runtime will also use; executeSingleTool stays the handler)
  *  - result normalization / truncation
  *  - ToolLedger recording (blocked / failed / success)
  *  - per-tool post-processing: typecheck detection, verification ingestion,
@@ -18,6 +19,11 @@
 
 import type { AgentRunState, RoundState, RoundToolCall } from "../run/types"
 import type { ToolDescriptor } from "../../tools/registry"
+import { executeCapability } from "../../harness/capabilities/executor"
+import { createCapabilityRegistry } from "../../harness/capabilities/registry"
+import { registerToolCapabilities } from "../../harness/capabilities/tool-adapter"
+import type { CapabilityRegistry } from "../../harness/contracts/capability"
+import type { ArtifactStore } from "../../harness/contracts/artifact"
 import type { HookSystem } from "../../hooks"
 import type { AgentRunTrace } from "../run-trace"
 import type { ThinkingStore } from "../../memory/thinking-store"
@@ -36,7 +42,6 @@ import { currentTransactionEvidenceBinding } from "../patch-transaction"
 import { clipProviderContext } from "../../context/staged"
 import { formatToolLedgerStatus, type ToolExecutionLedger } from "../tool-ledger"
 import { evaluateToolPolicy, type ToolPolicyResult } from "./policy"
-import { executeSingleTool } from "./single-executor"
 import { normalizeToolResultContent } from "./result-normalizer"
 import { containsTypecheckFailure, countTypecheckIssues, isVerificationUnavailable } from "../round/pre-loop"
 import { runPostEditDiagnostics } from "../round/post-loop"
@@ -73,6 +78,13 @@ export interface ToolBatchContext {
   stagedContext?: StagedContextManager
   prompt: string
   resultsContent: Array<Record<string, unknown>>
+
+  /** H9: capability registry routing tool executions through the executor. */
+  capabilityRegistry?: CapabilityRegistry
+  /** H9: harness-owned artifact store (write artifacts recorded when present). */
+  artifactStore?: ArtifactStore
+  /** H9: run id stamped on artifacts produced by write executions. */
+  runId?: string
 
   /** Trusted-verification extraction from a tool result (runtime built-in verifiers). */
   trustedVerification: (
@@ -129,6 +141,16 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
   const modifiedFilesThisRound = roundState.modifiedFiles
   const rippleReportsThisRound = roundState.rippleReports
   const verificationResultsThisRound = roundState.verificationResults
+
+  // H9: tool executions route through the CapabilityExecutor (the entry the
+  // Node Runtime will share). Direct agentLoop callers have no injected
+  // registry — build a throwaway one from the round's tools so behavior is
+  // identical either way.
+  const capabilityRegistry = ctx.capabilityRegistry ?? (() => {
+    const registry = createCapabilityRegistry()
+    registerToolCapabilities(registry, tools)
+    return registry
+  })()
   const taskFiles = execution.taskFiles
 
   // ── Parallel readonly candidate detection + policy preview ──
@@ -177,11 +199,13 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
       const tool = tools.find(t => t.defn.name === tc.name)!
       const startedAt = Date.now()
       try {
-        const result = await executeSingleTool({
-          tool,
+        const result = await executeCapability(capabilityRegistry, {
+          capabilityId: tc.name,
           params: tc.input,
+          tool,
           hooks,
           abortSignal,
+          policyDecision: parallelPolicies.get(tc.id),
         })
         return { id: tc.id, content: result.result.content, success: result.result.success, metadata: result.result.metadata, startedAt: result.startedAt }
       } catch (e) {
@@ -286,12 +310,14 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
       toolExecuted = true
       const parallelResult = parallelResults.get(tc.id)
       try {
-        const executed = await executeSingleTool({
-          tool,
+        const executed = await executeCapability(capabilityRegistry, {
+          capabilityId: tc.name,
           params: tc.input,
+          tool,
           hooks,
           abortSignal,
           parallelResult,
+          policyDecision: policyResult.allowed ? policyResult : undefined,
         })
         resultContent = executed.result.content
         resultObj = { success: executed.result.success, content: executed.result.content, metadata: executed.result.metadata }

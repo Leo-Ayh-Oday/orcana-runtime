@@ -52,7 +52,9 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
   // unified execution entry).
   const capabilities = createCapabilityRegistry()
   registerToolCapabilities(capabilities, input.deps.tools)
-  const adapter: LegacyLoopAdapter = createLegacyLoopAdapter({ deps: input.deps })
+  const adapter: LegacyLoopAdapter = createLegacyLoopAdapter({
+    deps: { ...input.deps, capabilityRegistry: capabilities },
+  })
   const projectRoot = input.projectRoot ?? process.cwd()
   const store = input.store
   const workspaceHash = input.workspaceHash

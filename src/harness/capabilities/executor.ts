@@ -196,7 +196,19 @@ export async function executeCapability(
       } else {
         const output = response.output
         const content = typeof output === "string" ? output : JSON.stringify(output)
-        result = { success: true, content, metadata: output && typeof output === "object" ? output as Record<string, unknown> : undefined }
+        // Tool-shaped outputs carry { success, content, metadata } — the
+        // metadata field is what downstream consumers (artifact tracker,
+        // completion gates) read; anything else is a custom output value.
+        const shaped = output !== null && typeof output === "object" && !Array.isArray(output)
+          ? output as Record<string, unknown>
+          : undefined
+        result = {
+          success: true,
+          content,
+          metadata: shaped && typeof shaped.metadata === "object" && shaped.metadata !== null
+            ? shaped.metadata as Record<string, unknown>
+            : undefined,
+        }
       }
     }
   } catch (error) {

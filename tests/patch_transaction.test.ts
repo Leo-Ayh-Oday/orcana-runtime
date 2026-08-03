@@ -148,8 +148,8 @@ describe("checkForbiddenFile", () => {
     expect(checkForbiddenFile(".git/config", testDir).allowed).toBe(false)
   })
 
-  it("rejects .deepseek-code/ internals", () => {
-    expect(checkForbiddenFile(".deepseek-code/config.json", testDir).allowed).toBe(false)
+  it("rejects .orcana/ internals", () => {
+    expect(checkForbiddenFile(".orcana/config.json", testDir).allowed).toBe(false)
   })
 
   it("rejects node_modules/", () => {

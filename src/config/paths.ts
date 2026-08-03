@@ -1,9 +1,9 @@
 /** 配置文件路径解析。
  *
  *  目录约定（与现有 mcp.json / permissions.json 保持一致）：
- *    ~/.deepseek-code/orcana.jsonc  — 全局 provider/runtime 配置
- *    ~/.deepseek-code/auth.json     — API key 安全存储（0600）
- *    ~/.deepseek-code/tui.jsonc     — TUI 外观/行为配置
+ *    ~/.orcana/orcana.jsonc  — 全局 provider/runtime 配置
+ *    ~/.orcana/auth.json     — API key 安全存储（0600）
+ *    ~/.orcana/tui.jsonc     — TUI 外观/行为配置
  *    ./orcana.jsonc                 — 项目级配置覆盖（默认禁用）
  *    ./tui.jsonc                    — 项目级 TUI 配置覆盖（默认禁用）
  *
@@ -21,7 +21,7 @@ import { homedir } from "node:os"
 
 /** 全局配置根目录（可被 ORCANA_CONFIG_DIR 覆盖）。 */
 export function globalConfigDir(): string {
-  return process.env.ORCANA_CONFIG_DIR ?? join(homedir(), ".deepseek-code")
+  return process.env.ORCANA_CONFIG_DIR ?? join(homedir(), ".orcana")
 }
 
 /** 全局 provider/runtime 配置文件路径。 */

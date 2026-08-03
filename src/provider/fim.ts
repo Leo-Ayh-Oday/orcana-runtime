@@ -1,5 +1,5 @@
 /** FIM (Fill-in-the-Middle) editor — DeepSeek V4 /beta/completions endpoint.
- *  Ported from deepseek-code/core/fim_editor.py */
+ *  Ported from orcana/core/fim_editor.py */
 
 import { existsSync } from "node:fs"
 import { readFile as readFileProm } from "node:fs/promises"

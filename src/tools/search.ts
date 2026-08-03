@@ -137,7 +137,7 @@ async function web_search(params: Record<string, unknown>): Promise<ToolResult> 
   if (!query) return Result.fail("web_search requires a non-empty query.")
 
   const apiKey = exaApiKey()
-  const timeoutMs = timeoutFromEnv("DEEPSEEK_SEARCH_TIMEOUT_MS", 8000)
+  const timeoutMs = timeoutFromEnv("ORCANA_SEARCH_TIMEOUT_MS", 8000)
   const errors: string[] = []
 
   // Try Exa REST API first (requires API key)

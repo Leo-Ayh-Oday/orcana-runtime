@@ -9,7 +9,7 @@ function readPackageVersion(startDir: string): string | null {
     if (existsSync(pkgPath)) {
       try {
         const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { name?: string; version?: string }
-        if (pkg.name === "deepseek-orcana" && typeof pkg.version === "string") return pkg.version
+        if (pkg.name === "orcana" && typeof pkg.version === "string") return pkg.version
       } catch {
         return null
       }

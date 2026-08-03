@@ -2,7 +2,7 @@
  *
  *  Aggregates per-file sha256 fingerprints (reusing file-state's
  *  fingerprintFile) into one stable hash. Excludes node_modules, .git,
- *  .deepseek-code and dist. Callers decide when to compute it — small
+ *  .orcana and dist. Callers decide when to compute it — small
  *  projects only (tests use small dirs).
  */
 
@@ -11,7 +11,7 @@ import { readdirSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import { fingerprintFile } from "../../file-state/file-fingerprint"
 
-const EXCLUDED_DIRS = new Set(["node_modules", ".git", ".deepseek-code", "dist", ".wolf"])
+const EXCLUDED_DIRS = new Set(["node_modules", ".git", ".orcana", "dist", ".wolf"])
 
 export function computeWorkspaceHash(projectRoot: string): string {
   const hashes: Array<{ path: string; sha256: string }> = []

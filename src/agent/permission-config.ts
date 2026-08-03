@@ -29,15 +29,15 @@ export interface PermissionConfig {
 
 // ── Loaders ──
 
-/** Load user-level config from ~/.deepseek-code/permissions.json */
+/** Load user-level config from ~/.orcana/permissions.json */
 export function loadUserConfig(): PermissionConfig | null {
-  const path = join(homedir(), ".deepseek-code", "permissions.json")
+  const path = join(homedir(), ".orcana", "permissions.json")
   return loadConfigFile(path)
 }
 
-/** Load project-level config from <projectRoot>/.deepseek-code/permissions.json */
+/** Load project-level config from <projectRoot>/.orcana/permissions.json */
 export function loadProjectConfig(projectRoot: string): PermissionConfig | null {
-  const path = resolve(projectRoot, ".deepseek-code", "permissions.json")
+  const path = resolve(projectRoot, ".orcana", "permissions.json")
   return loadConfigFile(path)
 }
 

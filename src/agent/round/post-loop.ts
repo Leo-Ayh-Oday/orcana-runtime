@@ -125,9 +125,9 @@ export function collectRecentTurns(messages: ProviderMessage[], count: number): 
 
 // ── Microcompact: tool result placeholder substitution ──
 
-const MC_READFILE_CHARS = Number(process.env.DEEPSEEK_READFILE_COMPACT_CHARS) || 0
-const MC_SHELL_CHARS = Number(process.env.DEEPSEEK_SHELL_COMPACT_CHARS) || 3000
-const MC_WEBFETCH_CHARS = Number(process.env.DEEPSEEK_WEBFETCH_COMPACT_CHARS) || 5000
+const MC_READFILE_CHARS = Number(process.env.ORCANA_READFILE_COMPACT_CHARS) || 0
+const MC_SHELL_CHARS = Number(process.env.ORCANA_SHELL_COMPACT_CHARS) || 3000
+const MC_WEBFETCH_CHARS = Number(process.env.ORCANA_WEBFETCH_COMPACT_CHARS) || 5000
 
 export function mcThreshold(toolName: string): number {
   if (toolName === "read_file") return MC_READFILE_CHARS

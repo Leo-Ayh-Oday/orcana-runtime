@@ -1,4 +1,4 @@
-/** MCP configuration — reads/writes ~/.deepseek-code/mcp.json.
+/** MCP configuration — reads/writes ~/.orcana/mcp.json.
  *
  *  Format:
  *  {
@@ -44,7 +44,7 @@ const DEFAULT_CONFIG: MCPConfig = {
 }
 
 function configPath(): string {
-  const dir = join(homedir(), ".deepseek-code")
+  const dir = join(homedir(), ".orcana")
   mkdirSync(dir, { recursive: true })
   return join(dir, "mcp.json")
 }

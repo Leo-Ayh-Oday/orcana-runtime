@@ -1,4 +1,4 @@
-/** MCP client — JSON-RPC lifecycle. Ported from deepseek-code/core/mcp_client.py */
+/** MCP client — JSON-RPC lifecycle. Ported from orcana/core/mcp_client.py */
 
 import { spawn, ChildProcess } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
@@ -44,7 +44,7 @@ export class MCPClientV2 {
         this._send(name, "initialize", {
           protocolVersion: "0.1.0",
           capabilities: {},
-          clientInfo: { name: "deepseek-code", version: "0.1.0" },
+          clientInfo: { name: "orcana", version: "0.1.0" },
         }).then(r => {
           const ok = !("error" in r)
           state.connected = ok

@@ -49,7 +49,7 @@ export function searchAllSessions(
 ): CrossSessionHit[] {
   if (!isSessionSqliteAvailable() || !DatabaseCtor) return []
 
-  const dir = options.storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+  const dir = options.storeDir ?? join(homedir(), ".orcana", "sessions")
   const limit = options.limit ?? 10
   const maxSessions = options.maxSessions ?? 50
 
@@ -139,7 +139,7 @@ export function listAllSessions(
 ): Array<{ id: string; createdAt: number; messageCount: number; topic?: string }> {
   if (!isSessionSqliteAvailable() || !DatabaseCtor) return []
 
-  const dir = options.storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+  const dir = options.storeDir ?? join(homedir(), ".orcana", "sessions")
   const limit = options.limit ?? 20
 
   return listSessionIds(dir)

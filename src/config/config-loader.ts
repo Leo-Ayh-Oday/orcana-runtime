@@ -2,7 +2,7 @@
  *
  *  优先级（低 → 高）：
  *    1. built-in defaults (defaultConfig from config-schema)
- *    2. global config (~/.deepseek-code/orcana.jsonc)
+ *    2. global config (~/.orcana/orcana.jsonc)
  *    3. project config (默认关闭；ORCANA_ENABLE_PROJECT_CONFIG=1 时启用)
  *    4. env override (TUI 默认关闭)
  *
@@ -166,14 +166,14 @@ function mergeProviders(
 function applyEnvOverrides(config: OrcanaConfig): OrcanaConfig {
   const result = { ...config }
 
-  // DEEPSEEK_MODEL_OVERRIDE 覆盖 default model
-  const modelOverride = process.env.DEEPSEEK_MODEL_OVERRIDE
+  // ORCANA_MODEL_OVERRIDE 覆盖 default model
+  const modelOverride = process.env.ORCANA_MODEL_OVERRIDE
   if (modelOverride) {
     result.models = { ...result.models, default: modelOverride }
   }
 
-  // DEEPSEEK_MAX_ROUNDS 覆盖 maxRounds
-  const maxRounds = process.env.DEEPSEEK_MAX_ROUNDS
+  // ORCANA_MAX_ROUNDS 覆盖 maxRounds
+  const maxRounds = process.env.ORCANA_MAX_ROUNDS
   if (maxRounds) {
     const n = Number(maxRounds)
     if (Number.isFinite(n) && n > 0) {

@@ -28,7 +28,7 @@ export class SessionManager {
   private storeDir: string
 
   constructor(storeDir?: string) {
-    this.storeDir = storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+    this.storeDir = storeDir ?? join(homedir(), ".orcana", "sessions")
     mkdirSync(this.storeDir, { recursive: true })
   }
 

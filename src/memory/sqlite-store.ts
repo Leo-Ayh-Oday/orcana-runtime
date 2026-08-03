@@ -48,7 +48,7 @@ export class SqliteStore {
   private _available: boolean
 
   constructor(storeName: string, storeDir?: string) {
-    const dir = storeDir ?? join(homedir(), ".deepseek-code", "fts")
+    const dir = storeDir ?? join(homedir(), ".orcana", "fts")
     mkdirSync(dir, { recursive: true })
     this.storePath = join(dir, `${storeName}.sqlite`)
     this._available = false

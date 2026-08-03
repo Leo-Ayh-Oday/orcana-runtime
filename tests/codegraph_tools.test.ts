@@ -9,16 +9,16 @@ describe("codegraph tools", () => {
     const dir = mkdtempSync(join(tmpdir(), "dscode-target-"))
     try {
       mkdirSync(join(dir, "src"), { recursive: true })
-      mkdirSync(join(dir, ".deepseek-code", "runs"), { recursive: true })
+      mkdirSync(join(dir, ".orcana", "runs"), { recursive: true })
       writeFileSync(join(dir, "src", "index.ts"), "export const ok = true\n", "utf-8")
-      writeFileSync(join(dir, ".deepseek-code", "runs", "run.jsonl"), "{}\n", "utf-8")
+      writeFileSync(join(dir, ".orcana", "runs", "run.jsonl"), "{}\n", "utf-8")
 
       const result = await PROJECT_STRUCTURE.execute({ path: dir, max_depth: 3 })
       expect(result.success).toBe(true)
       expect(result.content).toContain("Target project:")
       expect(result.content).toContain("Runtime artifacts")
       expect(result.content).toContain("src")
-      expect(result.content).not.toContain(".deepseek-code/")
+      expect(result.content).not.toContain(".orcana/")
       expect(result.content).not.toContain("run.jsonl")
     } finally {
       rmSync(dir, { recursive: true, force: true })

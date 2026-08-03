@@ -41,7 +41,7 @@ export function isForbiddenSecretPath(filePath: string): boolean {
 /** Directories that belong to the agent or package ecosystem —
  *  writing into these corrupts the agent's own state or node_modules. */
 export const FORBIDDEN_RUNTIME_DIRS = [
-  /(^|\/)\.deepseek-code\b/,
+  /(^|\/)\.orcana\b/,
   /(^|\/)\.codegraph\b/,
   /(^|\/)\.wolf\b/,
   /(^|\/)node_modules\b/,

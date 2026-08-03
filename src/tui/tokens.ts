@@ -6,14 +6,14 @@
  *    - 新增布局参数统一加到这里，不在组件里写死
  *
  *  Phase 3: 新增 glyphs 双主题（ascii / unicode）。
- *    - DEEPSEEK_TUI_UNICODE=1 使用 unicode 主题（完整 Braille/Block/几何字符）
+ *    - ORCANA_TUI_UNICODE=1 使用 unicode 主题（完整 Braille/Block/几何字符）
  *    - 默认使用 ascii 主题（ASCII-safe，Windows Terminal 所有字体兼容）
  *
  *  Phase 5: 每类 pending activity 独立 glyph 序列。
  *    - routing: 波浪扫描 (~-~=~-~=)
  *    - reading: 眼动扫描 (.oO@Oo.)
  *    - streaming: 专用 spinner
- *    - DEEPSEEK_TUI_REDUCED_MOTION=1 关闭所有动画 glyph
+ *    - ORCANA_TUI_REDUCED_MOTION=1 关闭所有动画 glyph
  */
 
 // ── Glyph 主题 ──
@@ -185,7 +185,7 @@ const UNICODE_GLYPHS: GlyphTheme = {
 
 /** 根据环境变量选择 glyph 主题。默认 ASCII-safe。 */
 export function getGlyphTheme(): GlyphTheme {
-  return process.env.DEEPSEEK_TUI_UNICODE === "1" ? UNICODE_GLYPHS : ASCII_GLYPHS
+  return process.env.ORCANA_TUI_UNICODE === "1" ? UNICODE_GLYPHS : ASCII_GLYPHS
 }
 
 // ── 主要令牌 ──
@@ -201,12 +201,12 @@ export const tuiTokens = {
       ideal: 36,
       max: 42,
     },
-    scrollStep: Number(process.env.DEEPSEEK_TUI_SCROLL_STEP ?? "3"),
+    scrollStep: Number(process.env.ORCANA_TUI_SCROLL_STEP ?? "3"),
   },
   motion: {
-    startupMs: Number(process.env.DEEPSEEK_TUI_STARTUP_MS ?? "700"),
-    frameMs: Number(process.env.DEEPSEEK_TUI_FRAME_MS ?? "96"),
-    streamFlushMs: Number(process.env.DEEPSEEK_TUI_STREAM_FLUSH_MS ?? "40"),
+    startupMs: Number(process.env.ORCANA_TUI_STARTUP_MS ?? "700"),
+    frameMs: Number(process.env.ORCANA_TUI_FRAME_MS ?? "96"),
+    streamFlushMs: Number(process.env.ORCANA_TUI_STREAM_FLUSH_MS ?? "40"),
     /** Sonar line character sets */
     sonar: {
       idle: "─",

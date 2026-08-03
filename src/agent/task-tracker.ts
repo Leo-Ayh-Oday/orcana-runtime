@@ -392,7 +392,7 @@ export function formatTaskPlanningPrompt(tracker: TaskTracker, round: number): s
   const lines = [
     "## 长任务规划阶段",
     "你现在必须先输出项目计划和交付清单，再进入写文件阶段。",
-    "如果当前目录是空项目，不要继续读取 deepseek-run.out.txt、deepseek-run.err.txt、.deepseek-code/runs 或其他运行日志。",
+    "如果当前目录是空项目，不要继续读取 deepseek-run.out.txt、deepseek-run.err.txt、.orcana/runs 或其他运行日志。",
     round > 0
       ? "本轮不要调用工具，只输出可执行计划。"
       : "最多做一次必要的项目结构扫描；如果没有真实项目文件，直接输出计划。",

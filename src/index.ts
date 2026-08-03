@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** DeepSeek Code — TS entry point. */
+/** Orcana — TS entry point. */
 
 import { createServer } from "node:http"
 import { readFileSync } from "node:fs"
@@ -73,7 +73,7 @@ function printHelp() {
     "  Run /models in the TUI to select a model and save its key globally.",
     "  Environment keys are used only when runtime.allowEnvKeys is enabled.",
     "",
-    "Docs: https://github.com/Leo-Ayh-Oday/deepseek-orcana",
+    "Docs: https://github.com/Leo-Ayh-Oday/orcana",
   ].join("\n"))
 }
 
@@ -96,7 +96,7 @@ async function printDoctor() {
 
 async function main() {
   if (arg === "--version" || arg === "-v" || arg === "version") {
-    console.log(`deepseek-orcana ${VERSION_LABEL}`)
+    console.log(`orcana ${VERSION_LABEL}`)
     return
   }
 
@@ -170,6 +170,6 @@ async function main() {
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err)
   const stack = err instanceof Error && err.stack ? `\n${err.stack}` : ""
-  console.error(`[deepseek-code] fatal: ${message}${stack}`)
+  console.error(`[orcana] fatal: ${message}${stack}`)
   process.exit(1)
 })

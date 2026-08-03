@@ -22,7 +22,7 @@ export class HybridMemory {
   private fts: SqliteStore
 
   constructor(private projectRoot = process.cwd()) {
-    const dir = join(projectRoot, ".deepseek-code")
+    const dir = join(projectRoot, ".orcana")
     this.file = join(dir, "hybrid-memory.jsonl")
     mkdirSync(dir, { recursive: true })
     this.fts = new SqliteStore("hybrid-memory", dir)

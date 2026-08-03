@@ -50,7 +50,7 @@ export function buildResearchEvidenceContext(decision: ResearchRouteDecision, ev
   lines.push("- 至少列出 2 个证据点；证据不足时要诚实说明。")
   lines.push("- 区分：论文/官方文档/GitHub/博客报道/推测。")
   lines.push("- 给出反方观点或主要风险。")
-  lines.push("- 给出能落地到 DeepSeek Code 的路线。")
+  lines.push("- 给出能落地到 Orcana 的路线。")
   lines.push("- 不要编造来源，不要把推测写成事实。")
 
   return { role: "user", content: lines.join("\n") }

@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to ~/.deepseek-code/settings.json and customize. All fields optional — defaults used when omitted.",
+  "_comment": "Copy to ~/.orcana/settings.json and customize. All fields optional — defaults used when omitted.",
 
   "provider": {
     "_comment": "Provider config. modelOverride: set to a model ID to override default. Cost mode: 'normal' (allow thinking) or 'strict' (no thinking, cheaper).",
@@ -73,7 +73,7 @@
   },
 
   "loop": {
-    "_comment": "Loop config. maxSteps overrides DEEPSEEK_MAX_ROUNDS env var. autoContinue: false means plan requires user approval before execution.",
+    "_comment": "Loop config. maxSteps overrides ORCANA_MAX_ROUNDS env var. autoContinue: false means plan requires user approval before execution.",
     "maxSteps": 100,
     "autoContinue": false,
     "planModeDefault": false

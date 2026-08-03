@@ -535,7 +535,7 @@ function walkFiles(root: string, dir: string, out: string[]): void {
   }
 }
 
-const SKIP_DIRS = new Set([".git", ".deepseek-code", ".orcana", "node_modules", "dist", "coverage", ".next"])
+const SKIP_DIRS = new Set([".git", ".orcana", ".orcana", "node_modules", "dist", "coverage", ".next"])
 const SOURCE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".css", ".scss", ".html", ".yml", ".yaml"])
 
 function isReadableSource(file: string): boolean {

@@ -9,7 +9,7 @@
  *  设计原则：
  *    - 低帧动效：tick 驱动的简单字符动画，不使用 setTimeout/setInterval
  *    - 数据驱动：所有数据来自 selectRuntimePanel，无内部状态
- *    - 可关闭：env DEEPSEEK_TUI_RUNTIME_PANEL=off 时 AppShell 不渲染此组件
+ *    - 可关闭：env ORCANA_TUI_RUNTIME_PANEL=off 时 AppShell 不渲染此组件
  *    - 纯展示：不 dispatch 事件，不修改 state
  */
 
@@ -99,7 +99,7 @@ export function rippleWaveChar(phase: TuiRipplePhase, tick: number): string {
 
 /** 检查运行态面板是否启用（env 开关）。 */
 export function isRuntimePanelEnabled(): boolean {
-  const flag = process.env.DEEPSEEK_TUI_RUNTIME_PANEL
+  const flag = process.env.ORCANA_TUI_RUNTIME_PANEL
   return flag !== "off" && flag !== "0" && flag !== "false"
 }
 

@@ -21,8 +21,8 @@ import { createRunCancellation } from "./cancellation"
 export function defaultSandboxConfig(projectRoot: string): SandboxConfig {
   return {
     projectRoot,
-    maxRuntimeSec: Number(process.env.DEEPSEEK_SANDBOX_TIMEOUT_SEC) || 30,
-    jobMemoryLimitMb: process.env.DEEPSEEK_SANDBOX_MEMORY_MB ? Number(process.env.DEEPSEEK_SANDBOX_MEMORY_MB) : 512,
+    maxRuntimeSec: Number(process.env.ORCANA_SANDBOX_TIMEOUT_SEC) || 30,
+    jobMemoryLimitMb: process.env.ORCANA_SANDBOX_MEMORY_MB ? Number(process.env.ORCANA_SANDBOX_MEMORY_MB) : 512,
   }
 }
 
@@ -35,14 +35,14 @@ export function createNoopTraceWriter(): TraceWriter {
   }
 }
 
-/** H5: JSONL typed trace under .deepseek-code/harness/events/. */
+/** H5: JSONL typed trace under .orcana/harness/events/. */
 export function createRunTraceWriter(
   projectRoot: string,
   runId: string,
   sessionId: string,
 ): TraceWriter {
   return createJsonlTraceWriter({
-    dir: join(projectRoot, ".deepseek-code", "harness", "events"),
+    dir: join(projectRoot, ".orcana", "harness", "events"),
     runId,
     sessionId,
   })

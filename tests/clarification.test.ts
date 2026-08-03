@@ -13,7 +13,7 @@ import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provi
 
 const MODEL_CLARIFICATION = [
   CLARIFICATION_MARKER,
-  '{"questions":[{"id":"1","title":"What visual style should the blog use?","options":[{"key":"A","label":"Minimal editorial","recommended":true},{"key":"B","label":"Magazine-like"},{"key":"C","label":"Personal brand"}]},{"id":"2","title":"What is the first release scope?","options":[{"key":"A","label":"Posts and reading","recommended":true},{"key":"B","label":"Posts, tags and search"},{"key":"C","label":"Posts, admin and auth"}]},{"id":"3","title":"How should we verify it?","options":[{"key":"A","label":"Smoke test only"},{"key":"B","label":"Typecheck, test and build","recommended":true},{"key":"C","label":"Visual QA too"}]}],"extraPrompt":"Anything else you want to tell DeepSeek Code?"}',
+  '{"questions":[{"id":"1","title":"What visual style should the blog use?","options":[{"key":"A","label":"Minimal editorial","recommended":true},{"key":"B","label":"Magazine-like"},{"key":"C","label":"Personal brand"}]},{"id":"2","title":"What is the first release scope?","options":[{"key":"A","label":"Posts and reading","recommended":true},{"key":"B","label":"Posts, tags and search"},{"key":"C","label":"Posts, admin and auth"}]},{"id":"3","title":"How should we verify it?","options":[{"key":"A","label":"Smoke test only"},{"key":"B","label":"Typecheck, test and build","recommended":true},{"key":"C","label":"Visual QA too"}]}],"extraPrompt":"Anything else you want to tell Orcana?"}',
 ].join("\n")
 
 class ModelClarificationProvider implements LLMProvider {

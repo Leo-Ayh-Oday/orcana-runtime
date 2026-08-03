@@ -15,11 +15,11 @@ import { applyAndCommit } from "../src/agent/patch-transaction"
 
 // Disable FlashTriage in integration tests: mock LLM providers don't model triage calls,
 // and FlashTriage is independently tested in src/agent/flash-triage.test.ts.
-const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
-process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+process.env.ORCANA_FLASH_TRIAGE = "off"
 afterAll(() => {
-  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
-  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+  if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+  else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 })
 
 class ParallelToolProvider implements LLMProvider {
@@ -1207,10 +1207,10 @@ describe("Agent loop greedy tool execution", () => {
   })
 
   test("blocks provider calls when context budget reaches hard stop", async () => {
-    const oldWarn = process.env.DEEPSEEK_CONTEXT_WARN_RATIO
-    const oldBlock = process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO
-    process.env.DEEPSEEK_CONTEXT_WARN_RATIO = "0.000001"
-    process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO = "0.000002"
+    const oldWarn = process.env.ORCANA_CONTEXT_WARN_RATIO
+    const oldBlock = process.env.ORCANA_CONTEXT_BLOCK_RATIO
+    process.env.ORCANA_CONTEXT_WARN_RATIO = "0.000001"
+    process.env.ORCANA_CONTEXT_BLOCK_RATIO = "0.000002"
     try {
       const provider = new ContextBudgetBlockProvider()
       const events: StreamEvent[] = []
@@ -1229,16 +1229,16 @@ describe("Agent loop greedy tool execution", () => {
       expect(text).toContain("Context budget exceeded")
       expect(events.some(e => e.type === "status" && String(e.data).includes("context-budget: block"))).toBe(true)
     } finally {
-      restoreEnv("DEEPSEEK_CONTEXT_WARN_RATIO", oldWarn)
-      restoreEnv("DEEPSEEK_CONTEXT_BLOCK_RATIO", oldBlock)
+      restoreEnv("ORCANA_CONTEXT_WARN_RATIO", oldWarn)
+      restoreEnv("ORCANA_CONTEXT_BLOCK_RATIO", oldBlock)
     }
   })
 
   test("degrades at context budget warning but allows current-stage write tools", async () => {
-    const oldWarn = process.env.DEEPSEEK_CONTEXT_WARN_RATIO
-    const oldBlock = process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO
-    process.env.DEEPSEEK_CONTEXT_WARN_RATIO = "0.000001"
-    process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO = "0.99"
+    const oldWarn = process.env.ORCANA_CONTEXT_WARN_RATIO
+    const oldBlock = process.env.ORCANA_CONTEXT_BLOCK_RATIO
+    process.env.ORCANA_CONTEXT_WARN_RATIO = "0.000001"
+    process.env.ORCANA_CONTEXT_BLOCK_RATIO = "0.99"
     try {
       let writes = 0
       const tools = buildTools({
@@ -1268,8 +1268,8 @@ describe("Agent loop greedy tool execution", () => {
       expect(JSON.stringify(provider.messages)).toContain("Context Budget Guard")
       expect(JSON.stringify(provider.messages)).toContain("Continue only the current atomic stage")
     } finally {
-      restoreEnv("DEEPSEEK_CONTEXT_WARN_RATIO", oldWarn)
-      restoreEnv("DEEPSEEK_CONTEXT_BLOCK_RATIO", oldBlock)
+      restoreEnv("ORCANA_CONTEXT_WARN_RATIO", oldWarn)
+      restoreEnv("ORCANA_CONTEXT_BLOCK_RATIO", oldBlock)
     }
   }, 15000)
 
@@ -1317,7 +1317,7 @@ describe("Agent loop greedy tool execution", () => {
   })
 
   test("budget-guard per-round cost gate — spec placeholder for future", () => {
-    // DEEPSEEK_MAX_ROUND_CACHE_MISS_TOKENS / MAX_ROUND_OUTPUT_TOKENS
+    // ORCANA_MAX_ROUND_CACHE_MISS_TOKENS / MAX_ROUND_OUTPUT_TOKENS
     // are not wired in loop.ts yet. When implemented, the gate should:
     //   - Track per-round delta of cache miss / output tokens
     //   - Block via contextBudget.mode === "block" before next provider call
@@ -1785,8 +1785,8 @@ describe("Agent loop greedy tool execution", () => {
   })
 
   test("dynamic tool disclosure can still empty plan-only provider tools when cache-stable mode is disabled", async () => {
-    const oldStableTools = process.env.DEEPSEEK_CACHE_STABLE_TOOLS
-    process.env.DEEPSEEK_CACHE_STABLE_TOOLS = "0"
+    const oldStableTools = process.env.ORCANA_CACHE_STABLE_TOOLS
+    process.env.ORCANA_CACHE_STABLE_TOOLS = "0"
     try {
       const provider = new LongTaskReadonlyThenPlanProvider()
       const tools = buildTools(
@@ -1825,7 +1825,7 @@ describe("Agent loop greedy tool execution", () => {
       // Cache-stable off: tool counts may differ per round with dynamic disclosure
       expect(provider.toolCounts.length).toBeGreaterThanOrEqual(2)
     } finally {
-      restoreEnv("DEEPSEEK_CACHE_STABLE_TOOLS", oldStableTools)
+      restoreEnv("ORCANA_CACHE_STABLE_TOOLS", oldStableTools)
     }
   })
 
@@ -2107,8 +2107,8 @@ describe("Agent loop greedy tool execution", () => {
   })
 
   test("idle provider stream times out and reaches recovery gate", async () => {
-    const previous = process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS
-    process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS = "20"
+    const previous = process.env.ORCANA_PROVIDER_IDLE_TIMEOUT_MS
+    process.env.ORCANA_PROVIDER_IDLE_TIMEOUT_MS = "20"
     try {
       const provider = new HangingThenTextProvider()
       const trace = new MemoryTrace()
@@ -2132,8 +2132,8 @@ describe("Agent loop greedy tool execution", () => {
       expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying interrupted round"))).toBe(true)
       expect(JSON.stringify(provider.messages[1])).toContain("Provider Stream Recovery")
     } finally {
-      if (previous === undefined) delete process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS
-      else process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS = previous
+      if (previous === undefined) delete process.env.ORCANA_PROVIDER_IDLE_TIMEOUT_MS
+      else process.env.ORCANA_PROVIDER_IDLE_TIMEOUT_MS = previous
     }
   })
 

@@ -1,7 +1,7 @@
 /** Knowledge base — stores learned solutions across sessions.
  *
  *  Format: JSONL, one entry per learned insight.
- *  Stored in ~/.deepseek-code/knowledge/
+ *  Stored in ~/.orcana/knowledge/
  *
  *  V2: supports research distillation — web_search/web_fetch results are
  *  extracted by Flash into structured KeyFact[], then stored here with
@@ -42,7 +42,7 @@ export class KnowledgeBase {
   private fts: SqliteStore
 
   constructor(storeDir?: string) {
-    this.storeDir = storeDir ?? join(homedir(), ".deepseek-code", "knowledge")
+    this.storeDir = storeDir ?? join(homedir(), ".orcana", "knowledge")
     mkdirSync(this.storeDir, { recursive: true })
     this.fts = new SqliteStore("knowledge", this.storeDir)
     this.load()

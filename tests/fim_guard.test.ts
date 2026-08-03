@@ -74,8 +74,8 @@ describe("checkFimSafety — forbidden files", () => {
     expect(result.allowed).toBe(false)
   })
 
-  test("blocks .deepseek-code path", async () => {
-    const result = await checkFimSafety("/project/.deepseek-code/state.json", {})
+  test("blocks .orcana path", async () => {
+    const result = await checkFimSafety("/project/.orcana/state.json", {})
     expect(result.allowed).toBe(false)
   })
 

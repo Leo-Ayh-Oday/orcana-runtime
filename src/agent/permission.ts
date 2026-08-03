@@ -139,12 +139,12 @@ export class PermissionGate {
    *
    *  Priority chain:
    *    1. GLOBAL_DENY_RULES           (physics — cannot be overridden)
-   *    2. User Deny                   (~/.deepseek-code/permissions.json)
-   *    3. Project Deny                (<root>/.deepseek-code/permissions.json)
+   *    2. User Deny                   (~/.orcana/permissions.json)
+   *    3. Project Deny                (<root>/.orcana/permissions.json)
    *    4. Session Deny Override       (gate.deny())
    *    5. Session Allow Override      (gate.allow()) — blocked for Risk 4-5
-   *    6. Project Allow               (<root>/.deepseek-code/permissions.json)
-   *    7. User Allow                  (~/.deepseek-code/permissions.json)
+   *    6. Project Allow               (<root>/.orcana/permissions.json)
+   *    7. User Allow                  (~/.orcana/permissions.json)
    *    8. Tool declared permission    (tool.defn.permission)
    *    9. Category default            (safe/git→allow, file/network/shell→ask)
    *

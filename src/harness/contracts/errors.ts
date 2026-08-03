@@ -18,6 +18,8 @@ export type HarnessErrorKind =
   | "snapshot_corrupt"
   | "storage_failure"
   | "budget_exhausted"
+  | "capability_not_found"
+  | "capability_already_registered"
   | "internal"
 
 export class HarnessError extends Error {

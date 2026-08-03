@@ -7,8 +7,9 @@
  *  explicit BudgetExhaustionReason — never a vague "max rounds reached".
  *
  *  H4 hooks model/tool/token/wall-time. write/external_action/repair are
- *  reserved-capable but not yet wired to kernel events (H8/H9 classify
- *  tools); their limits default to unlimited.
+ *  reserved-capable; BudgetRequest.kind was completed for "repair" in H9.
+ *  Event-level classification (which tools count as write/external) is wired
+ *  via the capability registry in H9; limits default to unlimited.
  */
 
 import { randomUUID } from "node:crypto"
@@ -62,6 +63,7 @@ function kindReason(kind: BudgetRequest["kind"]): BudgetExhaustionReason {
     case "tool_call": return "tool_call_budget"
     case "write": return "write_budget"
     case "external_action": return "external_action_budget"
+    case "repair": return "repair_budget"
   }
 }
 
@@ -71,6 +73,7 @@ function usedKind(used: BudgetUsage, kind: BudgetRequest["kind"]): number {
     case "tool_call": return used.toolCalls
     case "write": return used.writes
     case "external_action": return used.externalActions
+    case "repair": return used.repairCycles
   }
 }
 
@@ -80,6 +83,7 @@ function maxKind(limits: RunBudget, kind: BudgetRequest["kind"]): number {
     case "tool_call": return limits.maxToolCalls
     case "write": return limits.maxWrites
     case "external_action": return limits.maxExternalActions
+    case "repair": return limits.maxRepairCycles
   }
 }
 
@@ -131,6 +135,7 @@ export function createBudgetLedger(limits: RunBudget): BudgetLedger {
         case "tool_call": used.toolCalls += 1; break
         case "write": used.writes += 1; break
         case "external_action": used.externalActions += 1; break
+        case "repair": used.repairCycles += 1; break
       }
       // Actual token/wall-time usage (validated against limits).
       used.wallTimeMs = Math.max(used.wallTimeMs, actual.wallTimeMs ?? 0)

@@ -1,11 +1,11 @@
-# deepseek-code 项目交接文档
+# orcana 项目交接文档
 
 > 版本 0.1.0 → 0.2.0 (3-Agent 架构迁移)
 > 最后更新: 2025-06-09
 
 ## 1. 项目定位
 
-**deepseek-code** 是一个终端 AI 编程助手，运行在 Windows/WSL 环境，基于 Bun + TypeScript。
+**orcana** 是一个终端 AI 编程助手，运行在 Windows/WSL 环境，基于 Bun + TypeScript。
 目标：成为 "AI pair programmer"，提供从理解代码、编写代码到验证代码的完整闭环。
 
 ## 2. 当前架构概览

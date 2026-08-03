@@ -100,8 +100,8 @@ Provider-specific reasoning controls are less portable. A relay may accept ordin
 TUI configuration is global and survives process restarts:
 
 ```text
-~/.deepseek-code/orcana.jsonc
-~/.deepseek-code/auth.json
+~/.orcana/orcana.jsonc
+~/.orcana/auth.json
 ```
 
 - `orcana.jsonc` stores provider metadata, base URLs, models, and the selected default.

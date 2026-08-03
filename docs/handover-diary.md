@@ -8,7 +8,7 @@
 
 ## 1. 问题背景
 
-当前项目（deepseek-code）为单Agent循环架构（`agentLoop` + ReAct），但长期来看需要多Agent协作以解决：
+当前项目（orcana）为单Agent循环架构（`agentLoop` + ReAct），但长期来看需要多Agent协作以解决：
 
 - **幻觉累加**：链式执行中，Plan → Code → Review 层层污染
 - **决策盲区**：单Agent对复杂任务无"第二意见"

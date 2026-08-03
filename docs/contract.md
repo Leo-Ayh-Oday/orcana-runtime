@@ -1,7 +1,7 @@
 # 3-Agent 架构契约 (Agent Contract)
 
 > 版本 0.2.0
-> 本文档定义 deepseek-code 中 Planner、Coder、Inspector 三个独立 Agent 及 Meta-Agent 的接口契约。
+> 本文档定义 orcana 中 Planner、Coder、Inspector 三个独立 Agent 及 Meta-Agent 的接口契约。
 > **所有 Agent 输出必须是结构化 JSON。Review 必须对照 Plan Checklist 逐条打勾，禁止自由发挥。**
 
 ## 1. 架构总览

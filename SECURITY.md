@@ -50,14 +50,14 @@ The sandbox uses defense-in-depth with platform-specific capabilities:
 
 Three-tier permission enforcement:
 1. **Global Deny** — hard blocks (system paths, destructive commands)
-2. **User Config** — `~/.deepseek-code/permissions.json`
-3. **Project Config** — `.deepseek-code/permissions.json`
+2. **User Config** — `~/.orcana/permissions.json`
+3. **Project Config** — `.orcana/permissions.json`
 
 Configure via `settings.json` or the `permissions.json` files directly.
 
 ### 4. MCP Server Isolation
 
-MCP servers run as child processes with their own environment. Server configs are stored in `~/.deepseek-code/mcp.json`.
+MCP servers run as child processes with their own environment. Server configs are stored in `~/.orcana/mcp.json`.
 
 **Risks**:
 - **RCE via server command**: `mcp.json` `command` and `args` fields execute arbitrary binaries. Only add servers from trusted sources.

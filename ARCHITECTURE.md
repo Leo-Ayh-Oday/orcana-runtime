@@ -610,9 +610,9 @@ Handles Chinese text correctly:
 
 | File | Location | Purpose |
 |------|----------|---------|
-| `settings.json` | `~/.deepseek-code/` | Provider, TUI, memory, sandbox, MCP |
-| `mcp.json` | `~/.deepseek-code/` | MCP server definitions |
-| `permissions.json` | `~/.deepseek-code/` or `<project>/.deepseek-code/` | Tool access rules |
+| `settings.json` | `~/.orcana/` | Provider, TUI, memory, sandbox, MCP |
+| `mcp.json` | `~/.orcana/` | MCP server definitions |
+| `permissions.json` | `~/.orcana/` or `<project>/.orcana/` | Tool access rules |
 | `.env` | Project root | API keys (never committed) |
 
 Env-to-feature table (all with sensible defaults):
@@ -659,7 +659,7 @@ These are hard-won lessons from development, recorded to prevent regression:
 | Dev tooling | Bun (package manager, test runner) |
 | TUI | Ink 7 (React for terminal) |
 | Provider | Anthropic SDK (DeepSeek-compatible endpoint) |
-| MCP | Custom bridge → `~/.deepseek-code/mcp.json` |
+| MCP | Custom bridge → `~/.orcana/mcp.json` |
 | LSP | TypeScript compiler API + `ts.createProgram` |
 | Memory | SQLite (FTS5) + JSONL on disk |
 | Sandbox | Win32 Job Objects + PathGuard |

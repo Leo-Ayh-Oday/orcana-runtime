@@ -46,6 +46,17 @@ export type {
   SideEffect,
 } from "./contracts/capability"
 export type { JsonSchema, JsonSchemaType } from "./contracts/schema"
+export type {
+  ContextLayer,
+  ContextContribution,
+  ContextProvider,
+  ContextRequest,
+  ContextSlice,
+  ContextBudgetPolicy,
+  ContextTrimInfo,
+  ContextPipelineOptions,
+} from "./contracts/context"
+export { LAYER_ORDER } from "./contracts/context"
 export type { RunSnapshot } from "./contracts/snapshot"
 export {
   LEGAL_TRANSITIONS,

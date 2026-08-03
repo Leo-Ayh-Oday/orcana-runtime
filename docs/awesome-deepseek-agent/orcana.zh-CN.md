@@ -68,8 +68,8 @@ $env:DEEPSEEK_MODEL_OVERRIDE="deepseek-v4-pro"
 复制配置模板并编辑：
 
 ```bash
-mkdir -p ~/.deepseek-code
-cp settings.example.json ~/.deepseek-code/settings.json
+mkdir -p ~/.orcana
+cp settings.example.json ~/.orcana/settings.json
 ```
 
 配置文件采用嵌套结构：
@@ -234,7 +234,7 @@ DeepSeek V4 支持 1M token 上下文窗口。Orcana 通过 ContextEpoch 自动�
 
 ### 推理强度太低
 
-复杂编码任务默认使用 max reasoning effort。可在 `~/.deepseek-code/settings.json` 中确认。
+复杂编码任务默认使用 max reasoning effort。可在 `~/.orcana/settings.json` 中确认。
 
 ### 命令找不到
 

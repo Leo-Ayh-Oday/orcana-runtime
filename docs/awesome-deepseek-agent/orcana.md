@@ -68,8 +68,8 @@ $env:DEEPSEEK_MODEL_OVERRIDE="deepseek-v4-pro"
 Copy the example settings and edit:
 
 ```bash
-mkdir -p ~/.deepseek-code
-cp settings.example.json ~/.deepseek-code/settings.json
+mkdir -p ~/.orcana
+cp settings.example.json ~/.orcana/settings.json
 ```
 
 The file uses nested structure:
@@ -234,7 +234,7 @@ DeepSeek V4 supports a 1M token context window. Orcana manages this automaticall
 
 ### Reasoning effort too low
 
-For complex coding tasks, Orcana uses max reasoning effort by default. You can verify in `~/.deepseek-code/settings.json`.
+For complex coding tasks, Orcana uses max reasoning effort by default. You can verify in `~/.orcana/settings.json`.
 
 ### Commands not found
 

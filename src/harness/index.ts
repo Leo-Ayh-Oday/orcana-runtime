@@ -57,6 +57,31 @@ export type {
   ContextPipelineOptions,
 } from "./contracts/context"
 export { LAYER_ORDER } from "./contracts/context"
+export type {
+  NodeKind,
+  NodeRunStatus,
+  NodeUsage,
+  NodeDiagnostic,
+  NodeRunError,
+  NodeResult,
+  HarnessNode,
+  NodeExecutionContext,
+  NodeEvent,
+  AgentNodeInput,
+  AgentNodeOutput,
+  ToolNodeInput,
+  VerificationNodeInput,
+  HumanNodeInput,
+} from "./contracts/nodes"
+export { NODE_EVENT_TYPES } from "./contracts/nodes"
+export {
+  createNodeExecutionContext,
+  createDefaultNodePolicyContext,
+  createMinimalContextSlice,
+  createNodeRunId,
+} from "./nodes/context"
+export { runNode, runNodeToResult } from "./nodes/run"
+export { createFunctionNode } from "./nodes/function-node"
 export type { RunSnapshot } from "./contracts/snapshot"
 export {
   LEGAL_TRANSITIONS,

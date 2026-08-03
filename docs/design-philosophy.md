@@ -264,7 +264,7 @@ Orcana 的 runtime 设计考虑了 DeepSeek 的模型特性：thinking mode 的�
 
 **路线：Strong Single First → Microagent for Locator/Verifier → T3R (Planner/Coder/Reviewer)**
 
-计划规模：10 Phase / 32+ PR 组 / 20+ 条可验证验收标准。当前 v0.3.0 → v1.0 收口阶段。完整路线图见 [docs/v1.0-roadmap.md](./v1.0-roadmap.md)。
+计划规模：10 Phase / 32+ PR 组 / 20+ 条可验证验收标准。当前 v0.4.0 → v1.0 收口阶段。完整路线图见 [docs/v1.0-roadmap.md](./v1.0-roadmap.md)。
 
 ---
 

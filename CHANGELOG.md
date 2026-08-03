@@ -2,6 +2,14 @@
 
 All notable changes to DeepSeek Orcana.
 
+## [0.4.0] — 2026-08-03
+
+### Added
+- **Harness 2.0 (H0–H8)** — `src/harness/`: `AgentHarness` facade is now the single production entry (CLI/TUI run through `AgentHarness.run()` → `LegacyLoopAdapter` → `agentLoop`; direct `agentLoop()` calls removed). Typed `HarnessEvent` contracts, `RunLifecycleMachine` + exhaustive `LoopDecision → RunOutcome` mapping, per-run isolation via `AgentRunScope`, `BudgetLedger` + cancellation policy (model/tool/token/wall-time budgets with a wall-time watchdog), typed JSONL event trace with legacy migration, `HarnessStore` persistence (sessions/runs/snapshots + workspace hash), persistent interrupt/resume for plan approval and clarification (cross-instance), artifact/evidence integration with freshness (workspace + file-hash drift → stale detection, `CompletionOrchestrator` derives completion facts from `EvidenceLedger`).
+
+### Changed
+- **Agent Loop Kernel slimming (ALK-1.0, L0–L7 complete)** — `src/agent/loop.ts` reduced from **2077 → 132 lines** (stage orchestrator only). Phase bodies moved into `src/agent/kernel/` (prepare / round / finalize) and the L3–L6 coordinators (`ProviderRoundRunner`, `ToolBatchExecutor`, `VerificationCoordinator`, `MaintenanceCoordinator`). All phase exits unified as `LoopDecision` (continue/break/return); stream/trace/state emission unified as `RunEffect` with field-level `AgentRunStatePatch`; single terminal switch + `finalizeRun()` + unified `finally` lifecycle. `loop.ts` no longer executes tools, parses provider streams, or performs verification/checkpoint/file-system work itself. L0 Golden Trace preserved.
+
 ## [0.3.0] — 2026-06-28
 
 ### Added

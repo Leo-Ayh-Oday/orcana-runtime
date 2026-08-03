@@ -1,8 +1,8 @@
 # Orcana Strong Single v1.0 Status Matrix
 
-Updated: 2026-07-16
+Updated: 2026-08-03
 
-Snapshot: `codex/transaction-evidence-binding` (local, unreleased implementation slice). Published npm remains `0.3.4`.
+Snapshot: `codex/transaction-evidence-binding` → v0.4.0 (ALK 减重 L0–L7 + Harness 2.0 H0–H8 landed). Published npm baseline was `0.3.4`.
 
 This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is intentionally conservative: a module is `Done` only when the code, tests, and runtime wiring are present.
 

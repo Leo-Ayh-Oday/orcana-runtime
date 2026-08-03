@@ -34,7 +34,6 @@ import {
   runThinkingCompaction,
 } from "../maintenance/coordinator"
 import { revisePlan, formatTaskPlanningPrompt, formatTaskTrackerStatus, markPlanAccepted, missingTaskRequirements, snapshotTaskTracker } from "../task-tracker"
-import { formatModePrompt, getActiveMode } from "../mode-contract"
 import { evaluatePlanningArtifact, formatPlanningGatePrompt } from "../planning-gate"
 import { CompletionOrchestrator } from "../completion-orchestrator"
 import { AgentState } from "../state-machine"
@@ -42,19 +41,24 @@ import { executeToolBatch } from "../tool-execution/batch-executor"
 import { setRuntimeContextBudgetMode } from "../runtime-context"
 import { getBlockingObligations } from "../../ripple/obligations"
 import { currentTransactionEvidenceBinding } from "../patch-transaction"
-import { buildContextMessages, buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../round/request-builder"
+import { buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../round/request-builder"
 import { createPreRoundChain } from "../gates/pre-round"
 import { processGateOverflow } from "../gates/overflow"
 import {
-  buildPlanStateContext,
   classifyEpochAction,
   epochRollover,
   formatEpochBudgetWarning,
   formatEpochStatus,
   totalMessageChars,
-  type PlanStateInput,
 } from "../context-epoch"
-import { buildVolatileContextMessage, collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
+import { collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
+import {
+  createContextRequest,
+  createDefaultContextProviders,
+  contextSliceToMessages,
+  runContextPipeline,
+  stableMessageOf,
+} from "../../harness/context"
 import { createRoundState } from "../run/state"
 import { runProviderRound } from "../provider/round-runner"
 import { createProviderRoundResult, type ProviderRoundResult } from "../provider/round-result"
@@ -130,87 +134,30 @@ export async function* runRound(
   const maxTok = thinkingDecision.maxTokens
   yield trace("thinking_decision", { round, ...thinkingDecision })
 
-  // Project context
-  let ctxText = ""
-  if (stagedContext && (stagedContext.loadedFiles.size > 0 || ctx.state.roundNum > 0)) {
-    ctxText = stagedContext.buildContext().toPromptText()
-  }
-
-  // Thinking store
-  let thinkContext = ""
-  if (ctx.thinkingStore && ctx.state.roundNum > 0) {
-    thinkContext = ctx.thinkingStore.formatForPrompt(ctx.thinkingStore.findSimilar(ctx.effectivePrompt))
-  }
-
-  // Knowledge base
-  let knowledgeContext = ""
-  if (ctx.knowledgeBase && ctx.state.roundNum > 1) {
-    const hits = ctx.knowledgeBase.findRelevant(ctx.effectivePrompt)
-    if (hits.length > 0) {
-      knowledgeContext = "\n## 已学知识\n" + hits.map(e =>
-        `问题: ${e.problem}\n方案: ${e.solution}`
-      ).join("\n\n") + "\n"
-    }
-  }
-
   const system = buildSystemPrompt()
-  // ── Frozen stable prefix: computed once on round 0, reused across all rounds ──
-  if (!ctx.runState.conversation.frozenStablePrefix) {
-    const stablePrefixParts: string[] = []
-    if (options.stableMemoryContext?.trim()) stablePrefixParts.push(`## Stable Cold Memory\n${options.stableMemoryContext.trim()}`)
-    if (ctx.experienceContext) stablePrefixParts.push(ctx.experienceContext)
-    if (ctx.contextKernel.text) stablePrefixParts.push(`## Project Context Kernel\n${ctx.contextKernel.text}`)
-    if (ctx.contextMap.contextMapContext) stablePrefixParts.push(ctx.contextMap.contextMapContext)
-    if (triageSkillPrompts.length) stablePrefixParts.push(triageSkillPrompts.join("\n\n"))
-    yield patch({
-      conversation: {
-        frozenStablePrefix: stablePrefixParts.length > 0
-          ? { role: "user", content: ["## Stable Prefix Context\n[CACHE_ANCHOR:v3]", stablePrefixParts.join("\n\n")].join("\n\n") }
-          : null,
-      },
-    })
-  }
-  const stablePrefixContext = ctx.runState.conversation.frozenStablePrefix
-  // ── Plan State Context (PR 4, Layer 2): survives epoch rollover ──
-  const planStateInput: PlanStateInput = {
-    masterPlan: planStore.current,
-    taskTracker: planning.taskTracker,
-    taskPacket: planStore.current
-      ? (currentNode(planStore.current)?._packet ?? null)
-      : null,
-    rippleObligations: verificationState.rippleObligations,
-    userGoal: planStore.current?.goal ?? planning.taskTracker?.goal ?? ctx.effectivePrompt.slice(0, 200),
-    decisions: [], // TODO PR 6/7: wire Evidence/Ripple decisions into plan state
-    round,
-  }
-  const planStateText = buildPlanStateContext(planStateInput)
-  const planStateContext: ProviderMessage | null = planStateText.length > 0
-    ? { role: "user", content: planStateText }
-    : null
-  const volatileContext = buildVolatileContextMessage(ctxText, thinkContext, knowledgeContext)
+  // ── Context Pipeline (H10): every context source is a harness provider;
+  // the pipeline assembles the byte-frozen message list (plan §16). Budget
+  // stays disabled here — trimming is a separate decision with its own
+  // Golden Trace update (§3.5). ──
+  const contextSlice = await runContextPipeline({
+    providers: createDefaultContextProviders(),
+    request: createContextRequest(ctx, round),
+  })
+  const contextMessages = contextSliceToMessages(contextSlice)
+  const planStateText = contextSlice.byProvider.get("plan-state")?.content ?? ""
   const taskPlanning = planning.taskTracker?.phase === "planning"
-  const planningContext: ProviderMessage | null = taskPlanning && planning.taskTracker
-    ? { role: "user", content: formatTaskPlanningPrompt(planning.taskTracker, round) }
-    : null
+  // ── Frozen stable prefix: computed once on round 0, reused across all rounds ──
+  // (the pipeline's stable-memory provider passes it through byte-for-byte
+  // from round 1 — plan §23 cache stability).
+  const stableMessage = stableMessageOf(contextSlice)
+  if (round === 0 && !ctx.runState.conversation.frozenStablePrefix && stableMessage) {
+    yield patch({ conversation: { frozenStablePrefix: stableMessage } })
+  }
   // ── Context messages: all go BEFORE rawMessages ──
   // Anthropic API requires tool_use→tool_result adjacency. Any user
   // message inserted between an assistant(tool_use) and user(tool_result)
   // is a 400 error. So volatile/planning/budget context must precede
-  // rawMessages, never follow it.
-  const contextMessages = buildContextMessages({
-    langInstruction: ctx.langInstruction,
-    stablePrefixContext,
-    planStateContext,
-    researchContext: ctx.runState.research.context,
-    volatileContext,
-    planningContext,
-  })
-
-  // PR 8: inject mode contract prompt — tells model what mode it's in
-  const modeContext = formatModePrompt(getActiveMode())
-  if (modeContext) {
-    contextMessages.push({ role: "user", content: modeContext })
-  }
+  // rawMessages, never follow it. (pipeline output preserves this order)
 
   // ── Epoch check: estimate total chars and classify action ──
   const epochTotalChars = totalMessageChars(contextMessages) + totalMessageChars(rawMessages)

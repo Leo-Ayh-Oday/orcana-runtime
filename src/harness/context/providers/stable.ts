@@ -9,11 +9,11 @@
 
 import type { ContextContribution, ContextProvider, ContextRequest } from "../../contracts/context"
 
-function part(providerId: string, content: string, cacheKey?: string): ContextContribution {
+function part(providerId: string, priority: number, content: string, cacheKey?: string): ContextContribution {
   return {
     providerId,
     layer: "stable",
-    priority: 0,
+    priority,
     content,
     estimatedTokens: Math.ceil(content.length / 3),
     sourceRefs: [],
@@ -51,12 +51,12 @@ export const STABLE_MEMORY_PROVIDER: ContextProvider = {
     // Rounds ≥ 1: the frozen prefix is the authoritative source — pass it
     // through byte-for-byte; the other stable parts return empty.
     if (request.frozenStablePrefixContent !== null) {
-      return part("stable-memory", request.frozenStablePrefixContent, "stable-prefix:v3")
+      return part("stable-memory", 10, request.frozenStablePrefixContent, "stable-prefix:v3")
     }
     const parts: string[] = []
     if (request.stableMemoryContext?.trim()) parts.push(`## Stable Cold Memory\n${request.stableMemoryContext.trim()}`)
     if (request.experienceContext) parts.push(request.experienceContext)
-    return part("stable-memory", parts.join("\n\n"), "stable-prefix:v3")
+    return part("stable-memory", 10, parts.join("\n\n"), "stable-prefix:v3")
   },
 }
 
@@ -66,9 +66,9 @@ export const PROJECT_KERNEL_PROVIDER: ContextProvider = {
   priority: 20,
   cacheable: true,
   async provide(request: ContextRequest) {
-    if (request.frozenStablePrefixContent !== null) return part("project-kernel", "")
+    if (request.frozenStablePrefixContent !== null) return part("project-kernel", 20, "")
     const text = request.contextKernel.text
-    return part("project-kernel", text ? `## Project Context Kernel\n${text}` : "", `kernel:${request.contextKernel.hash}`)
+    return part("project-kernel", 20, text ? `## Project Context Kernel\n${text}` : "", `kernel:${request.contextKernel.hash}`)
   },
 }
 
@@ -78,8 +78,8 @@ export const CONTEXT_MAP_PROVIDER: ContextProvider = {
   priority: 30,
   cacheable: true,
   async provide(request: ContextRequest) {
-    if (request.frozenStablePrefixContent !== null) return part("context-map", "")
-    return part("context-map", request.contextMapContext)
+    if (request.frozenStablePrefixContent !== null) return part("context-map", 30, "")
+    return part("context-map", 30, request.contextMapContext)
   },
 }
 
@@ -89,7 +89,7 @@ export const SKILLS_PROVIDER: ContextProvider = {
   priority: 40,
   cacheable: true,
   async provide(request: ContextRequest) {
-    if (request.frozenStablePrefixContent !== null) return part("skills", "")
-    return part("skills", request.triageSkillPrompts.join("\n\n"))
+    if (request.frozenStablePrefixContent !== null) return part("skills", 40, "")
+    return part("skills", 40, request.triageSkillPrompts.join("\n\n"))
   },
 }

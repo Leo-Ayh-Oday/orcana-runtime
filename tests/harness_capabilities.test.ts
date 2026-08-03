@@ -14,10 +14,16 @@ import {
   sideEffectFromContract,
   toolCapabilityHandler,
 } from "../src/harness/capabilities/tool-adapter"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createBudgetLedger, defaultRunBudget } from "../src/harness/runtime/budget-ledger"
 import { HarnessError } from "../src/harness/contracts/errors"
 import { executeCapability } from "../src/harness/capabilities/executor"
 import { buildNodePolicyInput } from "../src/harness/capabilities/policy-adapter"
+import { createToolArtifactTracker } from "../src/harness/capabilities/tool-adapter"
+import { createArtifactStore } from "../src/harness/artifacts/artifact-store"
+import { planTextFromPayload } from "../src/harness/runtime/legacy-loop-adapter"
 import { evaluateToolPolicy } from "../src/agent/tool-execution/policy"
 import { PermissionGate } from "../src/agent/permission"
 import type { CapabilityDescriptor } from "../src/harness/contracts/capability"
@@ -379,5 +385,70 @@ describe("H9 capability executor", () => {
     })
     expect(result.success).toBe(false)
     expect((result as { error: string }).error).toBe("denied by policy")
+  })
+})
+
+// ── Artifact wiring (part C): plan §15.3 "Artifact / Evidence" step ──
+
+describe("H9 artifact wiring", () => {
+  test("patch artifact: committed write execution records a diff-bound patch artifact", async () => {
+    const store = createArtifactStore()
+    const tracker = createToolArtifactTracker({ store, runId: "run-patch" })
+    const dir = mkdtempSync(join(tmpdir(), "h9-patch-"))
+    const file = join(dir, "a.txt")
+    writeFileSync(file, "old content\n")
+    try {
+      const descriptor = createCapabilityDescriptor({
+        id: "write_file",
+        kind: "tool",
+        inputSchema: { type: "object", properties: {}, required: [] },
+        sideEffect: "write",
+      })
+      const snapshot = await tracker.beforeExecute(descriptor, { path: file })
+      expect(snapshot).toBe("old content\n")
+      writeFileSync(file, "new content\n")
+      await tracker.afterExecute(
+        descriptor,
+        { path: file },
+        snapshot,
+        { success: true, content: "ok", metadata: { patchTransactionId: "ptxn_1" } },
+      )
+      const patches = await store.findByKind("patch")
+      expect(patches).toHaveLength(1)
+      expect(patches[0]!.producedBy).toBe("write_file")
+      expect(patches[0]!.runId).toBe("run-patch")
+      const diff = await store.getContent(patches[0]!.contentRef)
+      // The project's diff format is a line-stat summary (not unified diff).
+      expect(diff).toContain("a.txt")
+      expect(diff).toContain("@@ 统计: +1 -1")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("patch artifact: failed writes and missing transactions record nothing", async () => {
+    const store = createArtifactStore()
+    const tracker = createToolArtifactTracker({ store, runId: "run-patch" })
+    const descriptor = createCapabilityDescriptor({
+      id: "write_file",
+      kind: "tool",
+      inputSchema: { type: "object", properties: {}, required: [] },
+      sideEffect: "write",
+    })
+    await tracker.afterExecute(descriptor, { path: "nope.txt" }, undefined, {
+      success: false, content: "failed", error: "failed",
+    })
+    await tracker.afterExecute(descriptor, { path: "nope.txt" }, undefined, {
+      success: true, content: "ok",
+    })
+    expect(await store.findByKind("patch")).toHaveLength(0)
+  })
+
+  test("plan artifact: planTextFromPayload extracts text from string/object shapes", () => {
+    expect(planTextFromPayload("plain plan")).toBe("plain plan")
+    expect(planTextFromPayload({ planText: "structured plan" })).toBe("structured plan")
+    expect(planTextFromPayload({ text: "legacy shape" })).toBe("legacy shape")
+    expect(planTextFromPayload({ opaque: { nested: true } })).toContain("opaque")
+    expect(planTextFromPayload(null)).toBe("")
   })
 })

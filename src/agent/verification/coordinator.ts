@@ -26,7 +26,7 @@ import type { AgentRunTrace } from "../run-trace"
 import type { EvidenceLedger } from "../evidence-ledger"
 import { deriveLastTypecheck, ingestTypecheck, ingestVerificationResults } from "../evidence-ledger"
 import type { ArtifactStore } from "../../harness/contracts/artifact"
-import { ingestTypecheckWithArtifact, ingestVerificationWithArtifact } from "../../harness/artifacts/evidence-adapter"
+import { ingestTypecheckWithArtifact, ingestVerificationWithArtifact, putRippleArtifact } from "../../harness/artifacts/evidence-adapter"
 import { computeRelevantFileHashes } from "../../harness/artifacts/freshness"
 import { runRippleVerification } from "../round/post-loop"
 import {
@@ -147,6 +147,24 @@ export async function* runRippleVerificationPhase(
         verificationState.rippleObligations,
         obligationsFromReport(report, modifiedFilesThisRound),
       )
+    }
+    // H9: ripple verification reports are run-flow facts — record one
+    // ripple_report artifact per round when a harness store is present
+    // (same injection chain as the H8 typecheck/verification artifacts).
+    if (ctx.artifactStore && ctx.runId && rippleReportsThisRound.length > 0) {
+      const report = rippleReportsThisRound
+        .map((r) => `${r.targetFile}: ${r.findings.length} findings`)
+        .join("; ")
+      try {
+        await putRippleArtifact({
+          store: ctx.artifactStore,
+          runId: ctx.runId,
+          report,
+          producedBy: "ripple_engine",
+        })
+      } catch {
+        // Best-effort: artifact recording never breaks the run.
+      }
     }
     if (verificationState.rippleObligations.length > 0) {
       // Let ripple engine know agent is cascading — promotes block→warn

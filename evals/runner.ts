@@ -11,7 +11,7 @@ import { classifyFailure, estimateCost } from "./scenarios"
 
 // ── Storage paths ──
 
-const EVAL_DIR = join(homedir(), ".deepseek-code", "evals")
+const EVAL_DIR = join(homedir(), ".orcana", "evals")
 const BASELINE_FILE = join(EVAL_DIR, "baseline.json")
 const HISTORY_DIR = join(EVAL_DIR, "history")
 

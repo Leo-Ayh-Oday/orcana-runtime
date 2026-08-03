@@ -5,3 +5,5 @@ export { createNodeExecutionContext, createDefaultNodePolicyContext, createMinim
 export { createNodeEventEmitter } from "./events"
 export { runNode, runNodeToResult } from "./run"
 export { createFunctionNode } from "./function-node"
+export { createToolNode } from "./tool-node"
+export { createVerificationNode } from "./verification-node"

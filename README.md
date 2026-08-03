@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana/actions/workflows/ci.yml"><img src="https://github.com/Leo-Ayh-Oday/deepseek-orcana/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/deepseek-orcana"><img src="https://img.shields.io/npm/v/deepseek-orcana" alt="npm"></a>
-  <a href="https://github.com/Leo-Ayh-Oday/deepseek-orcana"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/deepseek-orcana?style=flat" alt="stars"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/runtime-Node.js-339933" alt="Node.js"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/dev-Bun-%23f9f1e4" alt="Bun"></a>
@@ -17,6 +17,23 @@
 <p align="center">
   <a href="./README.zh.md">中文</a>
 </p>
+
+---
+
+A constraint-first terminal coding agent that verifies every change with typecheck, tests and an evidence ledger.
+
+## Quickstart
+
+```bash
+# Install (global)
+npm install -g deepseek-orcana
+
+# One-shot example
+orcana "fix the failing test"
+
+# Interactive TUI
+orcana
+```
 
 ---
 
@@ -70,7 +87,7 @@ You: "add a logout button"
     That's ~15 gates. Every write checked; completion requires proof.
 ```
 
-**The gate system scales to the risk.** Read-only tasks breeze through. Code changes get progressively more scrutiny — write gates, ripple analysis, evidence collection, independent verification. Stuck-in-a-loop? The overflow gate hard-stops after 5 repeated blocks and asks for human help.
+**The gate system scales to the risk.** Read-only tasks breeze through. Code changes get progressively more scrutiny — write gates, ripple analysis, evidence collection, independent verification[...] 
 
 This is why we say "constraint-first." Not because every task is slow, but because the runtime knows the difference.
 
@@ -80,13 +97,13 @@ This is why we say "constraint-first." Not because every task is slow, but becau
 
 ## Key capabilities
 
-**Ripple Engine** — Before writing to any file, Orcana asks: *who calls this?* Traces TypeScript dependencies through 7 layers, from API surface diff to semantic references, and blocks the write until every affected caller is handled. 212 tests. → [docs/ripple-engine.md](./docs/ripple-engine.md)
+**Ripple Engine** — Before writing to any file, Orcana asks: *who calls this?* Traces TypeScript dependencies through 7 layers, from API surface diff to semantic references, and blocks the write[...]
 
-**Evidence Ledger** — Completion isn't a claim, it's a record. Typecheck passed? Tests green? Build succeeded? The ledger tracks what was verified and cross-checks it against the final output. If the agent says "all tests pass" but the ledger shows none ran, the Truthfulness Gate blocks.
+**Evidence Ledger** — Completion isn't a claim, it's a record. Typecheck passed? Tests green? Build succeeded? The ledger tracks what was verified and cross-checks it against the final output. I[...]
 
-**Flash Judge** — An independent, cheaper model re-evaluates completion claims. If the main model confidently declares victory but the Judge says NOT_SATISFIED, the task continues. Circuit-breaks after 3 evaluations — won't silently accept unverified completion.
+**Flash Judge** — An independent, cheaper model re-evaluates completion claims. If the main model confidently declares victory but the Judge says NOT_SATISFIED, the task continues. Circuit-break[...]
 
-> **Sandbox note**: macOS/Linux runs in degraded mode (env filtering + timeout + post-hoc audit). Only Windows gets kernel-level Job Object isolation. See [SECURITY.md](./SECURITY.md) for platform-by-platform breakdown.
+> **Sandbox note**: macOS/Linux runs in degraded mode (env filtering + timeout + post-hoc audit). Only Windows gets kernel-level Job Object isolation. See [SECURITY.md](./SECURITY.md) for platform[...]
 
 ---
 

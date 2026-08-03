@@ -16,6 +16,10 @@ import {
 } from "../src/harness/capabilities/tool-adapter"
 import { createBudgetLedger, defaultRunBudget } from "../src/harness/runtime/budget-ledger"
 import { HarnessError } from "../src/harness/contracts/errors"
+import { executeCapability } from "../src/harness/capabilities/executor"
+import { buildNodePolicyInput } from "../src/harness/capabilities/policy-adapter"
+import { evaluateToolPolicy } from "../src/agent/tool-execution/policy"
+import { PermissionGate } from "../src/agent/permission"
 import type { CapabilityDescriptor } from "../src/harness/contracts/capability"
 
 // H9 acceptance part A: tool → capability projection is a pure function of
@@ -163,5 +167,217 @@ describe("H9 budget kinds", () => {
     ledger.commit(second.id, zeroUsage)
     expect(ledger.used.repairCycles).toBe(2)
     expect(ledger.remaining().repairCycles).toBe(0)
+  })
+})
+
+// ── Executor (part B): the 8-step chain (plan §15.3) ──
+
+function customRegistry(execute: () => Promise<{ ok: boolean; output?: unknown; error?: string }>) {
+  const registry = createCapabilityRegistry()
+  registry.register(
+    createCapabilityDescriptor({
+      id: "custom_verifier",
+      kind: "verifier",
+      inputSchema: { type: "object", properties: {}, required: [] },
+      sideEffect: "none",
+    }),
+    { execute },
+  )
+  return registry
+}
+
+function writeCapabilityRegistry(tools: ReturnType<typeof FIRST_BATCH>, handler: (params: Record<string, unknown>) => Promise<{ ok: boolean; output?: unknown; error?: string }>) {
+  const registry = createCapabilityRegistry()
+  const tool = tools.find((t) => t.defn.name === "write_file")!
+  registry.register(projectCapabilityDescriptor(tool), { execute: handler })
+  return { registry, tool }
+}
+
+describe("H9 capability executor", () => {
+  test("node mode executes a registered capability and synthesizes a ToolResult", async () => {
+    const registry = customRegistry(async () => ({ ok: true, output: { content: "verified", success: true } }))
+    const { result } = await executeCapability(registry, { capabilityId: "custom_verifier", params: {} })
+    expect(result.success).toBe(true)
+    expect(result.content).toContain("verified")
+  })
+
+  test("handler failure surfaces as a failed ToolResult", async () => {
+    const registry = customRegistry(async () => ({ ok: false, error: "boom" }))
+    const { result } = await executeCapability(registry, { capabilityId: "custom_verifier", params: {} })
+    expect(result.success).toBe(false)
+    expect((result as { success: false; error: string }).error).toBe("boom")
+  })
+
+  test("unknown capability id is rejected", async () => {
+    const registry = createCapabilityRegistry()
+    await expect(executeCapability(registry, { capabilityId: "nope", params: {} })).rejects.toThrowError(HarnessError)
+  })
+
+  test("node-mode policy runs the same evaluateToolPolicy pure function", async () => {
+    const tools = FIRST_BATCH()
+    const tool = tools.find((t) => t.defn.name === "write_file")!
+    const gate = new PermissionGate()
+    gate.deny("write_file")
+    const { registry } = writeCapabilityRegistry(tools, async (params) => ({ ok: true, output: params }))
+    const events: unknown[] = []
+    const { result } = await executeCapability(registry, {
+      capabilityId: "write_file",
+      params: { path: "x.ts" },
+      tool,
+      policyContext: { permissionGate: gate, input: { path: "x.ts" }, tool },
+      emit: (type, payload) => events.push({ type, payload }),
+    })
+    expect(result.success).toBe(false)
+    expect((result as { metadata?: { blocked?: boolean } }).metadata?.blocked).toBe(true)
+    // Policy decision is byte-identical to a direct evaluateToolPolicy call.
+    const direct = evaluateToolPolicy(buildNodePolicyInput({ permissionGate: gate, input: { path: "x.ts" }, tool }))
+    expect(direct.allowed).toBe(false)
+    if (!direct.allowed) {
+      expect((result as { error: string }).error).toBe(direct.blockMessage)
+    }
+    expect(events.some((e) => (e as { type: string }).type === "tool.policy.blocked")).toBe(true)
+  })
+
+  test("node-mode budget: write budget exhausts with explicit reason and releases reservations", async () => {
+    const registry = createCapabilityRegistry()
+    registry.register(
+      createCapabilityDescriptor({
+        id: "write_cap",
+        kind: "tool",
+        inputSchema: { type: "object", properties: {}, required: [] },
+        sideEffect: "write",
+      }),
+      { execute: async () => ({ ok: true, output: { success: true, content: "ok" } }) },
+    )
+    const ledger = createBudgetLedger({ ...defaultRunBudget(), maxWrites: 1, maxToolCalls: 10 })
+    const first = await executeCapability(registry, { capabilityId: "write_cap", params: {}, budget: ledger })
+    expect(first.result.success).toBe(true)
+    expect(ledger.used.writes).toBe(1)
+    const second = await executeCapability(registry, { capabilityId: "write_cap", params: {}, budget: ledger })
+    expect(second.result.success).toBe(false)
+    expect((second.result as { error: string }).error).toContain("write_budget")
+    // The limit is really enforced: a fresh reserve still fails (used=1=max).
+    expect(ledger.used.writes).toBe(1)
+    expect(() => ledger.reserve({ kind: "write" })).toThrow()
+  })
+
+  test("node-mode budget: read capabilities only consume tool_call", async () => {
+    const registry = createCapabilityRegistry()
+    registry.register(
+      createCapabilityDescriptor({
+        id: "read_cap",
+        kind: "tool",
+        inputSchema: { type: "object", properties: {}, required: [] },
+        sideEffect: "none",
+      }),
+      { execute: async () => ({ ok: true, output: { success: true, content: "read" } }) },
+    )
+    const ledger = createBudgetLedger({ ...defaultRunBudget(), maxWrites: 0, maxToolCalls: 5 })
+    const { result } = await executeCapability(registry, { capabilityId: "read_cap", params: {}, budget: ledger })
+    expect(result.success).toBe(true)
+    expect(ledger.used.writes).toBe(0)
+    expect(ledger.used.toolCalls).toBe(1)
+  })
+
+  test("before hook blocks execution and releases reservations", async () => {
+    let executed = 0
+    const registry = createCapabilityRegistry()
+    registry.register(
+      createCapabilityDescriptor({
+        id: "write_cap",
+        kind: "tool",
+        inputSchema: { type: "object", properties: {}, required: [] },
+        sideEffect: "write",
+      }),
+      { execute: async () => { executed += 1; return { ok: true, output: { success: true, content: "ok" } } } },
+    )
+    const ledger = createBudgetLedger({ ...defaultRunBudget(), maxWrites: 5 })
+    const hooks = {
+      runBefore: async () => ({ blocked: true, warnings: ["blocked by test"] }),
+      runAfter: async () => ({ blocked: false, warnings: [] }),
+    }
+    const { result } = await executeCapability(registry, {
+      capabilityId: "write_cap",
+      params: {},
+      hooks: hooks as never,
+      budget: ledger,
+    })
+    expect(executed).toBe(0)
+    expect(result.success).toBe(false)
+    expect(result.content).toContain("blocked by test")
+    // Nothing was consumed and the blocked reservation was released: the
+    // next reserve of the same kind succeeds.
+    expect(ledger.used.writes).toBe(0)
+    expect(() => ledger.reserve({ kind: "write" })).not.toThrow()
+  })
+
+  test("after hook can replace the result", async () => {
+    const registry = createCapabilityRegistry()
+    registry.register(
+      createCapabilityDescriptor({
+        id: "read_cap",
+        kind: "tool",
+        inputSchema: { type: "object", properties: {}, required: [] },
+        sideEffect: "none",
+      }),
+      { execute: async () => ({ ok: true, output: { success: true, content: "original" } }) },
+    )
+    const hooks = {
+      runBefore: async () => ({ blocked: false, warnings: [] }),
+      runAfter: async () => ({ blocked: false, warnings: [], replaceResult: { success: true, content: "replaced" } }),
+    }
+    const { result } = await executeCapability(registry, {
+      capabilityId: "read_cap",
+      params: {},
+      hooks: hooks as never,
+    })
+    expect(result.success).toBe(true)
+    expect(result.content).toBe("replaced")
+  })
+
+  test("parallel readonly result is reused as-is without hooks", async () => {
+    const tools = FIRST_BATCH()
+    const tool = tools.find((t) => t.defn.name === "read_file")!
+    const registry = createCapabilityRegistry()
+    let executed = 0
+    registry.register(projectCapabilityDescriptor(tool), {
+      execute: async () => { executed += 1; return { ok: true, output: { success: true, content: "should not run" } } },
+    })
+    const hooks = {
+      runBefore: async () => { throw new Error("before hook must not run") },
+      runAfter: async () => { throw new Error("after hook must not run") },
+    }
+    const { result } = await executeCapability(registry, {
+      capabilityId: "read_file",
+      params: { path: "x.ts" },
+      tool,
+      hooks: hooks as never,
+      parallelResult: { content: "parallel", success: true, startedAt: 1 },
+    })
+    expect(executed).toBe(0)
+    expect(result.success).toBe(true)
+    expect(result.content).toBe("parallel")
+  })
+
+  test("loop mode passes an evaluated policyDecision through unchanged", async () => {
+    const tools = FIRST_BATCH()
+    const tool = tools.find((t) => t.defn.name === "read_file")!
+    const registry = createCapabilityRegistry()
+    registry.register(projectCapabilityDescriptor(tool), {
+      execute: async () => ({ ok: true, output: { success: true, content: "read" } }),
+    })
+    const gate = new PermissionGate()
+    gate.deny("read_file")
+    // Loop mode: batch-executor already evaluated the policy — the executor
+    // must NOT re-evaluate it (identity passthrough).
+    const { result } = await executeCapability(registry, {
+      capabilityId: "read_file",
+      params: { path: "x.ts" },
+      tool,
+      policyDecision: { allowed: false, reason: "permission:deny", blockMessage: "denied by policy", category: "safe", incrementRateLimit: "safe", source: "policy:permission:deny", priority: 2 },
+      policyContext: { permissionGate: gate, input: { path: "x.ts" }, tool },
+    })
+    expect(result.success).toBe(false)
+    expect((result as { error: string }).error).toBe("denied by policy")
   })
 })

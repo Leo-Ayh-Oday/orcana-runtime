@@ -12,13 +12,18 @@ import type { BudgetRequest } from "../contracts/budget"
 import type { CapabilityDescriptor, SideEffect } from "../contracts/capability"
 import type { JsonSchema } from "../contracts/schema"
 
-/** Canonical tool result shape shared by every tool capability. */
+/** Canonical tool result shape shared by every tool capability.
+ *
+ *  Only success/content are structurally validated: metadata is a free-form
+ *  extension field (tool results may carry it or not — the result validator
+ *  checks declared properties by key-presence, and ToolResult shims always
+ *  include the key).
+ */
 export const TOOL_OUTPUT_SCHEMA: JsonSchema = {
   type: "object",
   properties: {
     success: { type: "boolean", description: "Whether the tool call succeeded" },
     content: { type: "string", description: "Human-readable result content" },
-    metadata: { type: "object", description: "Optional structured result metadata" },
   },
   required: ["success", "content"],
 }

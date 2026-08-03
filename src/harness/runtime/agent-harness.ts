@@ -27,6 +27,8 @@ import { createLegacyLoopAdapter, type LegacyLoopAdapter, type LegacyLoopAdapter
 import { serializeRun, snapshotFromRun, restoreAgentRun } from "../persistence/serialization"
 import type { HarnessStore, SerializableRun } from "../persistence/harness-store"
 import { serializeLedger } from "../../agent/evidence-ledger"
+import { createCapabilityRegistry } from "../capabilities"
+import { registerToolCapabilities } from "../capabilities"
 import { markInterruptAnswered, validateResume } from "../interrupts/interrupt-manager"
 import { applyPlanApprovalResponse } from "../interrupts/plan-approval"
 import { applyClarificationResponse } from "../interrupts/clarification"
@@ -45,6 +47,11 @@ export interface AgentHarnessInput {
 
 export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
   const registry = new RunRegistry()
+  // H9: capability registry over the first migration batch (§15.4). Event
+  // bridging and loop routing consume this registry in H9 (budget classes,
+  // unified execution entry).
+  const capabilities = createCapabilityRegistry()
+  registerToolCapabilities(capabilities, input.deps.tools)
   const adapter: LegacyLoopAdapter = createLegacyLoopAdapter({ deps: input.deps })
   const projectRoot = input.projectRoot ?? process.cwd()
   const store = input.store

@@ -44,7 +44,7 @@ export type BudgetExhaustionReason =
   | "repair_budget"
 
 export interface BudgetRequest {
-  kind: "model_call" | "tool_call" | "write" | "external_action"
+  kind: "model_call" | "tool_call" | "write" | "external_action" | "repair"
   estimatedInputTokens?: number
   estimatedOutputTokens?: number
 }

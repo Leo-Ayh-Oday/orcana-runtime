@@ -69,6 +69,10 @@ export interface LegacyLoopAdapter {
   execute(run: AgentRun, input: AgentRunInput, abortSignal?: AbortSignal): AsyncGenerator<HarnessEvent, LoopDecision>
 }
 
+/** What buildLoopOptions actually reads from the run — the LlmAgentNode (H11)
+ *  provides this shape via a run shim; the full AgentRun satisfies the Pick. */
+export type LoopRunContext = Pick<AgentRun, "runId" | "sessionId" | "scope">
+
 function readMetadata<T>(input: AgentRunInput, key: string): T | undefined {
   const value = input.metadata?.[key]
   return value === undefined ? undefined : (value as T)
@@ -88,9 +92,11 @@ export function planTextFromPayload(plan: unknown): string {
   return String(plan ?? "")
 }
 
-/** Build AgentOptions for agentLoop from run input + deps + metadata. */
+/** Build AgentOptions for agentLoop from run input + deps + metadata.
+ *  H11: accepts LoopRunContext (the LlmAgentNode run shim) — only the
+ *  runId/sessionId/scope fields are read. */
 export function buildLoopOptions(
-  run: AgentRun,
+  run: LoopRunContext,
   input: AgentRunInput,
   deps: LegacyLoopAdapterDeps,
   abortSignal?: AbortSignal,

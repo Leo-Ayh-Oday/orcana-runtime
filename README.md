@@ -103,7 +103,7 @@ Real trade-offs, not hidden:
 
 ## Project status
 
-**v0.3.x** — single-agent runtime foundation complete. Some capabilities partial, none fake.
+**v0.4.x** — Agent Loop Kernel slimmed (`loop.ts` 2077→132 lines) + Harness 2.0 (H0–H8) landed: single production entry via `AgentHarness`, per-run isolation, typed traces, persistence, interrupt/resume. Some capabilities partial, none fake.
 
 | Status | Meaning |
 |--------|---------|

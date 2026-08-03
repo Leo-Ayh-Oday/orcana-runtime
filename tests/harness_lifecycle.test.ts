@@ -8,11 +8,11 @@ import { buildTools, Result } from "../src/tools/registry"
 // H2 acceptance: every exit maps to a structured RunOutcome; each run has
 // exactly one terminal state visible via inspect().
 
-const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
-process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+process.env.ORCANA_FLASH_TRIAGE = "off"
 afterAll(() => {
-  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
-  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+  if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+  else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 })
 
 function probeTool() {
@@ -171,10 +171,10 @@ describe("Harness H2 lifecycle outcomes", () => {
   })
 
   test("context budget hard block → blocked", async () => {
-    const oldWarn = process.env.DEEPSEEK_CONTEXT_WARN_RATIO
-    const oldBlock = process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO
-    process.env.DEEPSEEK_CONTEXT_WARN_RATIO = "0.000001"
-    process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO = "0.000002"
+    const oldWarn = process.env.ORCANA_CONTEXT_WARN_RATIO
+    const oldBlock = process.env.ORCANA_CONTEXT_BLOCK_RATIO
+    process.env.ORCANA_CONTEXT_WARN_RATIO = "0.000001"
+    process.env.ORCANA_CONTEXT_BLOCK_RATIO = "0.000002"
     try {
       const result = await runAndInspect(
         { provider: new ProbeThenTextProvider(), tools: probeTool() },
@@ -187,10 +187,10 @@ describe("Harness H2 lifecycle outcomes", () => {
       const blockedEvents = result.events.filter(e => "status" in e.payload && e.payload.status === "blocked")
       expect(blockedEvents.length).toBeGreaterThan(0)
     } finally {
-      if (oldWarn === undefined) delete process.env.DEEPSEEK_CONTEXT_WARN_RATIO
-      else process.env.DEEPSEEK_CONTEXT_WARN_RATIO = oldWarn
-      if (oldBlock === undefined) delete process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO
-      else process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO = oldBlock
+      if (oldWarn === undefined) delete process.env.ORCANA_CONTEXT_WARN_RATIO
+      else process.env.ORCANA_CONTEXT_WARN_RATIO = oldWarn
+      if (oldBlock === undefined) delete process.env.ORCANA_CONTEXT_BLOCK_RATIO
+      else process.env.ORCANA_CONTEXT_BLOCK_RATIO = oldBlock
     }
   })
 

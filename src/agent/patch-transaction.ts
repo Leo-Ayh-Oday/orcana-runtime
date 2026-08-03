@@ -49,7 +49,7 @@ export interface PatchTransaction {
 
 const FORBIDDEN_PREFIXES = [
   ".git/",
-  ".deepseek-code/",
+  ".orcana/",
   "node_modules/",
   ".codegraph/",
   ".wolf/",
@@ -562,7 +562,7 @@ export function serializePatchTransaction(pt: PatchTransaction): Record<string, 
 //
 //  Key invariants:
 //    - State transitions are monotonic forward; only rollback goes backward
-//    - Temp files live in .deepseek-code/patches/<txId>/  (same filesystem → atomic rename)
+//    - Temp files live in .orcana/patches/<txId>/  (same filesystem → atomic rename)
 //    - commit() does atomic rename (temp → target), then cleans up temp dir
 //    - rollback() cleans up temp files and marks rolled_back
 // ═══════════════════════════════════════════════════════════════
@@ -689,7 +689,7 @@ export function clearTransactionRegistry(): void {
 
 /** Root directory for all patch temp files. */
 function patchesRoot(cwd: string): string {
-  return resolve(cwd, ".deepseek-code", "patches")
+  return resolve(cwd, ".orcana", "patches")
 }
 
 /** Temp directory for a specific transaction. */
@@ -799,7 +799,7 @@ export function initManagedTransaction(input: InitManagedTxInput): ManagedPatchT
 
 /** Write all files to temp directory. Transitions proposed → applied_to_temp.
  *
- *  Writes each file's newContent to .deepseek-code/patches/<txId>/<relativePath>.
+ *  Writes each file's newContent to .orcana/patches/<txId>/<relativePath>.
  *  Creates parent directories as needed. Does NOT touch the target files. */
 export function applyToTemp(mpt: ManagedPatchTransaction): ManagedPatchTransaction {
   assertTransition(mpt.state, "applied_to_temp", mpt.txId)
@@ -924,7 +924,7 @@ export function commitManagedTransaction(mpt: ManagedPatchTransaction): ManagedP
   const tempDir = txTempDir(mpt.txId, mpt.cwd)
   try { rmSync(tempDir, { recursive: true, force: true }) } catch (err) {
     // best-effort cleanup; log for diagnostics
-    if (process.env.DEEPSEEK_DEBUG) {
+    if (process.env.ORCANA_DEBUG) {
       console.warn(`[PatchTransaction ${mpt.txId}] temp cleanup failed: ${err}`)
     }
   }
@@ -967,7 +967,7 @@ export function rollbackManagedTransaction(
   const tempDir = txTempDir(mpt.txId, mpt.cwd)
   if (existsSync(tempDir)) {
     try { rmSync(tempDir, { recursive: true, force: true }) } catch (err) {
-      if (process.env.DEEPSEEK_DEBUG) {
+      if (process.env.ORCANA_DEBUG) {
         console.warn(`[PatchTransaction ${mpt.txId}] rollback temp cleanup failed: ${err}`)
       }
     }

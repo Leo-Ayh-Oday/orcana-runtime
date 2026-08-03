@@ -224,7 +224,7 @@ function useAgentStream(
   }
   const adapter = adapterRef.current
 
-  // Phase 2: Stream trace (DEEPSEEK_TUI_TRACE_STREAM=1)
+  // Phase 2: Stream trace (ORCANA_TUI_TRACE_STREAM=1)
   const traceRef = useRef<StreamTraceState>(createStreamTrace())
 
   // Subscribe to TuiStore — re-renders on every dispatch/dispatchMany
@@ -555,7 +555,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   const previousMaxOffsetRef = useRef(0)
   const [autoFollow, setAutoFollow] = useState(true)
   const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1 })
-  const [showStartup, setShowStartup] = useState(process.env.DEEPSEEK_TUI_SPLASH !== "off")
+  const [showStartup, setShowStartup] = useState(process.env.ORCANA_TUI_SPLASH !== "off")
   // TuiState.task 是 unknown（reducer 不感知 TaskProgressState 形状），这里做一次类型收窄
   const task = state.task as TaskProgressState | undefined
   const isWorking = !state.done && !state.errorLine
@@ -1107,7 +1107,7 @@ export async function startInkTUI(prompt?: string) {
   }
 
   // 设置终端标题（生产级 TUI 标配）
-  const projectDir = process.cwd().split(/[/\\]/).pop() ?? "deepseek-code"
+  const projectDir = process.cwd().split(/[/\\]/).pop() ?? "orcana"
   process.stdout.write(`\x1B]0;Orcana — ${projectDir}\x07`)
 
   // SIGINT/Ctrl+C 优雅退出：恢复终端状态后退出。

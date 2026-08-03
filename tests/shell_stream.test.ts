@@ -16,8 +16,8 @@ async function collectShell(params: Record<string, unknown>) {
 
 describe("shellStream", () => {
   test("requires explicit confirmation", async () => {
-    const old = process.env.DEEPSEEK_INTERACTIVE
-    process.env.DEEPSEEK_INTERACTIVE = "1"
+    const old = process.env.ORCANA_INTERACTIVE
+    process.env.ORCANA_INTERACTIVE = "1"
     try {
       const events = await collectShell({ command: "echo hello" })
       const done = events.at(-1)
@@ -28,7 +28,7 @@ describe("shellStream", () => {
         expect(done.data.content).toContain("confirmation")
       }
     } finally {
-      restoreEnv("DEEPSEEK_INTERACTIVE", old)
+      restoreEnv("ORCANA_INTERACTIVE", old)
     }
   })
 

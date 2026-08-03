@@ -272,7 +272,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   const defaultProvider = config.defaultProvider ?? "deepseek"
   if (!configuredProviders.has(defaultProvider) && !options.allowMissingProviderAuth) {
     throw new Error(
-      `${defaultProvider} 还没有配置 API key。请先运行 /models 选择模型并输入 key，或在 ~/.deepseek-code/auth.json 中保存 key。`,
+      `${defaultProvider} 还没有配置 API key。请先运行 /models 选择模型并输入 key，或在 ~/.orcana/auth.json 中保存 key。`,
     )
   }
 

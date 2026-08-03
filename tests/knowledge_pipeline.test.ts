@@ -40,7 +40,7 @@ async function* streamAdapter(system: string, prompt: string) {
 
 test("知识管道: 6轮递进验证", async () => {
   // 使用独立目录避免污染主 KB
-  const tmpDir = `${import.meta.dir}/../.deepseek-code/test-kb-${Date.now()}`
+  const tmpDir = `${import.meta.dir}/../.orcana/test-kb-${Date.now()}`
   const kb = new KnowledgeBase(tmpDir)
 
   try {

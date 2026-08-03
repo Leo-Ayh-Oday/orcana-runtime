@@ -13,7 +13,7 @@ describe("Memory Distillation Gate", () => {
   test("rejects ordinary logs", () => {
     const result = evaluateMemoryCandidate({
       type: "bug_pattern",
-      scope: "deepseek-code:logs",
+      scope: "orcana:logs",
       trigger: "tool output",
       lesson: "Command printed normal progress lines.",
       evidence: ["shell output"],
@@ -26,7 +26,7 @@ describe("Memory Distillation Gate", () => {
   test("rejects unverified guesses", () => {
     const result = evaluateMemoryCandidate({
       type: "architecture_decision",
-      scope: "deepseek-code:cache",
+      scope: "orcana:cache",
       trigger: "maybe cache is low",
       lesson: "Maybe tool schemas are causing cache misses.",
       evidence: ["model guess"],
@@ -39,7 +39,7 @@ describe("Memory Distillation Gate", () => {
   test("rejects code fences and long code-like snippets", () => {
     const fenced = evaluateMemoryCandidate({
       type: "bug_pattern",
-      scope: "deepseek-code:ripple",
+      scope: "orcana:ripple",
       trigger: "when tests fail",
       lesson: "```ts\nexport function bad() { return 1 }\n```",
       verifiedBy: "bun test",
@@ -50,7 +50,7 @@ describe("Memory Distillation Gate", () => {
 
     const longSnippet = evaluateMemoryCandidate({
       type: "bug_pattern",
-      scope: "deepseek-code:ripple",
+      scope: "orcana:ripple",
       trigger: "when tests fail",
       lesson: `Use this implementation: ${"const value = call(); ".repeat(20)}`,
       verifiedBy: "bun test",
@@ -63,7 +63,7 @@ describe("Memory Distillation Gate", () => {
   test("accepts a verified Ripple cascade lesson", () => {
     const result = evaluateMemoryCandidate({
       type: "bug_pattern",
-      scope: "deepseek-code:ripple",
+      scope: "orcana:ripple",
       trigger: "When changing exported TS signatures with external callers",
       lesson: "Prefer multi_edit so target and caller changes land atomically before final verification.",
       doNot: ["Do not claim completion while Ripple obligations remain."],
@@ -83,7 +83,7 @@ describe("Memory Distillation Gate", () => {
       const store = new MemoryCardStore(dir)
       const result = store.store({
         type: "verification_rule",
-        scope: "deepseek-code:cache-anatomy",
+        scope: "orcana:cache-anatomy",
         trigger: "When token_usage changes",
         lesson: "Run focused agent_loop and token_hud tests before claiming cache telemetry is stable.",
         evidence: ["tests/agent_loop.test.ts", "tests/token_hud.test.ts"],
@@ -91,7 +91,7 @@ describe("Memory Distillation Gate", () => {
       })
 
       expect(result.accepted).toBe(true)
-      const file = join(dir, ".deepseek-code", "memory-cards.jsonl")
+      const file = join(dir, ".orcana", "memory-cards.jsonl")
       expect(existsSync(file)).toBe(true)
       expect(readFileSync(file, "utf-8")).toContain("cache telemetry")
       expect(store.list().length).toBe(1)
@@ -103,7 +103,7 @@ describe("Memory Distillation Gate", () => {
   test("formats memory cards as guidance, not source code", () => {
     const result = evaluateMemoryCandidate({
       type: "project_rule",
-      scope: "deepseek-code:runtime",
+      scope: "orcana:runtime",
       trigger: "Before final answer in execute mode",
       lesson: "Check Ripple obligations and verification evidence before claiming completion.",
       doNot: ["Do not copy memory cards into source files."],
@@ -122,7 +122,7 @@ describe("Memory Distillation Gate", () => {
   test("excludes low-confidence and stale cards from default prompt injection", () => {
     const active = evaluateMemoryCandidate({
       type: "project_rule",
-      scope: "deepseek-code:runtime",
+      scope: "orcana:runtime",
       trigger: "When verification passes",
       lesson: "Record verification evidence in the final report.",
       evidence: ["process/reports"],
@@ -141,7 +141,7 @@ describe("Memory Distillation Gate", () => {
   test("scores verified project-specific future-impact candidates above threshold", () => {
     const scored = scoreMemoryCandidate({
       type: "bug_pattern",
-      scope: "deepseek-code:compactor",
+      scope: "orcana:compactor",
       trigger: "When M0 is created from warm records",
       lesson: "Avoid putting raw transcript gist into prompt; archive raw turns locally and keep M0 high-level.",
       evidence: ["src/memory/compactor.ts", "tests/context_compactor.test.ts"],

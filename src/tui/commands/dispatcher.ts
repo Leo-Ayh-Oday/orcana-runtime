@@ -119,7 +119,7 @@ function formatConnect(runtime: Runtime, provider?: string): string {
     const envVar = envVarMap[pid]
     if (envVar) lines.push(`     export ${envVar}=<your-key>`)
   }
-  lines.push("  2. Auth file (~/.deepseek-code/auth.json, mode 0600):")
+  lines.push("  2. Auth file (~/.orcana/auth.json, mode 0600):")
   lines.push('     {"deepseek": "sk-xxx", "anthropic": "sk-ant-xxx"}')
   lines.push("  3. Config file (orcana.jsonc) - see /help")
   lines.push("")

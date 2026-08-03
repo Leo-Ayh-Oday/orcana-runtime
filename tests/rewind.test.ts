@@ -40,7 +40,7 @@ afterAll(() => {
 
 beforeEach(() => {
   // Clean rewind dir between tests
-  const rd = join(testDir, ".deepseek-code", "rewind", sessionId)
+  const rd = join(testDir, ".orcana", "rewind", sessionId)
   try { rmSync(rd, { recursive: true, force: true }) } catch {}
 })
 
@@ -83,7 +83,7 @@ describe("saveRewindPoint & listRewindPoints", () => {
     })
 
     // Verify snapshot file exists
-    const snapshotPath = join(testDir, ".deepseek-code", "rewind", sessionId, "round-2.json")
+    const snapshotPath = join(testDir, ".orcana", "rewind", sessionId, "round-2.json")
     expect(existsSync(snapshotPath)).toBe(true)
 
     const snapshots = JSON.parse(readFileSync(snapshotPath, "utf-8")) as Record<string, unknown>

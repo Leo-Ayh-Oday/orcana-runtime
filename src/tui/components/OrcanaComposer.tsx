@@ -40,8 +40,8 @@ export interface PasteBlock {
 const PASTE_PREFIX = "PASTE:"
 const PASTE_SUFFIX = ""
 const pasteTokenRegex = /PASTE:(\d+)/g
-const pasteTriggerChars = Number(process.env.DEEPSEEK_TUI_PASTE_CHARS ?? "800")
-const pasteTriggerLines = Number(process.env.DEEPSEEK_TUI_PASTE_LINES ?? "2")
+const pasteTriggerChars = Number(process.env.ORCANA_TUI_PASTE_CHARS ?? "800")
+const pasteTriggerLines = Number(process.env.ORCANA_TUI_PASTE_LINES ?? "2")
 
 export function pasteToken(id: number): string {
   return `${PASTE_PREFIX}${id}${PASTE_SUFFIX}`

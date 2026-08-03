@@ -16,7 +16,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import { join, relative, resolve, dirname } from "node:path"
 import type { RippleCaller } from "./types"
 
-const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".deepseek-code"])
+const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".orcana"])
 
 interface FileVersion {
   mtimeMs: number

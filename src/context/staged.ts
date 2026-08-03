@@ -1,5 +1,5 @@
 /** Staged context — aligned with DeepSeek V4 tri-attention.
- *  Ported from deepseek-code/core/context.py */
+ *  Ported from orcana/core/context.py */
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs"
 import { resolve, relative, join, dirname } from "node:path"
@@ -38,7 +38,7 @@ export function clipProviderContext(content: string, maxChars: number): string {
 
 // ── Project scanner ──
 
-const SKIP = new Set([".git","__pycache__",".pytest_cache","node_modules",".venv","venv","dist","build",".egg-info",".codegraph",".obsidian",".wolf",".deepseek-code"])
+const SKIP = new Set([".git","__pycache__",".pytest_cache","node_modules",".venv","venv","dist","build",".egg-info",".codegraph",".obsidian",".wolf",".orcana"])
 
 export function scanProject(root: string, maxDepth = 3): string {
   const lines = [

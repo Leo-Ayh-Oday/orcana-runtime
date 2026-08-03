@@ -4,7 +4,7 @@
  *    - 方案 A 声呐脉冲 (Sonar Pulse): 7 rows, max 25 cols, ASCII/Unicode dual-track
  *    - 方案 B 深海尾鳍 (Tail Fin):    6 rows, max 15 cols, ASCII/Unicode dual-track
  *    - 方案 C 极简徽标 (Minimal Badge): 4 rows, 16 cols, ASCII/Unicode dual-track
- *  所有方案在 DEEPSEEK_TUI_UNICODE 未设置时纯 ASCII（charCode < 128），60 列终端不换行。
+ *  所有方案在 ORCANA_TUI_UNICODE 未设置时纯 ASCII（charCode < 128），60 列终端不换行。
  *  品牌色统一使用 theme.brand / theme.brandShimmer，无硬编码 hex。
  *
  *  Phase 8: 旧 5 套 logo 保留向后兼容（app.tsx 引用 GeometricFin）。
@@ -135,7 +135,7 @@ function computeMinimalLines(unicode: boolean): LogoLine[] {
 /** 方案 A: 声呐脉冲 (Sonar Pulse) — 7 rows, max 25 cols.
  *  接受可选 frame prop（默认 3 = 完整 logo），用于启动动画。 */
 export function SonarPulseLogo({ frame = 3 }: { frame?: LogoFrame }) {
-  const unicode = process.env.DEEPSEEK_TUI_UNICODE === "1"
+  const unicode = process.env.ORCANA_TUI_UNICODE === "1"
   const lines = computeSonarLines(frame, unicode, VERSION_LABEL)
   return (
     <Box flexDirection="column">
@@ -150,7 +150,7 @@ export function SonarPulseLogo({ frame = 3 }: { frame?: LogoFrame }) {
 
 /** 方案 B: 深海尾鳍 (Tail Fin) — 6 rows, max 15 cols. */
 export function TailFinLogo() {
-  const unicode = process.env.DEEPSEEK_TUI_UNICODE === "1"
+  const unicode = process.env.ORCANA_TUI_UNICODE === "1"
   const lines = computeTailFinLines(unicode)
   return (
     <Box flexDirection="column">
@@ -165,7 +165,7 @@ export function TailFinLogo() {
 
 /** 方案 C: 极简徽标 (Minimal Badge) — 4 rows, 16 cols. */
 export function MinimalBadgeLogo() {
-  const unicode = process.env.DEEPSEEK_TUI_UNICODE === "1"
+  const unicode = process.env.ORCANA_TUI_UNICODE === "1"
   const lines = computeMinimalLines(unicode)
   return (
     <Box flexDirection="column">
@@ -220,7 +220,7 @@ export function LogoAnimation({
     return () => clearTimeout(timer)
   }, [frame, reducedMotion, onComplete])
 
-  const unicode = process.env.DEEPSEEK_TUI_UNICODE === "1"
+  const unicode = process.env.ORCANA_TUI_UNICODE === "1"
   const lines = computeLogoLines(variant, frame, unicode, VERSION_LABEL)
 
   return (

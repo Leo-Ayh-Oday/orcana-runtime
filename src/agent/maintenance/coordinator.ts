@@ -124,7 +124,7 @@ export async function* runAdaptiveCheckpoint(
       checkpointId: generateCheckpointId(),
       round: ctx.round,
       timestamp: Date.now(),
-      sessionId: process.env.DEEPSEEK_SESSION_ID ?? "ds-default",
+      sessionId: process.env.ORCANA_SESSION_ID ?? "ds-default",
       masterPlan,
       taskSteps,
       changedFiles,

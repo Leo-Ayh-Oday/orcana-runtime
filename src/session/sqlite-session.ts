@@ -1,7 +1,7 @@
 /** SessionStore — SQLite-backed session persistence with FTS5.
  *
  *  Replaces the JSON-file SessionManager with a single SQLite database per
- *  session. Each session lives at ~/.deepseek-code/sessions/{id}.db.
+ *  session. Each session lives at ~/.orcana/sessions/{id}.db.
  *
  *  Design invariants:
  *    - Same public API as SessionManager (create/save/load/replace/listSessions)
@@ -170,7 +170,7 @@ export class SessionStore {
   private fallbackCheckpoints: CheckpointRecord[] = []
 
   constructor(sessionId: string, storeDir?: string) {
-    this.storeDir = storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+    this.storeDir = storeDir ?? join(homedir(), ".orcana", "sessions")
     this.sessionId = sessionId
     mkdirSync(this.storeDir, { recursive: true })
 
@@ -602,7 +602,7 @@ export class SessionStore {
 
 /** List all session IDs by scanning *.db files in the store directory. */
 export function listSessionIds(storeDir?: string): string[] {
-  const dir = storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+  const dir = storeDir ?? join(homedir(), ".orcana", "sessions")
   mkdirSync(dir, { recursive: true })
   try {
     return readdirSync(dir)

@@ -6,7 +6,7 @@ describe("file runtime artifact guard", () => {
     for (const path of [
       "deepseek-run.out.txt",
       "deepseek-run.err.txt",
-      ".deepseek-code/runs/run_abc.jsonl",
+      ".orcana/runs/run_abc.jsonl",
     ]) {
       const result = await READ_FILE.execute({ path })
       expect(result.success).toBe(false)

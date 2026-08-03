@@ -1,7 +1,7 @@
 /** Tests for PR-9 Logo — ASCII-safe variants + 700ms startup animation.
  *
  *  Verifies:
- *    1. ASCII-safe: all chars < 128 when DEEPSEEK_TUI_UNICODE unset
+ *    1. ASCII-safe: all chars < 128 when ORCANA_TUI_UNICODE unset
  *    2. 60-col safety: every line ≤ 60 chars (stringWidth)
  *    3. Frame visibility: correct rows shown at each animation frame
  *    4. Frame timing: 200/200/300ms delays = 700ms total
@@ -29,7 +29,7 @@ function lineTexts(variant: LogoVariant, frame: LogoFrame, unicode: boolean): st
 
 // ── 1. ASCII-safe ──
 
-describe("PR-9 Logo: ASCII-safe (DEEPSEEK_TUI_UNICODE unset)", () => {
+describe("PR-9 Logo: ASCII-safe (ORCANA_TUI_UNICODE unset)", () => {
   const variants: LogoVariant[] = ["sonar", "tailfin", "minimal"]
 
   test("all variants produce pure ASCII output when unicode=false", () => {

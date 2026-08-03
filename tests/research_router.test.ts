@@ -37,7 +37,7 @@ describe("ResearchRouter", () => {
   })
 
   test("builds bounded research subquestions", () => {
-    const questions = buildResearchQuestions("对比 Claude Code 和 DeepSeek Code 的架构差距，结合 GitHub 和论文")
+    const questions = buildResearchQuestions("对比 Claude Code 和 Orcana 的架构差距，结合 GitHub 和论文")
 
     expect(questions.length).toBeLessThanOrEqual(5)
     expect(questions.some(q => /DeepSeek|Claude|coding agent/i.test(q))).toBe(true)

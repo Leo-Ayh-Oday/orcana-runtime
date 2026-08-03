@@ -36,7 +36,7 @@ export interface SandboxVerdict {
 const ENV_ALLOWLIST = new Set([
   "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "TEMP", "TMP",
   "USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH",
-  "NODE_ENV", "DEEPSEEK_SANDBOX", "DEEPSEEK_SANDBOX_TIMEOUT_SEC",
+  "NODE_ENV", "ORCANA_SANDBOX", "ORCANA_SANDBOX_TIMEOUT_SEC",
   "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS",
   "npm_config_cache", "BUN_INSTALL", "GIT_SSH",
 ])
@@ -51,7 +51,7 @@ export class SandboxManager {
   constructor(config: SandboxConfig) {
     this.config = config
     this.pathGuard = new PathGuard(config.projectRoot)
-    this.job = createJob("deepseek-code-sandbox")
+    this.job = createJob("orcana-sandbox")
   }
 
   /** Mark a file as blocked (called when ripple blocks a write). */
@@ -101,7 +101,7 @@ export class SandboxManager {
       }
     }
     // Always set sandbox flag + production NODE_ENV
-    injectedEnv["DEEPSEEK_SANDBOX"] = "1"
+    injectedEnv["ORCANA_SANDBOX"] = "1"
     injectedEnv["NODE_ENV"] = process.env.NODE_ENV ?? "production"
 
     return {

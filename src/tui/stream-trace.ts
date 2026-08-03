@@ -1,6 +1,6 @@
 /** stream-trace — 开发期流输出追踪。
  *
- *  DEEPSEEK_TUI_TRACE_STREAM=1 开启，输出到 .deepseek-code/tui-stream-trace.jsonl。
+ *  ORCANA_TUI_TRACE_STREAM=1 开启，输出到 .orcana/tui-stream-trace.jsonl。
  *  每轮记录：delta chunk 数、每 chunk 字符数、reducer 后累计字符数、
  *  final 时累计字符数、render 后显示字符数、是否触发 viewport trim。
  */
@@ -51,8 +51,8 @@ export interface StreamTraceState {
 
 // ── 工厂 ──
 
-export function createStreamTrace(dir = ".deepseek-code"): StreamTraceState {
-  const traceSetting = process.env.DEEPSEEK_TUI_TRACE_STREAM
+export function createStreamTrace(dir = ".orcana"): StreamTraceState {
+  const traceSetting = process.env.ORCANA_TUI_TRACE_STREAM
   const enabled = traceSetting !== "0" && traceSetting !== "off" && traceSetting !== "false"
   return {
     enabled,

@@ -246,12 +246,12 @@ export function rootRuntimeVerificationPassed(results: VerificationResult[]): bo
 export function formatRuntimeSelfEditGate(files: string[]): string {
   return [
     "## Runtime Self-Edit Gate",
-    "You changed DeepSeek Code runtime source files in the currently running process.",
+    "You changed Orcana runtime source files in the currently running process.",
     "The current Node process cannot use those source changes until the CLI is restarted.",
     "",
     "Required next step:",
-    "1. Run exactly one root project typecheck command, for example: `bun run typecheck` or `npx tsc --noEmit --pretty false` from the deepseek-code root.",
-    "2. If it passes, stop and tell the user to restart DeepSeek Code.",
+    "1. Run exactly one root project typecheck command, for example: `bun run typecheck` or `npx tsc --noEmit --pretty false` from the orcana root.",
+    "2. If it passes, stop and tell the user to restart Orcana.",
     "3. Do not inspect unrelated files, do not keep debugging the old in-memory behavior, and do not claim the running process has picked up the fix.",
     "",
     "Changed runtime files:",

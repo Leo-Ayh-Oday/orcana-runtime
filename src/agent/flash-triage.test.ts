@@ -51,31 +51,31 @@ describe("FlashTriage cost policy", () => {
   })
 
   test("strict mode skips the Flash triage provider call", async () => {
-    const old = process.env.DEEPSEEK_COST_MODE
+    const old = process.env.ORCANA_COST_MODE
     const provider = new CountingProvider()
     try {
-      process.env.DEEPSEEK_COST_MODE = "strict"
+      process.env.ORCANA_COST_MODE = "strict"
       const triage = new FlashTriage(provider)
       const result = await triage.triage("build a small app", "package.json")
       expect(result).toBeNull()
       expect(provider.calls).toBe(0)
     } finally {
-      restoreEnv("DEEPSEEK_COST_MODE", old)
+      restoreEnv("ORCANA_COST_MODE", old)
     }
   })
 
   test("normal mode labels Flash triage calls with purpose", async () => {
-    const old = process.env.DEEPSEEK_COST_MODE
+    const old = process.env.ORCANA_COST_MODE
     const provider = new CountingProvider()
     try {
-      delete process.env.DEEPSEEK_COST_MODE
+      delete process.env.ORCANA_COST_MODE
       const triage = new FlashTriage(provider)
       const result = await triage.triage("build a small app", "package.json")
       expect(result?.mode).toBe("discussion")
       expect(provider.calls).toBe(1)
       expect(provider.options[0]?.purpose).toBe("flash_triage")
     } finally {
-      restoreEnv("DEEPSEEK_COST_MODE", old)
+      restoreEnv("ORCANA_COST_MODE", old)
     }
   })
 })

@@ -6,7 +6,7 @@
  *    3.  Plugin-provided (future)
  *
  *  Trigger: prompt text matches any skill's `triggers` list → skill prompt appended.
- *  Compatible with DeepSeek Code's SkillDef format.
+ *  Compatible with Orcana's SkillDef format.
  */
 
 import type { SkillDef } from "./types"

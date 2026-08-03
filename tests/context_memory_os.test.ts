@@ -29,7 +29,7 @@ function capsule(overrides: CapsuleOverrides = {}): MemoryCapsule {
     title: "Runtime evidence rule",
     kind: "project_rule",
     scope: {
-      repo: "deepseek-orcana",
+      repo: "orcana",
       module: "agent_runtime",
       files: ["src/agent/loop.ts"],
       appliesTo: ["agent_runtime"],

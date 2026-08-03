@@ -50,8 +50,8 @@ describe("Tool Registry", () => {
 
   test("requiresConfirmation blocks without confirm=true", async () => {
     // Force interactive mode — test env has no TTY, so isNonInteractive() returns true
-    const old = process.env.DEEPSEEK_INTERACTIVE
-    process.env.DEEPSEEK_INTERACTIVE = "1"
+    const old = process.env.ORCANA_INTERACTIVE
+    process.env.ORCANA_INTERACTIVE = "1"
     try {
     const tool = buildTool({
       name: "danger",
@@ -65,7 +65,7 @@ describe("Tool Registry", () => {
     const result = await tool.execute({})
     expect(result.success).toBe(false)
     if (!result.success) expect(result.content).toContain("confirmation")
-    } finally { restoreEnv("DEEPSEEK_INTERACTIVE", old) }
+    } finally { restoreEnv("ORCANA_INTERACTIVE", old) }
   })
 
   test("buildTools creates multiple", () => {
@@ -91,8 +91,8 @@ describe("Tool Registry", () => {
   })
 
   test("toAnthropicSchema exposes confirm for confirmed write tools", () => {
-    const old = process.env.DEEPSEEK_INTERACTIVE
-    process.env.DEEPSEEK_INTERACTIVE = "1"
+    const old = process.env.ORCANA_INTERACTIVE
+    process.env.ORCANA_INTERACTIVE = "1"
     try {
     const tool = buildTool({
       name: "write",
@@ -106,7 +106,7 @@ describe("Tool Registry", () => {
     const schema = tool.toAnthropicSchema() as { input_schema: { properties: Record<string, unknown>; required: string[] } }
     expect(schema.input_schema.properties.confirm).toBeTruthy()
     expect(schema.input_schema.required).toContain("confirm")
-    } finally { restoreEnv("DEEPSEEK_INTERACTIVE", old) }
+    } finally { restoreEnv("ORCANA_INTERACTIVE", old) }
   })
 })
 

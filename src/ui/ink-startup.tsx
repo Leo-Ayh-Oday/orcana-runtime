@@ -89,7 +89,7 @@ export function InkStartupScreen({ version, toolsCount, thinkingEffort, modelNam
 }
 
 export async function playInkStartupScreen(options: InkStartupOptions): Promise<boolean> {
-  if (!process.stdout.isTTY || process.env.DEEPSEEK_TUI_INK === "off") return false
+  if (!process.stdout.isTTY || process.env.ORCANA_TUI_INK === "off") return false
 
   const durationMs = Math.max(1400, options.durationMs ?? 2200)
   const instance = render(<InkStartupScreen {...options} />, { exitOnCtrlC: false })

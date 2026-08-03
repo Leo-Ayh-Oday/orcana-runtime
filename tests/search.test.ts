@@ -42,8 +42,8 @@ describe("web_search", () => {
   })
 
   test("times out failed backends quickly without API key", async () => {
-    const oldTimeout = process.env.DEEPSEEK_SEARCH_TIMEOUT_MS
-    process.env.DEEPSEEK_SEARCH_TIMEOUT_MS = "1"
+    const oldTimeout = process.env.ORCANA_SEARCH_TIMEOUT_MS
+    process.env.ORCANA_SEARCH_TIMEOUT_MS = "1"
     // Ensure no Exa API key so it falls through to MCP
     const oldKey = process.env.EXA_API_KEY
     delete process.env.EXA_API_KEY
@@ -59,8 +59,8 @@ describe("web_search", () => {
       expect(elapsed).toBeLessThan(500)
     } finally {
       fetchMock.restore()
-      if (oldTimeout === undefined) delete process.env.DEEPSEEK_SEARCH_TIMEOUT_MS
-      else process.env.DEEPSEEK_SEARCH_TIMEOUT_MS = oldTimeout
+      if (oldTimeout === undefined) delete process.env.ORCANA_SEARCH_TIMEOUT_MS
+      else process.env.ORCANA_SEARCH_TIMEOUT_MS = oldTimeout
       if (oldKey === undefined) delete process.env.EXA_API_KEY
       else process.env.EXA_API_KEY = oldKey
     }

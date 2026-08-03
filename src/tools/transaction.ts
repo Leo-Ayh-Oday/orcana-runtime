@@ -17,7 +17,7 @@ export interface FileTransaction {
 }
 
 function transactionDir(cwd = process.cwd()): string {
-  return resolve(cwd, ".deepseek-code", "transactions")
+  return resolve(cwd, ".orcana", "transactions")
 }
 
 function transactionPath(id: string, cwd = process.cwd()): string {

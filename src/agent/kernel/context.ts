@@ -63,7 +63,7 @@ export async function buildRunContext(
   const artifactStore = options.artifactStore
   const runId = options.runId
   const capabilityRegistry = options.capabilityRegistry
-  const maxRounds = resolveMaxRounds(options.maxRounds, process.env.DEEPSEEK_MAX_ROUNDS)
+  const maxRounds = resolveMaxRounds(options.maxRounds, process.env.ORCANA_MAX_ROUNDS)
 
   const effectivePrompt = buildEffectivePrompt(prompt, options.conversationHistory)
   const language = detectLanguage(effectivePrompt)
@@ -191,7 +191,7 @@ export async function buildRunContext(
   const intentPolicy = runState.planning.intentPolicy
   const evidenceLedger = runState.verification.evidenceLedger
   const triageSkillPrompts = runState.research.skillPrompts
-  const cacheStableTools = process.env.DEEPSEEK_CACHE_STABLE_TOOLS !== "0"
+  const cacheStableTools = process.env.ORCANA_CACHE_STABLE_TOOLS !== "0"
   const confidenceEvaluator = new ConfidenceEvaluator()
   const judgeModel = options.modelRouter?.selectForPurpose("completion_judge") ?? "deepseek-v4-flash"
   const flashJudge = new FlashJudge(provider, judgeModel)
@@ -206,13 +206,13 @@ export async function buildRunContext(
   // owner; otherwise created here with the same defaults.
   const sandbox = options.sandbox ?? new SandboxManager({
     projectRoot: process.cwd(),
-    maxRuntimeSec: Number(process.env.DEEPSEEK_SANDBOX_TIMEOUT_SEC) || 30,
-    jobMemoryLimitMb: process.env.DEEPSEEK_SANDBOX_MEMORY_MB ? Number(process.env.DEEPSEEK_SANDBOX_MEMORY_MB) : 512,
+    maxRuntimeSec: Number(process.env.ORCANA_SANDBOX_TIMEOUT_SEC) || 30,
+    jobMemoryLimitMb: process.env.ORCANA_SANDBOX_MEMORY_MB ? Number(process.env.ORCANA_SANDBOX_MEMORY_MB) : 512,
   })
   setShellSandbox(sandbox)
   // PR 8: set active mode contract from options (defaults to "coder")
   setActiveMode(options.activeMode ?? "coder")
-  const pmode: "full" | "strict" = process.env.DEEPSEEK_PERMISSION_MODE === "strict" ? "strict" : "full"
+  const pmode: "full" | "strict" = process.env.ORCANA_PERMISSION_MODE === "strict" ? "strict" : "full"
   const toolLedger = new ToolExecutionLedger()
   const gateBlockCounts = new Map<string, { count: number; lastSeen: number }>()
   const deferredGateMessages: string[] = []

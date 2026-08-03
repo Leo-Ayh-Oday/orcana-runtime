@@ -187,7 +187,7 @@ describe("SonarPulse glyphs (PR-1)", () => {
   })
 
   test("ASCII sonarFrames are all ASCII", () => {
-    // When DEEPSEEK_TUI_UNICODE is not set, should use ASCII glyphs
+    // When ORCANA_TUI_UNICODE is not set, should use ASCII glyphs
     const { getGlyphTheme } = require("../../src/tui/tokens")
     const g = getGlyphTheme()
     for (const ch of g.sonarFrames) {

@@ -21,7 +21,7 @@ function toNum(v: number | bigint): number {
   return typeof v === "bigint" ? Number(v) : v
 }
 
-const SKIP_DIRS = new Set([".git", "node_modules", ".codegraph", "dist", "coverage", ".next", ".deepseek-code"])
+const SKIP_DIRS = new Set([".git", "node_modules", ".codegraph", "dist", "coverage", ".next", ".orcana"])
 
 export class PathGuard {
   private snapshot: Map<string, FileEntry> | null = null

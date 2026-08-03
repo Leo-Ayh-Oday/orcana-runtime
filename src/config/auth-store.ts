@@ -1,7 +1,7 @@
 /** AuthStore — API key 安全存储。
  *
  *  要求：
- *    1. auth.json 放全局 config 目录（~/.deepseek-code/auth.json）
+ *    1. auth.json 放全局 config 目录（~/.orcana/auth.json）
  *    2. 文件权限 0600（仅所有者可读写）
  *    3. trace/log/final 不输出 key
  *    4. project config 里不能出现 apiKey 明文
@@ -53,7 +53,7 @@ interface AuthFileV2 {
 
 type AuthFileData = AuthFileV2
 
-/** 文件系统 AuthStore — 存储在 ~/.deepseek-code/auth.json，权限 0600。 */
+/** 文件系统 AuthStore — 存储在 ~/.orcana/auth.json，权限 0600。 */
 export class FileAuthStore implements AuthStore {
   private readonly filePath: string
 

@@ -95,8 +95,8 @@ export function isRuntimeBuiltToolDescriptor(tool: ToolDescriptor): boolean {
 export function isNonInteractive(): boolean {
   try {
     // Explicit env override
-    if (process.env.DEEPSEEK_INTERACTIVE === "1") return false
-    if (process.env.DEEPSEEK_NON_INTERACTIVE === "1") return true
+    if (process.env.ORCANA_INTERACTIVE === "1") return false
+    if (process.env.ORCANA_NON_INTERACTIVE === "1") return true
     // CLI one-shot: prompt passed as argument → no interactive session
     if (process.argv.length > 2 && process.argv.slice(2).some(a => !a.startsWith("-"))) return true
     // TTY check: stdin is not a terminal → non-interactive

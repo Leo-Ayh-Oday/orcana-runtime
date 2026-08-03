@@ -1,5 +1,5 @@
 /** Thinking store — persist and reuse DeepSeek V4 reasoning chains.
- *  Ported from deepseek-code/core/thinking_store.py */
+ *  Ported from orcana/core/thinking_store.py */
 
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -48,7 +48,7 @@ export class ThinkingStore {
   private index: ThinkingRecord[] = []
 
   constructor(storeDir?: string) {
-    this.storeDir = storeDir ?? join(homedir(), ".deepseek-code", "thinking")
+    this.storeDir = storeDir ?? join(homedir(), ".orcana", "thinking")
     mkdirSync(this.storeDir, { recursive: true })
     this.loadIndex()
   }

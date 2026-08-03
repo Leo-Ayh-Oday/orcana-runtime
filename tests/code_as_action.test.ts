@@ -132,7 +132,7 @@ const ROUNDS: TestCase[] = [
   },
   {
     name: "条件分支 — 文件存在性检查",
-    prompt: "Read package.json. If it contains 'deepseek-code' in the name field, print 'found deepseek project'. Otherwise print 'not our project'.",
+    prompt: "Read package.json. If it contains 'orcana' in the name field, print 'found deepseek project'. Otherwise print 'not our project'.",
     expectedTools: ["read_file"],
     expectedPatterns: ["read_file", "print"],
     allowAnyTool: true,
@@ -228,7 +228,7 @@ const ROUNDS: TestCase[] = [
   },
   {
     name: "write_file — 特殊字符内容 (引号/换行/反斜杠)",
-    prompt: "Using write_file, create a file at tests/tmp/special_chars.txt with this exact content (includes quotes, backslashes, and newlines):\n\n{\n  \"name\": \"deepseek-code\",\n  \"path\": \"C:\\\\Users\\\\test\",\n  \"description\": \"it's a coding agent\"\n}\n\nUse template strings (backticks) for the content. Call final_answer when done. Keep it short.",
+    prompt: "Using write_file, create a file at tests/tmp/special_chars.txt with this exact content (includes quotes, backslashes, and newlines):\n\n{\n  \"name\": \"orcana\",\n  \"path\": \"C:\\\\Users\\\\test\",\n  \"description\": \"it's a coding agent\"\n}\n\nUse template strings (backticks) for the content. Call final_answer when done. Keep it short.",
     expectedTools: ["write_file"],
     expectedPatterns: ["write_file", "final_answer"],
     allowAnyTool: false,

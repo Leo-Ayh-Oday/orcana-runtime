@@ -5,7 +5,7 @@
  *
  *  Phase 5 变更:
  *    - 每类 activity 独立 ASCII glyph 序列（routing/reading/streaming 不再共用 spinner）
- *    - reduced-motion 支持：DEEPSEEK_TUI_REDUCED_MOTION=1 时全部返回静态首字符
+ *    - reduced-motion 支持：ORCANA_TUI_REDUCED_MOTION=1 时全部返回静态首字符
  *    - stalled 检测：3s 无 token + 无活跃 tool → stalled
  *
  *  规则：

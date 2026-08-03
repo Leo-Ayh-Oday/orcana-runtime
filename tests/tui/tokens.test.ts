@@ -13,11 +13,11 @@ import { getGlyphTheme, tuiTokens } from "../../src/tui/tokens"
 // ── ASCII theme ──
 
 describe("glyph theme: ASCII (default)", () => {
-  const origEnv = process.env.DEEPSEEK_TUI_UNICODE
+  const origEnv = process.env.ORCANA_TUI_UNICODE
 
   // Ensure we're testing the ASCII theme
   test("default theme is ASCII (not unicode)", () => {
-    if (process.env.DEEPSEEK_TUI_UNICODE === "1") {
+    if (process.env.ORCANA_TUI_UNICODE === "1") {
       // Skip if env is set to unicode
       return
     }
@@ -29,7 +29,7 @@ describe("glyph theme: ASCII (default)", () => {
   })
 
   test("ASCII theme uses only ASCII characters", () => {
-    if (process.env.DEEPSEEK_TUI_UNICODE === "1") return
+    if (process.env.ORCANA_TUI_UNICODE === "1") return
     const g = getGlyphTheme()
     const allChars = [
       ...g.spinnerChars,
@@ -62,7 +62,7 @@ describe("glyph theme: ASCII (default)", () => {
   })
 
   test("ASCII theme has no mojibake-prone characters", () => {
-    if (process.env.DEEPSEEK_TUI_UNICODE === "1") return
+    if (process.env.ORCANA_TUI_UNICODE === "1") return
     const g = getGlyphTheme()
     const allGlyphs = JSON.stringify(g)
     // No replacement character
@@ -74,7 +74,7 @@ describe("glyph theme: ASCII (default)", () => {
   })
 
   test("ASCII spinner chars are valid ASCII printable", () => {
-    if (process.env.DEEPSEEK_TUI_UNICODE === "1") return
+    if (process.env.ORCANA_TUI_UNICODE === "1") return
     const g = getGlyphTheme()
     for (let i = 0; i < g.spinnerLen; i++) {
       const ch = g.spinnerChars[i]
@@ -89,8 +89,8 @@ describe("glyph theme: ASCII (default)", () => {
 
 describe("glyph theme: Unicode", () => {
   test("unicode theme has braille spinner", () => {
-    const prevEnv = process.env.DEEPSEEK_TUI_UNICODE
-    process.env.DEEPSEEK_TUI_UNICODE = "1"
+    const prevEnv = process.env.ORCANA_TUI_UNICODE
+    process.env.ORCANA_TUI_UNICODE = "1"
     try {
       const g = getGlyphTheme()
       // Should contain braille characters (U+2800-U+28FF)
@@ -100,31 +100,31 @@ describe("glyph theme: Unicode", () => {
       })
       expect(hasBraille).toBe(true)
     } finally {
-      process.env.DEEPSEEK_TUI_UNICODE = prevEnv
+      process.env.ORCANA_TUI_UNICODE = prevEnv
     }
   })
 
   test("unicode theme has block character progress", () => {
-    const prevEnv = process.env.DEEPSEEK_TUI_UNICODE
-    process.env.DEEPSEEK_TUI_UNICODE = "1"
+    const prevEnv = process.env.ORCANA_TUI_UNICODE
+    process.env.ORCANA_TUI_UNICODE = "1"
     try {
       const g = getGlyphTheme()
       expect(g.progressFill).toBe("▓")
       expect(g.progressEmpty).toBe("░")
     } finally {
-      process.env.DEEPSEEK_TUI_UNICODE = prevEnv
+      process.env.ORCANA_TUI_UNICODE = prevEnv
     }
   })
 
   test("unicode theme has check marks", () => {
-    const prevEnv = process.env.DEEPSEEK_TUI_UNICODE
-    process.env.DEEPSEEK_TUI_UNICODE = "1"
+    const prevEnv = process.env.ORCANA_TUI_UNICODE
+    process.env.ORCANA_TUI_UNICODE = "1"
     try {
       const g = getGlyphTheme()
       expect(g.checkMark).toBe("✓")
       expect(g.crossMark).toBe("✗")
     } finally {
-      process.env.DEEPSEEK_TUI_UNICODE = prevEnv
+      process.env.ORCANA_TUI_UNICODE = prevEnv
     }
   })
 })
@@ -133,13 +133,13 @@ describe("glyph theme: Unicode", () => {
 
 describe("glyph theme: switching", () => {
   test("ASCII and Unicode themes produce different glyphs", () => {
-    const prevEnv = process.env.DEEPSEEK_TUI_UNICODE
+    const prevEnv = process.env.ORCANA_TUI_UNICODE
 
-    process.env.DEEPSEEK_TUI_UNICODE = undefined
-    delete process.env.DEEPSEEK_TUI_UNICODE
+    process.env.ORCANA_TUI_UNICODE = undefined
+    delete process.env.ORCANA_TUI_UNICODE
     const ascii = getGlyphTheme()
 
-    process.env.DEEPSEEK_TUI_UNICODE = "1"
+    process.env.ORCANA_TUI_UNICODE = "1"
     const unicode = getGlyphTheme()
 
     try {
@@ -148,7 +148,7 @@ describe("glyph theme: switching", () => {
       // ASCII check mark is 'v', unicode is '✓'
       expect(ascii.checkMark).not.toBe(unicode.checkMark)
     } finally {
-      process.env.DEEPSEEK_TUI_UNICODE = prevEnv
+      process.env.ORCANA_TUI_UNICODE = prevEnv
     }
   })
 })

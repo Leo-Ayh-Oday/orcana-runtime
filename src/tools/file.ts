@@ -219,8 +219,8 @@ function isRuntimeArtifact(path: string): boolean {
   return (
     normalized === "deepseek-run.out.txt" ||
     normalized === "deepseek-run.err.txt" ||
-    normalized.startsWith(".deepseek-code/runs/") ||
-    normalized.startsWith(".deepseek-code/transactions/")
+    normalized.startsWith(".orcana/runs/") ||
+    normalized.startsWith(".orcana/transactions/")
   )
 }
 

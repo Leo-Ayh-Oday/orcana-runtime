@@ -1,8 +1,8 @@
 /** Gate 7: Context Budget — blocks the loop when context usage exceeds thresholds.
  *
  *  Configurable via env:
- *    DEEPSEEK_CONTEXT_WARN_RATIO  (default 0.5) — degraded mode
- *    DEEPSEEK_CONTEXT_BLOCK_RATIO (default 0.6) — hard block
+ *    ORCANA_CONTEXT_WARN_RATIO  (default 0.5) — degraded mode
+ *    ORCANA_CONTEXT_BLOCK_RATIO (default 0.6) — hard block
  */
 
 import type { Gate, GateResult } from "./types"
@@ -17,8 +17,8 @@ export class ContextBudgetGate implements Gate<PreRoundContext> {
   private blockRatio: number
 
   constructor(warnRatio?: number, blockRatio?: number) {
-    this.warnRatio = warnRatio ?? envRatio("DEEPSEEK_CONTEXT_WARN_RATIO", 0.5)
-    this.blockRatio = blockRatio ?? envRatio("DEEPSEEK_CONTEXT_BLOCK_RATIO", 0.6)
+    this.warnRatio = warnRatio ?? envRatio("ORCANA_CONTEXT_WARN_RATIO", 0.5)
+    this.blockRatio = blockRatio ?? envRatio("ORCANA_CONTEXT_BLOCK_RATIO", 0.6)
   }
 
   evaluate(ctx: PreRoundContext): GateResult {

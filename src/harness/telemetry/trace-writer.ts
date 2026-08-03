@@ -1,6 +1,6 @@
 /** JSONL TraceWriter (H5): typed event envelopes to disk.
  *
- *  Writes `.deepseek-code/harness/events/<runId>.jsonl`, one serialized
+ *  Writes `.orcana/harness/events/<runId>.jsonl`, one serialized
  *  EventEnvelope per line, in stream order (sequence is naturally ordered).
  *  Payloads pass through redactForTrace before serialization.
  *

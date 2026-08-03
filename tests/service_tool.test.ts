@@ -15,8 +15,8 @@ afterAll(() => {
 
 describe("start_service tool", () => {
   test("requires confirmation", async () => {
-    const old = process.env.DEEPSEEK_INTERACTIVE
-    process.env.DEEPSEEK_INTERACTIVE = "1"
+    const old = process.env.ORCANA_INTERACTIVE
+    process.env.ORCANA_INTERACTIVE = "1"
     try {
       const result = await START_SERVICE_TOOL.execute({
         command: "echo hello",
@@ -27,7 +27,7 @@ describe("start_service tool", () => {
       expect(result.success).toBe(false)
       expect(result.content).toContain("confirmation")
     } finally {
-      restoreEnv("DEEPSEEK_INTERACTIVE", old)
+      restoreEnv("ORCANA_INTERACTIVE", old)
     }
   })
 

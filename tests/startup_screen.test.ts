@@ -12,7 +12,7 @@ describe("startup screen fallback", () => {
     })
 
     expect(out).toContain("██████╗")
-    expect(out).toContain("DeepSeek Code")
+    expect(out).toContain("Orcana")
     expect(out).toContain("Hraness runtime")
     expect(out).toContain("deepseek-v4-pro")
     expect(out).toContain("19")

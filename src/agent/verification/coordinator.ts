@@ -317,7 +317,7 @@ export async function* runRuntimeSelfEditGate(
       yield { type: "status", data: "runtime-self-edit-gate: verified; restart required" }
       yield {
         type: "text",
-        data: `Runtime source changes were verified, but the current DeepSeek Code process cannot hot-load them. Restart DeepSeek Code before continuing. Changed runtime files: ${files}.`,
+        data: `Runtime source changes were verified, but the current Orcana process cannot hot-load them. Restart Orcana before continuing. Changed runtime files: ${files}.`,
       }
       ctx.runTrace?.record("gate_decision", { gate: "runtime_self_edit", decision: "restart_required", files: [...execution.runtimeSelfEditFiles].sort() })
       return { action: "break" }

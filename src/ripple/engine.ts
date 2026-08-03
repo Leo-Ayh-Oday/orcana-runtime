@@ -102,7 +102,7 @@ interface SymbolInfo {
   declEnd: number
 }
 
-const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".deepseek-code", "blog"])
+const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".orcana", "blog"])
 
 const FILE_LIST_CACHE_TTL_MS = 5000 // refresh at most every 5s
 

@@ -89,7 +89,7 @@ async function shell(
   }
   const sandboxed = sandbox?.needsSandbox(command) ?? false
   const effectiveTimeout = sandboxed
-    ? verdict.timeoutOverride ?? Math.min(timeoutSec, Number(process.env.DEEPSEEK_SANDBOX_TIMEOUT_SEC) || 30)
+    ? verdict.timeoutOverride ?? Math.min(timeoutSec, Number(process.env.ORCANA_SANDBOX_TIMEOUT_SEC) || 30)
     : timeoutSec
   sandbox?.snapshotWorkspace()
 

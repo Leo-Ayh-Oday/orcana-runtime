@@ -112,7 +112,7 @@ const HARD_CASES: QualityEval[] = [
       "包括文档未记载的行为和引擎差异（V8 vs JavaScriptCore vs Bun）。",
     ].join(" "),
     prompt: [
-      "我打算给 DeepSeek Code 加一个 `code_interpreter` 工具，",
+      "我打算给 Orcana 加一个 `code_interpreter` 工具，",
       "让模型能写 JavaScript 代码并安全执行。用 `new Function()` 做沙箱。",
       "",
       "已知风险:",
@@ -142,7 +142,7 @@ const HARD_CASES: QualityEval[] = [
       "设计降级策略时给出精确的触发条件、降级动作、和恢复条件。",
     ].join(" "),
     prompt: [
-      "DeepSeek Code 有 1M token 上下文窗口。当前策略:",
+      "Orcana 有 1M token 上下文窗口。当前策略:",
       "- 50% → degraded mode（只完成当前阶段）",
       "- 60% → block（停止，要求用户压缩或新建会话）",
       "",

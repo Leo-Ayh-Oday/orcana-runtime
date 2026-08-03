@@ -71,7 +71,7 @@ export function createInitialTuiState(): TuiState {
     // UI extensions
     status: "ready",
     telemetry: "",
-    modelName: process.env.DEEPSEEK_MODEL_OVERRIDE ?? "deepseek-v4-pro",
+    modelName: process.env.ORCANA_MODEL_OVERRIDE ?? "deepseek-v4-pro",
     done: true,
     queueCount: 0,
     errorLine: "",

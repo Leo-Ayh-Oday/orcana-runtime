@@ -1,6 +1,6 @@
 /**
  * E2E 全栈 — 实时协作笔记，高质量验收
- * 跑 DeepSeek Code agentLoop 全流程：意图 → 规划 → 执行 → 验证
+ * 跑 Orcana agentLoop 全流程：意图 → 规划 → 执行 → 验证
  */
 import { agentLoop } from "../src/agent/loop"
 import { DeepSeekProvider } from "../src/provider/deepseek"

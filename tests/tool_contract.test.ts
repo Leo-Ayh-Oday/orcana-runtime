@@ -307,7 +307,7 @@ describe("ToolContract projection", () => {
       "web_fetch:e58f5947a76b35bd7bf1013812e3a374fcc070c1659ee8eb2aca18cecca58ed8",
       "find_symbol:a98ea218fc64e3de3ae325e2ac553b4e31a2c61237e1999b7a74ac61581b6de3",
       "find_references:0bae3b44d68cd0ee400f32a6ac0ee3c86edb0f32c861b1f146d9447766f846db",
-      "project_structure:9a1b48e2672ecc604ddc51e6d5a089de91ea4fa74fe37e4987f7f955dda7dcbd",
+      "project_structure:b0f2f8a46a055a9a14f03981dfe45177d20620d5946c1a2e2d82396c162909b9",
       "lsp_diagnostics:134b5b1c2a8e85e2593cb6f7f870c100522c3a00919559f4e59101c1d41ad1c4",
       "lsp_hover:e34068cc9085964da281c7ab79c5a2f6edc487bf113c416e280af3818a9a6e1b",
       "lsp_definition:c2c070697bf5a58538155b9ab990a0824322f020eef2f80822dd1b95070f6e2f",

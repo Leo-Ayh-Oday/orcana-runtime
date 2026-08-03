@@ -16,12 +16,21 @@
  *    ORCANA_TUI_CONFIG  — 替换全局 TUI 配置文件路径
  */
 
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 
-/** 全局配置根目录（可被 ORCANA_CONFIG_DIR 覆盖）。 */
+/** 全局配置根目录（可被 ORCANA_CONFIG_DIR 覆盖）。
+ *
+ *  Rename migration: when the new ~/.orcana directory does not exist yet but
+ *  the legacy ~/.deepseek-code one does, config/auth reads fall back to the
+ *  legacy directory so existing user data keeps working. */
 export function globalConfigDir(): string {
-  return process.env.ORCANA_CONFIG_DIR ?? join(homedir(), ".orcana")
+  if (process.env.ORCANA_CONFIG_DIR) return process.env.ORCANA_CONFIG_DIR
+  const newDir = join(homedir(), ".orcana")
+  const legacyDir = join(homedir(), ".deepseek-code")
+  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir
+  return newDir
 }
 
 /** 全局 provider/runtime 配置文件路径。 */

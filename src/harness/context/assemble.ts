@@ -44,25 +44,26 @@ export function contextSliceToMessages(slice: ContextSlice): ProviderMessage[] {
 
 function assembleGroup(group: string, parts: ContextContribution[]): ProviderMessage | null {
   const sorted = [...parts].sort((a, b) => a.priority - b.priority)
+  const nonEmpty = sorted.filter((p) => p.content.trim() !== "")
 
   if (group === "stable-prefix") {
-    // Rounds ≥ 1: the frozen prefix passes through byte-for-byte.
-    if (sorted.length === 1 && sorted[0]!.content.includes("[CACHE_ANCHOR:v3]")) {
-      if (sorted[0]!.content.trim() === "") return null
-      return { role: "user", content: sorted[0]!.content }
+    // Rounds ≥ 1: the frozen prefix passes through byte-for-byte. Other
+    // stable providers return empty parts then, so the group has exactly one
+    // non-empty member carrying the full frozen message.
+    if (nonEmpty.length === 1 && nonEmpty[0]!.content.includes("[CACHE_ANCHOR:v3]")) {
+      return { role: "user", content: nonEmpty[0]!.content }
     }
-    const partsText = sorted.map((p) => p.content).filter((c) => c.trim() !== "")
+    const partsText = nonEmpty.map((p) => p.content)
     if (partsText.length === 0) return null
     return { role: "user", content: [STABLE_PREFIX_HEADER, partsText.join("\n\n")].join("\n\n") }
   }
 
   if (group === "volatile-round") {
-    // Single contribution that already IS the volatile message passes through.
-    if (sorted.length === 1 && sorted[0]!.content.startsWith(VOLATILE_HEADER)) {
-      if (sorted[0]!.content.trim() === "") return null
-      return { role: "user", content: sorted[0]!.content }
+    // A single contribution that already IS the volatile message passes through.
+    if (nonEmpty.length === 1 && nonEmpty[0]!.content.startsWith(VOLATILE_HEADER)) {
+      return { role: "user", content: nonEmpty[0]!.content }
     }
-    const chunks = sorted.map((p) => p.content).filter((c) => c.trim() !== "")
+    const chunks = nonEmpty.map((p) => p.content)
     if (chunks.length === 0) return null
     return { role: "user", content: [VOLATILE_HEADER, chunks.join("\n\n")].join("\n\n") }
   }

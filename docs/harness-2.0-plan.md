@@ -1,4 +1,4 @@
-# DeepSeek Orcana Harness 2.0 整体实施方案
+# Orcana Runtime Harness 2.0 整体实施方案
 
 **方案版本：** H2.0
 **适用阶段：** Loop 减重已完成约一半

@@ -85,7 +85,7 @@
 
 ```bash
 # 全局安装
-npm install -g deepseek-orcana
+npm install -g orcana-runtime
 
 # 交互模式
 orcana

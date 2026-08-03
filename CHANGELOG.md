@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to DeepSeek Orcana.
+All notable changes to Orcana Runtime.
 
 ## [0.4.0] — 2026-08-03
 
@@ -92,4 +92,4 @@ All notable changes to DeepSeek Orcana.
 - 26 safety mechanisms: permission gate, Flash Judge, state machine, ripple engine, sandbox, memory compaction.
 - MCP server bridge, tool registry, hook system.
 - Session checkpoint (save/resume).
-- npm distribution (`deepseek-orcana` package, `orcana` CLI command).
+- npm distribution (`orcana-runtime` package, `orcana` CLI command).

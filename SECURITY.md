@@ -14,7 +14,7 @@
 
 ## Security Model
 
-DeepSeek Orcana is a local-first terminal agent. Key security boundaries:
+Orcana Runtime is a local-first terminal agent. Key security boundaries:
 
 ### 1. API Key Management
 

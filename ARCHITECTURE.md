@@ -1,4 +1,4 @@
-# Architecture — DeepSeek Orcana
+# Architecture — Orcana Runtime
 
 ## Design Philosophy
 

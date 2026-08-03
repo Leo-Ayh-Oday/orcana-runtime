@@ -1,4 +1,4 @@
-# Contributing to DeepSeek Orcana
+# Contributing to Orcana Runtime
 
 Thanks for your interest in contributing! This document outlines the process.
 
@@ -6,8 +6,8 @@ Thanks for your interest in contributing! This document outlines the process.
 
 ```bash
 # Clone and install
-git clone https://github.com/Leo-Ayh-Oday/deepseek-orcana.git
-cd deepseek-orcana
+git clone https://github.com/Leo-Ayh-Oday/orcana-runtime.git
+cd orcana-runtime
 bun install
 ```
 

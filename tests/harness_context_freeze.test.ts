@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import { agentLoop } from "../src/agent/loop"
-import { buildContextMessages } from "../src/agent/round/request-builder"
 import { createDefaultContextProviders } from "../src/harness/context/providers"
 import { runContextPipeline } from "../src/harness/context/pipeline"
 import { contextSliceToMessages, stableMessageOf } from "../src/harness/context/assemble"
@@ -84,14 +83,16 @@ function legacyMessages(request: ContextRequest): ProviderMessage[] {
     ? { role: "user", content: "planning-prompt" }
     : null
 
-  const messages = buildContextMessages({
-    langInstruction: request.langInstruction,
-    stablePrefixContext: frozen,
-    planStateContext,
-    researchContext: request.researchContextContent ? { role: "user", content: request.researchContextContent } : null,
-    volatileContext,
-    planningContext,
-  })
+  // Inlined legacy buildContextMessages: lang first, then stable prefix
+  // (cacheable), then research/volatile/planning; mode pushed last.
+  const messages: ProviderMessage[] = [
+    { role: "user", content: request.langInstruction },
+    ...(frozen ? [frozen] : []),
+    ...(planStateContext ? [planStateContext] : []),
+    ...(request.researchContextContent ? [{ role: "user" as const, content: request.researchContextContent }] : []),
+    ...(volatileContext ? [volatileContext] : []),
+    ...(planningContext ? [planningContext] : []),
+  ]
   const modeContext = formatModePrompt(request.mode)
   if (modeContext) messages.push({ role: "user", content: modeContext })
   return messages

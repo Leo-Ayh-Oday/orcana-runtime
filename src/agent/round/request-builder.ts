@@ -4,35 +4,6 @@ import type { CachePrefixCheck, CacheTracker } from "../../provider/cache-tracke
 import type { ProviderMessage } from "../../provider/types"
 import type { ToolDescriptor } from "../../tools/registry"
 
-// ── Context message assembly ──
-
-export interface ContextMessageInput {
-  langInstruction: string
-  stablePrefixContext: ProviderMessage | null
-  planStateContext: ProviderMessage | null
-  researchContext: ProviderMessage | null
-  volatileContext: ProviderMessage | null
-  planningContext: ProviderMessage | null
-}
-
-/** @deprecated H10 — the harness context pipeline (src/harness/context) is
- *  now the single assembler; this legacy reference implementation is kept
- *  for the byte-frozen regression test and removed with the next release. */
-/** Assemble all context messages that go BEFORE rawMessages in the provider request.
- *  Order matters: lang instruction first, then stable prefix (cacheable), then
- *  research, volatile, and planning context. Budget context is appended later. */
-export function buildContextMessages(input: ContextMessageInput): ProviderMessage[] {
-  const langContextMsg: ProviderMessage = { role: "user", content: input.langInstruction }
-  return [
-    langContextMsg,
-    ...(input.stablePrefixContext ? [input.stablePrefixContext] : []),
-    ...(input.planStateContext ? [input.planStateContext] : []),
-    ...(input.researchContext ? [input.researchContext] : []),
-    ...(input.volatileContext ? [input.volatileContext] : []),
-    ...(input.planningContext ? [input.planningContext] : []),
-  ]
-}
-
 // ── Token estimation ──
 
 export function estimateRoundTokens(

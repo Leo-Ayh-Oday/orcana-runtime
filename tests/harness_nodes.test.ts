@@ -9,6 +9,7 @@ import { runNode, runNodeToResult } from "../src/harness/nodes/run"
 import { createFunctionNode } from "../src/harness/nodes/function-node"
 import { createToolNode } from "../src/harness/nodes/tool-node"
 import { createVerificationNode } from "../src/harness/nodes/verification-node"
+import { createHumanNode } from "../src/harness/nodes/human-node"
 import { createCapabilityRegistry } from "../src/harness/capabilities/registry"
 import { registerToolCapabilities } from "../src/harness/capabilities/tool-adapter"
 import { createCapabilityDescriptor } from "../src/harness/capabilities/descriptor"
@@ -229,6 +230,43 @@ describe("H11 ToolNode", () => {
     const { result } = await runNodeToResult(node, context, { capabilityId: "baseline_probe", params: {} })
     // The executor surfaces the abort as a failed tool result.
     expect(["failed", "blocked"]).toContain(result.status)
+  })
+})
+
+// ── HumanNode (part C) ──
+
+describe("H11 HumanNode", () => {
+  test("emits node.interrupt and succeeds on a valid response", async () => {
+    const { context } = buildNodeContext()
+    const node = createHumanNode({
+      id: "human",
+      respond: async () => ({ accepted: true, planText: "ok" }),
+    })
+    const { events, result } = await runNodeToResult(node, context, { kind: "plan_approval", prompt: "approve?" })
+    expect(result.status).toBe("succeeded")
+    expect(result.output).toEqual({ accepted: true, planText: "ok" })
+    expect(events.some((e) => e.type === "node.interrupt")).toBe(true)
+    const interrupt = events.find((e) => e.type === "node.interrupt") as { kind: string }
+    expect(interrupt.kind).toBe("plan_approval")
+  })
+
+  test("schema-invalid responses fail the node", async () => {
+    const { context } = buildNodeContext()
+    const node = createHumanNode({
+      id: "human",
+      respond: async () => ({ wrong: "shape" }),
+    })
+    const { result } = await runNodeToResult(node, context, { kind: "plan_approval", prompt: "approve?" })
+    expect(result.status).toBe("failed")
+    expect(result.error?.kind).toBe("invalid_interrupt_response")
+  })
+
+  test("default responder is not_implemented", async () => {
+    const { context } = buildNodeContext()
+    const node = createHumanNode({ id: "human" })
+    const { result } = await runNodeToResult(node, context, { kind: "clarification", prompt: "which?" })
+    expect(result.status).toBe("failed")
+    expect(result.error?.message).toContain("no responder")
   })
 })
 

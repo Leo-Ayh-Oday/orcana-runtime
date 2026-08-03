@@ -82,6 +82,10 @@ export {
 } from "./nodes/context"
 export { runNode, runNodeToResult } from "./nodes/run"
 export { createFunctionNode } from "./nodes/function-node"
+export { createToolNode } from "./nodes/tool-node"
+export { createVerificationNode } from "./nodes/verification-node"
+export { createLlmAgentNode } from "./nodes/llm-agent-node"
+export { createHumanNode } from "./nodes/human-node"
 export type { RunSnapshot } from "./contracts/snapshot"
 export {
   LEGAL_TRANSITIONS,

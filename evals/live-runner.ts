@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { join, resolve } from "node:path"
 import { homedir } from "node:os"
 
-const EVAL_DIR = join(homedir(), ".deepseek-code", "live-evals")
+const EVAL_DIR = join(homedir(), ".orcana", "live-evals")
 mkdirSync(EVAL_DIR, { recursive: true })
 
 interface Task {
@@ -77,7 +77,7 @@ function parseArgs(argv: string[]): { list: boolean; all: boolean; taskIds: stri
 }
 
 function listTraceFiles(cwd: string): string[] {
-  const dir = join(cwd, ".deepseek-code", "runs")
+  const dir = join(cwd, ".orcana", "runs")
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter(file => file.endsWith(".jsonl"))

@@ -212,15 +212,19 @@ export const DOMAIN_LABELS: Record<ReplayDomain, string> = {
 export function checkAssertions(expected: ReplayExpected, context: Record<string, unknown>): string[] {
   const failures: string[] = []
   for (const assertion of expected.assertions) {
-    // Simple assertions: "key exists", "key equals value", "key > N"
     const parsed = parseAssertion(assertion)
     if (!parsed) continue
     const { key, op, value } = parsed
-    const actual = context[key]
+    const actual = resolvePath(context, key)
     switch (op) {
       case "exists":
         if (actual === undefined || actual === null) {
           failures.push(`assertion failed: "${key}" should exist`)
+        }
+        break
+      case "not_exists":
+        if (actual !== undefined && actual !== null) {
+          failures.push(`assertion failed: "${key}" should not exist, got "${String(actual)}"`)
         }
         break
       case "equals":
@@ -228,6 +232,15 @@ export function checkAssertions(expected: ReplayExpected, context: Record<string
           failures.push(`assertion failed: "${key}" expected "${value}", got "${actual}"`)
         }
         break
+      case "matches": {
+        const re = parseRegex(value ?? "")
+        if (!re) {
+          failures.push(`assertion failed: "${key}" has invalid regex "${value}"`)
+        } else if (!re.test(String(actual ?? ""))) {
+          failures.push(`assertion failed: "${key}" should match ${value}, got "${String(actual)}"`)
+        }
+        break
+      }
       case "gt":
         if (Number(actual) <= Number(value)) {
           failures.push(`assertion failed: "${key}" expected > ${value}, got ${actual}`)
@@ -243,18 +256,93 @@ export function checkAssertions(expected: ReplayExpected, context: Record<string
           failures.push(`assertion failed: "${key}" should contain "${value}", got "${actual}"`)
         }
         break
+      case "length": {
+        const len = Array.isArray(actual) ? actual.length : String(actual ?? "").length
+        const { cmp, target } = parseLength(value ?? "")
+        if (cmp === "eq" && len !== target) failures.push(`assertion failed: "${key}" length expected ${target}, got ${len}`)
+        if (cmp === "gte" && len < target) failures.push(`assertion failed: "${key}" length expected >= ${target}, got ${len}`)
+        if (cmp === "gt" && len <= target) failures.push(`assertion failed: "${key}" length expected > ${target}, got ${len}`)
+        break
+      }
+      case "contains_set": {
+        const expectedItems = (value ?? "").split(",").map((s) => s.trim()).filter(Boolean)
+        const actualItems = Array.isArray(actual) ? actual.map((x) => String(x)) : []
+        const missing = expectedItems.filter((item) => !actualItems.includes(item))
+        if (missing.length > 0) {
+          failures.push(`assertion failed: "${key}" should contain {${missing.join(", ")}}, got [${actualItems.join(", ")}]`)
+        }
+        break
+      }
     }
   }
   return failures
 }
 
+/** Resolve a dot-separated path (a.b.0.c) into nested objects/arrays.
+ *  Flat literal keys take priority (the legacy assertion context flattens
+ *  e.g. "nodes.length" as a literal key); nested resolution is the extension
+ *  path for §18.1. */
+export function resolvePath(context: Record<string, unknown>, path: string): unknown {
+  if (path in context) return context[path]
+  let current: unknown = context
+  for (const segment of path.split(".")) {
+    if (current === null || current === undefined) return undefined
+    if (Array.isArray(current)) {
+      const index = Number(segment)
+      current = Number.isInteger(index) ? current[index] : undefined
+    } else if (typeof current === "object") {
+      current = (current as Record<string, unknown>)[segment]
+    } else {
+      return undefined
+    }
+  }
+  return current
+}
+
+function parseRegex(value: string): RegExp | null {
+  const match = value.match(/^\/(.+)\/([a-z]*)$/)
+  if (!match) return null
+  try {
+    return new RegExp(match[1]!, match[2])
+  } catch {
+    return null
+  }
+}
+
+function parseLength(value: string): { cmp: "eq" | "gte" | "gt"; target: number } {
+  const eq = value.match(/^==\s*(\d+)$/)
+  if (eq) return { cmp: "eq", target: Number(eq[1]) }
+  const gte = value.match(/^>=\s*(\d+)$/)
+  if (gte) return { cmp: "gte", target: Number(gte[1]) }
+  const gt = value.match(/^>\s*(\d+)$/)
+  if (gt) return { cmp: "gt", target: Number(gt[1]) }
+  return { cmp: "eq", target: Number(value) || 0 }
+}
+
 function parseAssertion(a: string): { key: string; op: string; value?: string } | null {
-  // Patterns: "key exists", "key equals value", "key > N", "key >= N", "key contains value"
+  // Patterns:
+  //   "key exists" / "key not exists"
+  //   "key equals value" / "key matches /re/"
+  //   "key > N" / "key >= N"
+  //   "key contains value" / "key contains-set a,b,c"
+  //   "key length == N" / "key length >= N"
+  const notExistsMatch = a.match(/^(\S+)\s+not\s+exists$/i)
+  if (notExistsMatch) return { key: notExistsMatch[1]!, op: "not_exists" }
+
   const existsMatch = a.match(/^(\S+)\s+exists$/i)
   if (existsMatch) return { key: existsMatch[1]!, op: "exists" }
 
+  const matchesMatch = a.match(/^(\S+)\s+matches\s+(\/.+\/[a-z]*)$/i)
+  if (matchesMatch) return { key: matchesMatch[1]!, op: "matches", value: matchesMatch[2]! }
+
   const equalsMatch = a.match(/^(\S+)\s+equals\s+(.+)$/i)
   if (equalsMatch) return { key: equalsMatch[1]!, op: "equals", value: equalsMatch[2]! }
+
+  const lengthMatch = a.match(/^(\S+)\s+length\s+(==\s*\d+|>=\s*\d+|>\s*\d+|\d+)$/i)
+  if (lengthMatch) return { key: lengthMatch[1]!, op: "length", value: lengthMatch[2]! }
+
+  const setMatch = a.match(/^(\S+)\s+contains-set\s+(.+)$/i)
+  if (setMatch) return { key: setMatch[1]!, op: "contains_set", value: setMatch[2]! }
 
   const gtMatch = a.match(/^(\S+)\s*>\s*(\d+)$/)
   if (gtMatch) return { key: gtMatch[1]!, op: "gt", value: gtMatch[2]! }

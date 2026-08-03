@@ -14,7 +14,7 @@ scripts/start.bat
 package-lock.json
 
 # Runtime traces and local agent state
-.deepseek-code/
+.orcana/
 
 # Generated app/test output
 .next/

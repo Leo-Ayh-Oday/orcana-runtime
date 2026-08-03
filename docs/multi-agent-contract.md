@@ -296,7 +296,7 @@ Agent:   PONG { role, version, ready: boolean, max_context_window: number }
 ## §6 签名
 
 ```
-本契约为 deepseek-code v0.2.0 的多Agent子系统设计规范。
+本契约为 orcana v0.2.0 的多Agent子系统设计规范。
 实现时应严格遵循此契约中的接口定义、决策树和置信度算法。
 
 签署日期：2026-06-09

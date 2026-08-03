@@ -62,6 +62,7 @@ export async function buildRunContext(
   const planStore = options.planStore ?? requireRuntimeExecutionContext().planStore
   const artifactStore = options.artifactStore
   const runId = options.runId
+  const capabilityRegistry = options.capabilityRegistry
   const maxRounds = resolveMaxRounds(options.maxRounds, process.env.DEEPSEEK_MAX_ROUNDS)
 
   const effectivePrompt = buildEffectivePrompt(prompt, options.conversationHistory)
@@ -271,6 +272,7 @@ export async function buildRunContext(
     planStore,
     artifactStore,
     runId,
+    capabilityRegistry,
     confidenceEvaluator,
     flashJudge,
     testimonyLedger,

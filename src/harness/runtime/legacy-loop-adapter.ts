@@ -29,6 +29,9 @@ import type { ToolDescriptor } from "../../tools/registry"
 import { HARNESS_EVENT_SCHEMA_VERSION, HARNESS_EVENT_TYPES } from "../contracts/events"
 import type { HarnessEvent } from "../contracts/events"
 import type { AgentRun, AgentRunInput } from "../contracts/run"
+import type { CapabilityRegistry } from "../contracts/capability"
+import type { SideEffect } from "../contracts/capability"
+import { classifyToolSideEffect } from "../capabilities/tool-adapter"
 
 export interface LegacyLoopAdapterDeps {
   provider: LLMProvider
@@ -43,6 +46,8 @@ export interface LegacyLoopAdapterDeps {
   gateTelemetryFile?: string
   contextMapPolicy?: "off" | "auto" | "always"
   flashTriagePolicy?: "off" | "auto" | "always"
+  /** H9: capability registry (first migration batch) injected into the kernel. */
+  capabilityRegistry?: CapabilityRegistry
 }
 
 // ── Metadata transport keys (H1 transition) ──
@@ -91,6 +96,9 @@ export function buildLoopOptions(
     // H8: run-scoped artifact store (verification binds artifacts to it).
     artifactStore: run.scope.artifactStore,
     runId: run.runId,
+    // H9: capability registry — the loop's tool executions route through the
+    // CapabilityExecutor with this registry (shared with the future Node Runtime).
+    capabilityRegistry: deps.capabilityRegistry,
     hooks: deps.hooks,
     stagedContext: deps.stagedContext,
     thinkingStore: deps.thinkingStore,
@@ -158,7 +166,7 @@ async function* executeLoop(
         // H2: the kernel's final LoopDecision rides the generator return value.
         return step.value as LoopDecision
       }
-      const translated = translateStreamEvent(step.value, emit)
+      const translated = translateStreamEvent(step.value, emit, (name) => classifyToolSideEffect(name, deps.tools))
       if (translated) yield translated
     }
   } finally {
@@ -177,6 +185,7 @@ async function* executeLoop(
 function translateStreamEvent(
   event: StreamEvent,
   emit: <T>(type: string, payload: T) => HarnessEvent,
+  classifySideEffect?: (name: string) => SideEffect,
 ): HarnessEvent | null {
   switch (event.type) {
     case "text":
@@ -193,11 +202,16 @@ function translateStreamEvent(
       return emit(HARNESS_EVENT_TYPES.displayChanged, { display: { kind: "user_question", data: event.data } })
     case "tool_call": {
       const call = event.data as { id?: string; name?: string; input?: unknown } | undefined
+      const name = String(call?.name ?? "")
       return emit(HARNESS_EVENT_TYPES.toolCallRequested, {
         toolCall: {
           id: String(call?.id ?? ""),
-          name: String(call?.name ?? ""),
+          name,
           input: call?.input,
+          // H9: capability classification rides the bridged event so the
+          // harness-side BudgetGuard can enforce write/external_action class
+          // limits (same descriptor source as the executor — no double count).
+          sideEffect: classifySideEffect?.(name),
         },
       })
     }

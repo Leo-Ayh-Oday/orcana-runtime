@@ -1,20 +1,21 @@
 {
-  "name": "orcana",
+  "name": "orcana-runtime",
   "version": "0.4.0",
-  "description": "Terminal coding agent with model-backed runtime, TUI, and workflow gates.",
+  "description": "Orcana Runtime — model-agnostic agent runtime for evidence-gated recursive self-evolution.",
   "type": "module",
   "license": "MIT",
   "packageManager": "bun@1.3.14",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Leo-Ayh-Oday/orcana-code.git"
+    "url": "git+https://github.com/Leo-Ayh-Oday/orcana-runtime.git"
   },
   "bugs": {
-    "url": "https://github.com/Leo-Ayh-Oday/orcana-code/issues"
+    "url": "https://github.com/Leo-Ayh-Oday/orcana-runtime/issues"
   },
-  "homepage": "https://github.com/Leo-Ayh-Oday/orcana-code#readme",
+  "homepage": "https://github.com/Leo-Ayh-Oday/orcana-runtime#readme",
   "keywords": [
     "orcana",
+    "agent-runtime",
     "coding-agent",
     "terminal-ai",
     "tui",
@@ -29,7 +30,10 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "orcana": "./bin/orcana.cjs"
+    "orcana": "./bin/orcana.cjs",
+    "deepseek": "./bin/legacy-deepseek.cjs",
+    "deepseek-code": "./bin/legacy-deepseek.cjs",
+    "deepseek-orcana": "./bin/legacy-deepseek.cjs"
   },
   "files": [
     "bin/",

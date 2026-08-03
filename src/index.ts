@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /** Orcana — TS entry point. */
 
+// MUST be the first import: mirrors legacy DEEPSEEK_* env vars to ORCANA_*
+// before any module reads them at load time.
+import "./config/env-compat"
 import { createServer } from "node:http"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"

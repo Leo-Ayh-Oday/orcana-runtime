@@ -22,7 +22,7 @@ export interface MigrationResult {
  * Returns a summary of what happened.
  */
 export function migrateAllJsonSessions(storeDir?: string): MigrationResult {
-  const dir = storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+  const dir = storeDir ?? join(homedir(), ".orcana", "sessions")
   const result: MigrationResult = { migrated: 0, skipped: 0, errors: [] }
 
   let jsonFiles: string[] = []
@@ -51,7 +51,7 @@ export function migrateAllJsonSessions(storeDir?: string): MigrationResult {
  * Returns true if migration happened, false if skipped (already migrated).
  */
 export function migrateSession(sessionId: string, storeDir?: string): boolean {
-  const dir = storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+  const dir = storeDir ?? join(homedir(), ".orcana", "sessions")
   const jsonPath = join(dir, `${sessionId}.json`)
   const dbPath = join(dir, `${sessionId}.db`)
 
@@ -89,7 +89,7 @@ export function migrateSession(sessionId: string, storeDir?: string): boolean {
 
 /** Check if any old JSON sessions need migration. */
 export function needsMigration(storeDir?: string): boolean {
-  const dir = storeDir ?? join(homedir(), ".deepseek-code", "sessions")
+  const dir = storeDir ?? join(homedir(), ".orcana", "sessions")
   try {
     return readdirSync(dir).some(f => f.endsWith(".json") && !f.endsWith(".tmp") && !f.endsWith(".bak"))
   } catch {
@@ -99,7 +99,7 @@ export function needsMigration(storeDir?: string): boolean {
 
 /** Try to migrate checkpoints from old JSON format into the SQLite store. */
 function migrateCheckpoints(sessionId: string, store: SessionStore): void {
-  const ckptDir = join(homedir(), ".deepseek-code", "checkpoints", sessionId)
+  const ckptDir = join(homedir(), ".orcana", "checkpoints", sessionId)
   if (!existsSync(ckptDir)) return
 
   let files: string[] = []

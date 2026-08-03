@@ -20,7 +20,7 @@ export class AgentRunTrace {
 
   static start(cwd: string, prompt: string): AgentRunTrace {
     const runId = `run_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`
-    const dir = join(cwd, ".deepseek-code", "runs")
+    const dir = join(cwd, ".orcana", "runs")
     mkdirSync(dir, { recursive: true })
     const trace = new AgentRunTrace(runId, join(dir, `${runId}.jsonl`))
     trace.record("run_started", { prompt: prompt.slice(0, 1000) })

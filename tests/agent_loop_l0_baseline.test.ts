@@ -13,11 +13,11 @@ import { HookEvent, HookSystem } from "../src/hooks"
 import { buildTools, Result } from "../src/tools/registry"
 import { getShellSandbox, setShellSandbox } from "../src/tools/shell"
 
-const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
-process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+process.env.ORCANA_FLASH_TRIAGE = "off"
 afterAll(() => {
-  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
-  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+  if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+  else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 })
 
 interface GoldenFixture {
@@ -434,10 +434,10 @@ describe("Agent loop L0 behavior baseline", () => {
 
   test("context budget block performs cleanup without calling the provider", async () => {
     resetFallbackRuntime()
-    const oldWarn = process.env.DEEPSEEK_CONTEXT_WARN_RATIO
-    const oldBlock = process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO
-    process.env.DEEPSEEK_CONTEXT_WARN_RATIO = "0.000001"
-    process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO = "0.000002"
+    const oldWarn = process.env.ORCANA_CONTEXT_WARN_RATIO
+    const oldBlock = process.env.ORCANA_CONTEXT_BLOCK_RATIO
+    process.env.ORCANA_CONTEXT_WARN_RATIO = "0.000001"
+    process.env.ORCANA_CONTEXT_BLOCK_RATIO = "0.000002"
     const dispose = spyOn(SandboxManager.prototype, "dispose")
     const stopReasons: string[] = []
     const hooks = new HookSystem()
@@ -465,10 +465,10 @@ describe("Agent loop L0 behavior baseline", () => {
       expect(dispose).toHaveBeenCalledTimes(1)
       assertFallbackRuntimeIsClean()
     } finally {
-      if (oldWarn === undefined) delete process.env.DEEPSEEK_CONTEXT_WARN_RATIO
-      else process.env.DEEPSEEK_CONTEXT_WARN_RATIO = oldWarn
-      if (oldBlock === undefined) delete process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO
-      else process.env.DEEPSEEK_CONTEXT_BLOCK_RATIO = oldBlock
+      if (oldWarn === undefined) delete process.env.ORCANA_CONTEXT_WARN_RATIO
+      else process.env.ORCANA_CONTEXT_WARN_RATIO = oldWarn
+      if (oldBlock === undefined) delete process.env.ORCANA_CONTEXT_BLOCK_RATIO
+      else process.env.ORCANA_CONTEXT_BLOCK_RATIO = oldBlock
       dispose.mockRestore()
     }
   })

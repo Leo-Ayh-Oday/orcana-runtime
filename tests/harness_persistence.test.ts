@@ -15,11 +15,11 @@ import { buildTools, Result } from "../src/tools/registry"
 // workspace hashes detect changes, and restored runs keep their completed
 // state (no repeated irreversible work).
 
-const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
-process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+process.env.ORCANA_FLASH_TRIAGE = "off"
 afterAll(() => {
-  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
-  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+  if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+  else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 })
 
 class ProbeThenTextProvider implements LLMProvider {
@@ -51,7 +51,7 @@ describe("Harness H6 persistence", () => {
   test("terminal runs are saved to runs/ and snapshots/ via the store", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h6-"))
     try {
-      const store = createFileHarnessStore({ root: join(cwd, ".deepseek-code", "harness") })
+      const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const harness = createAgentHarness({
         deps: { provider: new ProbeThenTextProvider(), tools: probeTool() },
         sessionId: "sess-persist",
@@ -65,8 +65,8 @@ describe("Harness H6 persistence", () => {
       }
       const runId = events[0]!.runId
 
-      const runsDir = join(cwd, ".deepseek-code", "harness", "runs")
-      const snapshotsDir = join(cwd, ".deepseek-code", "harness", "snapshots")
+      const runsDir = join(cwd, ".orcana", "harness", "runs")
+      const snapshotsDir = join(cwd, ".orcana", "harness", "snapshots")
       expect(readFileSync(join(runsDir, `${runId}.json`), "utf-8")).toContain('"status":"completed"')
       // Snapshot filename uses the run's final event sequence.
       const snapshotFiles = readdirSync(snapshotsDir).filter(f => f.startsWith(`${runId}-`))
@@ -91,9 +91,9 @@ describe("Harness H6 persistence", () => {
   test("corrupt run files are rejected with null", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h6-corrupt-"))
     try {
-      const store = createFileHarnessStore({ root: join(cwd, ".deepseek-code", "harness") })
-      mkdirSync(join(cwd, ".deepseek-code", "harness", "runs"), { recursive: true })
-      writeFileSync(join(cwd, ".deepseek-code", "harness", "runs", "run-bad.json"), "{not json")
+      const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
+      mkdirSync(join(cwd, ".orcana", "harness", "runs"), { recursive: true })
+      writeFileSync(join(cwd, ".orcana", "harness", "runs", "run-bad.json"), "{not json")
       expect(await store.loadRun("run-bad")).toBeNull()
       expect(await store.loadRun("run-missing")).toBeNull()
     } finally {
@@ -125,7 +125,7 @@ describe("Harness H6 persistence", () => {
   test("serialize/restore round-trip keeps outcome, status and done node states", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h6-restore-"))
     try {
-      const store = createFileHarnessStore({ root: join(cwd, ".deepseek-code", "harness") })
+      const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const harness = createAgentHarness({
         deps: { provider: new ProbeThenTextProvider(), tools: probeTool() },
         sessionId: "sess-restore",
@@ -158,7 +158,7 @@ describe("Harness H6 persistence", () => {
   test("restored runs preserve done plan nodes (no repeated work)", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h6-plan-"))
     try {
-      const store = createFileHarnessStore({ root: join(cwd, ".deepseek-code", "harness") })
+      const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const harness = createAgentHarness({
         deps: { provider: new ProbeThenTextProvider(), tools: probeTool() },
         sessionId: "sess-plan",
@@ -199,7 +199,7 @@ describe("Harness H6 persistence", () => {
   test("serialized runs carry workspace hash and mode/budget projections", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h6-proj-"))
     try {
-      const store = createFileHarnessStore({ root: join(cwd, ".deepseek-code", "harness") })
+      const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const harness = createAgentHarness({
         deps: { provider: new ProbeThenTextProvider(), tools: probeTool() },
         sessionId: "sess-proj",

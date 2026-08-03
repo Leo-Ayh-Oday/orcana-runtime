@@ -18,7 +18,7 @@ const WIDE_MARK = [
 ]
 
 const COMPACT_MARK = [
-  "DeepSeek Code",
+  "Orcana",
   "sonar first / verify always",
 ]
 
@@ -61,7 +61,7 @@ export function renderStartupScreen(options: StartupScreenOptions): string {
   }
 
   lines.push("")
-  lines.push(fit(`  ${bold("DeepSeek Code")} ${dim(`v${options.version}`)} ${dim("/")} ${cyan("Hraness runtime")}`, width))
+  lines.push(fit(`  ${bold("Orcana")} ${dim(`v${options.version}`)} ${dim("/")} ${cyan("Hraness runtime")}`, width))
   lines.push(fit(`  ${dim("Sonar first. Ripple before writes. Evidence before done.")}`, width))
   lines.push("")
   lines.push(`  ${chip("model", options.modelName, cyan)} ${chip("fim", "on", green)} ${chip("tools", String(options.toolsCount), yellow)} ${chip("thinking", options.thinkingEffort, cyan)}`)

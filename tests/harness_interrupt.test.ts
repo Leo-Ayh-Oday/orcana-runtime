@@ -14,11 +14,11 @@ import { buildTools, Result } from "../src/tools/registry"
 // resume validates (idempotent, schema, workspace), rejection is a formal
 // branch, cross-instance resume works, and waiting runs hold no resources.
 
-const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
-process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+process.env.ORCANA_FLASH_TRIAGE = "off"
 afterAll(() => {
-  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
-  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+  if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+  else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 })
 
 function probeTool() {
@@ -261,7 +261,7 @@ describe("Harness H7 interrupts", () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h7-"))
     try {
       writeFileSync(join(cwd, "file.txt"), "stable")
-      const store = createFileHarnessStore({ root: join(cwd, ".deepseek-code", "harness") })
+      const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const hash = () => computeWorkspaceHash(cwd)
       const harness = createAgentHarness({
         deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
@@ -302,7 +302,7 @@ describe("Harness H7 interrupts", () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h7-ws-"))
     try {
       writeFileSync(join(cwd, "file.txt"), "stable")
-      const store = createFileHarnessStore({ root: join(cwd, ".deepseek-code", "harness") })
+      const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const harness = createAgentHarness({
         deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
         sessionId: "sess-int-ws",

@@ -121,7 +121,7 @@ export function scoreMemoryCandidate(candidate: MemoryCandidate): { score: numbe
   const verified = candidate.verifiedBy || (candidate.evidence?.length ?? 0) >= 2 ? 1 : 0
   const reusable = /\b(when|whenever|before|after|prefer|avoid|must|do not|如果|当|必须|不要|优先)\b/i.test(text) ? 1 : 0.45
   const futureImpact = /\b(ripple|typecheck|test|caller|cache|memory|contract|verification|rollback|context|长期|调用方|验证|缓存|记忆)\b/i.test(text) ? 1 : 0.45
-  const projectSpecific = /\b(src\/|tests\/|\.ts|\.tsx|deepseek-code|ripple|agentLoop|loop\.ts|compactor)\b/i.test(text) ? 1 : 0.55
+  const projectSpecific = /\b(src\/|tests\/|\.ts|\.tsx|orcana|ripple|agentLoop|loop\.ts|compactor)\b/i.test(text) ? 1 : 0.55
   const notStale = candidate.status && candidate.status !== "active" ? 0 : 1
   const scores: MemoryGateScores = {
     reusable,
@@ -177,7 +177,7 @@ export class MemoryCardStore {
   private cards: MemoryCard[] = []
 
   constructor(private projectRoot = process.cwd()) {
-    const dir = join(projectRoot, ".deepseek-code")
+    const dir = join(projectRoot, ".orcana")
     mkdirSync(dir, { recursive: true })
     this.file = join(dir, "memory-cards.jsonl")
     this.load()

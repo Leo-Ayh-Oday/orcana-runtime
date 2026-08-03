@@ -38,7 +38,7 @@ const TRIAGE_TIMEOUT_MS = 8000
 
 export type FlashTriagePolicy = "off" | "auto" | "always"
 
-export function resolveFlashTriagePolicy(value = process.env.DEEPSEEK_FLASH_TRIAGE): FlashTriagePolicy {
+export function resolveFlashTriagePolicy(value = process.env.ORCANA_FLASH_TRIAGE): FlashTriagePolicy {
   const normalized = String(value ?? "auto").trim().toLowerCase()
   if (normalized === "1" || normalized === "true" || normalized === "on" || normalized === "always") return "always"
   if (normalized === "0" || normalized === "false" || normalized === "off") return "off"

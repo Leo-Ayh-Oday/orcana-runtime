@@ -15,7 +15,7 @@ const STRICT_DISABLED_PURPOSES = new Set<ProviderCallPurpose>([
 ])
 
 export function currentCostMode(): CostMode {
-  return process.env.DEEPSEEK_COST_MODE === "strict" ? "strict" : "normal"
+  return process.env.ORCANA_COST_MODE === "strict" ? "strict" : "normal"
 }
 
 export function isStrictCostMode(): boolean {

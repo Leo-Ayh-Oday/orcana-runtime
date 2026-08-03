@@ -1,6 +1,6 @@
 /** FileHarnessStore (H6, plan §13.1).
  *
- *  Local file layout under .deepseek-code/harness/:
+ *  Local file layout under .orcana/harness/:
  *    sessions/  <sessionId>.json
  *    runs/      <runId>.json
  *    snapshots/ <runId>-<sequence>.json

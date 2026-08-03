@@ -1,4 +1,4 @@
-/** DeepSeek Code readline UI with streaming output and Chinese status text.
+/** Orcana readline UI with streaming output and Chinese status text.
  *
  *  Assembly is delegated to createRuntime() — this file is now a thin UX layer.
  */
@@ -52,7 +52,7 @@ import type { MultiProvider } from "../provider/multi"
 
 const formatK = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)
 const LITE_CONTEXT_MAX = 1_000_000
-const CHAT_LITE_SYSTEM = "你是 DeepSeek Code。当前是轻聊天模式：简短回应用户，不读取文件，不调用工具，不做项目分析。"
+const CHAT_LITE_SYSTEM = "你是 Orcana。当前是轻聊天模式：简短回应用户，不读取文件，不调用工具，不做项目分析。"
 
 let sessionInputTokens = 0
 let sessionOutputTokens = 0
@@ -94,7 +94,7 @@ function rememberTurn(compactor: CompactionState, turn: { role: "user" | "assist
 }
 
 function maybeCreateM0(compactor: CompactionState, title: string) {
-  const thresholdTokens = envNumber("DEEPSEEK_M0_THRESHOLD_TOKENS", 50_000)
+  const thresholdTokens = envNumber("ORCANA_M0_THRESHOLD_TOKENS", 50_000)
   if (compactor.anchor || compactor.estimatedTokens < thresholdTokens) return
   replaceCompactorState(compactor, createBaseCheckpoint(compactor, {
     sessionId: "auto-m0",

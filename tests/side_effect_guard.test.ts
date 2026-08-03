@@ -151,7 +151,7 @@ describe("analyzeSideEffects — out-of-scope detection", () => {
 
 describe("checkScopeViolations", () => {
   test("returns files outside expected scope", () => {
-    const projectRoot = resolve(process.cwd(), ".deepseek-code")
+    const projectRoot = resolve(process.cwd(), ".orcana")
     const violations = checkScopeViolations(
       ["src/test.ts", "/etc/passwd", "../outside/file.txt"],
       ["src/test.ts"],

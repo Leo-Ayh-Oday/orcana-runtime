@@ -8,22 +8,22 @@ function restoreEnv(name: string, value: string | undefined) {
 
 describe("cost policy", () => {
   test("normal mode keeps auxiliary provider calls enabled", () => {
-    const old = process.env.DEEPSEEK_COST_MODE
+    const old = process.env.ORCANA_COST_MODE
     try {
-      delete process.env.DEEPSEEK_COST_MODE
+      delete process.env.ORCANA_COST_MODE
       expect(currentCostMode()).toBe("normal")
       expect(shouldSkipProviderPurpose("chat_lite")).toBe(false)
       expect(shouldSkipProviderPurpose("flash_triage")).toBe(false)
       expect(shouldSkipProviderPurpose("agent_main")).toBe(false)
     } finally {
-      restoreEnv("DEEPSEEK_COST_MODE", old)
+      restoreEnv("ORCANA_COST_MODE", old)
     }
   })
 
   test("strict mode disables auxiliary calls but preserves main agent and clarification", () => {
-    const old = process.env.DEEPSEEK_COST_MODE
+    const old = process.env.ORCANA_COST_MODE
     try {
-      process.env.DEEPSEEK_COST_MODE = "strict"
+      process.env.ORCANA_COST_MODE = "strict"
       expect(currentCostMode()).toBe("strict")
       expect(shouldSkipProviderPurpose("chat_lite")).toBe(true)
       expect(shouldSkipProviderPurpose("flash_triage")).toBe(true)
@@ -33,7 +33,7 @@ describe("cost policy", () => {
       expect(shouldSkipProviderPurpose("agent_main")).toBe(false)
       expect(shouldSkipProviderPurpose("clarification")).toBe(false)
     } finally {
-      restoreEnv("DEEPSEEK_COST_MODE", old)
+      restoreEnv("ORCANA_COST_MODE", old)
     }
   })
 })

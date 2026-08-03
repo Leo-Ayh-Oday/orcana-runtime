@@ -62,8 +62,8 @@ describe("AgentRunTrace", () => {
   })
 
   test("agent loop records rounds and tool results", async () => {
-    const oldCostMode = process.env.DEEPSEEK_COST_MODE
-    process.env.DEEPSEEK_COST_MODE = "strict"
+    const oldCostMode = process.env.ORCANA_COST_MODE
+    process.env.ORCANA_COST_MODE = "strict"
     const cwd = mkdtempSync(join(tmpdir(), "dscode-trace-"))
     const trace = AgentRunTrace.start(cwd, "read file")
     const tools = buildTools({
@@ -87,7 +87,7 @@ describe("AgentRunTrace", () => {
         // drain
       }
     } finally {
-      restoreEnv("DEEPSEEK_COST_MODE", oldCostMode)
+      restoreEnv("ORCANA_COST_MODE", oldCostMode)
     }
 
     const types = readTraceTypes(trace.file)
@@ -99,8 +99,8 @@ describe("AgentRunTrace", () => {
   })
 
   test("agent loop records token usage events", async () => {
-    const oldCostMode = process.env.DEEPSEEK_COST_MODE
-    process.env.DEEPSEEK_COST_MODE = "strict"
+    const oldCostMode = process.env.ORCANA_COST_MODE
+    process.env.ORCANA_COST_MODE = "strict"
     const cwd = mkdtempSync(join(tmpdir(), "dscode-trace-"))
     const trace = AgentRunTrace.start(cwd, "cache")
 
@@ -115,7 +115,7 @@ describe("AgentRunTrace", () => {
         // drain
       }
     } finally {
-      restoreEnv("DEEPSEEK_COST_MODE", oldCostMode)
+      restoreEnv("ORCANA_COST_MODE", oldCostMode)
     }
 
     const lines = readFileSync(trace.file, "utf-8").trim().split("\n").map(line => JSON.parse(line))

@@ -13,11 +13,11 @@ import { buildTools, Result } from "../src/tools/registry"
 // legacy traces migrate through shared types, secrets are redacted, and a
 // failing trace write never fails the run.
 
-const SAVED_DEEPSEEK_FLASH_TRIAGE = process.env.DEEPSEEK_FLASH_TRIAGE
-process.env.DEEPSEEK_FLASH_TRIAGE = "off"
+const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+process.env.ORCANA_FLASH_TRIAGE = "off"
 afterAll(() => {
-  if (SAVED_DEEPSEEK_FLASH_TRIAGE === undefined) delete process.env.DEEPSEEK_FLASH_TRIAGE
-  else process.env.DEEPSEEK_FLASH_TRIAGE = SAVED_DEEPSEEK_FLASH_TRIAGE
+  if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+  else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 })
 
 class ProbeThenTextProvider implements LLMProvider {
@@ -66,7 +66,7 @@ describe("Harness H5 typed trace", () => {
         events.push(event)
       }
       const runId = events[0]!.runId
-      const file = join(cwd, ".deepseek-code", "harness", "events", `${runId}.jsonl`)
+      const file = join(cwd, ".orcana", "harness", "events", `${runId}.jsonl`)
       const envelopes = readEnvelopes(file)
 
       expect(envelopes.length).toBeGreaterThan(0)
@@ -113,8 +113,8 @@ describe("Harness H5 typed trace", () => {
     const cwd = mkdtempSync(join(tmpdir(), "dscode-h5-fail-"))
     try {
       // Make the events directory a file so mkdir/append fails silently.
-      mkdirSync(join(cwd, ".deepseek-code", "harness"), { recursive: true })
-      writeFileSync(join(cwd, ".deepseek-code", "harness", "events"), "blocked")
+      mkdirSync(join(cwd, ".orcana", "harness"), { recursive: true })
+      writeFileSync(join(cwd, ".orcana", "harness", "events"), "blocked")
       const harness = createAgentHarness({
         deps: { provider: new ProbeThenTextProvider(), tools: probeTool() },
         sessionId: "sess-trace-fail",

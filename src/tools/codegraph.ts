@@ -6,7 +6,7 @@ import { execSync } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 
-const SKIP_DIRS = new Set([".git", ".deepseek-code", "node_modules", "__pycache__", ".pytest_cache", ".venv", "dist", "build", ".next"])
+const SKIP_DIRS = new Set([".git", ".orcana", "node_modules", "__pycache__", ".pytest_cache", ".venv", "dist", "build", ".next"])
 const SKIP_FILES = new Set(["deepseek-run.out.txt", "deepseek-run.err.txt"])
 
 let _rgAvailable: boolean | null = null
@@ -101,7 +101,7 @@ async function project_structure(params: Record<string, unknown>): Promise<ToolR
 
   const lines = [
     `Target project: ${resolve(root)}`,
-    "Boundary: this tree is the user's project. Runtime artifacts such as .deepseek-code are excluded.",
+    "Boundary: this tree is the user's project. Runtime artifacts such as .orcana are excluded.",
   ]
   walk(resolve(root), "", maxDepth, lines)
   return Result.ok(lines.slice(0, 100).join("\n"))
@@ -162,7 +162,7 @@ export const FIND_REFERENCES: ToolDef = {
 
 export const PROJECT_STRUCTURE: ToolDef = {
   name: "project_structure",
-  description: "Show the target project's directory tree, excluding DeepSeek Code runtime artifacts. Use this first when entering a new user project to understand its layout.",
+  description: "Show the target project's directory tree, excluding Orcana runtime artifacts. Use this first when entering a new user project to understand its layout.",
   isReadonly: true,
   category: "safe" as const,
   isConcurrencySafe: true,

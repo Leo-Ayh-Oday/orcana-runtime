@@ -152,14 +152,14 @@ describe("rippleWaveChar", () => {
 
   // PR-4: Unicode 模式下用 ○●▁▃✓ 等
   test("Unicode 模式: idle → '·', settled → '✓'", () => {
-    const prev = process.env.DEEPSEEK_TUI_UNICODE
-    process.env.DEEPSEEK_TUI_UNICODE = "1"
+    const prev = process.env.ORCANA_TUI_UNICODE
+    process.env.ORCANA_TUI_UNICODE = "1"
     try {
       expect(rippleWaveChar("idle", 0)).toBe("·")
       expect(rippleWaveChar("settled", 0)).toBe("✓")
       expect(rippleWaveChar("propagate", 0)).toBe("○○○")
     } finally {
-      process.env.DEEPSEEK_TUI_UNICODE = prev
+      process.env.ORCANA_TUI_UNICODE = prev
     }
   })
 
@@ -174,43 +174,43 @@ describe("rippleWaveChar", () => {
 // ── isRuntimePanelEnabled ──
 
 describe("isRuntimePanelEnabled", () => {
-  const originalEnv = process.env.DEEPSEEK_TUI_RUNTIME_PANEL
+  const originalEnv = process.env.ORCANA_TUI_RUNTIME_PANEL
 
   afterEach(() => {
     if (originalEnv === undefined) {
-      delete process.env.DEEPSEEK_TUI_RUNTIME_PANEL
+      delete process.env.ORCANA_TUI_RUNTIME_PANEL
     } else {
-      process.env.DEEPSEEK_TUI_RUNTIME_PANEL = originalEnv
+      process.env.ORCANA_TUI_RUNTIME_PANEL = originalEnv
     }
   })
 
   test("returns true when env not set", () => {
-    delete process.env.DEEPSEEK_TUI_RUNTIME_PANEL
+    delete process.env.ORCANA_TUI_RUNTIME_PANEL
     expect(isRuntimePanelEnabled()).toBe(true)
   })
 
   test("returns false when env is 'off'", () => {
-    process.env.DEEPSEEK_TUI_RUNTIME_PANEL = "off"
+    process.env.ORCANA_TUI_RUNTIME_PANEL = "off"
     expect(isRuntimePanelEnabled()).toBe(false)
   })
 
   test("returns false when env is '0'", () => {
-    process.env.DEEPSEEK_TUI_RUNTIME_PANEL = "0"
+    process.env.ORCANA_TUI_RUNTIME_PANEL = "0"
     expect(isRuntimePanelEnabled()).toBe(false)
   })
 
   test("returns false when env is 'false'", () => {
-    process.env.DEEPSEEK_TUI_RUNTIME_PANEL = "false"
+    process.env.ORCANA_TUI_RUNTIME_PANEL = "false"
     expect(isRuntimePanelEnabled()).toBe(false)
   })
 
   test("returns true when env is 'on'", () => {
-    process.env.DEEPSEEK_TUI_RUNTIME_PANEL = "on"
+    process.env.ORCANA_TUI_RUNTIME_PANEL = "on"
     expect(isRuntimePanelEnabled()).toBe(true)
   })
 
   test("returns true when env is '1'", () => {
-    process.env.DEEPSEEK_TUI_RUNTIME_PANEL = "1"
+    process.env.ORCANA_TUI_RUNTIME_PANEL = "1"
     expect(isRuntimePanelEnabled()).toBe(true)
   })
 })

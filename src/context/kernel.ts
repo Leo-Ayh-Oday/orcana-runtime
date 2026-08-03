@@ -10,7 +10,7 @@ export interface ContextKernel {
 }
 
 const ROOT_FILES = ["AGENTS.md", "CLAUDE.md", "OPENWOLF.md", "README.md", "package.json", "tsconfig.json"]
-const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".deepseek-code"])
+const SKIP_DIRS = new Set([".git", ".codegraph", "node_modules", "dist", "coverage", ".next", ".orcana"])
 
 function hash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 12)
@@ -52,8 +52,8 @@ export function buildContextKernel(projectRoot = process.cwd()): ContextKernel {
   const sections: string[] = []
   const chunks: string[] = [
     "## Target Project Context",
-    "This describes the user's current working directory, not the DeepSeek Code runtime.",
-    "Assistant runtime artifacts such as .deepseek-code/ are intentionally excluded.",
+    "This describes the user's current working directory, not the Orcana runtime.",
+    "Assistant runtime artifacts such as .orcana/ are intentionally excluded.",
   ]
 
   for (const file of ROOT_FILES) {

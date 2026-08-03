@@ -108,7 +108,7 @@ const FILE_RE = /\b[\w./-]+\.(py|ts|tsx|js|jsx|rs|go|json|toml|yaml|yml|md)\b/gi
 const DECISION_RE = /\b(decided|decision|choose|chosen|must|should|do not|avoid|changed|fixed|implemented|completed|blocked|risk|todo|next)\b/i
 
 export function createCompactor(storeDir?: string): CompactionState {
-  const dir = storeDir ?? join(homedir(), ".deepseek-code", "compactor")
+  const dir = storeDir ?? join(homedir(), ".orcana", "compactor")
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   return {
     hotTurns: [],

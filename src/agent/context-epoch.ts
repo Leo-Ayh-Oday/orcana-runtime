@@ -39,9 +39,9 @@ export interface EpochThresholds {
 }
 
 export const DEFAULT_EPOCH_THRESHOLDS: EpochThresholds = {
-  compressChars: Number(process.env.DEEPSEEK_EPOCH_COMPRESS_CHARS) || 120_000,
-  forceCompressChars: Number(process.env.DEEPSEEK_EPOCH_FORCE_COMPRESS_CHARS) || 220_000,
-  rolloverChars: Number(process.env.DEEPSEEK_EPOCH_ROLLOVER_CHARS) || 300_000,
+  compressChars: Number(process.env.ORCANA_EPOCH_COMPRESS_CHARS) || 120_000,
+  forceCompressChars: Number(process.env.ORCANA_EPOCH_FORCE_COMPRESS_CHARS) || 220_000,
+  rolloverChars: Number(process.env.ORCANA_EPOCH_ROLLOVER_CHARS) || 300_000,
 }
 
 /** Scale automatic compaction so it runs before ContextBudgetGate blocks models

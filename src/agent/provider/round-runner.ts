@@ -27,7 +27,7 @@ export interface ProviderRoundRunnerInput extends ProviderStreamInput {
 }
 
 export function providerIdleTimeoutMs(): number {
-  const raw = Number(process.env.DEEPSEEK_PROVIDER_IDLE_TIMEOUT_MS)
+  const raw = Number(process.env.ORCANA_PROVIDER_IDLE_TIMEOUT_MS)
   return Number.isFinite(raw) && raw > 0 ? raw : 180_000
 }
 

@@ -13,7 +13,7 @@ import { resolve } from "node:path"
  *   - writeGuardBefore (onToolBefore): checks read-set, warns or blocks
  *   - writeGuardAfter  (onToolAfter):  tracks successful reads into read-set
  *
- * Default mode is controlled by DEEPSEEK_WRITE_GUARD_MODE env var:
+ * Default mode is controlled by ORCANA_WRITE_GUARD_MODE env var:
  *   - "warn" (default): warns but allows unread-file edits
  *   - "strict": blocks unread-file edits
  */
@@ -36,7 +36,7 @@ function canonicalPath(path: string, cwd?: string): string {
 }
 
 function writeGuardMode(options: WriteGuardOptions): WriteGuardMode {
-  return options.mode ?? (process.env.DEEPSEEK_WRITE_GUARD_MODE === "strict" ? "strict" : "warn")
+  return options.mode ?? (process.env.ORCANA_WRITE_GUARD_MODE === "strict" ? "strict" : "warn")
 }
 
 function writePaths(input: { tool?: string; params?: Record<string, unknown> }, cwd?: string): Array<{ display: string; canonical: string }> {

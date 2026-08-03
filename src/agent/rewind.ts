@@ -53,7 +53,7 @@ export interface RewindResult {
 // ── Rewind point directory ──
 
 function rewindDir(sessionId: string): string {
-  return resolve(process.cwd(), ".deepseek-code", "rewind", sessionId)
+  return resolve(process.cwd(), ".orcana", "rewind", sessionId)
 }
 
 /** Save a per-user-prompt rewind point.

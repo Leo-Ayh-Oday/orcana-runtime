@@ -118,7 +118,7 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
   }
 
   // ── Context Map: acquire project map for long/high-risk tasks ──
-  const envContextMapPolicy = process.env.DEEPSEEK_CONTEXT_MAP
+  const envContextMapPolicy = process.env.ORCANA_CONTEXT_MAP
   const contextMapPolicy: "off" | "auto" | "always" = ctx.options.contextMapPolicy ?? (
     envContextMapPolicy === "off" || envContextMapPolicy === "always"
       ? envContextMapPolicy

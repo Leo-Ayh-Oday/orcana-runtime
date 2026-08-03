@@ -3,7 +3,9 @@ import { runContextPipeline } from "../src/harness/context/pipeline"
 import { dedupeContributions } from "../src/harness/context/dedupe"
 import { allocateContextBudget } from "../src/harness/context/budget-allocator"
 import { contextSliceToMessages, stableMessageOf } from "../src/harness/context/assemble"
+import { createDefaultContextProviders } from "../src/harness/context/providers"
 import { LAYER_ORDER } from "../src/harness/contracts/context"
+import { buildPlanStateContext } from "../src/agent/context-epoch"
 import type {
   ContextBudgetPolicy,
   ContextContribution,
@@ -60,7 +62,15 @@ const baseRequest = {
   contextKernel: { hash: "h", text: "", estimatedTokens: 0 },
   contextMapContext: "",
   triageSkillPrompts: [],
-  planState: { userGoal: "goal" },
+  planState: {
+    masterPlan: null,
+    taskTracker: null,
+    taskPacket: null,
+    rippleObligations: [],
+    userGoal: "goal",
+    decisions: [],
+    round: 0,
+  },
   researchContextContent: null,
   taskTracker: null,
   mode: { mode: "coder" },
@@ -243,5 +253,102 @@ describe("H10 contract", () => {
     })
     const stable = stableMessageOf(slice)
     expect(stable?.content).toContain("[CACHE_ANCHOR:v3]")
+  })
+})
+
+describe("H10 default providers", () => {
+  test("13 providers with the mapping-table identity", () => {
+    const providers = createDefaultContextProviders()
+    expect(providers).toHaveLength(13)
+    expect(providers.map((p) => [p.id, p.layer, p.priority, p.cacheable])).toEqual([
+      ["lang-instruction", "stable", 0, true],
+      ["stable-memory", "stable", 10, true],
+      ["project-kernel", "stable", 20, true],
+      ["context-map", "stable", 30, true],
+      ["skills", "stable", 40, true],
+      ["plan-state", "plan", 10, true],
+      ["research", "plan", 20, false],
+      ["staged-context", "volatile", 10, false],
+      ["thinking", "volatile", 20, false],
+      ["knowledge", "volatile", 30, false],
+      ["planning", "volatile", 40, false],
+      ["mode-contract", "volatile", 90, true],
+      ["conversation-tail", "volatile", 100, false],
+    ])
+  })
+
+  test("plan-state provider content equals buildPlanStateContext output", async () => {
+    const providers = createDefaultContextProviders()
+    const request = { ...baseRequest, planState: { ...baseRequest.planState, round: 1 } } as ContextRequest
+    const contribution = await providers.find((p) => p.id === "plan-state")!.provide(request)
+    expect(contribution.content).toBe(buildPlanStateContext(request.planState))
+    expect(contribution.required).toBe(true)
+  })
+
+  test("stable-memory round 0 composes stable memory + experience", async () => {
+    const providers = createDefaultContextProviders()
+    const request = {
+      ...baseRequest,
+      frozenStablePrefixContent: null,
+      stableMemoryContext: "memory",
+      experienceContext: "## Experience\nlearned",
+    } as ContextRequest
+    const contribution = await providers.find((p) => p.id === "stable-memory")!.provide(request)
+    expect(contribution.content).toBe("## Stable Cold Memory\nmemory\n\n## Experience\nlearned")
+    expect(contribution.cacheKey).toBe("stable-prefix:v3")
+  })
+
+  test("frozen prefix: stable-memory passes it through, other stable parts go empty", async () => {
+    const providers = createDefaultContextProviders()
+    const frozen = "## Stable Prefix Context\n[CACHE_ANCHOR:v3]\n\n## Stable Cold Memory\nfrozen"
+    const request = { ...baseRequest, frozenStablePrefixContent: frozen } as ContextRequest
+    const memory = await providers.find((p) => p.id === "stable-memory")!.provide(request)
+    expect(memory.content).toBe(frozen)
+    const kernel = await providers.find((p) => p.id === "project-kernel")!.provide(request)
+    const contextMap = await providers.find((p) => p.id === "context-map")!.provide(request)
+    const skills = await providers.find((p) => p.id === "skills")!.provide(request)
+    expect(kernel.content).toBe("")
+    expect(contextMap.content).toBe("")
+    expect(skills.content).toBe("")
+  })
+
+  test("project-kernel provider wraps the kernel text header", async () => {
+    const providers = createDefaultContextProviders()
+    const request = { ...baseRequest, contextKernel: { hash: "h1", text: "kernel-text", estimatedTokens: 10 } } as ContextRequest
+    const contribution = await providers.find((p) => p.id === "project-kernel")!.provide(request)
+    expect(contribution.content).toBe("## Project Context Kernel\nkernel-text")
+    expect(contribution.cacheKey).toBe("kernel:h1")
+  })
+
+  test("knowledge provider uses the inline loop format, not KnowledgeBase.buildContext", async () => {
+    const providers = createDefaultContextProviders()
+    const kb = {
+      findRelevant: () => [{ problem: "p1", solution: "s1" }, { problem: "p2", solution: "s2" }],
+    }
+    const request = { ...baseRequest, round: 3, knowledgeBase: kb } as unknown as ContextRequest
+    const contribution = await providers.find((p) => p.id === "knowledge")!.provide(request)
+    expect(contribution.content).toBe("\n## 已学知识\n问题: p1\n方案: s1\n\n问题: p2\n方案: s2\n")
+  })
+
+  test("knowledge is empty before round 2", async () => {
+    const providers = createDefaultContextProviders()
+    const request = { ...baseRequest, round: 1, knowledgeBase: { findRelevant: () => [{ problem: "p", solution: "s" }] } } as unknown as ContextRequest
+    const contribution = await providers.find((p) => p.id === "knowledge")!.provide(request)
+    expect(contribution.content).toBe("")
+  })
+
+  test("research provider passes content through byte-for-byte", async () => {
+    const providers = createDefaultContextProviders()
+    const request = { ...baseRequest, researchContextContent: "## Research Evidence Context\nraw" } as ContextRequest
+    const contribution = await providers.find((p) => p.id === "research")!.provide(request)
+    expect(contribution.content).toBe("## Research Evidence Context\nraw")
+  })
+
+  test("conversation-tail is metadata-only with epoch facts", async () => {
+    const providers = createDefaultContextProviders()
+    const request = { ...baseRequest, rawMessages: [{ role: "user", content: "a" }] } as ContextRequest
+    const contribution = await providers.find((p) => p.id === "conversation-tail")!.provide(request)
+    expect(contribution.content).toBe("")
+    expect(contribution.sourceRefs).toContain("raw:1")
   })
 })

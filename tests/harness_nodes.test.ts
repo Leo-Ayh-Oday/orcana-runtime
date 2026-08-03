@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
@@ -7,12 +7,16 @@ import { buildTools, Result } from "../src/tools/registry"
 import { createNodeExecutionContext, createDefaultNodePolicyContext, createMinimalContextSlice } from "../src/harness/nodes/context"
 import { runNode, runNodeToResult } from "../src/harness/nodes/run"
 import { createFunctionNode } from "../src/harness/nodes/function-node"
+import { createToolNode } from "../src/harness/nodes/tool-node"
+import { createVerificationNode } from "../src/harness/nodes/verification-node"
 import { createCapabilityRegistry } from "../src/harness/capabilities/registry"
 import { registerToolCapabilities } from "../src/harness/capabilities/tool-adapter"
+import { createCapabilityDescriptor } from "../src/harness/capabilities/descriptor"
 import { assembleRunScope } from "../src/harness/runtime/run-scope"
 import { createBudgetLedger, mergeRunBudget } from "../src/harness/runtime/budget-ledger"
 import type { AgentRun, AgentRunInput } from "../src/harness/contracts/run"
 import type { NodeExecutionContext } from "../src/harness/contracts/nodes"
+import type { VerificationResult } from "../src/verification/result"
 
 // H11 part A: node runtime contracts, sequential runner, FunctionNode —
 // lifecycle events, cancellation, node context, single-use enforcement.
@@ -43,7 +47,7 @@ function probeTool() {
 }
 
 /** Build a real AgentRun + node context (assembleRunScope, run-level ledger). */
-function buildNodeContext(budgetLimits?: Record<string, number>): { context: NodeExecutionContext; run: AgentRun } {
+function buildNodeContext(budgetLimits?: Record<string, number>): { context: NodeExecutionContext; run: AgentRun; projectRoot: string } {
   const projectRoot = mkdtempSync(join(tmpdir(), "h11-node-"))
   const runId = `run-${projectRoot.split("/").pop()}`
   const controller = new AbortController()
@@ -67,7 +71,41 @@ function buildNodeContext(budgetLimits?: Record<string, number>): { context: Nod
     capabilities,
     context: createMinimalContextSlice(),
   })
-  return { context, run }
+  return { context, run, projectRoot }
+}
+
+/** A write-class mock capability with a committed patch (artifact path).
+ *  Input carries { path, content } so the artifact tracker can snapshot/diff. */
+function registerWriteCapability(context: NodeExecutionContext, file: string): void {
+  context.capabilities.register(
+    createCapabilityDescriptor({
+      id: "mock_write",
+      kind: "tool",
+      inputSchema: { type: "object", properties: {}, required: [] },
+      sideEffect: "write",
+    }),
+    {
+      async execute(input) {
+        const params = input as { path?: string; content?: string }
+        writeFileSync(params.path ?? file, params.content ?? "new")
+        return { ok: true, output: { success: true, content: "written", metadata: { patchTransactionId: "ptxn_mock" } } }
+      },
+    },
+  )
+}
+
+/** Register the probe tool as a real capability (first-batch filter skips it).
+ *  Cooperates with cancellation so the abort path is observable. */
+function registerProbeCapability(context: NodeExecutionContext): void {
+  context.capabilities.register(
+    { ...createCapabilityDescriptor({ id: "baseline_probe", kind: "tool", inputSchema: { type: "object", properties: {}, required: [] } }) },
+    {
+      execute: async (_input, ctx) => {
+        if (ctx?.abortSignal?.aborted) return { ok: false, error: "aborted by signal" }
+        return { ok: true, output: { success: true, content: "ok" } }
+      },
+    },
+  )
 }
 
 describe("H11 node runtime", () => {
@@ -134,5 +172,101 @@ describe("H11 node runtime", () => {
     const policy = createDefaultNodePolicyContext({ path: "x.ts" })
     expect(policy.permissionMode).toBe("strict")
     expect(policy.input).toEqual({ path: "x.ts" })
+  })
+})
+
+// ── ToolNode + VerificationNode (part B) ──
+
+describe("H11 ToolNode", () => {
+  test("executes a registered capability successfully", async () => {
+    const { context } = buildNodeContext()
+    registerProbeCapability(context)
+    const node = createToolNode({ id: "read" })
+    const { events, result } = await runNodeToResult(node, context, { capabilityId: "baseline_probe", params: {} })
+    expect(result.status).toBe("succeeded")
+    expect(result.output?.success).toBe(true)
+    expect(result.usage.toolCalls).toBe(1)
+    expect(events.some((e) => e.type === "node.tool.result")).toBe(true)
+  })
+
+  test("unknown capability fails the node", async () => {
+    const { context } = buildNodeContext()
+    const node = createToolNode({ id: "nope" })
+    const { result } = await runNodeToResult(node, context, { capabilityId: "missing", params: {} })
+    expect(result.status).toBe("failed")
+    expect(result.error?.kind).toBe("capability_not_found")
+  })
+
+  test("budget exhaustion blocks the tool and leaves no ledger leak", async () => {
+    const { context } = buildNodeContext({ maxWrites: 0 })
+    registerWriteCapability(context, join(context.runScope.projectRoot, "a.txt"))
+    const node = createToolNode({ id: "write" })
+    const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: { content: "x" } })
+    expect(result.status).toBe("blocked")
+    expect(result.error?.message).toContain("write_budget")
+    expect(context.budget.used.writes).toBe(0)
+    expect(context.budget.used.toolCalls).toBe(0)
+  })
+
+  test("write capability records a patch artifact in the run store", async () => {
+    const { context, projectRoot } = buildNodeContext()
+    const file = join(projectRoot, "a.txt")
+    writeFileSync(file, "old")
+    registerWriteCapability(context, file)
+    const node = createToolNode({ id: "write" })
+    const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: { path: file, content: "new" } })
+    expect(result.status).toBe("succeeded")
+    const patches = await context.artifacts.findByKind("patch")
+    expect(patches).toHaveLength(1)
+    expect(patches[0]!.producedBy).toBe("mock_write")
+  })
+
+  test("cancellation propagates to the capability executor", async () => {
+    const { context } = buildNodeContext()
+    registerProbeCapability(context)
+    context.cancellation.cancel("node-cancel")
+    const node = createToolNode({ id: "read" })
+    const { result } = await runNodeToResult(node, context, { capabilityId: "baseline_probe", params: {} })
+    // The executor surfaces the abort as a failed tool result.
+    expect(["failed", "blocked"]).toContain(result.status)
+  })
+})
+
+describe("H11 VerificationNode", () => {
+  test("ingests verification results as bound artifacts and evidence", async () => {
+    const { context } = buildNodeContext()
+    const node = createVerificationNode({ id: "verify" })
+    const verification: VerificationResult = {
+      kind: "typecheck",
+      command: "bun run typecheck",
+      passed: true,
+      issues: 0,
+      durationMs: 10,
+      summary: "typecheck ok",
+    }
+    const { events, result } = await runNodeToResult(node, context, { results: [verification] })
+    expect(result.status).toBe("succeeded")
+    expect(result.output?.passedCount).toBe(1)
+    expect(result.output?.ingested).toHaveLength(1)
+    expect(events.some((e) => e.type === "node.artifact")).toBe(true)
+    const artifacts = await context.artifacts.findByKind("typecheck_result")
+    expect(artifacts).toHaveLength(1)
+  })
+
+  test("unclassifiable kinds warn but do not fail", async () => {
+    const { context } = buildNodeContext()
+    const node = createVerificationNode({ id: "verify" })
+    const verification: VerificationResult = {
+      kind: "unknown",
+      command: "mystery",
+      passed: true,
+      issues: 0,
+      durationMs: 1,
+      summary: "??",
+    }
+    const { result } = await runNodeToResult(node, context, { results: [verification] })
+    expect(result.status).toBe("succeeded")
+    expect(result.output?.ingested).toHaveLength(0)
+    expect(result.diagnostics.some((d) => d.code === "unclassified_kind")).toBe(true)
   })
 })

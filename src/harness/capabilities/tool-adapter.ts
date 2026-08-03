@@ -7,12 +7,18 @@
  *  registered; the rest are classified on the fly for event bridging.
  */
 
+import { existsSync, readFileSync, statSync } from "node:fs"
+import { resolve } from "node:path"
 import type { CapabilityDescriptor, CapabilityHandler, CapabilityRegistry, SideEffect } from "../contracts/capability"
 import type { JsonSchema } from "../contracts/schema"
+import type { ArtifactStore } from "../contracts/artifact"
 import type { ToolDescriptor } from "../../tools/registry"
 import { projectToolContract, type ToolContract } from "../../tools/tool-contract"
 import { inferToolCategory } from "../../agent/permission"
 import { executeSingleTool } from "../../agent/tool-execution/single-executor"
+import { generateLineDiff, formatDiff } from "../../agent/patch-transaction"
+import { putPatchArtifact } from "../artifacts/evidence-adapter"
+import type { CapabilityArtifactTracker } from "./executor"
 import { createCapabilityDescriptor, TOOL_OUTPUT_SCHEMA } from "./descriptor"
 
 /** First migration batch (plan §15.4). */
@@ -104,5 +110,68 @@ export function registerToolCapabilities(registry: CapabilityRegistry, tools: To
   for (const tool of tools) {
     if (!wanted.has(tool.defn.name)) continue
     registry.register(projectCapabilityDescriptor(tool), toolCapabilityHandler(tool))
+  }
+}
+
+/** Diff snapshots for write capabilities are capped at 1 MiB per file. */
+const MAX_DIFF_FILE_BYTES = 1024 * 1024
+
+export interface ToolArtifactTrackerOptions {
+  store: ArtifactStore
+  runId: string
+  workspaceHash?: string
+}
+
+/** Artifact tracker (H9, plan §15.3 "Artifact / Evidence" step).
+ *
+ *  Snapshots the target file before a write-style execution and, on a
+ *  successful committed patch, records a patch artifact bound to the
+ *  transaction id carried in the tool result metadata. The commit-time
+ *  registry entry is purged after commit, so the before/after file snapshots
+ *  are the only reliable diff source. Recording is best-effort: an artifact
+ *  failure never breaks the run.
+ */
+export function createToolArtifactTracker(options: ToolArtifactTrackerOptions): CapabilityArtifactTracker {
+  const { store, runId, workspaceHash } = options
+
+  return {
+    async beforeExecute(descriptor, input) {
+      if (descriptor.sideEffect !== "write") return undefined
+      const path = (input as { path?: unknown }).path
+      if (typeof path !== "string") return undefined
+      const absolute = resolve(process.cwd(), path)
+      try {
+        if (!existsSync(absolute)) return undefined
+        if (statSync(absolute).size > MAX_DIFF_FILE_BYTES) return undefined
+        return readFileSync(absolute, "utf8")
+      } catch {
+        return undefined
+      }
+    },
+
+    async afterExecute(descriptor, input, snapshot, result) {
+      if (descriptor.sideEffect !== "write") return
+      const metadata = result.metadata
+      if (!result.success || !metadata?.patchTransactionId) return
+      const path = (input as { path?: unknown }).path
+      if (typeof path !== "string") return
+      const absolute = resolve(process.cwd(), path)
+      try {
+        const newContent = existsSync(absolute) ? readFileSync(absolute, "utf8") : ""
+        const oldContent = typeof snapshot === "string" ? snapshot : null
+        const diff = formatDiff(generateLineDiff(oldContent, newContent, path))
+        await putPatchArtifact({
+          store,
+          runId,
+          txId: String(metadata.patchTransactionId),
+          diff,
+          files: [path],
+          producedBy: descriptor.id,
+          workspaceHash,
+        })
+      } catch {
+        // Best-effort: artifact recording never breaks the run.
+      }
+    },
   }
 }

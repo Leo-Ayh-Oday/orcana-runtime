@@ -21,7 +21,7 @@ import type { AgentRunState, RoundState, RoundToolCall } from "../run/types"
 import type { ToolDescriptor } from "../../tools/registry"
 import { executeCapability } from "../../harness/capabilities/executor"
 import { createCapabilityRegistry } from "../../harness/capabilities/registry"
-import { registerToolCapabilities } from "../../harness/capabilities/tool-adapter"
+import { createToolArtifactTracker, registerToolCapabilities } from "../../harness/capabilities/tool-adapter"
 import type { CapabilityRegistry } from "../../harness/contracts/capability"
 import type { ArtifactStore } from "../../harness/contracts/artifact"
 import type { HookSystem } from "../../hooks"
@@ -151,6 +151,11 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
     registerToolCapabilities(registry, tools)
     return registry
   })()
+  // H9: when a harness-owned store is present, write executions record patch
+  // artifacts via the executor's Artifact/Evidence step (§15.3).
+  const artifactTracker = ctx.artifactStore && ctx.runId
+    ? createToolArtifactTracker({ store: ctx.artifactStore, runId: ctx.runId })
+    : undefined
   const taskFiles = execution.taskFiles
 
   // ── Parallel readonly candidate detection + policy preview ──
@@ -318,6 +323,7 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
           abortSignal,
           parallelResult,
           policyDecision: policyResult.allowed ? policyResult : undefined,
+          artifactTracker,
         })
         resultContent = executed.result.content
         resultObj = { success: executed.result.success, content: executed.result.content, metadata: executed.result.metadata }

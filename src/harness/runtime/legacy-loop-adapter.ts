@@ -32,6 +32,7 @@ import type { AgentRun, AgentRunInput } from "../contracts/run"
 import type { CapabilityRegistry } from "../contracts/capability"
 import type { SideEffect } from "../contracts/capability"
 import { classifyToolSideEffect } from "../capabilities/tool-adapter"
+import { putPlanArtifact } from "../artifacts/evidence-adapter"
 
 export interface LegacyLoopAdapterDeps {
   provider: LLMProvider
@@ -71,6 +72,20 @@ export interface LegacyLoopAdapter {
 function readMetadata<T>(input: AgentRunInput, key: string): T | undefined {
   const value = input.metadata?.[key]
   return value === undefined ? undefined : (value as T)
+}
+
+/** Extract the plan text from a plan_ready payload (H9 plan artifact input).
+ *  Accepts a raw string, or objects carrying planText/text, falling back to a
+ *  JSON snapshot of opaque plan shapes. */
+export function planTextFromPayload(plan: unknown): string {
+  if (typeof plan === "string") return plan
+  if (plan !== null && typeof plan === "object") {
+    const shaped = plan as { planText?: unknown; text?: unknown }
+    const direct = shaped.planText ?? shaped.text
+    if (typeof direct === "string") return direct
+    return JSON.stringify(plan)
+  }
+  return String(plan ?? "")
 }
 
 /** Build AgentOptions for agentLoop from run input + deps + metadata. */
@@ -165,6 +180,23 @@ async function* executeLoop(
         closed = true
         // H2: the kernel's final LoopDecision rides the generator return value.
         return step.value as LoopDecision
+      }
+      // H9: plan activation is a run-flow fact — record it as a plan artifact
+      // at the bridge (the executor chain never sees plan_ready).
+      if (step.value.type === "plan_ready" && run.scope.artifactStore) {
+        const planText = planTextFromPayload(step.value.data)
+        if (planText) {
+          try {
+            await putPlanArtifact({
+              store: run.scope.artifactStore,
+              runId: run.runId,
+              planText,
+              producedBy: "planning",
+            })
+          } catch {
+            // Best-effort: artifact recording never breaks the run.
+          }
+        }
       }
       const translated = translateStreamEvent(step.value, emit, (name) => classifyToolSideEffect(name, deps.tools))
       if (translated) yield translated

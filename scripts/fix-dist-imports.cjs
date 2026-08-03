@@ -40,6 +40,12 @@ function fixFile(file) {
     (_match, prefix, specifier, suffix) => `${prefix}${resolveSpecifier(file, specifier)}${suffix}`,
   )
 
+  // Side-effect imports (`import "./x"`) also need the resolved extension.
+  after = after.replace(
+    /(\bimport\s*["'])(\.{1,2}\/[^"']+)(["'])/g,
+    (_match, prefix, specifier, suffix) => `${prefix}${resolveSpecifier(file, specifier)}${suffix}`,
+  )
+
   if (after !== before) writeFileSync(file, after, "utf-8")
 }
 

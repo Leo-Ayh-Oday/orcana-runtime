@@ -7,6 +7,7 @@
  */
 
 import type { RunStatus } from "./run"
+import type { SideEffect } from "./capability"
 
 export const HARNESS_EVENT_SCHEMA_VERSION = 1 as const
 
@@ -96,7 +97,7 @@ export type HarnessEvent =
   | EventEnvelope<{ interrupt: unknown }>
   // H1 bridge variants — kept independent of the legacy StreamEvent type so
   // the contract stays free of provider/loop dependencies.
-  | EventEnvelope<{ toolCall: { id: string; name: string; input: unknown } }>
+  | EventEnvelope<{ toolCall: { id: string; name: string; input: unknown; sideEffect?: SideEffect } }>
   | EventEnvelope<{ display: { kind: HarnessDisplayKind; data: unknown } }>
   // plan/clarification payloads are opaque in H1 (the legacy loop's own plan
   // artifact shape) and get formal schemas when they become real interrupts

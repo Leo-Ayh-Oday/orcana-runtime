@@ -46,6 +46,28 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
   return TERMINAL_RUN_STATUSES.includes(status)
 }
 
+/**
+ * Stopped-but-resumable run states (G0-1): the run is no longer advancing on
+ * its own, but the state is NOT terminal — an external action (resume /
+ * user decision) may move it back to `running`. `pausing` is a transient
+ * intermediate, not a stopped state.
+ *
+ * This separates two meanings that `TERMINAL_RUN_STATUSES` alone conflates:
+ *  - terminal  → finished forever, no transitions out
+ *  - stopped   → not advancing, resumable (blocked/waiting/paused)
+ * Replay/HR invariants must check "stopped", not "terminal".
+ */
+export const STOPPED_RUN_STATUSES: readonly RunStatus[] = [
+  "blocked",
+  "waiting",
+  "paused",
+] as const
+
+/** Whether the run is no longer auto-advancing (terminal OR stopped-resumable). */
+export function isStoppedRunStatus(status: RunStatus): boolean {
+  return isTerminalRunStatus(status) || STOPPED_RUN_STATUSES.includes(status)
+}
+
 export interface AgentRunInput {
   prompt: string
   tools?: Array<{ name: string; description?: string }>

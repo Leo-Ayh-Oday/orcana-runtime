@@ -83,8 +83,11 @@ export async function* runControlledRun(
     }
     machine.transitionTo(mapped.status)
     run.outcome = mapped.outcome
-    // Terminal lifecycle event (run.completed / run.waiting / run.blocked /
+    // Lifecycle event (run.completed / run.waiting / run.blocked /
     // run.paused / run.cancelled) — appended before the trace closes.
+    // NOTE (G0-1): waiting/blocked/paused are stopped-but-resumable states,
+    // not terminal — terminal statuses are completed/failed/cancelled/
+    // restart_required (contracts/run.ts TERMINAL_RUN_STATUSES).
     yield* traceAndYield(pending, run)
   } catch (error) {
     const mapped = failureOutcome(error)

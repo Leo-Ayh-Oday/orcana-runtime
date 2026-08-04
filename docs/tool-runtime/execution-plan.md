@@ -1,10 +1,57 @@
 # Orcana 生产级 Tool 系统改造执行方案
 
-**文档版本：** Tool Runtime 2.0 / Execution Plan v1.0
-**适用阶段：** Loop 减重进行中，Harness 2.0 尚未全面接线
+**文档版本：** Tool Runtime 2.0 / Execution Plan v1.0 → **v1.1（本地现状对齐版，2026-08-04）**
+**适用阶段：** ~~Loop 减重进行中，Harness 2.0 尚未全面接线~~ → **ALK-1.0 完成，Harness 2.0 已全面接线（H0–H12 + Closure R1 + Readiness R2 冻结），Node Runtime stable**
 **执行对象：** 可直接交给 Codex、Claude Code、Orcana 或其他代码 Agent 分 PR 执行
-**代码基线：** 先以本地工作区为唯一事实来源；远程仓库 `2207db20eb284d8b2f695c13951a3078bbff3682` 仅用于历史结构参考
+**代码基线：** 以本地工作区为唯一事实来源（HEAD `fcf5c6e`，v0.5.9）；远程仓库 `2207db20eb284d8b2f695c13951a3078bbff3682` 仅用于历史结构参考
 **核心原则：** 不大爆炸重写；先建立契约，再迁移核心工具；先完成隔离和安全，再增加高级能力。
+
+---
+
+## 0.5 本地现状对齐与计划修订（v1.1，2026-08-04）
+
+本计划原文（v1.0）写于 v0.4.0 基线（Harness 2.0 之前）。本地已完成 ALK-1.0（loop.ts 132 行阶段编排器）、Harness 2.0（H0–H12）、Harness Closure R1（六项收口）、Graph Readiness R2（G0-1..G0-4，v0.5.6–v0.5.9）。**用 SocratiCode MCP 全量核对后**，原文 T1–T5 的目标语义大部分已落地，但存在真实缺口。修订原则：保留原文目标语义（§4 核心契约、§10 禁止事项、§11 DoD），按差距重排 PR 顺序。
+
+### 0.5.1 已完成对照（不需要重建，按差距补强）
+
+| 原文 PR | 现状（本地文件） | 状态 |
+|---|---|---|
+| T1 Capability Contract | `src/harness/contracts/capability.ts`（CapabilityDescriptor 已含 inputSchema/outputSchema/sideEffect/concurrencyGroup/permissions/riskLevel/retryable/idempotent/cancellable/producesEvidence）、`src/harness/capabilities/descriptor.ts`（createCapabilityDescriptor + TOOL_OUTPUT_SCHEMA） | ✅ 契约主体已有 |
+| T2 Legacy Adapter + Executor | `src/harness/capabilities/tool-adapter.ts`（projectCapabilityDescriptor + toolCapabilityHandler + FIRST_BATCH 7 工具注册）、`executor.ts`（8 步链：Budget Reserve → Policy → Before Hook → Handler → After Hook → Schema → Artifact/Evidence → Budget Commit，R1 起强制 policy） | ✅ 主体已有 |
+| T3 Run-scoped Context | `src/harness/runtime/run-scope.ts`（AgentRunScope：runId/sessionId/projectRoot/sandbox/artifactStore/evidenceLedger/trace/rippleSession/cancellation）+ H3 真实共享进程隔离测试 | ✅ 主体已有 |
+| T4 Artifact/Evidence | `src/harness/artifacts/`（artifact-store + evidence-adapter + freshness + provenance，G0-3 起内容随 Run 持久化） | ✅ 主体已有 |
+| T5 Unified Policy | `src/agent/tool-execution/policy.ts`（evaluateToolPolicy 8 层）+ `src/harness/capabilities/policy-adapter.ts`（node 模式）+ R1 强制 policy 无跳过路径 | ✅ 主体已有 |
+| T13 Eval 基础设施 | `evals/harness/`（H12：12 场景 + rubric 8 维 + 质量地板 + CLI + summary.json） | ✅ 基础设施已有 |
+
+### 0.5.2 真实缺口（修订后的 PR 顺序，沿用"一个 PR 一个 patch 版本"节奏）
+
+| 修订 PR | 内容 | 差距性质 |
+|---|---|---|
+| RT-1 契约补强 | `errors.ts`（§4.4 的 26 个错误码）、`result.ts`（ToolExecutionStatus 6 状态枚举 + ToolExecutionResult）、`retry.ts`、`execution-context.ts`（ToolExecutionContext 类型）、独立 `schema-validator.ts`（从 interrupts/response-validator 抽出复用）→ 放 `src/harness/capabilities/` + `src/harness/contracts/` | 缺标准错误码与结构化结果类型 |
+| RT-2 Feature Flag / Shadow | `capabilities.mode`（legacy/shadow/enabled）配置 + legacy 标记 + shadow 差异记录（`capability.shadow_mismatch`） | 缺迁移开关与对照机制 |
+| RT-3 Context 显式化 | executor 收敛为显式 ToolExecutionContext 参数；readableRoots/writableRoots 声明；剩余 `process.cwd()` 清理（rewind.ts / kernel/prepare.ts / contract-freshness.ts / pre-loop.ts / task-tracker.ts / lsp/client.ts） | 部分工具仍隐式依赖 cwd |
+| RT-4 输出限制与真实 Output Schema | output-limiter（maxOutputBytes → Artifact + preview/hash/ref）；`shell.ts:326` SHELL_RESULT_MAX_CHARS=8000 硬截断改为写 Artifact；首批 per-tool output schema（typecheck / git_status / git_diff / lsp_diagnostics / web_search）——替换统一占位 `TOOL_OUTPUT_SCHEMA` | 无 per-tool 输出 schema（descriptor.ts 注释自认）；大输出截断即丢弃 |
+| RT-5 Policy 模块化 | 从 evaluateToolPolicy 拆出 `policy/writable-root-policy.ts`、`network-policy.ts`、`risk-policy.ts`、`approval-policy.ts`、`concurrency-policy.ts`；执行顺序文档化（§5 RT-5）；验收"Shell 被拦但 Patch 可写"路径不存在 | 单一函数未模块化，网络/writable-root 无显式策略 |
+| RT-6 File/Edit 2.0 | `apply_patch`（unified diff + baseHash + scope + 路径逃逸拒绝）、`read_file` selector/expectedHash、`edit_symbol`（AST/LSP）、`apply_patch_transaction`（多文件原子 + idempotencyKey + dryRun + 真实 verify-before-commit + 回滚）——复用 `src/agent/patch-transaction.ts`（36k，已有 proposed→committed→rolled_back 与原子写） | patch-transaction 已有，缺统一 diff 入口与事务工具 |
+| RT-7 Process/Shell 2.0 | `run_process`（shell:false + args 数组 + 进程组 + 超时杀树 + stdout/stderr 写 Artifact）；`run_shell_script`（显式审批 + SideEffect Plan）；收口 3 处 `shell:true`（shell.ts:102/232、service.ts:89）；复用 `src/sandbox/`（job-object 进程组已有） | 全部 shell 执行走字符串拼接 |
+| RT-8 Git 2.0 | `git status --porcelain=v2 -z` 结构化解析；大 diff 写 Artifact；git_add/git_commit 等有副作用工具与只读分离风险级 | 现有 git_status 等为文本封装 |
+| RT-9 Code Intelligence | `build_repo_map` / `query_repo_map` / `build_context_slice` + authority/confidence 结构——复用 `src/ripple/semantic-reference-provider.ts` + `astgrep-provider.ts` + `src/lsp/client.ts` + `src/tools/codegraph.ts`；find_symbol/find_references 已有 | 缺 repo map 与 authority 标注 |
+| RT-10 Verification 2.0 | `discover_verification` / `run_targeted_verification` / `classify_command_failure` / `verify_claim`——复用 verification/ + evidence-adapter（H8 全链）+ getWriteGeneration | 缺验证规划与声明核查工具 |
+| RT-11 Web/Service/MCP 硬化 | web_fetch 安全修复（SSRF/IP policy/重定向复查/压缩炸弹/缓存 key 含 summarize 模式）+ service lease + MCP trust policy（未知工具默认高风险；bridge.ts 现每调用新建 MCPClientV2，无信任模型） | 安全缺口 |
+| RT-12 Capability Router | 分层动态披露（Stable Core 6 + Specialist）+ token 预算；H9 registry 现为静态 | 全新 |
+| RT-13 Tool Production Eval | TL-001..020 场景（§5 RT-13），复用 evals/harness 基础设施 + trace-assertions | 全新 |
+
+### 0.5.3 目录与命令修订（相对原文 §3 / §7）
+
+- 目标目录改为 `src/harness/capabilities/`（已有）+ 新增 `policy/` 子目录 + `src/harness/contracts/`（契约补强）——**不新建 `src/capabilities/`**，避免重复模块（原文原则："不得机械创建重复模块"）。
+- 本地测试命令：`bun run typecheck` / `bun run test`（全量，run-tests.cjs 逐文件）/ `bun run test:harness-replay` / `bun run eval:replay` / `bun run build` / `npm pack --dry-run` / `git diff --check`（五门禁 + HR 12 场景）。
+- 发布节奏：每个 RT 一个 patch 版本（v0.5.10 起），每版五门禁全绿后 feature commit → `chore: release` → push → gh release → npm publish。
+
+### 0.5.4 T0 基线任务（对齐后）
+
+按 §2 执行，但清单落在**本地真实文件**上（见 0.5.2 表）：工具清单覆盖 `src/tools/*.ts` 全部 26 个生产工具（read_file / edit_file / edit_fim / multi_edit / write_file / shell / typecheck / git_status / git_diff / git_log / git_show / git_blame / git_add / git_commit / find_symbol / find_references / project_structure / web_search / web_fetch / start_service / task / todo_write / request_deeper_thinking / rollback_transaction / exa_web_search_exa / path）。已确认的模块级状态：无全局 sandbox/context；`shell:true` 3 处；`process.cwd()` 直接使用集中在 agent 层 6 文件（rewind / kernel/prepare / contract-freshness / pre-loop / task-tracker / lsp-client）。
+
+---
 
 ## 0. 执行 Agent 总指令
 

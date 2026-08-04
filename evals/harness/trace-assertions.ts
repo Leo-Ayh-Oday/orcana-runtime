@@ -6,6 +6,7 @@
  */
 
 import type { EventExpectation } from "./contracts"
+import { isStoppedRunStatus } from "../../src/harness/contracts/run"
 
 /** Deep-partial match: every key in `expected` must match `actual` (extra
  *  actual keys are fine; arrays match by deep equality). */
@@ -45,16 +46,19 @@ export function assertTraceInvariants(
   const failures: string[] = []
 
   // HR-025: sequence continuity is asserted by the executor (sequences come
-  // from envelopes); here we check the structural counterparts. blocked is a
-  // legitimate terminal for HR scenarios — the orchestrator refusing to
-  // claim done after a failed/blocked tool is the SAFE behavior.
-  const terminal = ["completed", "failed", "cancelled", "restart_required", "blocked"]
-  if (!terminal.includes(snapshot.status)) {
-    failures.push(`invariant: snapshot status "${snapshot.status}" is not terminal`)
+  // from envelopes); here we check the structural counterparts.
+  // G0-1: the outcome check uses "stopped" semantics — a run that is no
+  // longer auto-advancing (terminal OR blocked/waiting/paused) must carry an
+  // outcome. blocked is a legitimate end state for HR scenarios (the
+  // orchestrator refusing to claim done after a failed/blocked tool is the
+  // SAFE behavior), but it is stopped-resumable, NOT terminal
+  // (contracts/run.ts TERMINAL_RUN_STATUSES vs STOPPED_RUN_STATUSES).
+  if (!isStoppedRunStatus(snapshot.status as never)) {
+    failures.push(`invariant: snapshot status "${snapshot.status}" is not a stopped state`)
   }
-  // HR-027: every terminal run has an outcome.
-  if (terminal.includes(snapshot.status) && !snapshot.outcome) {
-    failures.push("invariant: terminal run without outcome")
+  // HR-027: every stopped run has an outcome.
+  if (isStoppedRunStatus(snapshot.status as never) && !snapshot.outcome) {
+    failures.push("invariant: stopped run without outcome")
   }
 
   // HR-026 (R1): pair each request to EXACTLY ONE terminal event by toolCallId.

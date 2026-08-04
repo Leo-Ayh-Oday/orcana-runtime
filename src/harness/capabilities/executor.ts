@@ -27,6 +27,7 @@ import { validateJsonSchema } from "../interrupts/response-validator"
 import { budgetKindsFor } from "./descriptor"
 import { projectCapabilityDescriptor, toolCapabilityHandler } from "./tool-adapter"
 import { buildNodePolicyInput, type NodePolicyContext } from "./policy-adapter"
+import { createDefaultNodePolicyContext } from "../nodes/context"
 
 /** Optional artifact hook (plan §15.3 "Artifact / Evidence" step). */
 export interface CapabilityArtifactTracker {
@@ -56,8 +57,11 @@ export interface CapabilityExecuteInput {
   // ── node mode (H11 Node Runtime) ──
   /** When set, steps 1/8 reserve/commit budget kinds. Loop leaves it unset (BudgetGuard governs). */
   budget?: BudgetLedger
-  /** When policyDecision is absent, policy is evaluated via this context. */
+  /** When policyDecision is absent, policy is ALWAYS evaluated (R1: no silent
+   *  skip path) — via this context when provided, else conservative defaults. */
   policyContext?: NodePolicyContext
+  /** Caller-side tool call id, carried into policy + emitted events (R1). */
+  toolCallId?: string
   emit?: (type: HarnessEventType, payload: unknown) => void
 
   // ── shared ──
@@ -137,14 +141,20 @@ export async function executeCapability(
   }
 
   // Step 2: Permission / Mode / Risk Policy
+  // R1 (Harness Closure): policy is MANDATORY — there is no path that skips
+  // evaluation. Loop mode passes the already-evaluated policyDecision
+  // (identity passthrough); node mode evaluates unconditionally, falling back
+  // to the conservative default context (strict gate, no rules) when the
+  // caller did not supply one. "No policy context" is a policy context.
   const policyDecision = input.policyDecision
-    ?? (input.policyContext
-      ? evaluateToolPolicy(buildNodePolicyInput(input.policyContext))
-      : undefined)
-  if (policyDecision && !policyDecision.allowed) {
+    ?? evaluateToolPolicy(buildNodePolicyInput(
+      input.policyContext ?? createDefaultNodePolicyContext(input.params, input.tool, input.toolCallId, input.capabilityId),
+    ))
+  if (!policyDecision.allowed) {
     releaseReservations()
     input.emit?.("tool.policy.blocked", {
       toolName: descriptor.id,
+      toolCallId: input.toolCallId,
       reason: policyDecision.reason,
       source: policyDecision.source,
       priority: policyDecision.priority,
@@ -184,7 +194,7 @@ export async function executeCapability(
       result = output.result
     } else {
       // Node mode: the registered capability handler.
-      input.emit?.("tool.call.started", { toolName: descriptor.id })
+      input.emit?.("tool.call.started", { toolName: descriptor.id, toolCallId: input.toolCallId })
       const response = await handler.execute(effectiveParams, {
         abortSignal: input.abortSignal,
         metadata: { capabilityId: descriptor.id },
@@ -192,7 +202,7 @@ export async function executeCapability(
       if (!response.ok) {
         const message = response.error ?? "capability execution failed"
         result = { success: false, content: message, error: message }
-        input.emit?.("tool.call.failed", { toolName: descriptor.id, error: message })
+        input.emit?.("tool.call.failed", { toolName: descriptor.id, toolCallId: input.toolCallId, error: message })
       } else {
         const output = response.output
         const content = typeof output === "string" ? output : JSON.stringify(output)

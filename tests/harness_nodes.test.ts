@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
@@ -18,6 +18,7 @@ import { createBudgetLedger, mergeRunBudget } from "../src/harness/runtime/budge
 import type { AgentRun, AgentRunInput } from "../src/harness/contracts/run"
 import type { NodeExecutionContext } from "../src/harness/contracts/nodes"
 import type { VerificationResult } from "../src/verification/result"
+import { PermissionGate } from "../src/agent/permission"
 
 // H11 part A: node runtime contracts, sequential runner, FunctionNode —
 // lifecycle events, cancellation, node context, single-use enforcement.
@@ -93,6 +94,14 @@ function registerWriteCapability(context: NodeExecutionContext, file: string): v
       },
     },
   )
+}
+
+/** R1: explicit permissive policy context — these ToolNode tests exercise
+ *  execution/budget semantics, not the gate (the gate has its own tests). */
+function allowGate(name: string) {
+  const gate = new PermissionGate()
+  gate.allow(name)
+  return { permissionGate: gate, input: {} }
 }
 
 /** Register the probe tool as a real capability (first-batch filter skips it).
@@ -182,7 +191,7 @@ describe("H11 ToolNode", () => {
   test("executes a registered capability successfully", async () => {
     const { context } = buildNodeContext()
     registerProbeCapability(context)
-    const node = createToolNode({ id: "read" })
+    const node = createToolNode({ id: "read", policyContext: allowGate("baseline_probe") })
     const { events, result } = await runNodeToResult(node, context, { capabilityId: "baseline_probe", params: {} })
     expect(result.status).toBe("succeeded")
     expect(result.output?.success).toBe(true)
@@ -214,7 +223,7 @@ describe("H11 ToolNode", () => {
     const file = join(projectRoot, "a.txt")
     writeFileSync(file, "old")
     registerWriteCapability(context, file)
-    const node = createToolNode({ id: "write" })
+    const node = createToolNode({ id: "write", policyContext: allowGate("mock_write") })
     const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: { path: file, content: "new" } })
     expect(result.status).toBe("succeeded")
     const patches = await context.artifacts.findByKind("patch")
@@ -222,11 +231,35 @@ describe("H11 ToolNode", () => {
     expect(patches[0]!.producedBy).toBe("mock_write")
   })
 
+  test("R1: no policyContext — the run-scope default gate blocks a write-class capability (strict ask)", async () => {
+    const { context } = buildNodeContext()
+    registerWriteCapability(context, join(context.runScope.projectRoot, "a.txt"))
+    const node = createToolNode({ id: "write" })
+    const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: {} })
+    expect(result.status).toBe("blocked")
+    expect(result.error?.kind).toBe("policy_blocked")
+    expect(result.error?.message).toContain("mock_write")
+  })
+
+  test("R1: the default gate loads project permissions from the run scope's projectRoot", async () => {
+    const { context, projectRoot } = buildNodeContext()
+    // Project-level allow rule (HR-019 style config surface): the run-scope
+    // derived gate must honor it — this proves node policy uses the run's
+    // projectRoot instead of an empty or cwd-bound gate.
+    const dir = join(projectRoot, ".orcana")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "permissions.json"), JSON.stringify({ rules: [{ toolName: "mock_write", level: "allow" }] }))
+    registerWriteCapability(context, join(projectRoot, "a.txt"))
+    const node = createToolNode({ id: "write" })
+    const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: {} })
+    expect(result.status).toBe("succeeded")
+  })
+
   test("cancellation propagates to the capability executor", async () => {
     const { context } = buildNodeContext()
     registerProbeCapability(context)
     context.cancellation.cancel("node-cancel")
-    const node = createToolNode({ id: "read" })
+    const node = createToolNode({ id: "read", policyContext: allowGate("baseline_probe") })
     const { result } = await runNodeToResult(node, context, { capabilityId: "baseline_probe", params: {} })
     // The executor surfaces the abort as a failed tool result.
     expect(["failed", "blocked"]).toContain(result.status)

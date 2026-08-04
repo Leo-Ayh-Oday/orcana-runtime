@@ -140,8 +140,8 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         // H8: artifact refs are collected from the run's store.
         if (store) {
           const hash = workspaceHash?.()
-          const artifactRefs = await collectArtifactRefs(registered.run)
-          await store.saveRun(serializeRun({ run: registered.run, workspaceHash: hash, artifactRefs })).catch(() => {})
+          const { artifactRefs, artifactState } = await collectArtifacts(registered.run)
+          await store.saveRun(serializeRun({ run: registered.run, workspaceHash: hash, artifactRefs, artifactState })).catch(() => {})
           await store.saveSnapshot(snapshotFromRun(registered.run, hash, artifactRefs)).catch(() => {})
         }
       }
@@ -189,8 +189,8 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         run.finishedAt ??= Date.now()
         run.outcome = { kind: "cancelled", reason: "interrupt_rejected" }
         if (store) {
-          const artifactRefs = await collectArtifactRefs(run)
-          await store.saveRun(serializeRun({ run, workspaceHash: currentHash, artifactRefs })).catch(() => {})
+          const { artifactRefs, artifactState } = await collectArtifacts(run)
+          await store.saveRun(serializeRun({ run, workspaceHash: currentHash, artifactRefs, artifactState })).catch(() => {})
         }
         return
       }
@@ -219,8 +219,8 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
       } finally {
         if (store) {
           const hash = workspaceHash?.()
-          const artifactRefs = await collectArtifactRefs(run)
-          await store.saveRun(serializeRun({ run, workspaceHash: hash, artifactRefs })).catch(() => {})
+          const { artifactRefs, artifactState } = await collectArtifacts(run)
+          await store.saveRun(serializeRun({ run, workspaceHash: hash, artifactRefs, artifactState })).catch(() => {})
           await store.saveSnapshot(snapshotFromRun(run, hash, artifactRefs)).catch(() => {})
         }
       }
@@ -275,7 +275,9 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         },
         // H8: serialized evidence entries + the run's artifact refs.
         evidenceState: { entries: serializeLedger(scope.evidenceLedger).entries },
-        artifactRefs: await collectArtifactRefs(run),
+        // Inspect snapshots carry refs only (content persistence is the
+        // store.saveRun path — G0-3 collectArtifacts).
+        artifactRefs: (await run.scope.artifactStore.entries()).map(a => a.artifactId),
         conversationRef: "",
         createdAt: run.createdAt,
         interrupt: run.interrupt,
@@ -290,12 +292,28 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
 }
 
 /** H8: collect the run's artifact ids (best-effort, never fails the run). */
-async function collectArtifactRefs(run: { scope: { artifactStore: import("../contracts/artifact").ArtifactStore } }): Promise<string[]> {
+/** G0-3: collect artifact entities + resolved content for persistence (the
+ *  store interface is async and serializeRun stays synchronous). */
+async function collectArtifacts(run: { scope: { artifactStore: import("../contracts/artifact").ArtifactStore } }): Promise<{
+  artifactRefs: string[]
+  artifactState: import("../persistence/harness-store").SerializedArtifactState
+}> {
   try {
     const artifacts = await run.scope.artifactStore.entries()
-    return artifacts.map(a => a.artifactId)
+    const contentsByRef = new Map<string, string>()
+    for (const artifact of artifacts) {
+      const value = await run.scope.artifactStore.getContent(artifact.contentRef)
+      if (value !== null) contentsByRef.set(artifact.contentRef, value)
+    }
+    return {
+      artifactRefs: artifacts.map(a => a.artifactId),
+      artifactState: {
+        artifacts,
+        contents: [...contentsByRef].map(([ref, value]) => ({ ref, value })),
+      },
+    }
   } catch {
-    return []
+    return { artifactRefs: [], artifactState: { artifacts: [], contents: [] } }
   }
 }
 

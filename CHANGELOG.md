@@ -2,6 +2,12 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.7] — 2026-08-04
+
+### Fixed (Graph Readiness G0-2)
+- **Trace write failures are now fail-loud** — `TraceWriter` counts failed batch writes (`writeFailures()` / `pendingEvents()`); `createJsonlTraceWriter` accepts an `onWriteFailure` observer and the RunController warns once when a run ended with lost events. Writes still never fail the run (audit stream policy unchanged — the Run/Snapshot JSON remain the restore source), but a gap is no longer silent.
+- **Restore trace integrity check** — `HarnessStore.traceIntegrity(runId)` reports event-file existence + count; `AgentHarness` restore/inspect paths surface a missing or incomplete audit stream as a warning. Graph Readiness Gate G0-2 — observability step toward Event Sourcing for Graph checkpoints.
+
 ## [0.5.6] — 2026-08-04
 
 ### Fixed (Graph Readiness G0-1)

@@ -2,6 +2,14 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.4] — 2026-08-04
+
+### Added (Harness Closure R1)
+- **Rubric wired into the eval CLI** — `run-replay-cli.ts` evaluates the §18.4/18.5 rubric over every replay result: 8-dimension scores per case, quality-floor report (correctness/safety/truthfulness), warnings and P0 violations printed, `rubric` block in per-case JSON and an aggregated `summary.json` under `--report`.
+- **Non-required rubric checks are real warnings** — `RubricEvaluation.warnings` separate from `failures`; a non-required failure no longer vetoes the run (was: pushed into `failures` with `passed` requiring an empty list, contradicting the "warnings only" comment).
+- **Shared-process dual-run policy isolation test** — two run scopes in one process sharing one projectRoot permission file: the R1 run-scope-derived gate honors the shared deny rule for both runs, per-run allow overrides don't leak, and different project roots load different permission files. (hr-dual stays as honest independent-harness sanity; real plan/mode/cancel isolation remains H3.)
+- **HR-031 False-done calibration scenario** — write tool executed + completion claim with no verification evidence. Calibrated against the real orchestrator: it **accepts** the completion (no task tracker → `canClaimDone` has no required evidence kinds). Recorded as a known Completion Gate hardening gap — the scenario is a regression probe that flips to `blocked` when the gate hardens. HR-004 retitled to match its actual semantics.
+
 ## [0.5.3] — 2026-08-04
 
 ### Fixed (Harness Closure R1)

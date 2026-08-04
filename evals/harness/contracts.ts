@@ -116,7 +116,7 @@ export interface RunReplayCase {
   expected: {
     outcome: RunOutcomeExpectation
     events: EventExpectation[]
-    artifacts: ArtifactExpectation[]
+    artifacts: ArtifactExpectation
     workspace: WorkspaceExpectation
     budget?: BudgetExpectation
   }

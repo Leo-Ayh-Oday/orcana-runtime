@@ -15,6 +15,15 @@ import type { AgentRunInput, RunStatus } from "../contracts/run"
 import type { RunSnapshot } from "../contracts/snapshot"
 import type { ModeName } from "../../agent/mode-contract"
 import type { SerializedEvidenceEntry } from "../../agent/evidence-ledger"
+import type { HarnessArtifact } from "../contracts/artifact"
+
+/** G0-3: artifact entities (metadata + resolved content) so a restored run
+ *  can prove its evidence chain — content normally lives in the in-memory
+ *  store map keyed by "content:<sha256>". */
+export interface SerializedArtifactState {
+  artifacts: HarnessArtifact[]
+  contents: Array<{ ref: string; value: string }>
+}
 
 export interface SerializableSession {
   sessionId: string
@@ -64,6 +73,9 @@ export interface SerializableRun {
   evidenceState: { entries: SerializedEvidenceEntry[] }
   /** H8: artifact ids produced by the run (content lives in the run's store). */
   artifactRefs: string[]
+  /** G0-3: artifact entities with resolved content — restored runs can read
+   *  back artifact content (was "content is not restored, refs are"). */
+  artifactState?: SerializedArtifactState
   workspaceHash?: string
 }
 

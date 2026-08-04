@@ -17,7 +17,8 @@ import type { RunSnapshot } from "../contracts/snapshot"
 import type { ModeName } from "../../agent/mode-contract"
 import { assembleRunScope } from "../runtime/run-scope"
 import { createBudgetLedger } from "../runtime/budget-ledger"
-import { HARNESS_STORE_SCHEMA_VERSION, type SerializablePlanState, type SerializableRun } from "./harness-store"
+import { createArtifactStore } from "../artifacts/artifact-store"
+import { HARNESS_STORE_SCHEMA_VERSION, type SerializablePlanState, type SerializableRun, type SerializedArtifactState } from "./harness-store"
 
 export function serializePlanState(planStore: { current: { goal: string; intent: string; current: string; nodes: Array<{ id: string; title: string; status: string; dependsOn: string[]; blockedBy: string[]; evidence?: string; reactCount: number }> } | null }): SerializablePlanState {
   const plan = planStore.current
@@ -72,10 +73,13 @@ export interface SerializeRunInput {
   /** H8: artifact ids produced by the run (collected by the caller — the
    *  store interface is async and serializeRun stays synchronous). */
   artifactRefs?: string[]
+  /** G0-3: artifact entities + resolved content (collected by the caller).
+   *  Restored runs can then read artifact content back, not just refs. */
+  artifactState?: SerializedArtifactState
 }
 
 export function serializeRun(input: SerializeRunInput): SerializableRun {
-  const { run, workspaceHash, artifactRefs } = input
+  const { run, workspaceHash, artifactRefs, artifactState } = input
   return {
     schemaVersion: HARNESS_STORE_SCHEMA_VERSION,
     runId: run.runId,
@@ -93,6 +97,7 @@ export function serializeRun(input: SerializeRunInput): SerializableRun {
     budgetState: { limits: run.budget.limits, used: run.budget.used },
     evidenceState: { entries: serializeLedger(run.scope.evidenceLedger).entries },
     artifactRefs: artifactRefs ?? [],
+    artifactState,
     workspaceHash,
   }
 }
@@ -118,10 +123,17 @@ export function restoreAgentRun(input: RestoreAgentRunInput): AgentRun {
   if (plan) setCurrentPlan(scope.planStore, plan)
 
   // H8: restore the evidence ledger; H6 files carried only a count — treat
-  // those as an empty ledger (artifact content is not restored, refs are).
+  // those as an empty ledger.
   const entries = serializable.evidenceState?.entries
   if (Array.isArray(entries)) {
     scope.evidenceLedger = deserializeLedger({ entries })
+  }
+
+  // G0-3: restore artifact entities + resolved content (was: "artifact
+  // content is not restored, refs are"). Old files without artifactState
+  // hydrate an empty store — refs alone stay unreadable, as before.
+  if (serializable.artifactState && (serializable.artifactState.artifacts.length > 0 || serializable.artifactState.contents.length > 0)) {
+    scope.artifactStore = createArtifactStore(serializable.artifactState)
   }
 
   const budget = createBudgetLedger(serializable.budgetState.limits)

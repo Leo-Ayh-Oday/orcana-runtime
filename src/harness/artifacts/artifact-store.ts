@@ -8,9 +8,20 @@ import { createHash } from "node:crypto"
 import type { ArtifactStore, HarnessArtifact, HarnessArtifactKind } from "../contracts/artifact"
 import { contentRefFromHash } from "./provenance"
 
-export function createArtifactStore(): ArtifactStore {
-  const artifacts = new Map<string, HarnessArtifact>()
-  const content = new Map<string, string>()
+/** G0-3: initial state for a restored store — artifacts + resolved content
+ *  hydrated synchronously (the store interface is async, restore is sync). */
+export interface ArtifactStoreInitialState {
+  artifacts?: HarnessArtifact[]
+  contents?: Array<{ ref: string; value: string }>
+}
+
+export function createArtifactStore(initial?: ArtifactStoreInitialState): ArtifactStore {
+  const artifacts = new Map<string, HarnessArtifact>(
+    (initial?.artifacts ?? []).map((a) => [a.artifactId, { ...a }]),
+  )
+  const content = new Map<string, string>(
+    (initial?.contents ?? []).map((c) => [c.ref, c.value]),
+  )
 
   return {
     async put(artifact) {

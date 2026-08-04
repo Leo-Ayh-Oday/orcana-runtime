@@ -80,4 +80,8 @@ export interface HarnessStore {
 
   saveSnapshot(snapshot: RunSnapshot): Promise<void>
   loadLatestSnapshot(runId: string): Promise<RunSnapshot | null>
+
+  /** G0-2: event trace file integrity for a run — used on restore to surface
+   *  a missing/incomplete audit stream (never blocks the restore). */
+  traceIntegrity(runId: string): Promise<{ eventFileExists: boolean; eventCount: number }>
 }

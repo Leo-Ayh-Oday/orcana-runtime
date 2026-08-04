@@ -39,11 +39,17 @@ export interface RunCancellation {
   throwIfCancelled(): void
 }
 
-/** Run-scoped trace writer (plan §12.3). Appends typed event envelopes. */
+/** Run-scoped trace writer (plan §12.3). Appends typed event envelopes.
+ *  G0-2: append errors are counted and surfaced (fail-loud) instead of being
+ *  silently swallowed — the trace is an audit stream, not the restore source. */
 export interface TraceWriter {
   append<T>(event: EventEnvelope<T>): Promise<void>
   flush(): Promise<void>
   close(): Promise<void>
+  /** G0-2: number of failed batch writes so far (0 = no write failures). */
+  writeFailures(): number
+  /** G0-2: events still queued in memory (not yet flushed to disk). */
+  pendingEvents(): number
 }
 
 import type { EventEnvelope } from "./events"

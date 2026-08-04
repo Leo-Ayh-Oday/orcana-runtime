@@ -100,6 +100,15 @@ export async function* runControlledRun(
     // H5: flush + close the typed trace (best-effort, never fails the run).
     await run.scope.trace.flush().catch(() => {})
     await run.scope.trace.close().catch(() => {})
+    // G0-2: fail-loud — a failed trace write must never fail the run, but it
+    // must not be silent either. Surface the gap once, then move on.
+    const lost = run.scope.trace.writeFailures()
+    if (lost > 0) {
+      console.warn(
+        `[orcana] trace integrity: run ${run.runId} had ${lost} event write failures — ` +
+        "the JSONL trace may be incomplete (audit stream only, run state is not affected)",
+      )
+    }
     cleanupRun({ session, runId: run.runId, controller })
   }
 }

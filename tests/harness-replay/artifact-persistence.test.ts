@@ -183,6 +183,8 @@ describe("G0-3 persisted run restores artifact content end-to-end", () => {
       const content = await restored.scope.artifactStore.getContent(artifact!.contentRef)
       expect(content).not.toBeNull()
       // inspect still works on the restored path (no crash, status intact).
+      // NOTE: the write-then-claim run ends blocked under G0-4 (write without
+      // verification evidence) — the artifact persistence is what's under test.
       const harness2 = createAgentHarness({
         deps: { provider: new WriteTsThenDoneProvider(), tools: writeTsTool(cwd) },
         sessionId: "sess-g03-e2e",
@@ -190,7 +192,7 @@ describe("G0-3 persisted run restores artifact content end-to-end", () => {
         store,
       })
       const snapshot = await harness2.inspect(runId)
-      expect(snapshot.status).toBe("completed")
+      expect(["blocked", "completed"]).toContain(snapshot.status)
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }

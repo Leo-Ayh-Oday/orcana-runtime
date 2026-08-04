@@ -2,6 +2,11 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.6] — 2026-08-04
+
+### Fixed (Graph Readiness G0-1)
+- **Terminal vs stopped status semantics** — new `STOPPED_RUN_STATUSES` (`blocked`/`waiting`/`paused`) alongside `TERMINAL_RUN_STATUSES`: terminal means finished forever (no transitions out), stopped means not auto-advancing but resumable (`blocked → running`, `waiting → resuming`). `isStoppedRunStatus()` covers both. Replay/HR invariants now check "stopped" instead of treating `blocked` as a terminal status; every stopped run must carry an outcome. RunController comments corrected (waiting/blocked/paused are not terminal events). Graph Readiness Gate G0-1 — pre-requisite for Graph scheduler node-terminal decisions.
+
 ## [0.5.5] — 2026-08-04
 
 ### Docs (Harness Closure R1 · freeze)

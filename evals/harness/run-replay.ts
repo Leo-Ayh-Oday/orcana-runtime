@@ -8,9 +8,9 @@
  * INDEPENDENT provider instances (isolation scenarios). NOT a scheduler.
  */
 
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createAgentHarness } from "../../src/harness/runtime/agent-harness"
 import { createFileHarnessStore } from "../../src/harness/persistence/file-harness-store"
 import { computeWorkspaceHash } from "../../src/harness/persistence/workspace-hash"
@@ -42,7 +42,8 @@ export async function runReplayCase(
     // initialWorkspace + HR-019 project-level permission config.
     for (const [path, content] of Object.entries(caseDef.initialWorkspace)) {
       const full = join(workspaceDir, path)
-      writeFileSync(full, content, { recursive: true } as never)
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, content)
     }
 
     const provider = new ScriptedProvider(caseDef.providerScript)
@@ -96,7 +97,9 @@ export async function runReplayCase(
           const interruptId = (snapshot.interrupt as { interruptId?: string } | undefined)?.interruptId
           if (!interruptId) throw new Error("waiting run without interrupt id")
           for (const [path, content] of Object.entries(response.mutateWorkspaceBeforeResume ?? {})) {
-            writeFileSync(join(workspaceDir, path), content)
+            const full = join(workspaceDir, path)
+            mkdirSync(dirname(full), { recursive: true })
+            writeFileSync(full, content)
           }
           resumeQueue = harness.resume(pendingRunId, {
             accepted: response.accepted,
@@ -234,9 +237,18 @@ function evaluateExpectations(
   }
   if (caseDef.expected.workspace.noAdditionalFiles) {
     const initial = new Set(Object.keys(caseDef.initialWorkspace))
-    const extra = readdirSync(workspaceDir, { recursive: true } as never)
-      .map((p) => String(p))
-      .filter((p) => !initial.has(p) && !p.startsWith(".orcana"))
+    const entries = readdirSync(workspaceDir, { recursive: true } as never).map((p) => String(p))
+    const extra = entries.filter((p) => {
+      if (p.startsWith(".orcana") || initial.has(p)) return false
+      // Directories from initialWorkspace paths (e.g. "src" for "src/a.ts")
+      // are expected, not creations — only plain files count.
+      const full = join(workspaceDir, p)
+      try {
+        return statSync(full).isFile()
+      } catch {
+        return false
+      }
+    })
     if (extra.length > 0) failures.push(`unexpected files created: ${extra.join(", ")}`)
   }
 

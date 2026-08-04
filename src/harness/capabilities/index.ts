@@ -1,4 +1,4 @@
-/** Capability Registry / Executor (H9) public surface. */
+/** Capability Registry / Executor (H9) + Tool Runtime 2.0 contracts (RT-1). */
 
 export { createCapabilityDescriptor, budgetKindsFor, TOOL_OUTPUT_SCHEMA } from "./descriptor"
 export type { CapabilityDescriptorPartial } from "./descriptor"
@@ -15,3 +15,20 @@ export {
   sideEffectFromContract,
   toolCapabilityHandler,
 } from "./tool-adapter"
+// RT-1: Tool Runtime 2.0 contracts.
+export { TOOL_ERROR_CODES, ToolError, toolError } from "./errors"
+export type { ToolErrorCode, ToolErrorCategory, ToolErrorInfo } from "./errors"
+export { toolResult, resultHelpers } from "./result"
+export type {
+  ArtifactReference,
+  Diagnostic,
+  EvidenceReference,
+  ToolExecutionMetrics,
+  ToolExecutionResult,
+  ToolExecutionStatus,
+} from "./result"
+export { NO_RETRY, retryDelayMs, shouldRetry } from "./retry"
+export type { RetryPolicy } from "./retry"
+export { buildExecutionContext, contextFromRunScope, systemClock } from "./execution-context"
+export type { ApprovalContext, Clock, ToolExecutionContext } from "./execution-context"
+export { validateJsonSchema } from "./schema-validator"

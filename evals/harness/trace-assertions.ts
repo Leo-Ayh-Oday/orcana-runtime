@@ -45,8 +45,10 @@ export function assertTraceInvariants(
   const failures: string[] = []
 
   // HR-025: sequence continuity is asserted by the executor (sequences come
-  // from envelopes); here we check the structural counterparts.
-  const terminal = ["completed", "failed", "cancelled", "restart_required"]
+  // from envelopes); here we check the structural counterparts. blocked is a
+  // legitimate terminal for HR scenarios — the orchestrator refusing to
+  // claim done after a failed/blocked tool is the SAFE behavior.
+  const terminal = ["completed", "failed", "cancelled", "restart_required", "blocked"]
   if (!terminal.includes(snapshot.status)) {
     failures.push(`invariant: snapshot status "${snapshot.status}" is not terminal`)
   }
@@ -55,7 +57,9 @@ export function assertTraceInvariants(
     failures.push("invariant: terminal run without outcome")
   }
 
-  // HR-026: every tool call has a matching terminal event.
+  // HR-026: every tool call either has a matching terminal event or was
+  // hard-blocked by policy (L4 hard blocks skip the tool_result yield and
+  // surface as a status ledger line — no terminal event is EXPECTED then).
   const calls = events.filter((e) => e.type === "tool.call.requested")
   for (const call of calls) {
     const name = (call.payload as { toolCall?: { name?: string } }).toolCall?.name
@@ -63,8 +67,14 @@ export function assertTraceInvariants(
       (e) => (e.type === "tool.call.completed" || e.type === "tool.call.failed")
         && (e.payload as { toolName?: string }).toolName === name,
     )
-    if (!terminated) {
-      failures.push(`invariant: tool call "${name ?? "?"}" has no terminal event`)
+    const policyBlocked = events.some(
+      (e) => e.type === "display.changed"
+        && typeof (e.payload as { display?: { data?: unknown } }).display?.data === "string"
+        && (e.payload as { display: { data: string } }).display.data.includes(name ?? "")
+        && (e.payload as { display: { data: string } }).display.data.includes("blocked"),
+    )
+    if (!terminated && !policyBlocked) {
+      failures.push(`invariant: tool call "${name ?? "?"}" has no terminal event and no policy-block trace`)
     }
   }
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { runReplayCase } from "../../evals/harness/run-replay"
+import { runReplayCase, runReplayPair, runReplaySuite } from "../../evals/harness/run-replay"
+import { loadHrScenarios } from "../../evals/harness/scenarios"
 import type { RunReplayCase } from "../../evals/harness/contracts"
 
 // H12 Tier 2: end-to-end run replay — scripted provider/tools/workspace
@@ -105,5 +106,33 @@ describe("H12 run replay executor", () => {
     })
     expect(result.passed).toBe(false)
     expect(result.failures.some((f) => f.includes("providerScript"))).toBe(true)
+  })
+})
+
+// ── HR scenario suite (plan §18.6) ──
+
+describe("H12 HR scenario suite", () => {
+  const all = loadHrScenarios()
+
+  test(`loads ${all.length} first-batch scenarios (8 core + 3 dual)`, () => {
+    expect(all.length).toBe(11)
+    expect(all.some((c) => c.caseId === "HR-001")).toBe(true)
+    expect(all.some((c) => c.caseId === "HR-024")).toBe(true)
+  })
+
+  test("every single-run scenario passes (core + trace invariants)", async () => {
+    const suite = await runReplaySuite(all, { keepWorkspaceOnFailure: true })
+    expect(suite.failed).toBe(0)
+    const failures = suite.results.filter((r) => !r.passed)
+    if (failures.length > 0) {
+      throw new Error(failures.map((f) => `${f.caseId}: ${f.failures.join("; ")}`).join("\n"))
+    }
+  })
+
+  test("dual-run cases pass through runReplayPair", async () => {
+    const [hr21, hr22] = all.filter((c) => c.caseId === "HR-021" || c.caseId === "HR-022")
+    const [a, b] = await runReplayPair(hr21!, hr22!)
+    expect(a.passed).toBe(true)
+    expect(b.passed).toBe(true)
   })
 })

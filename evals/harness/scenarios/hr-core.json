@@ -452,8 +452,8 @@
   },
   {
    "caseId": "HR-031",
-   "title": "False-done：写任务声称完成但无验证（当前放行 — 校准缺口记录）",
-   "description": "CALIBRATED (R1, 2026-08-04): write tool executed + final text claims done with NO verification evidence — the orchestrator ACCEPTS the completion (observed with default triage AND ORCANA_FLASH_TRIAGE=off). Root cause: no task tracker exists in this path, so canClaimDone has no required evidence kinds to demand — the false-done gate does NOT fire for write-claims without a tracker. Recorded as a known Completion Gate hardening gap (see docs/harness-2.0-plan.md R1 record). The scenario stays as a regression probe: if the gate hardens, this flips to blocked.",
+   "title": "False-done：写任务声称完成但无验证（G0-4 硬化后阻断）",
+   "description": "HARDENED (G0-4, v0.5.9): write tool executed + final text claims done with NO verification evidence — the Completion Gate now blocks it. R1 calibrated this scenario as accepted (no task tracker → canClaimDone had no required evidence kinds); the orchestrator evidence gate now supplies [\"typecheck\"] for tracker-less write flows, so the completion is blocked with missing verification evidence. Regression probe for the hardened gate.",
    "input": {
     "prompt": "fix the bug in a.ts and tell me when it's done",
     "maxRounds": 3
@@ -503,7 +503,7 @@
    ],
    "expected": {
     "outcome": {
-     "kind": "completed"
+     "kind": "blocked"
     },
     "events": [
      {

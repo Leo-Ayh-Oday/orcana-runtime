@@ -30,7 +30,7 @@ import { markPlanAccepted, missingTaskRequirements, formatTaskTrackerPrompt } fr
 import { evaluateCompletionGate, formatBlockedCompletion, formatCompletionEvidenceReport, formatCompletionGatePrompt, needsExternalCompletionGate } from "./external-completion-gate"
 import { FlashJudge, type TestimonyLedger } from "./flash-judge"
 import { extractPromises } from "./round/post-loop"
-import { canClaimDone, deriveLastTypecheck, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
+import { canClaimDone, deriveLastTypecheck, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceKind, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
 import { getWriteGeneration } from "../file-state"
 import type { TransactionEvidenceBinding, VerificationResult } from "../verification/result"
 import type { RippleObligation } from "../ripple/obligations"
@@ -354,12 +354,22 @@ export class CompletionOrchestrator {
   private evaluateEvidenceGate(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult): boolean {
     if (!input.evidenceLedger) return true // no ledger → can't check, allow
 
+    // G0-4 (Completion Gate hardening): tracker-less flows that performed
+    // writes must still satisfy the evidence contract. Without a tracker,
+    // canClaimDone has no required kinds and would let any write-then-claim
+    // complete with zero verification (R1 calibration found exactly this in
+    // HR-031). A write claim now demands passing typecheck evidence — the
+    // same default the narrow_edit auto-finish path already requires.
+    const explicitRequiredKinds: EvidenceKind[] =
+      !input.taskTracker && input.taskHadWrite ? ["typecheck"] : []
+
     const evidenceResult = canClaimDone({
       tracker: input.taskTracker,
       evidence: input.evidenceLedger,
       currentGeneration: getWriteGeneration(),
       evidenceBinding: input.evidenceBinding,
       requireEvidenceBinding: input.taskHadWrite || getWriteGeneration() > 0,
+      requiredKinds: explicitRequiredKinds,
     })
 
     out.evidenceResult = evidenceResult

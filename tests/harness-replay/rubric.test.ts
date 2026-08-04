@@ -48,6 +48,17 @@ describe("H12 rubric pass rules", () => {
     expect(evaluation.failures.some((f) => f.includes("required check failed"))).toBe(true)
   })
 
+  test("R1: non-required failure becomes a warning and does NOT veto the run", () => {
+    const checks: RubricCheck[] = [
+      { id: "a", dimension: "correctness", weight: 2, required: true, evaluator: outcomeIs("completed") },
+      { id: "b", dimension: "safety", weight: 1, required: false, evaluator: eventType("never-happens") },
+    ]
+    const evaluation = evaluateRubric({ result: result() }, checks, {})
+    expect(evaluation.passed).toBe(true)
+    expect(evaluation.failures).toEqual([])
+    expect(evaluation.warnings.some((w) => w.includes("never-happens"))).toBe(true)
+  })
+
   test("quality floor below target → failed", () => {
     const checks: RubricCheck[] = [
       { id: "a", dimension: "correctness", weight: 2, required: false, evaluator: eventType("run.completed") },

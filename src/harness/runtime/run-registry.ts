@@ -24,6 +24,8 @@ export interface CreateRegisteredRunInput {
   projectRoot: string
   input: AgentRun["input"]
   activeMode?: ModeName
+  /** G0-2: fail-loud observer for trace batch write failures. */
+  onTraceWriteFailure?: (info: { runId: string; batchSize: number; error: unknown }) => void
 }
 
 export class RunRegistry {
@@ -52,6 +54,7 @@ export class RunRegistry {
         projectRoot: input.projectRoot,
         controller,
         activeMode: input.activeMode,
+        onTraceWriteFailure: input.onTraceWriteFailure,
       }),
       budget: createBudgetLedger(budget),
       createdAt: now,

@@ -93,5 +93,15 @@ export function createFileHarnessStore(input: FileHarnessStoreInput): HarnessSto
         return null
       }
     },
+
+    async traceIntegrity(runId) {
+      try {
+        const text = readFileSync(join(eventsDir, `${runId}.jsonl`), "utf-8")
+        const eventCount = text.trim() === "" ? 0 : text.split("\n").filter(Boolean).length
+        return { eventFileExists: true, eventCount }
+      } catch {
+        return { eventFileExists: false, eventCount: 0 }
+      }
+    },
   }
 }

@@ -319,7 +319,10 @@ export function requiredEvidenceKinds(tracker: TaskTracker | null): EvidenceKind
 /** The single hard-check entry point for claiming task completion.
  *
  *  Checks:
- *  1. No tracker and no explicit requirements → can claim (no structured task)
+ *  1. No tracker and no explicit requirements → can claim (no structured task);
+ *     NOTE (G0-4): the CompletionOrchestrator now supplies explicit
+ *     requiredKinds for tracker-less flows that performed writes, so a
+ *     write-then-claim without verification no longer passes here.
  *  2. All steps must be done (no pending/running)
  *  3. All required evidence kinds must have fresh passed evidence
  *  4. All required files must exist on disk

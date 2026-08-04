@@ -295,3 +295,67 @@ describe("checkNarrowEditCompletion", () => {
     expect(result.evidencePrompt).toBeNull()
   })
 })
+
+// ── G0-4: Completion Gate hardening — tracker-less write flows need evidence ──
+
+describe("G0-4 tracker-less write completion demands evidence", () => {
+  test("write + completion claim with empty ledger is blocked (no more false-done)", async () => {
+    const result = await new CompletionOrchestrator().evaluate(input({
+      finalText: "done — the bug is fixed",
+      taskHadWrite: true,
+      taskModifiedFiles: 1,
+      changedFiles: ["a.ts"],
+      maxRounds: 1,
+    }))
+
+    // Must NOT accept the completion: either the external gate or the hardened
+    // evidence gate blocks it.
+    expect(result.decision).not.toBe("done")
+    expect(
+      result.statusMessages.some((m) => m.includes("blocked"))
+      || result.yieldTexts.join("\n").includes("blocked"),
+    ).toBe(true)
+  })
+
+  test("write + completion claim backed by passing typecheck evidence is accepted", async () => {
+    const ledger = createEvidenceLedger()
+    const evidenceBinding = {
+      stateId: "txstate_0123456789abcdef0123456789abcdef",
+      transactionCount: 1,
+      latestTransactionId: "ptxn_current",
+    }
+    addEvidence(ledger, {
+      id: "evi_tc",
+      kind: "typecheck",
+      command: "tsc --noEmit",
+      output: "ok",
+      passed: true,
+      timestamp: Date.now(),
+      generation: 0,
+      transaction: evidenceBinding,
+    })
+
+    const result = await new CompletionOrchestrator().evaluate(input({
+      finalText: "done",
+      taskHadWrite: true,
+      taskModifiedFiles: 1,
+      changedFiles: ["a.ts"],
+      verificationResults: [{ kind: "typecheck", command: "tsc --noEmit", passed: true, issues: 0, durationMs: 1, summary: "ok" }],
+      evidenceLedger: ledger,
+      evidenceBinding,
+      maxRounds: 1,
+    }))
+
+    expect(result.decision).toBe("done")
+  })
+
+  test("read-only completion with no tracker stays allowed (no false positive)", async () => {
+    const result = await new CompletionOrchestrator().evaluate(input({
+      finalText: "here's the explanation",
+      taskHadWrite: false,
+      maxRounds: 1,
+    }))
+
+    expect(result.decision).toBe("done")
+  })
+})

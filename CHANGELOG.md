@@ -2,6 +2,14 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.1] — 2026-08-04
+
+### Fixed (Harness Closure R1, P0-1)
+- **ToolNode Policy Gate is now mandatory** — `executeCapability` no longer has a silent skip path: when neither `policyDecision` nor `policyContext` is supplied, the conservative default context is itself evaluated as a policy. `ToolNode` derives its policy context from the run scope (`createNodePolicyContextFromRunScope`), loading project permission rules under `scope.projectRoot/.orcana/permissions.json` — node-mode executions now obey the same permission surface as the loop, and strict mode fails closed (no interactive confirm channel in node mode).
+- **Gate 2 name-only fallback** — `evaluateToolPolicy` now runs the permission gate when a concrete tool name exists even without a resolved tool descriptor, so unknown write-class capabilities are blocked by category inference instead of passing unexamined (loop mode always passes a descriptor — unchanged).
+- **Rate-limit counter fix** — node-mode round usage counters were `Infinity`, which saturated Gate 1 and blocked every call; they now start at zero (run-level call budgets stay on the BudgetLedger).
+- Tool calls carry `toolCallId` through policy/events; artifact tracker resolves relative paths against `projectRoot` when provided.
+
 ## [0.5.0] — 2026-08-04
 
 ### Added

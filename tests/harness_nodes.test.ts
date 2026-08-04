@@ -242,6 +242,21 @@ describe("H11 ToolNode", () => {
     expect(result.error?.message).toContain("mock_write")
   })
 
+  test("R1: artifact tracker resolves RELATIVE paths against the run scope's projectRoot", async () => {
+    // Pre-R1 the tracker resolved against process.cwd() — a relative path
+    // would miss the file and record no patch artifact. The node passes
+    // context.runScope.projectRoot, so "a.txt" means <projectRoot>/a.txt.
+    const { context, projectRoot } = buildNodeContext()
+    writeFileSync(join(projectRoot, "a.txt"), "old")
+    registerWriteCapability(context, join(projectRoot, "a.txt"))
+    const node = createToolNode({ id: "write", policyContext: allowGate("mock_write") })
+    const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: { path: "a.txt", content: "new" } })
+    expect(result.status).toBe("succeeded")
+    const patches = await context.artifacts.findByKind("patch")
+    expect(patches).toHaveLength(1)
+    expect(patches[0]!.producedBy).toBe("mock_write")
+  })
+
   test("R1: the default gate loads project permissions from the run scope's projectRoot", async () => {
     const { context, projectRoot } = buildNodeContext()
     // Project-level allow rule (HR-019 style config surface): the run-scope

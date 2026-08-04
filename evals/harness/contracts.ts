@@ -126,7 +126,7 @@ export interface RunReplayResult {
   caseId: string
   passed: boolean
   failures: string[]
-  events: Array<{ type: string; payload: unknown }>
+  events: Array<{ type: string; payload: unknown; sequence?: number }>
   snapshot: {
     status: string
     outcome?: { kind: string; [key: string]: unknown }

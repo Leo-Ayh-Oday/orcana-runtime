@@ -176,7 +176,7 @@ export function noSecretInEvents(pattern: RegExp): RubricEvaluator {
 
 export function sequenceContinuous(): RubricEvaluator {
   return (subject) => {
-    const sequences = subject.result.events.map((e) => (e as { sequence?: number }).sequence).filter((s) => s !== undefined)
+    const sequences = subject.result.events.map((e) => e.sequence).filter((s) => s !== undefined)
     let ok = true
     for (let i = 1; i < sequences.length; i++) {
       if (sequences[i]! !== sequences[i - 1]! + 1) { ok = false; break }

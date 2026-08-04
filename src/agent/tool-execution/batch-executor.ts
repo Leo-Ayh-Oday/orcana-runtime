@@ -356,7 +356,9 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
 
     yield {
       type: "tool_result",
-      data: { name: tc.name, content: resultContent.slice(0, 500), success: resultObj.success },
+      // R1 (Harness Closure): carry the call id so replay invariants can pair
+      // each request to exactly one terminal event (was name-only before).
+      data: { id: tc.id, name: tc.name, content: resultContent.slice(0, 500), success: resultObj.success },
     }
     if (tc.name === "web_search" && !resultObj.success) {
       notices.webSearchFailedThisTurn = true

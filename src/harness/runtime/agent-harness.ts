@@ -43,6 +43,26 @@ export interface AgentHarnessInput {
   store?: HarnessStore
   /** Optional workspace-hash provider (computed lazily at terminal save). */
   workspaceHash?: () => string
+  /** G0-2: fail-loud observer for trace batch write failures (audit stream). */
+  onTraceWriteFailure?: (info: { runId: string; batchSize: number; error: unknown }) => void
+}
+
+/** G0-2: fail-loud trace integrity check on restore — the JSONL event stream
+ *  is an audit trail, not the restore source (Run/Snapshot JSON are), so a
+ *  missing or incomplete stream is surfaced as a warning, never a failure. */
+async function checkTraceIntegrity(store: HarnessStore, serializable: SerializableRun): Promise<void> {
+  const integrity = await store.traceIntegrity(serializable.runId).catch(() => ({ eventFileExists: false, eventCount: 0 }))
+  if (!integrity.eventFileExists && serializable.eventSequence > 0) {
+    console.warn(
+      `[orcana] trace integrity: run ${serializable.runId} restored without an event trace file ` +
+      `(${serializable.eventSequence} events expected — audit stream only, run state is unaffected)`,
+    )
+  } else if (integrity.eventCount < serializable.eventSequence) {
+    console.warn(
+      `[orcana] trace integrity: run ${serializable.runId} event trace is incomplete ` +
+      `(${integrity.eventCount}/${serializable.eventSequence} events — audit stream only, run state is unaffected)`,
+    )
+  }
 }
 
 export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
@@ -100,6 +120,7 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
         sessionId,
         projectRoot,
         input: runInput,
+        onTraceWriteFailure: input.onTraceWriteFailure,
       })
       session.activeRunIds.push(registered.run.runId)
       session.updatedAt = Date.now()
@@ -137,6 +158,8 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
           const restored = restoreAgentRun({ serializable: restoreSerializable, projectRoot })
           registered = registry.registerRestored(restored, new AbortController())
           savedWorkspaceHash = restoreSerializable.workspaceHash
+          // G0-2: surface a missing/incomplete audit stream on restore.
+          await checkTraceIntegrity(store, restoreSerializable)
         }
       }
       if (!registered) {
@@ -218,6 +241,8 @@ export function createAgentHarness(input: AgentHarnessInput): AgentHarness {
           const serializable = await store.loadRun(runId).catch(() => null)
           if (serializable) {
             const restored = restoreAgentRun({ serializable, projectRoot })
+            // G0-2: surface a missing/incomplete audit stream on historical inspect.
+            await checkTraceIntegrity(store, serializable)
             return snapshotFromRun(restored, serializable.workspaceHash, serializable.artifactRefs ?? [])
           }
         }

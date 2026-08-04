@@ -19,6 +19,8 @@ export interface JsonlTraceWriterInput {
   dir: string
   runId: string
   sessionId: string
+  /** G0-2: fail-loud callback — invoked on every failed batch write. */
+  onWriteFailure?: (info: { runId: string; batchSize: number; error: unknown }) => void
 }
 
 export function createJsonlTraceWriter(input: JsonlTraceWriterInput): TraceWriter {
@@ -26,6 +28,8 @@ export function createJsonlTraceWriter(input: JsonlTraceWriterInput): TraceWrite
   let queue: Array<EventEnvelope<unknown>> = []
   let flushScheduled = false
   let closed = false
+  // G0-2: failed writes are counted and surfaced instead of silently lost.
+  let failures = 0
 
   const writeQueue = () => {
     flushScheduled = false
@@ -36,8 +40,11 @@ export function createJsonlTraceWriter(input: JsonlTraceWriterInput): TraceWrite
       mkdirSync(input.dir, { recursive: true })
       const lines = batch.map(event => `${JSON.stringify(event)}\n`).join("")
       appendFileSync(file, lines, "utf-8")
-    } catch {
-      // Trace writes must never fail the run (plan §12.3).
+    } catch (error) {
+      // Trace writes must never fail the run (plan §12.3), but they must not
+      // be silent either (G0-2): count the failure and notify the observer.
+      failures += batch.length
+      input.onWriteFailure?.({ runId: input.runId, batchSize: batch.length, error })
       queue = [...batch, ...queue]
     }
   }
@@ -67,6 +74,14 @@ export function createJsonlTraceWriter(input: JsonlTraceWriterInput): TraceWrite
       if (closed) return
       writeQueue()
       closed = true
+    },
+
+    writeFailures(): number {
+      return failures
+    },
+
+    pendingEvents(): number {
+      return queue.length
     },
   }
 }

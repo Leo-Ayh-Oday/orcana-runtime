@@ -32,6 +32,12 @@ export function createNoopTraceWriter(): TraceWriter {
     async append() {},
     async flush() {},
     async close() {},
+    writeFailures() {
+      return 0
+    },
+    pendingEvents() {
+      return 0
+    },
   }
 }
 
@@ -40,11 +46,13 @@ export function createRunTraceWriter(
   projectRoot: string,
   runId: string,
   sessionId: string,
+  onTraceWriteFailure?: (info: { runId: string; batchSize: number; error: unknown }) => void,
 ): TraceWriter {
   return createJsonlTraceWriter({
     dir: join(projectRoot, ".orcana", "harness", "events"),
     runId,
     sessionId,
+    onWriteFailure: onTraceWriteFailure,
   })
 }
 
@@ -54,10 +62,12 @@ export interface AssembleRunScopeInput {
   projectRoot: string
   controller: AbortController
   activeMode?: ModeName
+  /** G0-2: fail-loud observer for trace batch write failures. */
+  onTraceWriteFailure?: (info: { runId: string; batchSize: number; error: unknown }) => void
 }
 
 export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
-  const { runId, sessionId, projectRoot, controller } = input
+  const { runId, sessionId, projectRoot, controller, onTraceWriteFailure } = input
   return {
     runId,
     sessionId,
@@ -71,6 +81,6 @@ export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
     artifactStore: createArtifactStore(),
     cancellation: createRunCancellation(controller),
     // H5: typed JSONL trace (H3 no-op replaced).
-    trace: createRunTraceWriter(projectRoot, runId, sessionId),
+    trace: createRunTraceWriter(projectRoot, runId, sessionId, onTraceWriteFailure),
   }
 }

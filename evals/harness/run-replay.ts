@@ -108,10 +108,12 @@ export async function runReplayCase(
           } as never)[Symbol.asyncIterator]()
         } catch (error) {
           if (response.expectRefused && error instanceof HarnessError) {
+            // R1: synthetic events carry NO sequence — a placeholder would
+            // fake sequence continuity in resume scenarios (sequenceContinuous
+            // filters undefined).
             collected.push({
               schemaVersion: 1,
               eventId: "refused",
-              sequence: collected.length + 1,
               runId: pendingRunId,
               sessionId: session.sessionId,
               type: "interrupt.answered",
@@ -132,7 +134,9 @@ export async function runReplayCase(
       caseId: caseDef.caseId,
       passed: failures.length === 0,
       failures,
-      events: collected.map((e) => ({ type: e.type, payload: e.payload })),
+      // R1: keep the envelope sequence — sequenceContinuous() must see the
+      // REAL 1,2,3,… stream, not an empty array (was dropped before).
+      events: collected.map((e) => ({ type: e.type, payload: e.payload, sequence: e.sequence })),
       snapshot: {
         status: snapshot.status,
         outcome: snapshot.outcome ? { kind: snapshot.outcome.kind, ...(snapshot.outcome as object) } : undefined,
@@ -186,7 +190,7 @@ function evaluateExpectations(
   workspaceDir: string,
 ): string[] {
   const failures: string[] = []
-  const replayEvents: ReplayEvent[] = events.map((e) => ({ type: e.type, payload: e.payload }))
+  const replayEvents: ReplayEvent[] = events.map((e) => ({ type: e.type, payload: e.payload, sequence: e.sequence }))
 
   // Outcome.
   const outcome = snapshot.outcome

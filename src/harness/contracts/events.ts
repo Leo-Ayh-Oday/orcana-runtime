@@ -91,7 +91,7 @@ export type HarnessDisplayKind =
 export type HarnessEvent =
   | EventEnvelope<{ status: RunStatus }>
   | EventEnvelope<{ text: string }>
-  | EventEnvelope<{ toolName: string; content: string; success: boolean }>
+  | EventEnvelope<{ toolName: string; content: string; success: boolean; toolCallId?: string }>
   | EventEnvelope<{ usage: unknown }>
   | EventEnvelope<{ error: string }>
   | EventEnvelope<{ interrupt: unknown }>

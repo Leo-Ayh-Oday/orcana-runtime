@@ -107,6 +107,17 @@ describe("H12 run replay executor", () => {
     expect(result.passed).toBe(false)
     expect(result.failures.some((f) => f.includes("providerScript"))).toBe(true)
   })
+
+  test("R1: collected events carry the real increasing sequence (HR-025 not vacuous)", async () => {
+    // The sequence was dropped from RunReplayResult before R1 — this locks
+    // that sequenceContinuous() sees an actual 1,2,3,… stream.
+    const result = await runReplayCase(COMPLETE_CASE)
+    const sequences = result.events.map((e) => e.sequence).filter((s) => s !== undefined)
+    expect(sequences.length).toBeGreaterThan(0)
+    for (let i = 1; i < sequences.length; i++) {
+      expect(sequences[i]).toBe(sequences[i - 1]! + 1)
+    }
+  })
 })
 
 // ── HR scenario suite (plan §18.6) ──

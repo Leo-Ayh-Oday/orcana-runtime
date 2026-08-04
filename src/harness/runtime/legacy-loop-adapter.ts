@@ -261,9 +261,11 @@ function translateStreamEvent(
       })
     }
     case "tool_result": {
-      const result = event.data as { name?: string; success?: boolean; content?: unknown } | undefined
+      const result = event.data as { id?: string; name?: string; success?: boolean; content?: unknown } | undefined
       return emit(HARNESS_EVENT_TYPES.toolCallCompleted, {
         toolName: String(result?.name ?? ""),
+        // R1: callId pairing for the replay invariants (HR-026).
+        toolCallId: String(result?.id ?? ""),
         success: Boolean(result?.success),
         content: typeof result?.content === "string" ? result.content : JSON.stringify(result?.content ?? ""),
       })

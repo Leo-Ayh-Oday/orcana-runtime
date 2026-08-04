@@ -23,7 +23,7 @@ export function matchDeepPartial(actual: unknown, expected: Record<string, unkno
   return true
 }
 
-export interface ReplayEvent { type: string; payload: unknown }
+export interface ReplayEvent { type: string; payload: unknown; sequence?: number }
 
 /** Match an EventExpectation against the collected event list. */
 export function matchEvents(events: ReplayEvent[], expectation: EventExpectation): boolean {
@@ -57,24 +57,40 @@ export function assertTraceInvariants(
     failures.push("invariant: terminal run without outcome")
   }
 
-  // HR-026: every tool call either has a matching terminal event or was
-  // hard-blocked by policy (L4 hard blocks skip the tool_result yield and
-  // surface as a status ledger line — no terminal event is EXPECTED then).
+  // HR-026 (R1): pair each request to EXACTLY ONE terminal event by toolCallId.
+  // Name-based matching let a same-named second call with zero terminals slip
+  // through when the first call had two. Rules:
+  //   - 0 terminals → needs a policy-block trace (L4 hard blocks skip the
+  //     tool_result yield and surface as a status ledger line) else FAIL
+  //   - ≥2 terminals → FAIL (duplicate terminal)
+  //   - terminal must come AFTER the request (stream order)
   const calls = events.filter((e) => e.type === "tool.call.requested")
   for (const call of calls) {
-    const name = (call.payload as { toolCall?: { name?: string } }).toolCall?.name
-    const terminated = events.some(
-      (e) => (e.type === "tool.call.completed" || e.type === "tool.call.failed")
-        && (e.payload as { toolName?: string }).toolName === name,
-    )
+    const callId = (call.payload as { toolCall?: { id?: string } }).toolCall?.id ?? ""
+    const name = (call.payload as { toolCall?: { name?: string } }).toolCall?.name ?? "?"
+    const requestIndex = events.indexOf(call)
+    const terminals: Array<{ index: number; type: string }> = []
+    events.forEach((e, index) => {
+      if (e.type === "tool.call.completed" || e.type === "tool.call.failed") {
+        const payload = e.payload as { toolCallId?: string; toolName?: string }
+        // Fallback: bridged events without a callId pair by name (legacy);
+        // real streams carry toolCallId (R1).
+        const matches = payload.toolCallId !== undefined
+          ? payload.toolCallId === callId
+          : payload.toolName === name
+        if (matches && index > requestIndex) terminals.push({ index, type: e.type })
+      }
+    })
     const policyBlocked = events.some(
       (e) => e.type === "display.changed"
         && typeof (e.payload as { display?: { data?: unknown } }).display?.data === "string"
-        && (e.payload as { display: { data: string } }).display.data.includes(name ?? "")
+        && (e.payload as { display: { data: string } }).display.data.includes(name)
         && (e.payload as { display: { data: string } }).display.data.includes("blocked"),
     )
-    if (!terminated && !policyBlocked) {
-      failures.push(`invariant: tool call "${name ?? "?"}" has no terminal event and no policy-block trace`)
+    if (terminals.length === 0 && !policyBlocked) {
+      failures.push(`invariant: tool call "${name}" (${callId || "no-id"}) has no terminal event and no policy-block trace`)
+    } else if (terminals.length >= 2) {
+      failures.push(`invariant: tool call "${name}" (${callId || "no-id"}) has ${terminals.length} terminal events (expected exactly one)`)
     }
   }
 

@@ -2,6 +2,12 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.5] — 2026-08-04
+
+### Docs (Harness Closure R1 · freeze)
+- `docs/harness-2.0-plan.md` §27 — Harness Closure R1 实施记录：六项逐条 + HR-031 校准结论（False-done 门当前放行，已知加固缺口）+ **冻结声明**（H0–H12 + R1 冻结，禁止非 Graph 前置结构改动，Execution Graph GEP-1.0 启动）。
+- `ARCHITECTURE.md` 状态表：Node Runtime (H11) → 🟢 stable（强制 Policy + 证据链已落地；scheduler/Graph deferred）。
+
 ## [0.5.4] — 2026-08-04
 
 ### Added (Harness Closure R1)

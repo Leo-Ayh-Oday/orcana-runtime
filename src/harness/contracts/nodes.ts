@@ -134,8 +134,17 @@ export interface AgentNodeOutput {
   decision: LoopDecision
   outcome: RunOutcome
   usage: NodeUsage
-  /** H11: always [] — the evidence chain lands with H12 eval. */
+  /** R1: evidence entries added during this node run (ledger diff). */
   evidenceIds: string[]
+  /** R1: artifacts added during this node run (store diff). */
+  artifactIds: string[]
+  /** R1: patch transaction ids realized by this node run (from patch artifacts). */
+  patchTransactionIds: string[]
+  /** R1: unresolved ripple obligations at node end (honest unknown[] until the
+   *  typed trace lands). */
+  unresolvedRippleObligations: unknown[]
+  /** R1: workspace content hash at node end. */
+  resultingWorkspaceDigest: string
 }
 
 export interface ToolNodeInput {

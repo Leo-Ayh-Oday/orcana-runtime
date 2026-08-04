@@ -65,6 +65,10 @@ export interface AgentOptions {
   /** H8: optional caller-provided run-scoped artifact store (single ownership
    *  with the harness). When present, verification produces bound artifacts. */
   artifactStore?: import("../harness/contracts/artifact").ArtifactStore
+  /** R1 (Harness Closure): optional caller-provided run-scoped evidence
+   *  ledger — same single-ownership pattern as planStore/sandbox/artifactStore.
+   *  When absent the kernel creates its own (unchanged behavior). */
+  evidenceLedger?: import("../agent/evidence-ledger").EvidenceLedger
   /** H8: run id stamped on artifacts produced inside the kernel. */
   runId?: string
   /** H9: capability registry — the loop's tool executions route through the

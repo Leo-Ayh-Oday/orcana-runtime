@@ -166,6 +166,7 @@ export async function putPatchArtifact(input: PutPatchArtifactInput): Promise<Ha
     producedBy: input.producedBy,
     workspaceHash: input.workspaceHash,
     relevantFileHashes: input.relevantFileHashes,
+    txId: input.txId,
   })
   await input.store.put(artifact)
   return artifact

@@ -10,6 +10,7 @@
 import type { HarnessNode, NodeEvent, NodeExecutionContext, NodeResult, NodeUsage, VerificationNodeInput } from "../contracts/nodes"
 import { ingestVerificationWithArtifact } from "../artifacts/evidence-adapter"
 import { computeRelevantFileHashes } from "../artifacts/freshness"
+import { snapshotEvidence, diffEvidence } from "./context"
 
 export interface VerificationNodeOutput {
   ingested: Array<{ artifactId: string; evidenceId: string }>
@@ -30,8 +31,11 @@ export function createVerificationNode(options: { id: string }): HarnessNode<Ver
       let failedCount = 0
       const warnings: Array<{ code: string; message: string }> = []
 
+      // R1: evidence = entries this node ADDS; projectRoot is the run scope's
+      // (relative modified files resolve against it, not the CLI cwd).
+      const evidenceSnapshot = snapshotEvidence(context.runScope.evidenceLedger)
       const relevantFileHashes = input.modifiedFiles?.length
-        ? computeRelevantFileHashes(process.cwd(), input.modifiedFiles)
+        ? computeRelevantFileHashes(context.runScope.projectRoot, input.modifiedFiles)
         : undefined
 
       try {
@@ -55,10 +59,12 @@ export function createVerificationNode(options: { id: string }): HarnessNode<Ver
           yield { type: "node.artifact", nodeRunId: context.nodeRunId, artifactId: pair.artifact.artifactId }
         }
 
+        // R1: the ingested entries ARE this node's evidence (ledger diff).
+        const newEvidence = diffEvidence(context.runScope.evidenceLedger, evidenceSnapshot)
         result = {
           status: "succeeded",
           output: { ingested, passedCount, failedCount },
-          evidence: [],
+          evidence: newEvidence,
           diagnostics: warnings.map((w) => ({ code: w.code, message: w.message, severity: "warning" as const, source: options.id })),
           usage: zeroUsage(),
         }

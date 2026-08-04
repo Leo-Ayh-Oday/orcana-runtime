@@ -19,6 +19,7 @@ import type { AgentRun, AgentRunInput } from "../src/harness/contracts/run"
 import type { NodeExecutionContext } from "../src/harness/contracts/nodes"
 import type { VerificationResult } from "../src/verification/result"
 import { PermissionGate } from "../src/agent/permission"
+import { addEvidence, generateEvidenceId } from "../src/agent/evidence-ledger"
 
 // H11 part A: node runtime contracts, sequential runner, FunctionNode —
 // lifecycle events, cancellation, node context, single-use enforcement.
@@ -322,6 +323,37 @@ describe("H11 VerificationNode", () => {
     expect(events.some((e) => e.type === "node.artifact")).toBe(true)
     const artifacts = await context.artifacts.findByKind("typecheck_result")
     expect(artifacts).toHaveLength(1)
+    // R1: NodeResult.evidence = the entries THIS node added, bound to artifacts.
+    expect(result.evidence).toHaveLength(1)
+    expect(result.evidence[0]!.id).toBe(result.output!.ingested[0]!.evidenceId)
+    expect(result.evidence[0]!.artifactId).toBe(result.output!.ingested[0]!.artifactId)
+  })
+
+  test("R1: evidence diff is per node run — pre-existing ledger entries are excluded", async () => {
+    const { context } = buildNodeContext()
+    // Seed the run-scope ledger BEFORE the node runs (e.g. produced by an
+    // earlier node in the same run): the diff must not include it.
+    const seeded = {
+      id: generateEvidenceId(),
+      kind: "manual" as const,
+      output: "seeded before the node",
+      passed: true,
+      timestamp: Date.now(),
+    }
+    addEvidence(context.runScope.evidenceLedger, seeded)
+    const node = createVerificationNode({ id: "verify" })
+    const verification: VerificationResult = {
+      kind: "typecheck",
+      command: "bun run typecheck",
+      passed: true,
+      issues: 0,
+      durationMs: 10,
+      summary: "typecheck ok",
+    }
+    const { result } = await runNodeToResult(node, context, { results: [verification] })
+    expect(result.evidence).toHaveLength(1)
+    expect(result.evidence[0]!.id).not.toBe(seeded.id)
+    expect(result.evidence[0]!.id).toBe(result.output!.ingested[0]!.evidenceId)
   })
 
   test("unclassifiable kinds warn but do not fail", async () => {

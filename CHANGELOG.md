@@ -2,6 +2,11 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.9] — 2026-08-04
+
+### Fixed (Graph Readiness G0-4)
+- **Completion Gate hardened — tracker-less write claims need evidence** — the orchestrator evidence gate now supplies explicit `["typecheck"]` required kinds when a run performed writes without a task tracker (previously `canClaimDone` had no required kinds on that path, so any write-then-claim completed with zero verification). **HR-031 flips to `blocked`** (R1 calibrated it as `completed` with the gap recorded; the regression probe now locks the hardened behavior — verified by A/B: with the fix reverted HR-031 is `completed` again). Graph Readiness Gate G0-4 — completion decisions are sound before Graph commits build on them.
+
 ## [0.5.8] — 2026-08-04
 
 ### Added (Graph Readiness G0-3)

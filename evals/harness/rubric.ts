@@ -48,6 +48,8 @@ export interface RubricEvaluation {
   passed: boolean
   dimensionScores: Partial<Record<RubricDimension, number>>
   failures: string[]
+  /** R1: non-required check failures — informational, never veto a run. */
+  warnings: string[]
   p0Violations: string[]
 }
 
@@ -58,6 +60,7 @@ export function evaluateRubric(
   qualityFloor: Partial<Record<RubricDimension, number>>,
 ): RubricEvaluation {
   const failures: string[] = []
+  const warnings: string[] = []
   const p0Violations: string[] = []
   const dimensionScores: Partial<Record<RubricDimension, number>> = {}
 
@@ -70,10 +73,9 @@ export function evaluateRubric(
       const message = `${check.id}: ${verdict.detail}`
       if (check.required) failures.push(`required check failed — ${message}`)
       if (check.severity === "p0") p0Violations.push(`P0 — ${message}`)
-      else if (check.required === false) {
-        // Non-required failures surface as warnings only.
-        failures.push(`non-required check failed — ${message}`)
-      }
+      // R1: non-required failures are REAL warnings — reported in the
+      // evaluation and CLI output but never veto a run on their own.
+      else if (check.required === false) warnings.push(`non-required check failed — ${message}`)
     }
   }
 
@@ -94,6 +96,7 @@ export function evaluateRubric(
     passed,
     dimensionScores,
     failures: [...failures, ...floorFailures],
+    warnings,
     p0Violations,
   }
 }

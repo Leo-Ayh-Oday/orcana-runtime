@@ -125,12 +125,14 @@ describe("H12 run replay executor", () => {
 describe("H12 HR scenario suite", () => {
   const all = loadHrScenarios()
 
-  test(`loads ${all.length} first-batch scenarios (8 core + 3 dual)`, () => {
-    expect(all.length).toBe(11)
+  test(`loads ${all.length} first-batch scenarios (9 core + 3 dual)`, () => {
+    expect(all.length).toBe(12)
     expect(all.some((c) => c.caseId === "HR-001")).toBe(true)
     expect(all.some((c) => c.caseId === "HR-024")).toBe(true)
   })
 
+  // R1: 12 scenarios (HR-031 runs a full write+claim loop, ~9s) — the suite
+  // needs a longer window than bun's 5s default.
   test("every single-run scenario passes (core + trace invariants)", async () => {
     const suite = await runReplaySuite(all, { keepWorkspaceOnFailure: true })
     expect(suite.failed).toBe(0)
@@ -138,7 +140,7 @@ describe("H12 HR scenario suite", () => {
     if (failures.length > 0) {
       throw new Error(failures.map((f) => `${f.caseId}: ${f.failures.join("; ")}`).join("\n"))
     }
-  })
+  }, 60_000)
 
   test("dual-run cases pass through runReplayPair", async () => {
     const [hr21, hr22] = all.filter((c) => c.caseId === "HR-021" || c.caseId === "HR-022")

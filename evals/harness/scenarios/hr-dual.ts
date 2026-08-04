@@ -1,21 +1,25 @@
-/** H12 dual-run scenarios (HR-021/022/024) — isolation & cancellation.
+/** H12 dual-run scenarios (HR-021/022/024) — independent-harness sanity.
  *
- *  Each side gets its OWN ScriptedProvider instance (no cursor sharing) and
- *  its own temp workspace; isolation is asserted via the tool scripts.
+ *  R1 (Harness Closure): these are INDEPENDENT-harness sanity checks, NOT
+ *  shared-process isolation tests: each side gets its OWN ScriptedProvider,
+ *  its own temp workspace and its own AgentHarness; the probe result is
+ *  static. Real shared-process isolation (shared permission config, one
+ *  process, two runs) is covered by tests/harness_run_isolation.test.ts (H3)
+ *  and tests/harness-replay/shared-process-isolation.test.ts (R1).
  */
 
 import type { RunReplayCase } from "../contracts"
 import type { ToolScriptResult } from "../contracts"
 
-// The isolation probe tool captures per-run facts through the runtime
-// execution context and returns them in its output.
+// The isolation probe returns a STATIC marker — the probe does not read
+// plan/mode stores (that is H3's real shared-process coverage).
 const ISOLATION_TOOL: ToolScriptResult[] = [{
   toolName: "isolation_probe",
   steps: [
     {
       content: "probe",
       success: true,
-      metadata: { isolation: "{{RUN_SCOPE}}" },
+      metadata: { isolation: "probe-static" },
     },
   ],
 }]
@@ -23,8 +27,8 @@ const ISOLATION_TOOL: ToolScriptResult[] = [{
 export const HR_DUAL_CASES: RunReplayCase[] = [
   {
     caseId: "HR-021",
-    title: "两个 Run 的 Plan 不串扰",
-    description: "run A activates a plan in its tool; run B's plan state stays untouched (dual-run via runReplayPair)",
+    title: "独立 Harness 并行 sanity：两个 Run 均可完成",
+    description: "INDEPENDENT-harness sanity (not shared-process isolation): two harnesses, two providers, two workspaces run concurrently via runReplayPair and both complete. Real plan-state isolation: tests/harness_run_isolation.test.ts (H3).",
     input: { prompt: "isolate", maxRounds: 2 },
     initialWorkspace: {},
     providerScript: [
@@ -44,8 +48,8 @@ export const HR_DUAL_CASES: RunReplayCase[] = [
   },
   {
     caseId: "HR-022",
-    title: "两个 Run 的 Mode 不串扰",
-    description: "run A switches mode inside its tool; run B stays in the default mode",
+    title: "独立 Harness 并行 sanity：Mode 各自独立",
+    description: "INDEPENDENT-harness sanity: run A activates a mode in its tool; run B's mode store stays untouched. Real mode isolation: tests/harness_run_isolation.test.ts (H3).",
     input: { prompt: "isolate", maxRounds: 2 },
     initialWorkspace: {},
     providerScript: [
@@ -65,8 +69,8 @@ export const HR_DUAL_CASES: RunReplayCase[] = [
   },
   {
     caseId: "HR-024",
-    title: "取消 Run A 不影响 Run B",
-    description: "run A hangs (idle_timeout) and gets cancelled; run B completes normally (dual-run via runReplayPair)",
+    title: "独立 Harness：取消 Run A 不影响 Run B",
+    description: "INDEPENDENT-harness sanity: run A hangs (idle_timeout) and gets cancelled; run B completes normally. Real shared-process cancellation: tests/harness_run_isolation.test.ts (H3).",
     input: { prompt: "hang or finish", maxRounds: 3 },
     initialWorkspace: {},
     providerScript: [

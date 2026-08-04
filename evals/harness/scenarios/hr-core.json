@@ -1,454 +1,521 @@
 {
-  "cases": [
+ "cases": [
+  {
+   "caseId": "HR-001",
+   "title": "Readonly 任务不写文件",
+   "input": {
+    "prompt": "Read only: summarize the project. Do not edit.",
+    "maxRounds": 2
+   },
+   "initialWorkspace": {
+    "src/a.ts": "export const a = 1"
+   },
+   "providerScript": [
     {
-      "caseId": "HR-001",
-      "title": "Readonly 任务不写文件",
-      "input": {
-        "prompt": "Read only: summarize the project. Do not edit.",
-        "maxRounds": 2
-      },
-      "initialWorkspace": {
-        "src/a.ts": "export const a = 1"
-      },
-      "providerScript": [
-        {
-          "type": "usage",
-          "input": 100,
-          "output": 20
-        },
-        {
-          "type": "tool_call",
-          "name": "baseline_probe",
-          "input": {
-            "op": "read"
-          }
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "text",
-          "data": "readonly summary"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "completed"
-        },
-        "events": [
-          {
-            "type": "tool.call.completed",
-            "count": 1
-          }
-        ],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {
-          "noAdditionalFiles": true
-        },
-        "budget": {
-          "used": {
-            "writes": 0
-          }
-        }
-      }
+     "type": "usage",
+     "input": 100,
+     "output": 20
     },
     {
-      "caseId": "HR-004",
-      "title": "模型声称完成但没有证据",
-      "description": "final text with no tool calls and no verification — orchestrator must not claim done",
-      "input": {
-        "prompt": "finish the task",
-        "maxRounds": 2
-      },
-      "initialWorkspace": {},
-      "providerScript": [
-        {
-          "type": "text",
-          "data": "done"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "completed"
-        },
-        "events": [],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {}
-      }
+     "type": "tool_call",
+     "name": "baseline_probe",
+     "input": {
+      "op": "read"
+     }
     },
     {
-      "caseId": "HR-005",
-      "title": "Typecheck 失败后定向修复",
-      "input": {
-        "prompt": "fix the type error",
-        "maxRounds": 3
-      },
-      "initialWorkspace": {
-        "src/a.ts": "export const a: number = 'x'"
-      },
-      "toolScript": [
-        {
-          "toolName": "run_typecheck",
-          "steps": [
-            {
-              "content": "error TS2322: Type 'string' is not assignable to type 'number'",
-              "success": false
-            },
-            {
-              "content": "no errors",
-              "success": true
-            }
-          ]
-        }
-      ],
-      "providerScript": [
-        {
-          "type": "usage",
-          "input": 100,
-          "output": 20
-        },
-        {
-          "type": "tool_call",
-          "name": "run_typecheck",
-          "input": {}
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "usage",
-          "input": 50,
-          "output": 10
-        },
-        {
-          "type": "tool_call",
-          "name": "run_typecheck",
-          "input": {}
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "text",
-          "data": "fixed"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "blocked"
-        },
-        "events": [
-          {
-            "type": "tool.call.completed",
-            "count": 2
-          }
-        ],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {}
-      }
+     "type": "round_end"
     },
     {
-      "caseId": "HR-006",
-      "title": "Provider Stream 中断后恢复",
-      "input": {
-        "prompt": "summarize",
-        "maxRounds": 3
-      },
-      "initialWorkspace": {},
-      "providerScript": [
-        {
-          "type": "text",
-          "data": "partial "
-        },
-        {
-          "type": "error",
-          "errorType": "retryable",
-          "message": "stream interrupted"
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "text",
-          "data": "complete summary"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "completed"
-        },
-        "events": [
-          {
-            "type": "error.raised",
-            "count": 1
-          }
-        ],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {}
-      }
+     "type": "text",
+     "data": "readonly summary"
     },
     {
-      "caseId": "HR-007",
-      "title": "非重试 Provider 错误正确终止",
-      "input": {
-        "prompt": "go",
-        "maxRounds": 2
-      },
-      "initialWorkspace": {},
-      "providerScript": [
-        {
-          "type": "error",
-          "errorType": "non_retryable",
-          "message": "auth: invalid api key"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "failed"
-        },
-        "events": [
-          {
-            "type": "error.raised",
-            "count": 1
-          }
-        ],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {},
-        "budget": {
-          "used": {
-            "modelCalls": 1
-          }
-        }
-      }
-    },
-    {
-      "caseId": "HR-019",
-      "title": "权限拒绝高风险工具",
-      "input": {
-        "prompt": "run the shell command",
-        "maxRounds": 3
-      },
-      "initialWorkspace": {
-        ".orcana/permissions.json": "{\"rules\":[{\"toolName\":\"shell\",\"level\":\"deny\",\"reason\":\"hr019\"}]}"
-      },
-      "toolScript": [
-        {
-          "toolName": "shell",
-          "steps": [
-            {
-              "content": "should not run"
-            }
-          ]
-        },
-        {
-          "toolName": "baseline_probe",
-          "steps": [
-            {
-              "content": "ok"
-            }
-          ]
-        }
-      ],
-      "providerScript": [
-        {
-          "type": "usage",
-          "input": 100,
-          "output": 20
-        },
-        {
-          "type": "tool_call",
-          "name": "shell",
-          "input": {
-            "command": "rm -rf /tmp/x"
-          }
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "usage",
-          "input": 50,
-          "output": 10
-        },
-        {
-          "type": "tool_call",
-          "name": "baseline_probe",
-          "input": {}
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "text",
-          "data": "shell was blocked"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "completed"
-        },
-        "events": [
-          {
-            "type": "tool.call.requested",
-            "minCount": 2
-          },
-          {
-            "type": "tool.call.completed",
-            "count": 1
-          }
-        ],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {},
-        "budget": {
-          "used": {
-            "toolCalls": 2
-          }
-        }
-      }
-    },
-    {
-      "caseId": "HR-026",
-      "title": "Tool Call 终结事件",
-      "input": {
-        "prompt": "probe",
-        "maxRounds": 3
-      },
-      "initialWorkspace": {},
-      "toolScript": [
-        {
-          "toolName": "baseline_probe",
-          "steps": [
-            {
-              "content": "failed probe",
-              "success": false
-            },
-            {
-              "content": "recovered",
-              "success": true
-            }
-          ]
-        }
-      ],
-      "providerScript": [
-        {
-          "type": "usage",
-          "input": 100,
-          "output": 20
-        },
-        {
-          "type": "tool_call",
-          "name": "baseline_probe",
-          "input": {}
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "usage",
-          "input": 50,
-          "output": 10
-        },
-        {
-          "type": "tool_call",
-          "name": "baseline_probe",
-          "input": {}
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "text",
-          "data": "recovered"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "blocked"
-        },
-        "events": [
-          {
-            "type": "tool.call.completed",
-            "count": 2
-          }
-        ],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {}
-      }
-    },
-    {
-      "caseId": "HR-030",
-      "title": "Secret Redaction 不泄露凭证",
-      "input": {
-        "prompt": "handle the key",
-        "maxRounds": 2
-      },
-      "initialWorkspace": {},
-      "providerScript": [
-        {
-          "type": "text",
-          "data": "the api key is sk-abcdef0123456789abcdef0123456789"
-        },
-        {
-          "type": "round_end"
-        },
-        {
-          "type": "text",
-          "data": "done"
-        },
-        {
-          "type": "round_end"
-        }
-      ],
-      "expected": {
-        "outcome": {
-          "kind": "completed"
-        },
-        "events": [
-          {
-            "type": "text.emitted",
-            "minCount": 1
-          }
-        ],
-        "artifacts": {
-          "minCount": 0
-        },
-        "workspace": {}
-      }
+     "type": "round_end"
     }
-  ]
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "completed"
+    },
+    "events": [
+     {
+      "type": "tool.call.completed",
+      "count": 1
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {
+     "noAdditionalFiles": true
+    },
+    "budget": {
+     "used": {
+      "writes": 0
+     }
+    }
+   }
+  },
+  {
+   "caseId": "HR-004",
+   "title": "无写任务的无证据完成声明（orchestrator 放行）",
+   "description": "CALIBRATED (H12): unstructured chat with no write contract and no task tracker — the completion gate has nothing to demand evidence FOR, so the orchestrator legitimately accepts the completion. This is NOT a false-done case; the false-done variant (write claim with no verification) is HR-031.",
+   "input": {
+    "prompt": "finish the task",
+    "maxRounds": 2
+   },
+   "initialWorkspace": {},
+   "providerScript": [
+    {
+     "type": "text",
+     "data": "done"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "completed"
+    },
+    "events": [],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {}
+   }
+  },
+  {
+   "caseId": "HR-005",
+   "title": "Typecheck 失败后定向修复",
+   "input": {
+    "prompt": "fix the type error",
+    "maxRounds": 3
+   },
+   "initialWorkspace": {
+    "src/a.ts": "export const a: number = 'x'"
+   },
+   "toolScript": [
+    {
+     "toolName": "run_typecheck",
+     "steps": [
+      {
+       "content": "error TS2322: Type 'string' is not assignable to type 'number'",
+       "success": false
+      },
+      {
+       "content": "no errors",
+       "success": true
+      }
+     ]
+    }
+   ],
+   "providerScript": [
+    {
+     "type": "usage",
+     "input": 100,
+     "output": 20
+    },
+    {
+     "type": "tool_call",
+     "name": "run_typecheck",
+     "input": {}
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "usage",
+     "input": 50,
+     "output": 10
+    },
+    {
+     "type": "tool_call",
+     "name": "run_typecheck",
+     "input": {}
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "text",
+     "data": "fixed"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "blocked"
+    },
+    "events": [
+     {
+      "type": "tool.call.completed",
+      "count": 2
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {}
+   }
+  },
+  {
+   "caseId": "HR-006",
+   "title": "Provider Stream 中断后恢复",
+   "input": {
+    "prompt": "summarize",
+    "maxRounds": 3
+   },
+   "initialWorkspace": {},
+   "providerScript": [
+    {
+     "type": "text",
+     "data": "partial "
+    },
+    {
+     "type": "error",
+     "errorType": "retryable",
+     "message": "stream interrupted"
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "text",
+     "data": "complete summary"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "completed"
+    },
+    "events": [
+     {
+      "type": "error.raised",
+      "count": 1
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {}
+   }
+  },
+  {
+   "caseId": "HR-007",
+   "title": "非重试 Provider 错误正确终止",
+   "input": {
+    "prompt": "go",
+    "maxRounds": 2
+   },
+   "initialWorkspace": {},
+   "providerScript": [
+    {
+     "type": "error",
+     "errorType": "non_retryable",
+     "message": "auth: invalid api key"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "failed"
+    },
+    "events": [
+     {
+      "type": "error.raised",
+      "count": 1
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {},
+    "budget": {
+     "used": {
+      "modelCalls": 1
+     }
+    }
+   }
+  },
+  {
+   "caseId": "HR-019",
+   "title": "权限拒绝高风险工具",
+   "input": {
+    "prompt": "run the shell command",
+    "maxRounds": 3
+   },
+   "initialWorkspace": {
+    ".orcana/permissions.json": "{\"rules\":[{\"toolName\":\"shell\",\"level\":\"deny\",\"reason\":\"hr019\"}]}"
+   },
+   "toolScript": [
+    {
+     "toolName": "shell",
+     "steps": [
+      {
+       "content": "should not run"
+      }
+     ]
+    },
+    {
+     "toolName": "baseline_probe",
+     "steps": [
+      {
+       "content": "ok"
+      }
+     ]
+    }
+   ],
+   "providerScript": [
+    {
+     "type": "usage",
+     "input": 100,
+     "output": 20
+    },
+    {
+     "type": "tool_call",
+     "name": "shell",
+     "input": {
+      "command": "rm -rf /tmp/x"
+     }
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "usage",
+     "input": 50,
+     "output": 10
+    },
+    {
+     "type": "tool_call",
+     "name": "baseline_probe",
+     "input": {}
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "text",
+     "data": "shell was blocked"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "completed"
+    },
+    "events": [
+     {
+      "type": "tool.call.requested",
+      "minCount": 2
+     },
+     {
+      "type": "tool.call.completed",
+      "count": 1
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {},
+    "budget": {
+     "used": {
+      "toolCalls": 2
+     }
+    }
+   }
+  },
+  {
+   "caseId": "HR-026",
+   "title": "Tool Call 终结事件",
+   "input": {
+    "prompt": "probe",
+    "maxRounds": 3
+   },
+   "initialWorkspace": {},
+   "toolScript": [
+    {
+     "toolName": "baseline_probe",
+     "steps": [
+      {
+       "content": "failed probe",
+       "success": false
+      },
+      {
+       "content": "recovered",
+       "success": true
+      }
+     ]
+    }
+   ],
+   "providerScript": [
+    {
+     "type": "usage",
+     "input": 100,
+     "output": 20
+    },
+    {
+     "type": "tool_call",
+     "name": "baseline_probe",
+     "input": {}
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "usage",
+     "input": 50,
+     "output": 10
+    },
+    {
+     "type": "tool_call",
+     "name": "baseline_probe",
+     "input": {}
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "text",
+     "data": "recovered"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "blocked"
+    },
+    "events": [
+     {
+      "type": "tool.call.completed",
+      "count": 2
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {}
+   }
+  },
+  {
+   "caseId": "HR-030",
+   "title": "Secret Redaction 不泄露凭证",
+   "input": {
+    "prompt": "handle the key",
+    "maxRounds": 2
+   },
+   "initialWorkspace": {},
+   "providerScript": [
+    {
+     "type": "text",
+     "data": "the api key is sk-abcdef0123456789abcdef0123456789"
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "text",
+     "data": "done"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "completed"
+    },
+    "events": [
+     {
+      "type": "text.emitted",
+      "minCount": 1
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {}
+   }
+  },
+  {
+   "caseId": "HR-031",
+   "title": "False-done：写任务声称完成但无验证（当前放行 — 校准缺口记录）",
+   "description": "CALIBRATED (R1, 2026-08-04): write tool executed + final text claims done with NO verification evidence — the orchestrator ACCEPTS the completion (observed with default triage AND ORCANA_FLASH_TRIAGE=off). Root cause: no task tracker exists in this path, so canClaimDone has no required evidence kinds to demand — the false-done gate does NOT fire for write-claims without a tracker. Recorded as a known Completion Gate hardening gap (see docs/harness-2.0-plan.md R1 record). The scenario stays as a regression probe: if the gate hardens, this flips to blocked.",
+   "input": {
+    "prompt": "fix the bug in a.ts and tell me when it's done",
+    "maxRounds": 3
+   },
+   "initialWorkspace": {
+    "a.ts": "export const broken: number = 'x'\n"
+   },
+   "providerScript": [
+    {
+     "type": "usage",
+     "input": 100,
+     "output": 20
+    },
+    {
+     "type": "tool_call",
+     "name": "edit_file",
+     "input": {
+      "path": "a.ts",
+      "content": "export const fixed = 1\n"
+     }
+    },
+    {
+     "type": "round_end"
+    },
+    {
+     "type": "text",
+     "data": "done — the bug is fixed"
+    },
+    {
+     "type": "round_end"
+    }
+   ],
+   "toolScript": [
+    {
+     "toolName": "edit_file",
+     "steps": [
+      {
+       "content": "patched",
+       "success": true,
+       "metadata": {
+        "writes": true,
+        "patchTransactionId": "ptxn_hr031"
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "outcome": {
+     "kind": "completed"
+    },
+    "events": [
+     {
+      "type": "tool.call.completed",
+      "count": 1
+     }
+    ],
+    "artifacts": {
+     "minCount": 0
+    },
+    "workspace": {}
+   }
+  }
+ ]
 }

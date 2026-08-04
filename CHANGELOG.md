@@ -2,6 +2,11 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.8] — 2026-08-04
+
+### Added (Graph Readiness G0-3)
+- **Artifact content persists with the run** — `SerializableRun` gains `artifactState` (artifact entities + resolved content); `collectArtifacts` gathers metadata AND content map at terminal save, `createArtifactStore` hydrates synchronously on restore. A restored run can now read artifact content back via its hash ref (was: *"artifact content is not restored, refs are"* — `serialization.ts` comment, removed). Old pre-G0-3 files hydrate an empty store, unchanged. End-to-end: a real run writing `.ts` files persists its `typecheck_result` artifacts and a fresh harness reads them after restore. Graph Readiness Gate G0-3 — restored evidence chains are provable.
+
 ## [0.5.7] — 2026-08-04
 
 ### Fixed (Graph Readiness G0-2)

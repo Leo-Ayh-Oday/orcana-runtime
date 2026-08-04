@@ -2,6 +2,15 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.10] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-1)
+- **Standard tool error codes** — canonical 26-code list (`TOOL_ERROR_CODES`), `ToolError` throwable + `toolError` info builder with per-code category/retryability defaults (`src/harness/capabilities/errors.ts`).
+- **Structured execution results** — `ToolExecutionResult` with 6 statuses (`succeeded` / `domain_failed` / `execution_failed` / `blocked` / `cancelled` / `timed_out`), artifact/evidence refs, diagnostics, metrics; `domain_failed` (domain said NO) vs `execution_failed` (could not run) explicitly distinct; `resultHelpers` constructors.
+- **Retry policy** — code-scoped `shouldRetry` + exponential backoff with cap (`retry.ts`).
+- **ToolExecutionContext type** — explicit run-scoped context contract (roots/signal/budget/approval/sandbox/artifactStore/evidenceLedger/trace/fileState/ripple/patchStore/clock) with `buildExecutionContext` / `contextFromRunScope` (RT-3 wiring target).
+- **Shared schema validator** — `validateJsonSchema` extracted to `capabilities/schema-validator.ts` (executor + interrupt manager + human node share one; `response-validator.ts` re-exports, zero behavior change).
+
 ## [0.5.9] — 2026-08-04
 
 ### Fixed (Graph Readiness G0-4)

@@ -28,7 +28,9 @@ export function createScriptedTools(toolScript?: ToolScriptResult[]): ToolDescri
     return buildTools({
       name: scripted.toolName,
       description: `scripted tool ${scripted.toolName}`,
-      isReadonly: scripted.steps.every((s) => s.success !== false && !s.metadata?.writes),
+      // Readonly unless a step explicitly declares a write (a failed step is
+      // still a read attempt — it must not trip the write-risk path).
+      isReadonly: !scripted.steps.some((s) => s.metadata?.writes === true),
       isConcurrencySafe: true,
       inputSchema: { type: "object", properties: {}, required: [] },
       execute() {

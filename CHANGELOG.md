@@ -2,6 +2,13 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.2] — 2026-08-04
+
+### Added (Harness Closure R1, P0-2)
+- **NodeResult.evidence chain landed** — `NodeResult.evidence` is now the ledger diff of the node run: `snapshotEvidence`/`diffEvidence` helpers, wired into ToolNode, VerificationNode and LlmAgentNode. `AgentNodeOutput` carries `artifactIds` / `patchTransactionIds` (from patch artifacts, new `txId` field on `HarnessArtifact`) / `unresolvedRippleObligations` (honest `unknown[]` until the typed trace) / `resultingWorkspaceDigest` (run scope `projectRoot` hash). VerificationNode's ingested entries now appear in its `evidence`, bound to artifacts.
+- **Single authoritative evidence ledger** — the kernel now accepts an injected `options.evidenceLedger` (same single-ownership pattern as sandbox/artifactStore); `buildLoopOptions` passes `run.scope.evidenceLedger`, so kernel verification and node diffs share ONE instance. Absent the option, the kernel creates its own (unchanged behavior).
+- VerificationNode resolves relative modified files against `runScope.projectRoot` instead of `process.cwd()`.
+
 ## [0.5.1] — 2026-08-04
 
 ### Fixed (Harness Closure R1, P0-1)

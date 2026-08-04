@@ -33,6 +33,8 @@ export interface HarnessArtifact {
 
   workspaceHash?: string
   relevantFileHashes?: Record<string, string>
+  /** R1: the PatchTransaction txId this artifact realizes (patch artifacts). */
+  txId?: string
 
   producedBy: string
   createdAt: number

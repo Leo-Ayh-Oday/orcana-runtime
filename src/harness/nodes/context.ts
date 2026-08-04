@@ -19,6 +19,7 @@ import { PermissionGate } from "../../agent/permission"
 import { loadUserConfig, loadProjectConfig } from "../../agent/permission-config"
 import type { ToolDescriptor } from "../../tools/registry"
 import type { NodePolicyContext } from "../capabilities/policy-adapter"
+import type { EvidenceLedger, EvidenceEntry } from "../../agent/evidence-ledger"
 
 export function createNodeRunId(): string {
   return randomUUID()
@@ -56,6 +57,16 @@ export function createNodeExecutionContext(input: CreateNodeExecutionContextInpu
     artifacts: input.run.scope.artifactStore,
     trace: input.run.scope.trace,
   }
+}
+
+/** R1 evidence diff helpers: NodeResult.evidence = the entries ADDED during
+ *  this node run. Snapshot the ledger before the node's work, diff after. */
+export function snapshotEvidence(ledger: EvidenceLedger): ReadonlySet<string> {
+  return new Set(ledger.entries.map((e) => e.id))
+}
+
+export function diffEvidence(ledger: EvidenceLedger, snapshot: ReadonlySet<string>): EvidenceEntry[] {
+  return ledger.entries.filter((e) => !snapshot.has(e.id))
 }
 
 /** Conservative node-mode policy context (H9 default semantics: unlimited

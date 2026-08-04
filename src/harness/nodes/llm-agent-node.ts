@@ -15,6 +15,9 @@ import { BudgetGuard } from "../runtime/budget-guard"
 import { mapDecisionToOutcome } from "../runtime/outcome-mapper"
 import type { LoopDecision } from "../../agent/kernel/types"
 import type { AgentRunInput, AgentRun } from "../contracts/run"
+import { snapshotEvidence, diffEvidence } from "./context"
+import { computeWorkspaceHash } from "../persistence/workspace-hash"
+import type { HarnessArtifact } from "../contracts/artifact"
 
 export interface LlmAgentNodeOptions {
   id: string
@@ -59,6 +62,11 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
       const usage: NodeUsage = { modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, cacheMissTokens: 0, wallTimeMs: 0 }
       let decision: LoopDecision = { kind: "continue" }
 
+      // R1: evidence chain — snapshot ledger + artifact store before the loop;
+      // the node's output is the diff (entries/artifacts ADDED by this node).
+      const evidenceSnapshot = snapshotEvidence(context.runScope.evidenceLedger)
+      const artifactSnapshot = new Set((await context.runScope.artifactStore.entries()).map((a) => a.artifactId))
+
       const iterator = adapter.execute(run, runInput, context.cancellation.signal)
       while (true) {
         const step = await iterator.next()
@@ -79,25 +87,38 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
 
       const cancelled = context.cancellation.cancelled
       const outcome = mapDecisionToOutcome(decision, undefined, cancelled ? context.cancellation.reason : undefined).outcome
+
+      // R1: evidence-backed node commit — the diff the Graph Scheduler will
+      // need to judge/commit this node (audit: P0-2).
+      const newEvidence = diffEvidence(context.runScope.evidenceLedger, evidenceSnapshot)
+      const newArtifacts: HarnessArtifact[] = (await context.runScope.artifactStore.entries())
+        .filter((a) => !artifactSnapshot.has(a.artifactId))
       const nodeOutput: AgentNodeOutput = {
         text: finalText,
         decision,
         outcome,
         usage,
-        evidenceIds: [], // H11: evidence chain lands with H12
+        evidenceIds: newEvidence.map((e) => e.id),
+        artifactIds: newArtifacts.map((a) => a.artifactId),
+        patchTransactionIds: newArtifacts
+          .filter((a) => a.kind === "patch" && a.txId)
+          .map((a) => a.txId as string),
+        // Honest unknown[] until the typed ripple trace lands (scope.ts).
+        unresolvedRippleObligations: context.runScope.rippleSession.obligations,
+        resultingWorkspaceDigest: computeWorkspaceHash(context.runScope.projectRoot),
       }
 
       if (cancelled) {
-        result = { status: "cancelled", output: nodeOutput, evidence: [], diagnostics: [], usage, retryable: false }
+        result = { status: "cancelled", output: nodeOutput, evidence: newEvidence, diagnostics: [], usage, retryable: false }
       } else if (decision.kind === "break" && decision.reason === "orchestrator_done") {
-        result = { status: "succeeded", output: nodeOutput, evidence: [], diagnostics: [], usage }
+        result = { status: "succeeded", output: nodeOutput, evidence: newEvidence, diagnostics: [], usage }
       } else if (decision.kind === "break" && decision.reason === "round_budget" && finalText) {
-        result = { status: "succeeded", output: nodeOutput, evidence: [], diagnostics: [{ code: "round_budget", message: "natural end", severity: "info", source: nodeOptions.id }], usage }
+        result = { status: "succeeded", output: nodeOutput, evidence: newEvidence, diagnostics: [{ code: "round_budget", message: "natural end", severity: "info", source: nodeOptions.id }], usage }
       } else if (decision.kind === "break" && (decision.reason === "orchestrator_plan_ready" || decision.reason === "orchestrator_blocked")) {
         result = {
           status: "blocked",
           output: nodeOutput,
-          evidence: [],
+          evidence: newEvidence,
           diagnostics: [{ code: "interrupt_pending", message: decision.reason, severity: "warning", source: nodeOptions.id }],
           usage,
         }
@@ -105,7 +126,7 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
         result = {
           status: "blocked",
           output: nodeOutput,
-          evidence: [],
+          evidence: newEvidence,
           diagnostics: [{ code: "interrupt_pending", message: decision.reason, severity: "warning", source: nodeOptions.id }],
           usage,
         }
@@ -113,7 +134,7 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
         result = {
           status: "failed",
           output: nodeOutput,
-          evidence: [],
+          evidence: newEvidence,
           diagnostics: [{ code: "loop_failed", message: decision.kind === "return" ? decision.reason : decision.kind, severity: "error", source: nodeOptions.id }],
           usage,
           retryable: false,

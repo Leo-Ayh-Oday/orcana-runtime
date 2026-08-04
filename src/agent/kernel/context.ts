@@ -175,7 +175,9 @@ export async function buildRunContext(
     intentPolicy: initialIntentPolicy,
     taskTracker: initialTaskTracker,
     planStore,
-    evidenceLedger: createEvidenceLedger(),
+    // R1: the harness may inject its run-scoped evidence ledger so node and
+    // kernel write to ONE authoritative instance (same pattern as sandbox).
+    evidenceLedger: options.evidenceLedger ?? createEvidenceLedger(),
     skillPrompts: initialTriageSkillPrompts,
     planApproved: options.initialPlanState === "approved",
     lifecycle,

@@ -2,6 +2,13 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.3] — 2026-08-04
+
+### Fixed (Harness Closure R1)
+- **Replay events carry the real sequence** — `RunReplayResult.events`/`ReplayEvent` keep the envelope `sequence` (was dropped before, making HR-025 sequence continuity vacuous); synthetic `interrupt.answered` events carry no sequence so resume scenarios can't fake continuity.
+- **Tool-call termination pairs by `toolCallId`** — `batch-executor` `tool_result` now carries `tc.id`; the bridged `tool.call.completed` event carries `toolCallId` (contract field added). HR-026 asserts exactly one terminal per requested call: no terminal (unless a policy-block trace exists), duplicate terminals, and out-of-order terminals all fail; legacy events without a callId fall back to name pairing.
+- **Node artifact paths resolve against the run scope's `projectRoot`** — artifact tracker relative paths (complements the VerificationNode fix in 0.5.2); loop keeps the cwd fallback.
+
 ## [0.5.2] — 2026-08-04
 
 ### Added (Harness Closure R1, P0-2)

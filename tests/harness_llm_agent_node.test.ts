@@ -13,6 +13,8 @@ import { assembleRunScope } from "../src/harness/runtime/run-scope"
 import { createBudgetLedger, mergeRunBudget } from "../src/harness/runtime/budget-ledger"
 import { buildLoopOptions } from "../src/harness/runtime/legacy-loop-adapter"
 import type { AgentRun } from "../src/harness/contracts/run"
+import { addEvidence, generateEvidenceId } from "../src/agent/evidence-ledger"
+import { computeWorkspaceHash } from "../src/harness/persistence/workspace-hash"
 
 // H11 acceptance: a single agent IS one LlmAgentNode. Three-way parity check
 // (direct agentLoop / AgentHarness / LlmAgentNode) on the same scripted
@@ -171,6 +173,50 @@ describe("H11 LlmAgentNode parity", () => {
     const { result } = await runNodeToResult(node, context, { prompt: PROMPT, maxRounds: 2 })
     expect(result.status).toBe("cancelled")
     expect(result.output?.outcome.kind).toBe("cancelled")
+  })
+
+  test("R1: AgentNodeOutput carries the evidence/artifact/tx/digest chain", async () => {
+    const { result } = await runPathC()
+    const output = result.output!
+    expect(Array.isArray(output.evidenceIds)).toBe(true)
+    expect(Array.isArray(output.artifactIds)).toBe(true)
+    expect(Array.isArray(output.patchTransactionIds)).toBe(true)
+    expect(Array.isArray(output.unresolvedRippleObligations)).toBe(true)
+    expect(output.resultingWorkspaceDigest).toBe(computeWorkspaceHash("/tmp/h11-llm-agent-node"))
+    // NodeResult.evidence and output.evidenceIds are the same ledger diff.
+    expect(result.evidence.map((e) => e.id)).toEqual(output.evidenceIds)
+  })
+
+  test("R1: the node diffs the same ledger the kernel is injected with (seed excluded)", async () => {
+    // Seed the run-scope ledger before the node starts: buildLoopOptions now
+    // injects scope.evidenceLedger, so the kernel and the node share ONE
+    // authoritative ledger — the node's diff must exclude pre-existing
+    // entries while still being the kernel's own write target.
+    const seeded = { id: generateEvidenceId(), kind: "manual" as const, output: "pre-existing", passed: true, timestamp: Date.now() }
+    const projectRoot = "/tmp/h11-llm-agent-node-seeded"
+    const runId = "run-seeded"
+    const controller = new AbortController()
+    const scope = assembleRunScope({ runId, sessionId: "sess-seeded", projectRoot, controller })
+    addEvidence(scope.evidenceLedger, seeded)
+    const run: AgentRun = {
+      runId,
+      sessionId: "sess-seeded",
+      status: "running",
+      input: { prompt: PROMPT, maxRounds: 2 },
+      scope,
+      budget: createBudgetLedger(mergeRunBudget(undefined)),
+      createdAt: Date.now(),
+      eventSequence: 0,
+      schemaVersion: 1,
+    }
+    const capabilities = createCapabilityRegistry()
+    registerToolCapabilities(capabilities, probeTool())
+    const context = createNodeExecutionContext({ run, capabilities })
+    const node = createLlmAgentNode({ id: "agent-seeded", deps: { provider: new ProbeThenTextProvider(), tools: probeTool() } })
+    const { result } = await runNodeToResult(node, context, { prompt: PROMPT, maxRounds: 2 })
+    expect(result.status).toBe("succeeded")
+    expect(result.output!.evidenceIds).not.toContain(seeded.id)
+    expect(result.output!.evidenceIds).toEqual(result.evidence.map((e) => e.id))
   })
 })
 

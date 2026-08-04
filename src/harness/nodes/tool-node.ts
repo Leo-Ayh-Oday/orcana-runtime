@@ -21,7 +21,7 @@ import { createToolArtifactTracker } from "../capabilities/tool-adapter"
 import type { NodePolicyContext } from "../capabilities/policy-adapter"
 import type { CapabilityArtifactTracker } from "../capabilities/executor"
 import type { ToolDescriptor, ToolResult } from "../../tools/registry"
-import { createNodePolicyContextFromRunScope } from "./context"
+import { createNodePolicyContextFromRunScope, snapshotEvidence, diffEvidence } from "./context"
 
 export interface ToolNodeOptions {
   id: string
@@ -40,6 +40,8 @@ export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeIn
     kind: "tool",
 
     async *execute(context: NodeExecutionContext, input: ToolNodeInput): AsyncGenerator<NodeEvent> {
+      // R1: evidence = entries added during this node run (ledger diff).
+      const evidenceSnapshot = snapshotEvidence(context.runScope.evidenceLedger)
       try {
         const descriptor = context.capabilities.resolve(input.capabilityId).descriptor
         // R1: resolve the canonical tool descriptor for the policy gate; the
@@ -82,7 +84,7 @@ export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeIn
           result = {
             status: "succeeded",
             output: toolResult,
-            evidence: [],
+            evidence: diffEvidence(context.runScope.evidenceLedger, evidenceSnapshot),
             diagnostics: [],
             usage: nodeUsage,
           }
@@ -91,7 +93,7 @@ export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeIn
           const blocked = toolResult.metadata?.blocked === true
           result = {
             status: blocked ? "blocked" : "failed",
-            evidence: [],
+            evidence: diffEvidence(context.runScope.evidenceLedger, evidenceSnapshot),
             diagnostics: [{
               code: blocked ? "policy_blocked" : "tool_failed",
               message: toolResult.error ?? toolResult.content,
@@ -113,7 +115,7 @@ export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeIn
         const nodeError: NodeResult<ToolResult>["error"] = { kind, message, retryable: false }
         result = {
           status: "failed",
-          evidence: [],
+          evidence: diffEvidence(context.runScope.evidenceLedger, evidenceSnapshot),
           diagnostics: [{ code: kind, message, severity: "error", source: options.id }],
           usage: { modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, cacheMissTokens: 0, wallTimeMs: 0 },
           error: nodeError,

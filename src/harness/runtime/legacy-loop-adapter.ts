@@ -117,6 +117,9 @@ export function buildLoopOptions(
     sandbox: run.scope.sandbox,
     // H8: run-scoped artifact store (verification binds artifacts to it).
     artifactStore: run.scope.artifactStore,
+    // R1: single authoritative evidence ledger — the kernel writes into the
+    // run scope's ledger so nodes can diff what THIS run produced.
+    evidenceLedger: run.scope.evidenceLedger,
     runId: run.runId,
     // H9: capability registry — the loop's tool executions route through the
     // CapabilityExecutor with this registry (shared with the future Node Runtime).

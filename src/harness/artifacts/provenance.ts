@@ -45,6 +45,8 @@ export interface CreateArtifactInput {
   nodeRunId?: string
   workspaceHash?: string
   relevantFileHashes?: Record<string, string>
+  /** R1: the PatchTransaction txId this artifact realizes. */
+  txId?: string
   createdAt?: number
 }
 
@@ -62,6 +64,7 @@ export function createArtifact(input: CreateArtifactInput): HarnessArtifact {
     relevantFileHashes: input.relevantFileHashes
       ? { ...input.relevantFileHashes }
       : undefined,
+    txId: input.txId,
     producedBy: input.producedBy,
     createdAt: input.createdAt ?? Date.now(),
   }

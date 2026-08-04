@@ -60,6 +60,7 @@ export const LEGACY_AUTO_APPROVE_PLAN = "legacy.autoApprovePlan" as const
 export const LEGACY_AUTO_FINISH_ON_VERIFIED_WRITE = "legacy.autoFinishOnVerifiedWrite" as const
 export const LEGACY_RUN_TRACE = "legacy.runTrace" as const
 export const LEGACY_INITIAL_PLAN_STATE = "legacy.initialPlanState" as const
+export const LEGACY_CONTEXT_MAX_TOKENS = "legacy.contextMaxTokens" as const
 export const LEGACY_PLAN_TEXT = "legacy.planText" as const
 export const LEGACY_RESUME_FROM_CHECKPOINT = "legacy.resumeFromCheckpoint" as const
 
@@ -134,6 +135,9 @@ export function buildLoopOptions(
     stableMemoryContext: readMetadata(input, LEGACY_STABLE_MEMORY_CONTEXT),
     autoApprovePlan: readMetadata(input, LEGACY_AUTO_APPROVE_PLAN),
     autoFinishOnVerifiedWrite: readMetadata(input, LEGACY_AUTO_FINISH_ON_VERIFIED_WRITE),
+    // H12: context window override (HR-015/016 reachability — default 1M is
+    // unreachable in scripted evals without this knob).
+    contextMaxTokens: readMetadata(input, LEGACY_CONTEXT_MAX_TOKENS),
     runTrace: readMetadata(input, LEGACY_RUN_TRACE),
     initialPlanState: readMetadata(input, LEGACY_INITIAL_PLAN_STATE),
     planText: readMetadata(input, LEGACY_PLAN_TEXT),

@@ -54,6 +54,10 @@ export class RunLifecycleMachine {
   }
 }
 
+/** True terminal (G0-1): finished forever — no transitions out. `blocked`,
+ *  `waiting`, `paused` are stopped-but-resumable, NOT terminal (see
+ *  contracts/run.ts STOPPED_RUN_STATUSES). `finishedAt` is only stamped on
+ *  terminal states because stopped states may resume. */
 export function isTerminal(status: RunStatus): boolean {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "restart_required"
 }

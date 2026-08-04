@@ -65,10 +65,12 @@ describe("R1 HR-026 tool-call termination pairing", () => {
     expect(assertTraceInvariants(events, terminal)).toEqual([])
   })
 
-  test("non-terminal snapshot status fails HR-027", () => {
+  test("non-stopped snapshot status fails HR-027 (G0-1: blocked is stopped, running is not)", () => {
     const events = [requested("a"), completed("a")]
     const failures = assertTraceInvariants(events, { status: "running" })
-    expect(failures.some((f) => f.includes("not terminal"))).toBe(true)
+    expect(failures.some((f) => f.includes("not a stopped state"))).toBe(true)
+    // blocked is stopped-but-resumable → passes with an outcome.
+    expect(assertTraceInvariants(events, { status: "blocked", outcome: { kind: "blocked" } })).toEqual([])
   })
 
   test("legacy events without toolCallId fall back to name pairing", () => {

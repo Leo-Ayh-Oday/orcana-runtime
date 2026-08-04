@@ -1,14 +1,18 @@
 # Orcana Runtime
 
 <p align="center">
-  <strong>不允许交付烂代码的编码智能体。</strong><br>
-  面向证据闸递归自进化的模型无关 Agent Runtime——每次写入检查下游影响，每次完成交付需要证据支撑。
+  <strong>让 Coding Agent 的执行更可控，让完成声明更可验证。</strong><br>
+  一个面向长期编码任务的开源、模型无关 Agent Runtime。
 </p>
 
 <p align="center">
+  状态一致性 · 受控执行 · 变更影响 · 证据约束 · 中断恢复
+</p>
+
+<p align="center">
+  <a href="https://github.com/Leo-Ayh-Oday/orcana-runtime/actions/workflows/ci.yml"><img src="https://github.com/Leo-Ayh-Oday/orcana-runtime/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/orcana-runtime"><img src="https://img.shields.io/npm/v/orcana-runtime" alt="npm"></a>
-  <a href="https://github.com/Leo-Ayh-Oday/orcana-runtime"><img src="https://img.shields.io/github/stars/Leo-Ayh-Oday/orcana-runtime?style=flat" alt="stars"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/runtime-Node.js-339933" alt="Node.js"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/dev-Bun-%23f9f1e4" alt="Bun"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/lang-TypeScript-%233178c6" alt="TypeScript"></a>
@@ -18,20 +22,49 @@
   <a href="./README.md">English</a>
 </p>
 
----
+> [!IMPORTANT]
+> Orcana Runtime 当前是一套可运行、研究级的 Coding Agent Runtime，而不是已经成熟的通用 Agent 平台。项目优先收敛单 Agent 的状态、执行、验证和恢复语义，再逐步扩展 Durable Execution、Typed Graph 与受约束的 Multi-Agent。
 
-## 安装
+## Orcana Runtime 是什么？
 
-普通用户只需要 Node.js 20+ 和 npm。Bun 只在参与开发时需要。
+Orcana Runtime 是一个开源、模型无关、约束优先的 Coding Agent 执行运行时。
+
+它位于模型与真实开发环境之间，统一协调：
+
+- 模型调用与上下文；
+- 计划、任务和运行状态；
+- 文件读取、代码修改与 Shell 工具；
+- 权限、预算、取消和人工中断；
+- 变更影响分析；
+- Typecheck、测试、构建与其他验证；
+- Evidence、Trace、Snapshot 和恢复；
+- 最终完成判断。
+
+Orcana 不把模型的一句"已经完成"视为充分条件。它尝试让代码修改、验证结果和完成声明与当前工作区状态建立可追踪的关系，再由 Runtime 决定是否接受完成。
+
+Orcana 的长期目标，是成为连接模型、工具和真实计算环境的执行与治理层；Coding Agent 是它目前的第一个验证场景。
+
+## 快速开始
+
+### 环境要求
+
+- Node.js 20+
+- npm
+- 一个受支持 Provider 的 API Key
+- Bun 仅用于源码开发、测试和构建
+
+### 安装
 
 ```bash
 npm install -g orcana-runtime
 ```
 
-配置密钥：
+### 配置 Provider
+
+当前 Quickstart 以 DeepSeek 为例：
 
 ```bash
-# macOS / Linux / Git Bash
+# Linux / macOS / Git Bash
 export DEEPSEEK_API_KEY="sk-your-key-here"
 
 # Windows PowerShell
@@ -41,117 +74,524 @@ $env:DEEPSEEK_API_KEY="sk-your-key-here"
 set DEEPSEEK_API_KEY=sk-your-key-here
 ```
 
+Provider、模型、预算、权限、沙箱和 MCP 等高级配置，请参考：
+
+- [ORCANA.md](./ORCANA.md)
+- [settings.example.json](./settings.example.json)
+- [.env.example](./.env.example)
+
+### 运行
+
 ```bash
-orcana                          # 交互式 TUI
-orcana "修复失败的测试"          # 单次任务
-orcana list                     # 历史会话
+# 交互式 TUI
+orcana
+
+# 单次任务
+orcana "修复失败的测试"
+
+# 查看已保存会话
+orcana list
+
+# 环境诊断
+orcana doctor
 ```
 
-主命令为 `orcana`。旧别名 `deepseek-orcana`、`deepseek-code`、`deepseek` 已废弃（会打印提示并转发到 `orcana`），将在后续发布周期移除。
+> [!NOTE]
+> 旧命令 `deepseek-orcana`、`deepseek-code` 和 `deepseek` 仅作为迁移期兼容别名保留，后续版本将逐步移除。新脚本和文档应统一使用 `orcana`。
 
----
+## 为什么需要 Orcana？
 
-## 工作机制
+现代 Coding Agent 已经能够读取仓库、调用工具、修改代码并运行测试，但任务一旦变长，Runtime 会遇到一组不能只靠提示词解决的问题。
 
-Orcana 不会对所有任务一视同仁。一个简单问题和一次复杂重构走的是完全不同的路径：
+### 1. 模型上下文可能已经过期
+
+Agent 读取文件后，工作区可能被其他工具、用户或上一轮操作改变。
+
+如果 Runtime 不追踪文件状态，模型可能继续基于旧内容推理和写入。
+
+### 2. 验证结果可能不再对应当前代码
+
+测试曾经通过，不代表后续修改后的工作区仍然通过。
+
+Orcana 尝试把验证结果与写入代际、事务、Artifact 和文件状态关联，避免把历史结果误当成当前证据。
+
+### 3. "模型说完成"不等于任务真的完成
+
+最终回答可能声称：
+
+- 已实现全部需求；
+- 测试已经通过；
+- 没有遗漏调用方；
+- 修改可以安全交付。
+
+Runtime 需要检查这些声明是否有对应的计划状态、验证记录和未解决义务，而不是只接受自然语言结论。
+
+### 4. 长任务必须能够被治理
+
+长期运行的 Agent 需要明确的：
+
+- 生命周期；
+- 预算；
+- 取消传播；
+- 人工审批；
+- 持久化；
+- Trace；
+- 恢复边界；
+- 副作用控制。
+
+Orcana 正在把这些能力从 Agent Loop 内部提取为显式 Runtime 语义。
+
+## 核心运行模型
 
 ```
-你问："这个文件是干什么的？"
-  ──► 读文件 ──► 回答
-       ↑
-    权限门（风险 0 级 — 自动放行）
-    只过 ~3 道门控。不写文件，不触发涟漪，不需要证据。
-
-你说："帮我加个退出登录按钮"
-  ──► 读文件 ──► 追踪调用方 ──► 写代码 ──► typecheck ──► 跑测试 ──► 验证 ──► 交付
-       ↑            ↑              ↑           ↑             ↑          ↑
-    权限门       涟漪引擎       沙箱守卫    证据账本      Flash     完成门控
-                                                         Judge
-    过 ~15 道门控。每次写入检查影响范围；完成交付要有证据。
+Human Intent
+     │
+     ▼
+Agent Harness
+     │
+     ├── Lifecycle / Outcome
+     ├── Budget / Cancellation
+     ├── Interrupt / Resume
+     ├── Persistence / Trace
+     └── Run Scope / Sandbox
+     │
+     ▼
+Agent Kernel
+     │
+     ├── Provider
+     ├── Planning
+     ├── Tool Execution
+     ├── File State
+     ├── Ripple Analysis
+     ├── Verification
+     └── Completion Gates
+     │
+     ▼
+Files · Shell · Tests · Build · MCP · External Tools
 ```
 
-**门控按风险自动匹配。** 只读任务快速通过。代码变更逐步加码——写入检查、涟漪分析、证据收集、独立验证。卡在循环里？溢出门控在连续 5 次拦截后硬停，请求人工介入。
+> [!NOTE]
+> 当前 Harness 已成为统一控制入口，底层 Agent Kernel 仍承担主要编码执行。两者之间的状态所有权、Evidence、事务和恢复语义仍在持续收敛。
 
-这就是"约束优先"的意思——不是每步都慢，而是运行时知道什么时候该松、什么时候该严。
+### 一次代码修改的理想链路
 
-→ [ARCHITECTURE.md](./ARCHITECTURE.md) 有完整 28-gate 回路解剖。
+```
+读取工作区状态
+→ 检查上下文是否新鲜
+→ 建立 Patch Transaction
+→ 执行受控修改
+→ 分析下游影响
+→ 运行可用验证
+→ 生成并绑定 Evidence
+→ 检查未完成义务
+→ Runtime 决定是否接受完成
+```
 
----
+这条链路的目标不是"证明代码绝对正确"，而是减少以下不一致：
+
+- 修改基于过期状态；
+- 验证对应旧版本；
+- 回滚后沿用旧证据；
+- 最终声明超过现有证据能够支持的范围。
 
 ## 核心能力
 
-**Ripple Engine（涟漪引擎）** — 每次写入文件前，Orcana 追问：*谁在调用它？* 通过 7 层追踪 TypeScript 依赖链，从 API 差异到语义引用，在所有受影响调用方处理完之前阻断写入。212 个测试。→ [docs/ripple-engine.md](./docs/ripple-engine.md)
+### Agent Harness
 
-**Evidence Ledger（证据账本）** — 完成不是一个声称，是一份记录。Typecheck 过了？测试绿了？构建成功了？账本记录每项验证结果，并与最终输出交叉比对。如果模型说"测试全过"但账本显示根本没跑，Truthfulness Gate 直接拦截。
+Harness 为一次 Agent Run 提供显式控制面：
 
-**Flash Judge（独立法官）** — 用更便宜的独立模型重新评估完成声明。主模型自信宣布完成但法官判定 NOT_SATISFIED？任务继续。每任务最多 3 次评估即熔断——不会沉默接受未验证的交付。
+- 类型化生命周期；
+- 结构化 Run Outcome；
+- 独立 Run Scope；
+- 模型、工具、Token 和时间预算；
+- 取消与超时；
+- 事件流和 JSONL Trace；
+- Snapshot 与持久化；
+- Plan Approval 和 Clarification 中断；
+- 显式等待点后的跨实例恢复。
 
-> **沙箱说明**：macOS/Linux 运行在降级模式（仅环境过滤 + 超时 + 事后审计）。仅 Windows 有内核级 Job Object 隔离。平台差异详见 [SECURITY.md](./SECURITY.md)。
+> [!NOTE]
+> 当前恢复能力以显式等待点和持久化状态为主，不等价于任意指令级断点恢复。
 
----
+### File State 与 Freshness
 
-## 已知限制
+Orcana 记录文件指纹和运行期观察到的写入，用于识别：
 
-真实取舍，不隐藏：
+- 读取后发生变化的文件；
+- 可能基于旧状态生成的修改；
+- Shell 或外部工具引起的工作区变化；
+- 验证后发生的新写入。
 
-- **Thinking Compaction** 每会话仅触发一次（上下文 40% 时）。极长任务下，上下文仍会涨到 60% Budget Gate 阻断，中间没有第二次压缩。
-- **Flash Judge** 每任务最多 3 次评估即熔断。仍为 NOT_SATISFIED 则会话阻断——不会沉默接受坏结果。
-- **macOS/Linux 沙箱** 仅为环境过滤 + 超时。无内核级隔离。生产环境建议放在容器里跑。
-- **双配置路径**：`settings.json` 的 `loop.maxSteps` 优先于 `DEEPSEEK_MAX_ROUNDS` 环境变量。同时设置时 JSON 值生效。
+### Patch Transaction
 
----
+代码修改逐步从"直接写文件"收敛为带上下文的事务：
 
-## 项目状态
+- 输入状态；
+- 修改范围；
+- 事务身份；
+- 写入代际；
+- 回滚关系；
+- 相关 Evidence。
 
-**v0.4.x** — Agent Loop Kernel 减重完成（`loop.ts` 2077→132 行）+ Harness 2.0（H0–H8）落地：生产入口统一走 `AgentHarness`、Run 级隔离、类型化 Trace、持久化、中断/恢复。部分能力还在打磨，不虚标。
+> [!NOTE]
+> 当前事务和回滚语义仍在继续加强，目标是让写入、验证、回滚和恢复共享同一事实来源。
 
-| 状态 | 含义 |
-|------|------|
-| 🟢 Stable | 已接入主流程，日常任务可靠 |
-| 🟡 Partial | 已实现但有限制——平台差异、交互糙、覆盖窄 |
-| 🔵 Planned | 路线图上，还没做 |
+### Ripple Engine
 
-→ [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) — 10 Phase 到 v1.0。
+Ripple Engine 面向 TypeScript 代码变更分析下游影响，包括：
 
----
+- API 表面变化；
+- 符号引用；
+- 调用方；
+- 使用方式；
+- 相关测试；
+- 必须继续处理的 Obligation。
 
-## 卸载
+它的目标不是只给出"可能受影响"的提示，而是把部分变更影响转化为可以阻止完成的运行时义务。
 
-```bash
-npm uninstall -g orcana-runtime
+> [!NOTE]
+> 当前 Ripple 主要针对 TypeScript，仍可能出现误报、漏报和降级路径。
+
+### Evidence Ledger
+
+Evidence Ledger 用于记录可验证执行结果，例如：
+
+- Typecheck；
+- 测试；
+- 构建；
+- 命令和退出码；
+- 输出摘要；
+- 关联 Artifact；
+- 写入代际；
+- 事务和文件状态；
+- 新鲜或失效状态。
+
+Evidence 代表"某个检查在某个状态下发生过"，不自动等价于"代码完全正确"。
+
+### Completion Gates
+
+模型可以提出完成，但 Runtime 需要综合检查：
+
+- Task 与 Plan 状态；
+- 未解决 Ripple Obligation；
+- 当前可用验证；
+- Evidence 是否仍然有效；
+- 最终声明是否有对应依据；
+- 是否触发预算、权限或失败边界。
+
+无法验证、验证失败和验证已过期，应被视为不同状态，而不是统一投影成"通过"。
+
+### Provider Layer
+
+Orcana Runtime 不再以某一家模型供应商定义自身。
+
+当前项目通过 Provider 层接入模型，仓库文档包含 DeepSeek、Anthropic 和 OpenAI 等 Provider 的支持与配置路径。不同 Provider 的工具调用、上下文、流式输出和错误恢复能力可能并不完全一致，具体兼容性以当前版本和测试结果为准。
+
+### Context 与 Memory
+
+Orcana 具备多层上下文管理能力，包括：
+
+- 上下文预算；
+- Tool 结果裁剪；
+- 历史压缩；
+- Context Epoch；
+- 本地知识与记忆存储；
+- 面向长任务的上下文降级和阻断策略。
+
+> [!NOTE]
+> 这些机制用于控制上下文增长，但不能保证任意长度任务都能无损持续运行。
+
+## 当前项目状态
+
+| 子系统 | 当前状态 | 说明 |
+|---|---|---|
+| CLI / TUI | 可运行 | 支持交互式与单次任务入口 |
+| Agent Kernel | 可运行，正在收敛 | 仍承担主要编码执行逻辑 |
+| Agent Harness | 已建立，持续优化 | 生命周期、Outcome、预算、取消、Trace、持久化和中断已接入 |
+| Run Isolation | 已实现主要隔离 | 部分权威状态仍需从 Kernel ALS 继续迁移到统一 Run Scope |
+| File State / Freshness | 已实现 | 继续加强与事务、Shell 写入和 Evidence 的绑定 |
+| Patch Transaction | 部分实现 | 原子提交、完整回滚失效和 Durable Step 仍需加强 |
+| Ripple Engine | 已实现 | 当前以 TypeScript 为主要验证场景 |
+| Evidence Ledger | 已实现，完整性收敛中 | 需要确保 Harness 与 Kernel 使用唯一权威实例 |
+| Completion Gates | 已实现，统一入口收敛中 | 目标是 fail-closed，而不是无法验证时默认通过 |
+| Interrupt / Resume | 已实现显式等待点恢复 | 不是任意调用栈或指令级恢复 |
+| Trace / Snapshot | 已实现 | 继续补足稳定重放和 Durable Execution 语义 |
+| Linux Sandbox | 部分执行 | 当前不能视为完整安全边界，见下文 |
+| Typed Execution Graph | 未完成 | 当前仍以单主执行节点为核心 |
+| Multi-Agent | 延后 | 单 Agent Runtime 语义稳定后再进入受约束 Subagent 阶段 |
+| Recursive Self-Evolution | 研究方向 | 不应被视为 v0.4 已稳定交付的能力 |
+
+## Orcana 目前不是什么
+
+为避免把研究目标误写成现有能力，当前 Orcana 不是：
+
+- 已成熟的通用 Agent 平台；
+- 能证明任意代码修改绝对正确的系统；
+- 完整的 Durable Execution Engine；
+- 支持任意 fan-out、fan-in 和 join 的通用 Graph Runtime；
+- 多个 Agent 共享工作区自由写入的 Multi-Agent Framework；
+- Linux 内核级安全沙箱的完整替代品；
+- 已完成的递归自我进化系统；
+- 对所有模型 Provider 具有完全一致语义的统一接口。
+
+Orcana 当前最适合被理解为：
+
+> 一套正在通过真实 Coding Agent 场景，研究状态一致性、受控执行、Evidence、恢复和可信完成语义的开源 Runtime。
+
+## Linux 优先开发与沙箱状态
+
+Orcana 当前的主要开发和运行环境正在转向 Linux。
+
+现有跨平台沙箱能力包括：
+
+- 环境变量过滤；
+- 命令超时；
+- 危险命令和权限规则；
+- 工作区执行前后差异审计；
+- 取消后的进程终止尝试。
+
+Windows 还具备 Job Object 进程树控制；Linux/macOS 当前仍属于降级路径，不能宣称具备完整的文件系统、网络、进程和资源隔离。
+
+在 Linux 沙箱重构完成前：
+
+- 不要把 Orcana 直接运行在包含高价值凭据的宿主环境；
+- 不要向不可信仓库或脚本开放无限制 Shell；
+- 高风险场景建议运行在额外容器或隔离环境中；
+- Sandbox 降级必须在 Trace 和 Evidence 中被明确记录；
+- 缺失必要隔离能力时，高风险执行应 fail closed，而不是静默回退宿主执行。
+
+计划中的 Linux 沙箱方向包括：
+
+- 统一流式和非流式 Shell 执行管线；
+- 进程组和完整进程树清理；
+- Capability Probe 与 `orcana doctor sandbox`；
+- 只读工作区和声明式可写路径；
+- 默认关闭网络；
+- cgroup v2 资源限制；
+- Bubblewrap 低延迟隔离后端；
+- Rootless Podman 严格执行后端；
+- 后续 Landlock / seccomp 原生加强层。
+
+安全模型与已知限制见 [SECURITY.md](./SECURITY.md)。
+
+## 配置目录
+
+新的默认配置目录：
+
+```
+~/.orcana/
 ```
 
----
+常见文件：
+
+```
+~/.orcana/settings.json
+~/.orcana/mcp.json
+~/.orcana/permissions.json
+<project>/.orcana/
+```
+
+> [!NOTE]
+> 旧目录和旧环境变量可能在迁移期继续兼容，但新配置应优先使用 Orcana 命名空间。
+
+复制配置模板：
+
+```bash
+mkdir -p ~/.orcana
+cp settings.example.json ~/.orcana/settings.json
+```
+
+## 从源码开发
+
+### 克隆与安装
+
+```bash
+git clone https://github.com/Leo-Ayh-Oday/orcana-runtime.git
+cd orcana-runtime
+bun install
+```
+
+### 开发运行
+
+```bash
+bun run dev
+```
+
+### 类型检查
+
+```bash
+bun run typecheck
+```
+
+### 测试
+
+```bash
+# 默认测试门禁
+bun test
+
+# 仓库定义的测试脚本
+bun run test
+
+# 集成测试
+bun run test:integration
+
+# 完整测试集合
+bun run test:all
+```
+
+### 构建与发布检查
+
+```bash
+bun run build
+npm pack --dry-run
+```
+
+> [!NOTE]
+> 发布、CI 和测试数量会随仓库变化。README 不使用静态"全部绿色"或固定测试数作为永久承诺，应以当前 CI 和对应 commit 的实际结果为准。
 
 ## 文档导航
 
-| 文档 | 你会了解到 |
-|------|-----------|
-| [docs/design-philosophy.md](./docs/design-philosophy.md) | 为什么约束优先——从工具循环到证据账本 |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 完整 28-gate 回路、DeepSeek V4 机制 |
-| [docs/v1.0-roadmap.md](./docs/v1.0-roadmap.md) | 10 Phase 路线图、P0/P1/P2 优先级 |
-| [docs/ripple-engine.md](./docs/ripple-engine.md) | 7 层变更影响分析深度解析 |
-| [docs/gate-scenario-matrix.md](./docs/gate-scenario-matrix.md) | 每个 gate、每个场景、验证行为 |
-| [docs/model-provider-runtime.md](./docs/model-provider-runtime.md) | 模型配置、中转站兼容、持久化与 provider 故障排查 |
-| [docs/skill-template/](./docs/skill-template/) | 黄金标准 Skill 模板——面向人类、AI、Orcana Runtime |
-| [SECURITY.md](./SECURITY.md) | 沙箱能力、漏洞报告 |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | 环境搭建、代码规范、PR 流程 |
+| 文档 | 内容 |
+|---|---|
+| [ORCANA.md](./ORCANA.md) | 使用、配置和项目入口文档 |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Runtime、Agent Loop、Gate 与子系统架构 |
+| [SECURITY.md](./SECURITY.md) | 权限、凭据、沙箱和安全边界 |
+| [CHANGELOG.md](./CHANGELOG.md) | 版本变更记录 |
+| [CONTRIBUTING.zh.md](./CONTRIBUTING.zh.md) | 中文贡献指南 |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | English contribution guide |
+| [ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md) | 致谢与参考项目 |
 
-## 开发
+## 发展路线
 
-```bash
-bun install
-bun run typecheck    # tsc --noEmit
-bun test             # 运行测试
-bun run build        # tsc → dist/
+Orcana 采用"先收敛执行语义，再增加执行单元"的路线。
+
+### 当前：Runtime Integrity
+
+重点包括：
+
+- Harness 与 Kernel 共享唯一事实源；
+- 统一 Evidence Ledger；
+- 区分 passed / failed / unavailable / stale；
+- Rollback 正确失效旧 Evidence；
+- 统一生命周期、取消和 Cleanup；
+- Linux Shell 与 Sandbox 基础一致性；
+- 将 Runtime 关键路径纳入稳定 CI。
+
+### 下一阶段：Durable Execution
+
+重点包括：
+
+- 稳定 Step ID；
+- 副作用声明；
+- 幂等键；
+- Prepared / Executing / Committed 状态；
+- Crash Injection；
+- 恢复时避免重复执行副作用；
+- Trace Replay 和 Runtime Evaluation Lab。
+
+### 后续：Typed Execution Graph
+
+重点包括：
+
+- 类型化节点和边；
+- Ready Queue；
+- 条件路由；
+- 显式 Join；
+- 有界循环；
+- 节点级 Checkpoint；
+- 只读并行；
+- 单写入提交通道。
+
+### 再后续：Bounded Multi-Agent
+
+第一阶段只考虑：
+
+- Lead Agent；
+- 只读或提案型 Subagent；
+- Artifact 通信；
+- 独立上下文和独立预算；
+- 有限委派深度；
+- 单一全局 Completion Authority；
+- 单写入通道。
+
+不会优先采用多个平级 Agent 在同一工作区自由写入的模式。
+
+### 长期研究方向
+
+- Agent Operating Layer；
+- 模型无关执行治理；
+- 长期任务和持续运行；
+- 可验证的受控自我修改；
+- 递归演化与回归门禁；
+- 多工作区和分布式执行。
+
+这些是研究方向，不代表当前版本已经完成。
+
+## 研究与声明原则
+
+Orcana 采用实现驱动的研究方式：
+
+```
+提出架构假设
+→ 实现
+→ 编写测试与失败注入
+→ 检查真实运行语义
+→ 公开限制
+→ 修正设计
 ```
 
-## 基于
+项目文档遵循以下原则：
 
-| 项目 | 角色 |
-|------|------|
-| [OpenCode](https://github.com/anomalyco/opencode) (MIT) | 架构基础——MCP bridge、配置系统、TUI 模式、Agent Loop |
-| [CodeGraph](https://github.com/colbymchenry/codegraph) (MIT) | MCP 代码智能——符号搜索、引用追踪 |
-| [Reasonix](https://github.com/esengine/reasonix) (MIT) | 缓存优先上下文压缩——分层阈值、冻结稳定前缀 |
+- 不把计划中的架构写成已实现能力；
+- 不把一次测试通过写成普遍正确性证明；
+- 不把模型自评等同于独立验证；
+- 不把降级沙箱描述为完整安全边界；
+- 不把节点依赖计划描述为完整 Graph Runtime；
+- 不把多个角色提示词描述为成熟 Multi-Agent；
+- 性能、质量和可靠性结论应附带可复现的评测条件。
 
-[ACKNOWLEDGMENTS.md](./ACKNOWLEDGMENTS.md) · [LICENSE](./LICENSE) (MIT)
+欢迎从源码、测试、Trace 和失败案例直接挑战 Orcana 的设计。
+
+## 贡献
+
+Orcana Runtime 目前尤其欢迎以下方向的贡献：
+
+- Agent Harness 与 Runtime 状态模型；
+- Linux 沙箱、进程树和 cgroup；
+- Durable Execution 与幂等恢复；
+- TypeScript 变更影响分析；
+- Evidence 与验证状态建模；
+- Replay、Trace 和 Evaluation；
+- Provider 兼容性测试；
+- TUI 与开发者体验；
+- 文档、示例和失败复现。
+
+开始贡献前请阅读：
+
+- [CONTRIBUTING.zh.md](./CONTRIBUTING.zh.md)
+- [SECURITY.md](./SECURITY.md)
+- [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+提交 Issue 时，请尽量包含：
+
+- Orcana 版本或 commit SHA；
+- 操作系统与运行时版本；
+- Provider 和模型；
+- 最小复现步骤；
+- 期望行为与实际行为；
+- 相关 Trace、日志或测试结果；
+- 是否涉及工作区写入、凭据或外部副作用。
+
+## 项目定位摘要
+
+> Orcana Runtime 是一个模型无关、面向长期自主任务的可信 Agent Runtime，让 AI 能在真实代码库与计算环境中更可控地执行、验证、恢复并完成工作。
+
+更严格地说，Orcana 当前正在研究：
+
+> Runtime 如何确认操作所依据的状态仍然有效，验证结果仍对应当前工作区，并限制模型作出超过现有证据的完成声明。
+
+这仍是一个需要通过真实运行、失败注入和可复现评测持续验证的研究问题，而不是已经被证明的最终答案。
+
+## 许可证
+
+Orcana Runtime 使用 [MIT License](./LICENSE) 开源。

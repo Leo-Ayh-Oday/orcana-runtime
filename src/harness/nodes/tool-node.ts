@@ -3,8 +3,16 @@
  *  Wraps the H9 CapabilityExecutor (node mode): budget reservations land on
  *  the run-level ledger, cancellation flows through the run signal, and the
  *  default artifact tracker records patch artifacts for write-class
- *  capabilities (Node Artifact acceptance). Policy evaluation uses the
- *  conservative node-mode defaults; modeContract enrichment is H12.
+ *  capabilities (Node Artifact acceptance).
+ *
+ *  R1 (Harness Closure): the policy gate is MANDATORY and cannot be forgotten.
+ *  When the caller supplies no policyContext, ToolNode derives one from the
+ *  run scope (createNodePolicyContextFromRunScope) — project permission rules
+ *  under the run's projectRoot apply, and the mode is strict (node mode has
+ *  no interactive confirm channel, so "ask" fails closed). A resolved tool
+ *  descriptor (options.tools) gives the gate full category/risk/readonly
+ *  semantics; without one, the capability name still runs through the gate
+ *  via category inference (policy.ts Gate 2, R1).
  */
 
 import type { HarnessNode, NodeEvent, NodeExecutionContext, NodeResult, NodeUsage, ToolNodeInput } from "../contracts/nodes"
@@ -12,12 +20,16 @@ import { executeCapability } from "../capabilities/executor"
 import { createToolArtifactTracker } from "../capabilities/tool-adapter"
 import type { NodePolicyContext } from "../capabilities/policy-adapter"
 import type { CapabilityArtifactTracker } from "../capabilities/executor"
-import type { ToolResult } from "../../tools/registry"
+import type { ToolDescriptor, ToolResult } from "../../tools/registry"
+import { createNodePolicyContextFromRunScope } from "./context"
 
 export interface ToolNodeOptions {
   id: string
   policyContext?: NodePolicyContext
   artifactTracker?: CapabilityArtifactTracker
+  /** Canonical tool descriptors for policy resolution (category/risk/readonly).
+   *  Optional: without one the gate still runs on the capability name. */
+  tools?: ToolDescriptor[]
 }
 
 export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeInput, ToolResult> {
@@ -30,13 +42,29 @@ export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeIn
     async *execute(context: NodeExecutionContext, input: ToolNodeInput): AsyncGenerator<NodeEvent> {
       try {
         const descriptor = context.capabilities.resolve(input.capabilityId).descriptor
+        // R1: resolve the canonical tool descriptor for the policy gate; the
+        // policy context is NEVER undefined — when the caller did not supply
+        // one, derive it from the run scope (project rules + strict mode).
+        const tool = options.tools?.find((t) => t.defn.name === input.capabilityId)
+        const policyContext = options.policyContext
+          ?? createNodePolicyContextFromRunScope(context.runScope, {
+            input: input.params,
+            tool,
+            toolCallId: input.toolCallId,
+            name: input.capabilityId,
+          })
         const executed = await executeCapability(context.capabilities, {
           capabilityId: input.capabilityId,
           params: input.params,
           budget: context.budget,
-          policyContext: options.policyContext,
+          policyContext,
+          toolCallId: input.toolCallId,
           artifactTracker: options.artifactTracker
-            ?? createToolArtifactTracker({ store: context.artifacts, runId: context.runId }),
+            ?? createToolArtifactTracker({
+              store: context.artifacts,
+              runId: context.runId,
+              projectRoot: context.runScope.projectRoot,
+            }),
           abortSignal: context.cancellation.signal,
         })
 

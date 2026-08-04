@@ -120,6 +120,8 @@ export interface ToolArtifactTrackerOptions {
   store: ArtifactStore
   runId: string
   workspaceHash?: string
+  /** Base for resolving relative tool paths (R1). Falls back to cwd. */
+  projectRoot?: string
 }
 
 /** Artifact tracker (H9, plan §15.3 "Artifact / Evidence" step).
@@ -130,16 +132,20 @@ export interface ToolArtifactTrackerOptions {
  *  registry entry is purged after commit, so the before/after file snapshots
  *  are the only reliable diff source. Recording is best-effort: an artifact
  *  failure never breaks the run.
+ *
+ *  R1: relative paths resolve against `projectRoot` when provided (node mode
+ *  passes the run scope's projectRoot) — the loop keeps the cwd fallback.
  */
 export function createToolArtifactTracker(options: ToolArtifactTrackerOptions): CapabilityArtifactTracker {
   const { store, runId, workspaceHash } = options
+  const root = options.projectRoot ?? process.cwd()
 
   return {
     async beforeExecute(descriptor, input) {
       if (descriptor.sideEffect !== "write") return undefined
       const path = (input as { path?: unknown }).path
       if (typeof path !== "string") return undefined
-      const absolute = resolve(process.cwd(), path)
+      const absolute = resolve(root, path)
       try {
         if (!existsSync(absolute)) return undefined
         if (statSync(absolute).size > MAX_DIFF_FILE_BYTES) return undefined
@@ -155,7 +161,7 @@ export function createToolArtifactTracker(options: ToolArtifactTrackerOptions): 
       if (!result.success || !metadata?.patchTransactionId) return
       const path = (input as { path?: unknown }).path
       if (typeof path !== "string") return
-      const absolute = resolve(process.cwd(), path)
+      const absolute = resolve(root, path)
       try {
         const newContent = existsSync(absolute) ? readFileSync(absolute, "utf8") : ""
         const oldContent = typeof snapshot === "string" ? snapshot : null

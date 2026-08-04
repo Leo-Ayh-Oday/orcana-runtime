@@ -141,6 +141,8 @@ export interface AgentNodeOutput {
 export interface ToolNodeInput {
   capabilityId: string
   params: Record<string, unknown>
+  /** Caller-side tool call id; carried into policy evaluation and events (R1). */
+  toolCallId?: string
 }
 
 export interface VerificationNodeInput {

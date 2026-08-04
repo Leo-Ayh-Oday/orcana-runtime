@@ -20,14 +20,22 @@ export interface NodePolicyContext {
   tool?: ToolDescriptor
   input: Record<string, unknown>
   toolCallId?: string
+  /** Policy subject name when no tool descriptor is resolved (R1: name-only
+   *  evaluation falls back to category inference, fail-closed in strict mode). */
+  name?: string
 }
 
-const UNLIMITED_RATE_LIMITS: Record<ToolCategory, number> = {
-  safe: Number.POSITIVE_INFINITY,
-  file: Number.POSITIVE_INFINITY,
-  network: Number.POSITIVE_INFINITY,
-  shell: Number.POSITIVE_INFINITY,
-  git: Number.POSITIVE_INFINITY,
+/** Node mode has no round semantics: the round-scoped Gate 1 caps compare
+ *  per-round usage counters, so a standalone node call starts at zero —
+ *  counters at Infinity would make EVERY call trip the cap (R1 found this:
+ *  the old "unlimited" values saturated Gate 1). Run-level call budgets are
+ *  governed by the BudgetLedger instead. */
+const NODE_MODE_ROUND_USAGE: Record<ToolCategory, number> = {
+  safe: 0,
+  file: 0,
+  network: 0,
+  shell: 0,
+  git: 0,
 }
 
 /** Assemble an L4 ToolPolicyInput for a standalone (node-mode) call. */
@@ -35,7 +43,7 @@ export function buildNodePolicyInput(context: NodePolicyContext): ToolPolicyInpu
   return {
     toolCall: {
       id: context.toolCallId ?? "node-call",
-      name: context.tool?.defn.name ?? "unknown",
+      name: context.name ?? context.tool?.defn.name ?? "unknown",
       input: context.input,
     },
     tool: context.tool,
@@ -45,7 +53,7 @@ export function buildNodePolicyInput(context: NodePolicyContext): ToolPolicyInpu
     pendingRippleObligations: [],
     permissionGate: context.permissionGate,
     permissionMode: context.permissionMode ?? "strict",
-    rateLimits: { ...UNLIMITED_RATE_LIMITS },
+    rateLimits: { ...NODE_MODE_ROUND_USAGE },
     webSearchFailedThisTurn: false,
     webSearchFailReason: "",
     finalText: "",

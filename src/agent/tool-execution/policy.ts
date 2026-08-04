@@ -87,8 +87,13 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
 
   // Gate 2: PermissionGate — deny always hard-blocks; ask may be auto-allowed in full mode.
   // PR-5.1: riskLevel passed to block session allow() overrides for Risk 4-5 tools.
+  // Harness Closure R1: node mode evaluates with a real name even when no tool
+  // descriptor is resolved — the gate then falls back to category inference so
+  // unknown write-class capabilities fail closed (strict ask) instead of
+  // passing through unexamined. The loop always passes a tool, so this branch
+  // is byte-identical there.
   const risk = tool ? getToolRisk(toolCall.name, toolCall.input, tool) : null
-  if (tool) {
+  if (tool || toolCall.name !== "unknown") {
     const perm = permissionGate.check(toolCall.name, toolCall.input, tool, { riskLevel: risk?.level })
     if (!perm.allowed) {
       const isFullModeAsk = perm.level === "ask" && permissionMode === "full"

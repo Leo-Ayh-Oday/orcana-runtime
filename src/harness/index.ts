@@ -77,6 +77,7 @@ export { NODE_EVENT_TYPES } from "./contracts/nodes"
 export {
   createNodeExecutionContext,
   createDefaultNodePolicyContext,
+  createNodePolicyContextFromRunScope,
   createMinimalContextSlice,
   createNodeRunId,
 } from "./nodes/context"

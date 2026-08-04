@@ -35,6 +35,14 @@ import type { CapabilityDescriptor } from "../src/harness/contracts/capability"
 const FIRST_BATCH = () =>
   buildTools(READ_FILE, WRITE_FILE, EDIT_FILE, SHELL_TOOL, TYPECHECK_TOOL, FIND_SYMBOL, FIND_REFERENCES)
 
+/** R1: explicit permissive policy context (the executor now ALWAYS evaluates
+ *  policy — these tests exercise execution semantics, not the gate). */
+function allowGate(name: string) {
+  const gate = new PermissionGate()
+  gate.allow(name)
+  return { permissionGate: gate, input: {} }
+}
+
 describe("H9 tool → capability projection", () => {
   test("first batch registers exactly the 7 plan §15.4 tools", () => {
     expect([...FIRST_BATCH_TOOL_NAMES].sort()).toEqual(
@@ -202,16 +210,29 @@ function writeCapabilityRegistry(tools: ReturnType<typeof FIRST_BATCH>, handler:
 describe("H9 capability executor", () => {
   test("node mode executes a registered capability and synthesizes a ToolResult", async () => {
     const registry = customRegistry(async () => ({ ok: true, output: { content: "verified", success: true } }))
-    const { result } = await executeCapability(registry, { capabilityId: "custom_verifier", params: {} })
+    const { result } = await executeCapability(registry, { capabilityId: "custom_verifier", params: {}, policyContext: allowGate("custom_verifier") })
     expect(result.success).toBe(true)
     expect(result.content).toContain("verified")
   })
 
   test("handler failure surfaces as a failed ToolResult", async () => {
     const registry = customRegistry(async () => ({ ok: false, error: "boom" }))
-    const { result } = await executeCapability(registry, { capabilityId: "custom_verifier", params: {} })
+    const { result } = await executeCapability(registry, { capabilityId: "custom_verifier", params: {}, policyContext: allowGate("custom_verifier") })
     expect(result.success).toBe(false)
     expect((result as { success: false; error: string }).error).toBe("boom")
+  })
+
+  test("R1: no policy input at all — the gate still runs (unknown name, strict ask → blocked)", async () => {
+    // Before R1 this call silently skipped policy; now the conservative
+    // default context is itself a policy: an unknown write-class name is
+    // "ask" and strict mode fails closed without an interactive confirm.
+    let executed = false
+    const registry = customRegistry(async () => { executed = true; return { ok: true, output: { success: true, content: "x" } } })
+    const { result } = await executeCapability(registry, { capabilityId: "custom_verifier", params: {} })
+    expect(executed).toBe(false)
+    expect(result.success).toBe(false)
+    expect((result as { metadata?: { blocked?: boolean } }).metadata?.blocked).toBe(true)
+    expect((result as { error: string }).error).toContain("custom_verifier")
   })
 
   test("unknown capability id is rejected", async () => {
@@ -256,10 +277,10 @@ describe("H9 capability executor", () => {
       { execute: async () => ({ ok: true, output: { success: true, content: "ok" } }) },
     )
     const ledger = createBudgetLedger({ ...defaultRunBudget(), maxWrites: 1, maxToolCalls: 10 })
-    const first = await executeCapability(registry, { capabilityId: "write_cap", params: {}, budget: ledger })
+    const first = await executeCapability(registry, { capabilityId: "write_cap", params: {}, budget: ledger, policyContext: allowGate("write_cap") })
     expect(first.result.success).toBe(true)
     expect(ledger.used.writes).toBe(1)
-    const second = await executeCapability(registry, { capabilityId: "write_cap", params: {}, budget: ledger })
+    const second = await executeCapability(registry, { capabilityId: "write_cap", params: {}, budget: ledger, policyContext: allowGate("write_cap") })
     expect(second.result.success).toBe(false)
     expect((second.result as { error: string }).error).toContain("write_budget")
     // The limit is really enforced: a fresh reserve still fails (used=1=max).
@@ -279,7 +300,7 @@ describe("H9 capability executor", () => {
       { execute: async () => ({ ok: true, output: { success: true, content: "read" } }) },
     )
     const ledger = createBudgetLedger({ ...defaultRunBudget(), maxWrites: 0, maxToolCalls: 5 })
-    const { result } = await executeCapability(registry, { capabilityId: "read_cap", params: {}, budget: ledger })
+    const { result } = await executeCapability(registry, { capabilityId: "read_cap", params: {}, budget: ledger, policyContext: allowGate("read_cap") })
     expect(result.success).toBe(true)
     expect(ledger.used.writes).toBe(0)
     expect(ledger.used.toolCalls).toBe(1)
@@ -307,6 +328,7 @@ describe("H9 capability executor", () => {
       params: {},
       hooks: hooks as never,
       budget: ledger,
+      policyContext: allowGate("write_cap"),
     })
     expect(executed).toBe(0)
     expect(result.success).toBe(false)
@@ -336,6 +358,7 @@ describe("H9 capability executor", () => {
       capabilityId: "read_cap",
       params: {},
       hooks: hooks as never,
+      policyContext: allowGate("read_cap"),
     })
     expect(result.success).toBe(true)
     expect(result.content).toBe("replaced")

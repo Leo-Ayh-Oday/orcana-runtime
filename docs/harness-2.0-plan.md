@@ -2786,3 +2786,36 @@ Orcana
 ```
 
 的真正 Agent Kernel。
+
+---
+
+# 二十七、Harness Closure R1 实施记录（2026-08-04）
+
+v0.5.0 发布后外部审计指出"Harness 主体实施完成"成立但"已完全闭环"不成立。R1 为小型收口（不做 H13/H14 大模块），六项全部落地，随后冻结 Harness 进入 Graph Engineering。
+
+## R1 六项收口
+
+| # | 审计项 | 落地（commit 范围） | 行为变更 |
+|---|---|---|---|
+| 1 | **ToolNode Policy 强制化（P0-1）** | v0.5.1 | `executeCapability` 删除静默跳过路径；ToolNode 默认从 RunScope 派生策略上下文（`createNodePolicyContextFromRunScope`，加载 `projectRoot/.orcana/permissions.json`）；Gate 2 name-only 回退（policy.ts，loop 恒传 tool 零影响）；node 模式 strict fail-closed（无交互确认通道） |
+| 2 | **NodeResult.evidence 证据链（P0-2）** | v0.5.2 | `snapshotEvidence`/`diffEvidence`；ToolNode/VerificationNode/LlmAgentNode 返回节点新增条目；`AgentNodeOutput` 五字段（evidenceIds/artifactIds/patchTransactionIds/unresolvedRippleObligations/resultingWorkspaceDigest）；kernel 注入 `options.evidenceLedger`（与 sandbox 同款单所有权模式，未注入行为不变） |
+| 3 | **Node 路径 projectRoot 统一** | v0.5.2/0.5.3 | VerificationNode 相对文件哈希、artifact tracker 相对路径均按 `runScope.projectRoot` 解析；loop 保留 cwd fallback |
+| 4 | **Replay sequence + callId 配对** | v0.5.3 | 事件流真实 sequence 透传（HR-025 不再空验证）；终结事件按 `toolCallId` 精确配对（batch-executor 补 `tc.id`；不重复/不缺失/顺序约束；policy-block 痕迹豁免）；合成事件无 sequence |
+| 5 | **Rubric 诚实化 + CLI 接入** | v0.5.4 | non-required 失败进 `warnings`（不再否决）；`evaluateRubric` 接入 `run-replay-cli.ts`（8 维得分 + floor 表 + per-case rubric + summary.json） |
+| 6 | **场景诚实化** | v0.5.4 | HR-004 改真实语义标题；hr-dual 改 independent-harness sanity 标签；新增真实共享进程双 run 策略隔离测试；新增 HR-031 False-done 校准场景 |
+
+## HR-031 校准结论（重要发现）
+
+写工具执行 + 完成声明但**无验证证据**，对真实 orchestrator 双配置校准（默认 triage 与 `ORCANA_FLASH_TRIAGE=off`）：
+
+> **当前放行（completed）**。根因：该路径无 task tracker → `canClaimDone` 没有要求证据类别 → false-done 门不触发。
+
+这是 Completion Gate 的已知加固缺口（计划 §18.3 Truthfulness 方向的下一步硬化点）。HR-031 作为回归探针保留：门加固后该场景应翻转 `blocked`。
+
+## 冻结声明
+
+**Harness 2.0 H0–H12 + Harness Closure R1 冻结（2026-08-04，v0.5.5）**：
+
+- 生产入口唯一性、Context Pipeline 字节冻结、Capability 执行链、Node Primitive + 强制 Policy + 证据链、Eval 2.0（12 场景 + Rubric）均已收敛并有回归保护；
+- 冻结期内禁止非 Graph 前置的 Harness 结构改动（修 bug 除外）；
+- 下一阶段：**Execution Graph（GEP-1.0）**——Typed Execution Graph 运行时按 `docs/typed-execution-graph-runtime-plan.md` 启动。

@@ -35,7 +35,7 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 | MCP Bridge | 🟡 partial | Tools only, resources/prompts deferred |
 | Capability Registry (H9) | 🟢 stable | Unified capability descriptors + 8-step CapabilityExecutor — single execution entry for loop and future Node Runtime |
 | Context Pipeline (H10) | 🟢 stable | 13 layered context providers → ContextSlice; loop context assembly moved into the pipeline (byte-frozen) |
-| Node Runtime (H11) | 🟡 partial | HarnessNode primitives (function/tool/llm_agent/verification/human) + sequential runner; a single agent = one LlmAgentNode; scheduler/Graph deferred (plan §23) |
+| Node Runtime (H11) | 🟢 stable | HarnessNode primitives (function/tool/llm_agent/verification/human) + sequential runner; a single agent = one LlmAgentNode; mandatory policy gate and evidence chain landed (Closure R1); scheduler/Graph deferred (plan §23) |
 | Skills Registry | 🟡 partial | Trigger-based prompt append, no lifecycle stats |
 | ModelRouter (purpose routing) | 🟡 partial | Session model pinning, cheap subcall routing off |
 | FIM Editor | 🟡 partial | DeepSeek beta API, pending tx protection |

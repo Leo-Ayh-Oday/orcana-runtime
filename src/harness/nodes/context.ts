@@ -11,11 +11,13 @@
  */
 
 import { randomUUID } from "node:crypto"
-import type { AgentRun } from "../contracts/run"
+import type { AgentRun, AgentRunScope } from "../contracts/run"
 import type { CapabilityRegistry } from "../contracts/capability"
 import type { ContextSlice } from "../contracts/context"
 import type { NodeExecutionContext } from "../contracts/nodes"
 import { PermissionGate } from "../../agent/permission"
+import { loadUserConfig, loadProjectConfig } from "../../agent/permission-config"
+import type { ToolDescriptor } from "../../tools/registry"
 import type { NodePolicyContext } from "../capabilities/policy-adapter"
 
 export function createNodeRunId(): string {
@@ -58,11 +60,44 @@ export function createNodeExecutionContext(input: CreateNodeExecutionContextInpu
 
 /** Conservative node-mode policy context (H9 default semantics: unlimited
  *  rate limits, no task tracker, strict permission mode). modeContract
- *  enrichment is deferred to H12 node context work. */
-export function createDefaultNodePolicyContext(input: Record<string, unknown>): NodePolicyContext {
+ *  enrichment is deferred to the Node Context work. */
+export function createDefaultNodePolicyContext(
+  input: Record<string, unknown>,
+  tool?: ToolDescriptor,
+  toolCallId?: string,
+  name?: string,
+): NodePolicyContext {
   return {
     permissionGate: new PermissionGate(),
     permissionMode: "strict",
+    tool,
     input,
+    toolCallId,
+    name,
+  }
+}
+
+/** R1: node-mode policy context derived from the run scope.
+ *
+ *  Mandatory policy gate (Harness Closure R1): ToolNode always evaluates
+ *  policy through a context built from the run scope — the project permission
+ *  file under `scope.projectRoot` is loaded the same way the kernel loads it
+ *  (kernel/context.ts), so node-mode executions obey the same permission
+ *  surface as loop-mode ones. permissionMode is always strict: node mode has
+ *  no interactive confirm channel, so "ask" must fail closed.
+ */
+export function createNodePolicyContextFromRunScope(
+  scope: AgentRunScope,
+  opts: { input: Record<string, unknown>; tool?: ToolDescriptor; toolCallId?: string; name?: string },
+): NodePolicyContext {
+  const gate = new PermissionGate()
+  gate.loadRules(loadUserConfig()?.rules ?? [], loadProjectConfig(scope.projectRoot)?.rules ?? [])
+  return {
+    permissionGate: gate,
+    permissionMode: "strict",
+    tool: opts.tool,
+    input: opts.input,
+    toolCallId: opts.toolCallId,
+    name: opts.name,
   }
 }

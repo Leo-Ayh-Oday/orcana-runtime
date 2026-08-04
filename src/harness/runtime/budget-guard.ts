@@ -31,6 +31,12 @@ interface UsagePayload {
 
 export class BudgetGuard {
   private readonly seenRounds = new Set<number>()
+  // H12: the kernel's provider usage events are CUMULATIVE snapshots (round N
+  // carries rounds 1..N), so token accounting takes deltas against the last
+  // seen value instead of adding blindly (which double-counted).
+  private lastInputTokens = 0
+  private lastOutputTokens = 0
+  private lastCacheMissTokens = 0
 
   constructor(
     private readonly ledger: BudgetLedger,
@@ -75,9 +81,17 @@ export class BudgetGuard {
     // token validation applies to direct commit() callers).
     if (usage.cacheSource !== "provider") return true
     const used = this.ledger.used
-    used.inputTokens += usage.inputTokens ?? 0
-    used.outputTokens += usage.outputTokens ?? 0
-    used.cacheMissTokens += usage.cacheMissInputTokens ?? 0
+    // H12: cumulative snapshots → delta accounting. Scripted/fixed providers
+    // that emit per-round values still work: current >= last keeps the sum.
+    const input = usage.inputTokens ?? 0
+    const output = usage.outputTokens ?? 0
+    const cacheMiss = usage.cacheMissInputTokens ?? 0
+    used.inputTokens += Math.max(0, input - this.lastInputTokens)
+    used.outputTokens += Math.max(0, output - this.lastOutputTokens)
+    used.cacheMissTokens += Math.max(0, cacheMiss - this.lastCacheMissTokens)
+    this.lastInputTokens = Math.max(this.lastInputTokens, input)
+    this.lastOutputTokens = Math.max(this.lastOutputTokens, output)
+    this.lastCacheMissTokens = Math.max(this.lastCacheMissTokens, cacheMiss)
     if (used.inputTokens > this.ledger.limits.maxInputTokens
       || used.outputTokens > this.ledger.limits.maxOutputTokens
       || used.cacheMissTokens > this.ledger.limits.maxCacheMissTokens) {

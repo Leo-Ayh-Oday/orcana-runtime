@@ -81,6 +81,21 @@ Use GitHub Issues. Include:
 - Expected vs actual behavior
 - Relevant error logs
 
+## CI tiers (Harness 2.0, plan §18.1)
+
+```text
+每次提交：    typecheck + unit（bun run typecheck && bun run test）
+每个 PR：     + function replay（bun run test:replay）+ run replay（bun run test:harness-replay）
+发布候选：    + integration + live smoke（bun run eval:replay --report）
+正式发布：    完整 live eval（bun run eval:live）+ RippleBench
+```
+
+Run replay suites live under `tests/harness-replay/` and are driven by the
+scripted provider/tools executor in `evals/harness/`; the HR scenario matrix
+(plan §18.6) is registered in `evals/harness/scenarios/`. Add new scenarios
+as JSON cases there — every case asserts outcome/events/artifacts/workspace/
+budget plus the always-on trace invariants.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.

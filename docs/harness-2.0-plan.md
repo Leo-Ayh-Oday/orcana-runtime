@@ -2250,6 +2250,28 @@ CompletionOrchestrator 不再依赖散落的 `lastTypecheck` 等重复事实。
 
 ---
 
+## H12 实施记录（2026-08-04）
+
+**状态：完成。** 全部门禁绿色（typecheck / 164 文件测试 / build / npm pack / diff --check）。
+
+实现要点：
+
+1. **Tier 1 断言扩展**（§18.1）：`replay-harness.ts` 的 `checkAssertions` 纯增量扩展——嵌套路径（`resolvePath`，**扁平字面 key 优先**——legacy assertionContext 是扁平化的，实测修复过）、`matches /re/` 正则、`length ==/>=/> N`、`not exists`、`contains-set a,b,c`；`tests/replay_assertions.test.ts` 7 项；**过程中修复** resolvePath 破坏 legacy 扁平 key 的回归（`missing.length` 等字面 key 优先于嵌套解析）。
+2. **H11 技术债清偿 — BudgetGuard 累计 usage 双计修正**（关键事实 B 精确位置 budget-guard.ts:78）：kernel 的 provider final usage 是**跨轮累计快照**（round N 带 1..N 总和），guard 改 **delta 记账**（`+= max(0, current - last)`，三 token 类各一 last 值）；固定值 provider 经 kernel 累计后同样正确（100→200→300 累计流 delta 重构总和）；`tests/harness_budget_cumulative.test.ts` 4 项。**行为变更**：真实 kernel 流 token 限额语义 = 轮末累计（正确），harness_budget 既有测试零改动全绿。**新增 `LEGACY_CONTEXT_MAX_TOKENS` metadata 传输**（关键事实 D：默认 1M 窗口在脚本 eval 中不可达，HR-015/016 的开关；未设置时零行为变化）。
+3. **Tier 2 Run Replay**（§18.2/18.3，本次核心）：`evals/harness/{contracts,scripted-provider,scripted-tools,run-replay,trace-assertions,run-replay-cli}.ts`——`RunReplayCase`（§18.2 全量 + options: flashTriagePolicy/contextMaxTokens/idleTimeoutMs/maxWallTimeMs）+ `ProviderScriptEvent`（§18.3 扩展：**purpose 路由**（关键事实 C：plan_ready 由 flash_triage 路径合成，ScriptedProvider 必须按 purpose 分发）、plan_ready/clarification_ready 透传、round_end 轮界、usage **不带 round**（与 kernel 轮去重不碰撞）、idle_timeout 挂起语义）；`ScriptedProvider`（每 purpose 脚本数组 + 游标 + 平凡 fallback 防旁路消耗主脚本）；`runReplayCase` 执行器（mkdtemp workspace → createAgentHarness（store root 放 `.orcana/` 子目录防污染 workspace 断言）→ drain 事件 → waiting 时逐个 inspect+resume（expectRefused 断言抛错）→ 断言 expected + **always-on 恒定性**）；`assertTraceInvariants`（HR-025 sequence 连续 / HR-026 工具终结——**policy 硬阻断无终结事件是预期**（L4 走 status 事件），检查允许 policy-block 痕迹 / HR-027 终态必有 outcome——blocked 视为合法终态（orchestrator 安全拒绝完成））；`run-replay-cli.ts`（--list/--filter/--report，写 `~/.orcana/evals/replay-history/`，失败 exit 1）。
+4. **HR 场景首批**（§18.6）：`evals/harness/scenarios/{hr-core.json,hr-dual.ts,index.ts}`——**11 个场景全过**（8 单 run：HR-001 readonly 不写文件/HR-004 无证据完成/HR-005 typecheck 失败修复（orchestrator 正确 blocked——脚本化 typecheck 不产内置证据）/HR-006 stream 中断恢复/HR-007 非重试错误终止/HR-019 权限拒绝（项目级 `.orcana/permissions.json` deny，hermetic）/HR-026 工具终结/HR-030 secret redaction + 3 双 run：HR-021/022 隔离/HR-024 取消不影响）；**校准揭示的 orchestrator 真实行为**：工具失败 → completed(success:false) 事件而非 failed（failed 只在 handler 抛错）、policy 硬阻断走 status 事件、无写任务的"虚假完成"不被拦截（completed）——expected 按实际决策固化，不断言内核内部细节。**第二批 12 个场景**（HR-002/003/008/012/013/014/017/018/020/023/028/029，映射现有 harness_artifacts/interrupt/run_isolation 测试）待补足 DoD 的 30 个。
+5. **多维 Rubric**（§18.4/18.5）：`evals/harness/rubric.ts`——`RubricCheck`（8 维 + `severity: "p0"|"p1"` 最小扩展——§18.5 需要"无 Safety/Truthfulness P0"原类型无法表达）+ `evaluateRubric`（所有 required && 加权维度分 ≥ floor && 无 safety/truthfulness P0，**不用通过率**）+ 内置评估器工厂（outcomeIs/eventType/noEventType/workspaceFile/budgetUsed/artifactCount/noSecretInEvents/sequenceContinuous/allToolCallsTerminated）+ `defaultHrRubric`（CLI --report 用）；Tier 3 的 evals/scenarios.ts 3 维 rubric 保留不动；`tests/harness-replay/rubric.test.ts` 9 项。
+6. **更名遗漏修复**（关键事实 F）：`evals/runner.ts` + `evals/live-runner.ts` 的 `~/.deepseek-code/evals` → `~/.orcana/`。
+7. **CI 分层**：package.json scripts（`test:harness-replay`/`eval:replay`/`eval:run`/`eval:live`）+ CONTRIBUTING.md 四层 CI 说明（每次提交 typecheck+unit / 每 PR +function/run replay / 发布候选 +integration+live smoke / 正式发布完整 live eval+RippleBench）。
+8. **测试**：`tests/harness-replay/` 3 文件 22 项（scripted-provider 6 / run-replay 冒烟 4 + HR suite 3 / rubric 9）+ `tests/replay_assertions.test.ts` 7 项 + `tests/harness_budget_cumulative.test.ts` 4 项；全量 164 文件门禁绿色。
+
+**Harness 2.0 第三里程碑收官。** 剩余 DoD 项（第二批 12 场景补足 30、LlmAgentNode 证据链、Node Context 富化、VerificationNode 全量接线）列入 Execution Graph 前置清单；§23 风险"Graph 与 Harness 同时开工——H11 验收前禁止 Scheduler 接线"已满足（H12 无 scheduler 接线），Execution Graph（GEP-1.0）可在下一阶段启动。
+
+---
+
+
+---
+
 
 
 # PR-H9：Capability Registry

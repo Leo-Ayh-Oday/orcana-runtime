@@ -2,12 +2,14 @@
 
 All notable changes to Orcana Runtime.
 
-## [Unreleased] — Harness 2.0 third milestone (H9–H11)
+## [0.5.0] — 2026-08-04
 
 ### Added
 - **Capability Registry / CapabilityExecutor (H9)** — `src/harness/capabilities/*`: unified Tool/Model/Verifier capability descriptions (§15); Tool→Capability projection over the canonical ToolContract (no second tool system); 8-step execution chain (Budget Reserve → Policy → Before Hook → Handler → After Hook → Schema Validation → Artifact/Evidence → Budget Commit); the normal loop and the future Node Runtime share one execution entry (`executeCapability`). Loop tool executions now route through it; write/external_action budgets are enforced (H4 debt cleared); patch/plan/ripple artifacts wired into the run flow (H8 debt cleared).
 - **Context Provider Pipeline (H10)** — `src/harness/context/*`: 13 context providers (§16) layered stable/plan/node/volatile; pipeline (collect → dedupe → freshness → sort → budget → trim → ContextSlice); the loop no longer assembles context sources inline (byte-frozen parity with the legacy assembly).
 - **Unified Node Runtime (H11)** — `src/harness/nodes/*`: `HarnessNode` primitives (function/tool/llm_agent/verification/human) + sequential `runNode` (no scheduler); **a single agent is now formally one `LlmAgentNode`** (reuses the LegacyLoopAdapter with byte-parity verified three ways); NodeEvent side stream (nodeRunId-stamped envelopes); run-level budget/cancellation/artifact governance throughout.
+- **Eval Harness 2.0 (H12)** — `evals/harness/*` + `tests/harness-replay/*`: `RunReplayCase` contracts (§18.2) with ScriptedProvider (purpose routing, round_end boundaries, idle-timeout hang semantics) and scripted tools; `runReplayCase` hermetic executor (temp workspace, always-on trace invariants: sequence continuity / tool-call termination / terminal outcome); §18.4/18.5 multidimensional rubric (8 dimensions, quality floors, Safety/Truthfulness P0 veto — never a plain pass-rate); HR scenario matrix batch A — 11 scenarios green (readonly no-write, false-done blocking, typecheck repair, stream-interrupt recovery, plan approval / clarification resume, idempotent re-resume, context budget degrade/pause, permission deny, tool-call termination, secret redaction) + 3 dual-run isolation cases; Tier-1 replay assertion extensions (nested paths, regex, array length, not-exists, set containment); run-replay CLI (`bun run eval:replay --report`); CI tiers documented (§18.1); BudgetGuard cumulative-token double-count fixed (delta accounting) and `LEGACY_CONTEXT_MAX_TOKENS` plumbed for context-budget scenarios.
+- **Rename leftovers fixed (H12)** — legacy eval paths migrated from `~/.deepseek-code/evals` to `~/.orcana/`.
 
 ## [0.4.0] — 2026-08-03
 

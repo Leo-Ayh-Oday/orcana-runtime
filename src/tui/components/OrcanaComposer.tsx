@@ -339,10 +339,12 @@ export function OrcanaComposer({
 
       // 命令面板选择
       // PR-4: 禁用命令（enabled=false）不自动补全，由命令处理器拒绝执行。
+      // 审计修复：仅输入 "/" 时（无 query）不做补全替换，防止回车误触发第一个命令。
       const hasCommandArgs = trimmed.startsWith("/") && /\s/.test(trimmed.slice(1))
+      const bareSlash = trimmed === "/"
       const selectedEnabled = selectedCommand && selectedCommand.enabled !== false
       const finalValue =
-        showCommands && selectedEnabled && !hasCommandArgs ? `/${selectedCommand!.name}` : trimmed
+        showCommands && selectedEnabled && !hasCommandArgs && !bareSlash ? `/${selectedCommand!.name}` : trimmed
 
       // 保存历史（结构化 → 回溯时恢复原始 draft + pasteBlocks）
       const historyItem = buildHistoryItem(rawValue, pasteBlocks)

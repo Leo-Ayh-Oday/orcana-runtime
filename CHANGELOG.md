@@ -2,7 +2,19 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.11] — 2026-08-05
+## [0.8.12] — 2026-08-05
+
+### Added (LNXF-5 — Agent Execution Domain 与并发调度)
+- **Resource ledger** — atomic reservation before start (all-or-nothing; overcommit is rejected, `RESOURCE_OVERCOMMIT: 0`), host reserves (1 core or 15% CPU, 1 GB or 20% memory, whichever larger), per-run/per-agent release, cell concurrency cap.
+- **Fair queue** — weighted priorities (interactive > verification > normal > analysis > low > evolution), per-agent running caps with begin/finish accounting so no agent can starve the queue, `removeRun` so human-waiting runs hold no resources.
+- **Isolation-domain lock** — `main-workspace` exclusive, `worktree:<agent>` exclusive (different worktrees write in parallel — `CROSS_WORKTREE_SERIALIZATION: 0`), `cache:<type>:<key>` exclusive-or-shared, artifacts immutable; `releaseAll` on cancellation.
+- **Cache manager** — runtime-decided host paths per kind/key (bun/npm/pnpm/typescript/repo-map/custom), ro-shared vs rw-locked classification (cross-agent cache corruption = 0).
+- **Port lease manager** — loopback-only binding (`127.0.0.1`, `0.0.0.0` rejected), non-overlapping host ports, expiry collection, run-end collection (port leaks = 0).
+- **Agent domain manager** — binds worktree + cgroup parent + temp root + cache namespace + budget; `cancelAgent` marks cancelling and kills the agent cgroup; `closeDomain`/`closeRun` clean up; one agent's cancellation never touches others (`AGENT_CANCEL_ISOLATION`).
+- Cell states extended with `waiting_resources` / `waiting_backend`.
+- 21 tests; full gate 1009 pass, bench no regression.
+
+
 
 ### Added (LNXF-4 — cgroup v2 资源治理)
 - **Delegation detection** — `detectDelegatedRoot` follows the priority chain (systemd user scope+delegate → existing subtree → manual → none) with a real write probe; `enableControllers` enables only controllers the hierarchy actually offers (fs injectable for tests). No delegation ⇒ resource isolation is explicitly degraded; strict profiles refuse.

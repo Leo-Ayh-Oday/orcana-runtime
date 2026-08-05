@@ -20,6 +20,14 @@ export interface BackendRunContext {
   resourceState?: unknown
   /** 取消信号（透传到进程监督器）。 */
   abortSignal?: AbortSignal
+  /** Cell 级 cgroup 路径（Broker 已创建；后端 spawn 后 attach）。 */
+  cgroupPath?: string
+  /** spawn 后立即 attach（cgroup 绑定真实进程，P0-4 修复）。 */
+  attachCell?: (pid: number) => void
+  /** 执行结束后读取 cgroup 指标（真实 metrics，P0-6 修复）。 */
+  readCellMetrics?: () => SandboxReceipt["metrics"] | undefined
+  /** 清理验证：真实执行后报告（默认不假设安全值）。 */
+  cleanupVerify?: () => Partial<SandboxReceipt["cleanup"]>
 }
 
 export interface ExecutionBackend {
@@ -79,6 +87,7 @@ export async function* streamBackendRun(
     wallTimeMs: spec.resources.wallTimeMs,
     detectDaemon: spec.lifecycle.killOnParentExit,
     abortSignal: ctx.abortSignal,
+    onSpawn: pid => ctx.attachCell?.(pid),
   })) {
     if (event.type === "stdout") yield { type: "cell.stdout", cellId: spec.identity.cellId, data: event.data, at: event.at }
     else if (event.type === "stderr") yield { type: "cell.stderr", cellId: spec.identity.cellId, data: event.data, at: event.at }

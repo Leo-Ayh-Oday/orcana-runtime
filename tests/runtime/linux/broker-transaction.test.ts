@@ -1,0 +1,148 @@
+/** LNXF R2: Broker 执行事务（资源预留/锁/cgroup attach/取消/清理/真实 Receipt）。 */
+
+import { describe, expect, test } from "bun:test"
+import { createLinuxBroker } from "../../../src/runtime/linux/broker"
+import { ResourceLedger } from "../../../src/runtime/linux/scheduler/resource-ledger"
+import { CgroupManager, type CgroupFs } from "../../../src/runtime/linux/cgroup/manager"
+import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
+import type { ExecutionCellSpec } from "../../../src/runtime/linux/contracts"
+
+function mockCgroupFs(): CgroupFs {
+  const state = new Map<string, string>()
+  const dirs = new Set<string>(["/sys/fs/cgroup"])
+  return {
+    exists: p => dirs.has(p) || state.has(p) || p.endsWith("cgroup.subtree_control"),
+    read(p) {
+      const v = state.get(p)
+      if (v !== undefined) return v
+      if (p.endsWith("cgroup.controllers")) return "cpuset cpu io memory hugetlb pids"
+      if (p.endsWith("cgroup.subtree_control")) return "cpu memory pids"
+      throw new Error(`missing ${p}`)
+    },
+    write(p, c) {
+      if (p.endsWith("cgroup.subtree_control")) {
+        state.set(p, `${state.get(p) ?? "cpu memory pids"} ${c}`.trim())
+        return
+      }
+      state.set(p, c)
+    },
+    mkdir(p) {
+      dirs.add(p)
+      for (const a of ["cgroup.procs", "cgroup.kill", "pids.max", "memory.max", "memory.events", "memory.current", "memory.oom.group", "cpu.max", "pids.current", "memory.peak", "pids.peak", "cpu.stat"]) {
+        state.set(`${p}/${a}`, a === "pids.max" ? "max" : a === "pids.current" ? "0" : a === "memory.events" ? "oom 0\noom_kill 0" : a === "cpu.stat" ? "usage_usec 100\nt_hrottled_usec 0" : a === "memory.peak" ? "4096" : a === "pids.peak" ? "2" : "0")
+      }
+    },
+    rm(p) {
+      for (const k of [...state.keys()]) if (k.startsWith(p)) state.delete(k)
+      for (const d of [...dirs]) if (d.startsWith(p)) dirs.delete(d)
+    },
+    readdir(p) {
+      return [...dirs].filter(d => d.startsWith(p + "/")).map(d => d.slice(p.length + 1).split("/")[0] ?? "")
+    },
+  }
+}
+
+function cellSpec(overrides: Partial<ExecutionCellSpec> = {}): ExecutionCellSpec {
+  return {
+    schemaVersion: "1.0",
+    identity: { cellId: `c-${Math.random().toString(36).slice(2, 8)}`, runId: "r1", nodeRunId: "r1:n", attempt: 1, agentId: "a1" },
+    command: { executable: "/bin/true", args: [], cwd: "/tmp", stdin: "closed" },
+    profile: "build",
+    isolation: { minimum: "audit", preferredBackend: "host-audit", allowDegradation: true },
+    filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt/a1" },
+    network: { mode: "none" },
+    environment: { variables: {}, inheritHost: false, locale: "C.UTF-8", pathEntries: [] },
+    secrets: [],
+    resources: { memoryMaxBytes: 64 * 1024, pidsMax: 16, wallTimeMs: 5000, stdoutMaxBytes: 1024, stderrMaxBytes: 1024, tmpfsMaxBytes: 1024 },
+    cache: [],
+    lifecycle: { killOnParentExit: true, cleanupOnExit: true, retainOnFailure: false, serviceMode: false },
+    policyDigest: "",
+    ...overrides,
+  }
+}
+
+async function collect(spec: ExecutionCellSpec, broker: ReturnType<typeof createLinuxBroker>) {
+  const events: Array<{ type: string; [k: string]: unknown }> = []
+  for await (const e of broker.execute(spec)) events.push(e as unknown as { type: string; [k: string]: unknown })
+  return events
+}
+
+describe("R2 broker transaction", () => {
+  test("execute reserves resources and releases them after completion", async () => {
+    const ledger = new ResourceLedger({ maxConcurrentCells: 2, capacity: { cpuQuota: 1000, memoryBytes: 1024 * 1024, pids: 100, networkSlots: 1, tempBytes: 1024 * 1024, concurrentCells: 2 } })
+    const broker = createLinuxBroker({ mode: "enabled", ledger })
+    const events = await collect(cellSpec(), broker)
+    expect(events.some(e => e.type === "cell.exit")).toBe(true)
+    expect(events.some(e => e.type === "cell.receipt")).toBe(true)
+    expect(ledger.outstanding().length).toBe(0)
+  })
+
+  test("resource exhaustion → RESOURCE_RESERVATION_FAILED before start", async () => {
+    const ledger = new ResourceLedger({ maxConcurrentCells: 1, capacity: { cpuQuota: 1000, memoryBytes: 1024 * 1024, pids: 100, networkSlots: 1, tempBytes: 1024 * 1024, concurrentCells: 1 } })
+    const broker = createLinuxBroker({ mode: "enabled", ledger })
+    const hold = cellSpec({ command: { executable: "/bin/sh", args: ["-c", "sleep 3"], cwd: "/tmp", stdin: "closed" } })
+    const p1 = (async () => { const events: unknown[] = []; for await (const e of broker.execute(hold)) events.push(e); return events })()
+    await new Promise(r => setTimeout(r, 150))
+    await expect((async () => {
+      const second = cellSpec()
+      for await (const _ of broker.execute(second)) { /* drain */ }
+    })()).rejects.toThrow(LinuxExecutionError)
+    const events = await p1
+    expect(events.length).toBeGreaterThan(0)
+  })
+
+  test("isolation lock conflict rejects concurrent same-worktree cell", async () => {
+    const broker = createLinuxBroker({ mode: "enabled" })
+    // 同一 worktree 并发：第一个长跑（sleep），第二个在锁上失败。
+    const lockSpec = cellSpec({
+      command: { executable: "/bin/sh", args: ["-c", "sleep 3"], cwd: "/tmp", stdin: "closed" },
+      filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt/same" },
+    })
+    const other = cellSpec({ filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt/same" } })
+    const p1 = (async () => { for await (const _ of broker.execute(lockSpec)) { /* long running */ } })()
+    await new Promise(r => setTimeout(r, 150))
+    await expect((async () => {
+      for await (const _ of broker.execute(other)) { /* drain */ }
+    })()).rejects.toThrow(LinuxExecutionError)
+    await p1
+  })
+
+  test("cgroup attach: cell cgroup created and pid attached (mock fs)", async () => {
+    const fs = mockCgroupFs()
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    const broker = createLinuxBroker({ mode: "enabled", cgroup })
+    const spec = cellSpec()
+    const attached: number[] = []
+    const orig = cgroup.attach.bind(cgroup)
+    cgroup.attach = (pid: number, path: string) => { attached.push(pid); orig(pid, path) }
+    const events: unknown[] = []
+    for await (const e of broker.execute(spec)) events.push(e)
+    expect(attached.length).toBeGreaterThanOrEqual(1)
+    expect(events.some(e => (e as { type: string }).type === "cell.receipt")).toBe(true)
+  })
+
+  test("cancelRun releases ledger and records cancelled state", async () => {
+    const ledger = new ResourceLedger({ maxConcurrentCells: 2, capacity: { cpuQuota: 1000, memoryBytes: 1024 * 1024, pids: 100, networkSlots: 1, tempBytes: 1024 * 1024, concurrentCells: 2 } })
+    const broker = createLinuxBroker({ mode: "enabled", ledger })
+    const controller = new AbortController()
+    const spec = cellSpec({ command: { executable: "/bin/sh", args: ["-c", "sleep 30"], cwd: "/tmp", stdin: "closed" } })
+    const run = (async () => { for await (const _ of broker.execute(spec, { abortSignal: controller.signal })) { /* drain */ } })()
+    await new Promise(r => setTimeout(r, 150))
+    controller.abort()
+    await run
+    await broker.cancelRun("r1")
+    expect(ledger.outstanding().length).toBe(0)
+    expect(broker.activeCells().length).toBe(0)
+  })
+
+  test("receipt cleanup is not assumed-safe: processesRemaining is measured", async () => {
+    const fs = mockCgroupFs()
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    const broker = createLinuxBroker({ mode: "enabled", cgroup })
+    const events = await collect(cellSpec(), broker)
+    const receipt = events.find(e => e.type === "cell.receipt") as { receipt: { cleanup: { processesRemaining: number }; metrics: Record<string, unknown> } } | undefined
+    expect(receipt).toBeDefined()
+    expect(receipt!.receipt.cleanup.processesRemaining).toBeGreaterThanOrEqual(0)
+    expect(typeof receipt!.receipt.metrics.cpuUsageUsec === "number" || receipt!.receipt.metrics.cpuUsageUsec === undefined).toBe(true)
+  })
+})

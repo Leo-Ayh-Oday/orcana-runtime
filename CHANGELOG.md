@@ -2,7 +2,17 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.0] — 2026-08-05
+## [0.8.1] — 2026-08-05
+
+### Added (MACP-M1 — conditional dependencies & result propagation)
+- **`WorkflowDependency { nodeId, when }`** — dependencies may now declare `terminal | succeeded | failed | accepted | rejected | blocked` conditions; `schemaVersion: "0.2"` enables them, while `"0.1"` specs keep the legacy terminal semantics (a failed upstream still lets downstream run — exactly as before).
+- **Execution / acceptance separation** — a node may execute successfully while its output is not accepted; acceptance is declared via `output.metadata.acceptance` (this layer only interprets it; who may declare it is a coordination-authority concern, MACP M7/M9).
+- **Fail-closed readiness** — the scheduler evaluates every dependency condition before launching: a finished-but-unsatisfied dependency puts the dependent into a terminal `blocked` state (no deadlock, no failed-upstream leak into downstream work). `blocked`-condition branches (escalation paths) are supported.
+- **Checkpoint consistency** — restored runs recompute dependency conditions from restored results and reach identical verdicts without re-executing.
+- **P0 fixed**: "Planner 失败后 Coder 仍然执行" is impossible in 0.2 specs (planner→coder must be `accepted` or `succeeded`).
+- 16 tests: policy units, planner→coder chains (accepted / not-accepted / rejected), failed→repair branches, blocked escalation, all-blocked no-deadlock, legacy compatibility, checkpoint restore consistency.
+
+
 
 ### Added (Typed Execution Graph, G7 — T3R Multi-Agent, Graph Runtime finale)
 - **Agent Pool** (`src/workflow/agents/agent-pool.ts`) — register agents with disjoint file ownership (overlaps rejected with a structured violation report), owner lookup, `canWrite` checks, and cancellation; cancelled agents fail fast.

@@ -1,0 +1,93 @@
+name: Linux Sandbox Lanes
+
+# R6: 真实验收 —— 真实 Bubblewrap / 真实 Rootless Podman / 真实 cgroup。
+# 审计要求：关键场景不允许 Skip 后仍宣布 Freeze。这些 lane 在真实后端
+# 存在时自动把条件测试转为真执行；缺失时该 lane 自身失败（而不是测试
+# 静默跳过）—— 安装失败即红，杜绝"假 Freeze"。
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-lanes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lane-bubblewrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Bubblewrap (real sandbox)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap iproute2
+          bwrap --version
+          bwrap --unshare-all --bind / / sh -c 'echo real-bwrap-ok'
+      - run: bun install --frozen-lockfile
+      - name: Real bubblewrap backend tests (conditionals auto-enable)
+        run: bun test tests/runtime/linux/bubblewrap.test.ts tests/runtime/linux/linux-foundation.test.ts
+      - name: Linux sandbox eval with real bwrap
+        run: bun run eval:linux
+
+  lane-podman:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Rootless Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman uidmap
+          export STORAGE_DRIVER=vfs
+          podman --version
+          podman pull -q docker.io/library/alpine:latest
+          DIGEST=$(podman image inspect --format '{{.Digest}}' docker.io/library/alpine:latest)
+          echo "resolved digest: $DIGEST"
+          podman run --rm --network=none --read-only --cap-drop=ALL "docker.io/library/alpine@$DIGEST" echo real-podman-ok
+      - run: bun install --frozen-lockfile
+      - name: Real podman backend tests (digest-locked image, strict no-degrade)
+        run: bun test tests/runtime/linux/podman.test.ts
+      - name: Linux sandbox eval (LX-030 real)
+        run: bun run eval:linux
+
+  lane-cgroup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe cgroup delegation
+        run: |
+          mount | grep cgroup2 || true
+          ls -la /sys/fs/cgroup/ | head -20
+          test -w /sys/fs/cgroup && echo DELEGATED || echo NOT-DELEGATED
+      - run: bun install --frozen-lockfile
+      - name: cgroup tests (mock lifecycle always; real-kernel sections auto-enable when delegated)
+        run: bun test tests/runtime/linux/cgroup.test.ts

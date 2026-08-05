@@ -2,6 +2,12 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.14] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-5)
+- **Policy chain modularized** — the 8-gate `evaluateToolPolicy` now composes standalone modules under `src/harness/capabilities/policy/`: `writable-root-policy` (path boundary), `network-policy` (network tool set + web-search gate), `risk-policy` (Risk 4-5 per-invocation confirmation + `isSessionAllowableRisk`), `approval-policy` (ask→allow promotion rules, gate order preserved), `concurrency-policy` (declared per-group caps; writes/external serialize). One shared boundary for shell/file/patch/git writers — no "shell blocked but patch can write" paths.
+- **Writable-root gate** — node mode passes the run scope's `projectRoot`; write calls whose paths escape it are blocked with `writable_root` before any handler runs (loop mode omits roots → gate skipped, unchanged).
+
 ## [0.5.13] — 2026-08-05
 
 ### Added (Tool Runtime 2.0, RT-4)

@@ -32,3 +32,13 @@ export { RepairLoop, type RepairLoopOptions, type ConvergenceReport, type Repair
 export { ResultCache, cacheKeyFor, type CacheEntry } from "./results/result-cache"
 export { saveResultCache, loadResultCache } from "./persistence/result-cache-store"
 export { buildContextSlice, sliceDependencyIds, type ContextSlice, type DependencySlice } from "./context/context-slice"
+export {
+  parseDynamicSpec,
+  payloadToSpec,
+  DYNAMIC_NODE_TYPES,
+  type DynamicGraphPayload,
+  type DynamicNodePayload,
+  type DynamicNodeType,
+} from "./dynamic/dynamic-schema"
+export { compileDynamicSpec, DEFAULT_NODE_TYPES, type DynamicCompilerOptions, type DynamicCompileResult, type DynamicIssue } from "./dynamic/dynamic-compiler"
+export { PermissionGate, type GateDecision, type GateResult } from "./dynamic/permission-gate"

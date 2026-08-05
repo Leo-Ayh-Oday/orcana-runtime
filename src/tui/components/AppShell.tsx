@@ -59,24 +59,40 @@ export const SLASH_COMMANDS: SlashCommandHint[] = getCommandHints()
 
 // ── 内部组件 ──
 
-function EmptySurface({ mode, modelName }: { mode: TuiMode; modelName: string }) {
+/** 空态品牌面板（视觉优化：容器化 + 品牌化，静态渲染零 tick）。 */
+export function emptySurfaceLines(mode: TuiMode, modelName: string, cols: number): string[] {
+  const boxWidth = Math.min(46, Math.max(32, cols - 8))
+  const inner = boxWidth - 2
+  const pad = (text: string) => `│ ${text.padEnd(inner - 1)}│`
+  const blank = pad("")
+  const top = `╭─ orcana ${"─".repeat(Math.max(0, inner - 7 - 2))}─╮`
+  const bottom = `╰${"─".repeat(inner)}╯`
+  return [
+    top,
+    blank,
+    pad("  ◉  Orcana Agent Runtime"),
+    pad("     knowledge-native coding"),
+    blank,
+    pad("  ▸ /runtime    runtime inspector"),
+    pad("  ▸ /gates      gate ledger"),
+    pad("  ▸ /evidence   evidence trail"),
+    pad("  ▸ /help       command reference"),
+    blank,
+    pad(`  model  ${modelName}`),
+    pad(`  mode   ${mode}`),
+    bottom,
+  ]
+}
+
+function EmptySurface({ mode, modelName, width }: { mode: TuiMode; modelName: string; width: number }) {
+  const lines = emptySurfaceLines(mode, modelName, width)
   return (
     <Box flexDirection="column">
-      <Box flexDirection="row">
-        <Text color={theme.brand} bold>Orcana</Text>
-        <Text color={theme.textDim}>  mode:</Text>
-        <Text color={theme.brand}>{mode}</Text>
-        <Text color={theme.textDim}>  {modelName}</Text>
-      </Box>
-      <Box height={1} />
-      <Text color={theme.textDim}>Try:</Text>
-      <Box flexDirection="row">
-        <Text color={theme.brand}>  /status</Text>
-        <Text color={theme.textDim}>  ·  /gates  ·  /evidence  ·  /models</Text>
-      </Box>
-      <Text color={theme.textDim}>  /help  — all commands</Text>
-      <Box height={1} />
-      <Text color={theme.textDim}>Type your request or / for commands.</Text>
+      {lines.map((line, i) => (
+        <Text key={i} bold={i === 0} color={i === 0 ? theme.brand : i === lines.length - 1 ? theme.textFaint : theme.textDim}>
+          {line}
+        </Text>
+      ))}
     </Box>
   )
 }
@@ -240,6 +256,7 @@ export interface AppShellLayout {
   inputRows: number
   footerHeight: number
   bodyHeight: number
+  sessionRows: number
 }
 
 export function computeEffectiveBodyHeight(layout: Pick<AppShellLayout, "bodyHeight">, modalActive: boolean): number {
@@ -307,8 +324,10 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
     : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
   // Depthline P2: 单条 Composer 分隔线（+1，原 +2）
   const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1 + thinkingDockRows + 1))
-  const bodyHeight = Math.max(10, rows - footerHeight - 3)
-  return { showDash, mode, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight }
+  // 视觉优化：SessionLine ≥60 列占 2 行（品牌行 + 信息行），body 相应让 1 行
+  const sessionRows = cols >= 60 ? 2 : 1
+  const bodyHeight = Math.max(10, rows - footerHeight - 3 - (sessionRows - 1))
+  return { showDash, mode, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight, sessionRows }
 }
 
 // ── 主组件 ──
@@ -461,7 +480,7 @@ export function AppShell(props: AppShellProps) {
       {/* Body: Transcript（单画布，无右栏，Depthline P4 块化渲染） */}
       <Box flexDirection="column" height={effectiveBodyHeight} flexGrow={1}>
         {empty ? (
-          <EmptySurface mode={state.mode} modelName={state.modelName} />
+          <EmptySurface mode={state.mode} modelName={state.modelName} width={cols} />
         ) : (
           <TranscriptViewport
             blocks={blocks}

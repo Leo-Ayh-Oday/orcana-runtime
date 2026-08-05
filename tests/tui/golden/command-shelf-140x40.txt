@@ -1,8 +1,9 @@
-orcana · working · discussion · anthropic/claude-sonnet · ctx 0% · cache 0% · orcana-runtime
+orcana ◉ working
+discussion · anthropic/claude-sonnet · ctx ░░░░░░░░ 0%
 > 打开命令菜单
   
 | 
   
 Routing...
-────────────────────
-↑↓ select    Enter run   Tab insert   Esc close
+╭──────────────────╮
+[↑↓ select]   [Enter] run  [Tab] insert  [Esc] close

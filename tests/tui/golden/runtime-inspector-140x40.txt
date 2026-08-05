@@ -1,4 +1,5 @@
-orcana · done · discussion · anthropic/claude-sonnet · ctx 0% · cache 0% · orcana-runtime
+orcana ● done
+discussion · anthropic/claude-sonnet · ctx ░░░░░░░░ 0%
 > 检查运行状态
   
 | 运行状态如下。
@@ -13,5 +14,5 @@ orcana · done · discussion · anthropic/claude-sonnet · ctx 0% · cache 0% ·
 │ evidence  1 accepted · 0 failed
 │ patches   1 committed
 ╰───────────╯
-────────────────────
-Enter send   / commands   Ctrl+? shortcuts
+╭──────────────────╮
+[Enter] send  [/] commands  [Ctrl+?] shortcuts

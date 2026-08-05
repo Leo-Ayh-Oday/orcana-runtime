@@ -209,7 +209,7 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     expect(layout.footerHeight).toBe(4)
   })
 
-  test("bodyHeight + footerHeight + 3 ≈ rows (normal case)", () => {
+  test("bodyHeight + footerHeight + 4 ≈ rows (normal case, ≥60 cols 双行 SessionLine)", () => {
     const rows = 40
     const layout = computeAppShellLayout({
       rows,
@@ -220,7 +220,8 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
       task: undefined,
       inputChrome: defaultInputChrome,
     })
-    expect(layout.bodyHeight + layout.footerHeight + 3).toBe(rows)
+    expect(layout.sessionRows).toBe(2)
+    expect(layout.bodyHeight + layout.footerHeight + 3 + (layout.sessionRows - 1)).toBe(rows)
   })
 
   test("modal active reduces effective body height for Scrollback", () => {

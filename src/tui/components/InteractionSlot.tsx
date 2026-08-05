@@ -12,7 +12,6 @@
 import React from "react"
 import { Box, Text } from "ink"
 import { theme } from "../theme/theme"
-import { FlowLine } from "./PlanPanel"
 import { fitText } from "./MessageItem"
 import { QuestionPanel } from "./QuestionPanel"
 import type { ClarificationQuestion } from "../../agent/clarification"
@@ -40,7 +39,6 @@ export interface InteractionSlotProps {
 export function ClarificationPanel({ wizard, width }: { wizard: ClarificationWizardState; width: number }) {
   const question = wizard.questions[wizard.index]
   if (!question) return null
-  const flowWidth = Math.max(18, Math.min(width - 4, 72))
 
   return (
     <Box flexDirection="column" paddingX={1} marginBottom={1}>
@@ -67,7 +65,6 @@ export function ClarificationPanel({ wizard, width }: { wizard: ClarificationWiz
           </Box>
         )
       })}
-      <FlowLine width={flowWidth} active />
       <Text color={theme.textFaint}>Up/Down or j/k select  Enter confirm  Esc cancel</Text>
     </Box>
   )

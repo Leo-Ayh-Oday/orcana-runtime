@@ -27,21 +27,6 @@ export interface TaskProgressState {
   steps: TaskStep[]
 }
 
-/** 流线装饰，用于 planning 阶段和 clarification 面板。
- *  Depthline P1: 动画已静态化（tick 固定 0），P5 删除 FlowLine。 */
-export function FlowLine({ width, active }: { width: number; active: boolean }) {
-  const usable = Math.max(18, Math.min(width, 72))
-  const line = Array.from({ length: usable }, (_, index) => {
-    if (!active) return index % 2 === 0 ? "-" : "."
-    const phase = index % 12
-    if (phase === 0) return "="
-    if (phase <= 2 || phase >= 10) return "~"
-    if (phase <= 4 || phase >= 8) return "-"
-    return "."
-  }).join("")
-  return <Text color={active ? C.cyan : C.border}>{line}</Text>
-}
-
 export interface PlanPanelProps {
   task: TaskProgressState | null | undefined
   width: number
@@ -56,7 +41,6 @@ export const PlanPanel = React.memo(function PlanPanel({ task, width }: PlanPane
       <Box flexDirection="column" paddingX={1} marginBottom={1}>
         <Text color={C.cyan}>planning / <Text color={C.dim}>{pulse}</Text></Text>
         <Text color={C.dim}>{fitText(task.goal, Math.max(18, width - 4))}</Text>
-        <FlowLine width={Math.max(18, width - 4)} active />
         <Text color={C.dim}>The model has not produced an accepted plan yet. Checklist will appear after planning gate passes.</Text>
       </Box>
     )

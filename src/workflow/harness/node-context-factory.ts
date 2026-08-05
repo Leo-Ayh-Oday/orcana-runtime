@@ -29,14 +29,22 @@ export function createWorkflowHarnessRuntime(environment: WorkflowHarnessEnviron
   }
 }
 
-/** Build the H11 NodeExecutionContext for one workflow node run. */
-export function createWorkflowNodeContext(runtime: WorkflowHarnessRuntime, nodeId: string): NodeExecutionContext {
+/** Build the H11 NodeExecutionContext for one workflow node run.
+ *  `projectRootOverride` (MACP-M3) redirects the node's relative-path
+ *  resolution into an agent worktree; the ledger/artifact store/cancellation
+ *  stay shared with the run. */
+export function createWorkflowNodeContext(
+  runtime: WorkflowHarnessRuntime,
+  nodeId: string,
+  projectRootOverride?: string,
+): NodeExecutionContext {
+  const scope = projectRootOverride ? { ...runtime.scope, projectRoot: projectRootOverride } : runtime.scope
   const run = {
     runId: runtime.runId,
-    sessionId: runtime.scope.sessionId,
+    sessionId: scope.sessionId,
     status: "running" as const,
     input: { prompt: "" },
-    scope: runtime.scope,
+    scope,
     budget: runtime.budget,
     createdAt: Date.now(),
     eventSequence: 0,

@@ -108,6 +108,10 @@ export interface WorkflowNodeSpec {
    *  Absent (or `function`) = legacy handler/reducer path — the only
    *  permitted deterministic reducers. */
   execution?: WorkflowNodeExecution
+  /** MACP-M3: explicit participant assignment (agentId). Absent → the
+   *  node id prefix ("a1:w:patch" → agent "a1") selects the agent when a
+   *  pool is present; without a pool, writes behave exactly as before. */
+  assignment?: string
 }
 
 /** MACP-M2: which HarnessNode executes this node. Inputs are declared

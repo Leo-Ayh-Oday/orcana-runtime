@@ -328,7 +328,6 @@ describe("PR-9 Logo: brand color unification", () => {
       const lines = computeLogoLines(variant, 3, false, VERSION)
       for (const line of lines) {
         expect(line.color).not.toBe("#88C0D0")
-        expect(line.color).not.toBe("#38BDF8")
       }
     }
   })

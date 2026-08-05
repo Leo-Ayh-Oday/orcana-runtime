@@ -1,6 +1,15 @@
-/** Typed Execution Graph (G0): shadow projection over the run trace. */
+/** Typed Execution Graph (G0–G1): shadow projection + read-only DAG scheduler. */
 
 export * from "./types"
 export { WorkflowProjector, ProjectingRunTrace, wrapRunTrace, type TraceLike } from "./telemetry/workflow-trace"
 export { serializeSnapshot, deserializeSnapshot, WORKFLOW_SNAPSHOT_SCHEMA } from "./telemetry/graph-snapshot"
 export { stableHash, stableHashString, stableSerialize } from "./results/result-hash"
+export { ResultStore } from "./results/result-store"
+export { buildTopology, detectCycle, topologicalOrder } from "./results/edge-store"
+export { HandlerRegistry } from "./execution/handler-registry"
+export { runReadonlyTool } from "./execution/tool-executor"
+export { ReadyQueue } from "./scheduler/ready-queue"
+export { runScheduler, type SchedulerOptions } from "./scheduler/scheduler"
+export { compileFromSnapshot } from "./compiler/snapshot-compiler"
+export { buildReadonlyRegistry } from "./registry"
+export { dedupeValues, mergeDiagnostics } from "./reducers/dedupe"

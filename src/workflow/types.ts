@@ -77,3 +77,46 @@ export interface WorkflowTraceEvent {
   type: string
   data?: Record<string, unknown>
 }
+
+// ── G1: executable DAG (read-only scheduler) ──
+
+/** One executable node in a read-only WorkflowSpec. */
+export interface WorkflowNodeSpec {
+  /** Stable id within the spec: "tool:read_file:1" / "reduce:dedupe:1". */
+  id: string
+  /** Handler id registered in the handler registry ("tool.read_file"). */
+  handler: string
+  /** Static inputs for this node. */
+  input: Record<string, unknown>
+  /** Node ids this node depends on (their results feed the edge store). */
+  dependsOn: string[]
+}
+
+/** An executable, validated read-only DAG. */
+export interface WorkflowSpec {
+  schemaVersion: "0.1"
+  specId: string
+  nodes: WorkflowNodeSpec[]
+  /** Optional budget caps. */
+  maxParallel?: number
+}
+
+export type WorkflowNodeResultStatus = "done" | "failed"
+
+/** Result of a single node execution (edge payload + terminal state). */
+export interface WorkflowNodeResult {
+  nodeId: string
+  status: WorkflowNodeResultStatus
+  /** Handler output (JSON-serializable); error message on failure. */
+  output: unknown
+  error?: string
+  startedAt: number
+  finishedAt: number
+  durationMs: number
+}
+
+export interface WorkflowRunResult {
+  specId: string
+  finishedAt: number
+  results: WorkflowNodeResult[]
+}

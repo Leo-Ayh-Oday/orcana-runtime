@@ -34,10 +34,13 @@ export interface OrcanaConfig {
     mode?: "legacy" | "shadow" | "enabled"
   }
 
-  /** Typed Execution Graph（G0）：shadow 投影 — 只记录不改执行。 */
+  /** Typed Execution Graph（G0–G1）：shadow 投影 + 只读并行调度。 */
   workflow?: {
-    /** "off"（默认）：零开销；"shadow"：投影 run-trace 事件为执行图快照。 */
-    mode?: "off" | "shadow"
+    /** "off"（默认）：零开销；"shadow"：投影为执行图快照；
+     *  "readonly"：shadow 记录 + 只读节点真实并行执行（G1）。 */
+    mode?: "off" | "shadow" | "readonly"
+    /** G1 只读并行上限（默认 4）。 */
+    maxParallel?: number
   }
 }
 

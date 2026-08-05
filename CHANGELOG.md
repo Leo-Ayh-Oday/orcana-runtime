@@ -2,7 +2,16 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.5.23] — 2026-08-05
+## [0.5.24] — 2026-08-05
+
+### Added (Typed Execution Graph, G1)
+- **Read-only DAG scheduler** — `src/workflow/`: bounded-concurrency parallel execution over a validated `WorkflowSpec`; ready queue (indegree 0), failure isolation (a failed node's siblings and dependents keep running), deadlock guard (cycles rejected up front, self-loops included).
+- **Write protection (two layers)** — handler registry rejects any non-`isReadonly` tool at registration; the tool executor re-verifies `isReadonly` before every call (fail-closed). Whitelist: `read_file` / `find_symbol` / `find_references` / `project_structure` / `git_diff` / `git_status` + `reduce.dedupe` / `reduce.merge_diagnostics` / `reduce.noop`.
+- **Graph checkpoint** — `ResultStore` writes every finished node incrementally (`.orcana/workflow/checkpoints/`, redacted); restored runs never re-execute finished nodes.
+- **Snapshot compiler bridge** — G0 snapshots compile to executable read-only specs; write tools in a snapshot are rejected at compile time.
+- **Config** — `workflow.mode` gains `"readonly"` (shadow record + real read-only parallel execution); `workflow.maxParallel` (default 4). G1 is standalone: not wired into `agentLoop` until G3.
+
+
 
 ### Added (Typed Execution Graph, G0)
 - **Shadow graph projection** — `src/workflow/`: `WorkflowProjector` maps the existing run-trace event stream (rounds / tool calls / gate decisions / verifications / terminal events) into a typed execution graph snapshot (nodes, containment edges, metrics), written to `.orcana/workflow/<runId>.graph.json` on run completion.

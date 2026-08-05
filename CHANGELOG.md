@@ -13,7 +13,7 @@ All notable changes to Orcana Runtime.
 ### Fixed
 - **Trace token metering** — `redactForTrace` exempts token/cost counter fields (`inputTokens` etc.); the `/token/i` secret-key pattern was redacting every cost metric to `[redacted]`, zeroing all §12 live-eval observability.
 
-
+## [0.5.22] — 2026-08-05
 
 ### Added (Tool Runtime 2.0, RT-13)
 - **Tool Production Eval** — TL-001..020 scenarios (`tests/capabilities/tool_production_eval.test.ts`) exercising real tool handlers, the executor 8-step chain, policy gates, the router, and the service registry: run sandbox isolation, orphan-free cancellation, patch path-escape / stale-baseHash / atomic rollback, verification-gated commits, artifact-kept truncation, git/process injection safety, SSRF redirect re-validation, web cache mode separation, MCP unknown-tool posture, run-end service cleanup, freshness stale rejection, router schema economy, paired trace events, writable-root coverage, oversized-output artifacts.

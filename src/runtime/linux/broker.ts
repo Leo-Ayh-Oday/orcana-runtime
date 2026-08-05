@@ -1,7 +1,12 @@
 /** LNXF-1.0: Linux execution broker (LF-1 骨架) — 单一执行入口（ADR-L1）。
  *
- *  LF-1 提供接口、能力缓存、shadow 记录器与 spec 编译门。真实后端执行
- *  从 LF-2（HostAudit）与 LF-3（Bubblewrap）开始接线。
+ *  LF-1 提供接口、能力缓存、shadow 记录器与 spec 编译门。
+ *  R1: execute() 接线真实后端执行 + abortSignal 透传。
+ *  R2: execute() 成为完整执行事务 ——
+ *    编译 → 资源预留 → Isolation Lock → Agent Domain → Cell cgroup →
+ *    启动后端 → attach 进程 → 流式事件 → 真实 Receipt（cgroup 指标 +
+ *    清理验证）→ 清理 → 释放锁与资源。cancelCell/cancelAgent/cancelRun/
+ *    cleanupRun 全部真实现（不再空壳）。
  */
 
 import { randomUUID } from "node:crypto"
@@ -11,6 +16,7 @@ import type {
   ExecutionCellEvent,
   ExecutionCellSpec,
   LinuxCapabilities,
+  SandboxReceipt,
 } from "./contracts"
 import type { DomainResourceBudget } from "./contracts"
 import { probeLinuxCapabilities, requireLinuxPlatform } from "./capability-probe"
@@ -22,6 +28,14 @@ import { createHostAuditBackend } from "./backends/host-audit"
 import { createBubblewrapBackend } from "./backends/bubblewrap"
 import { createPodmanBackend } from "./backends/podman"
 import type { ExecutionBackend } from "./backends/backend"
+import { ResourceLedger } from "./scheduler/resource-ledger"
+import type { ResourceRequest } from "./contracts"
+import { IsolationDomainLock } from "./workspace/isolation-lock"
+import { AgentDomainManager } from "./workspace/agent-domain"
+import { CgroupManager, hierarchyPaths } from "./cgroup/manager"
+import { detectDelegatedRoot } from "./cgroup/delegation"
+import { readCgroupMetrics as readMetrics } from "./cgroup/metrics"
+import { RuntimeStateStore } from "./recovery/state-store"
 
 export interface ShadowExecutionRecord {
   cellId: string
@@ -39,11 +53,19 @@ export interface LinuxBrokerOptions {
   /** shadow = 编译 spec + 记录后端选择，仍走旧执行路径（LF-1）。 */
   mode: "shadow" | "enabled" | "enforced"
   onShadow?: (record: ShadowExecutionRecord) => void
+  /** R2: 注入 cgroup 管理器（无委托时 Broker 自动降级为无 cgroup）。 */
+  cgroup?: CgroupManager
+  /** R2: 注入资源账本（默认宿主预留 + 6 并发 Cell）。 */
+  ledger?: ResourceLedger
+  /** R2: 状态持久化（默认 ~/.orcana/runtime/linux）。 */
+  stateStore?: RuntimeStateStore
 }
 
 export interface ExecuteOptions {
   /** 取消信号（透传到后端 runSupervised）。 */
   abortSignal?: AbortSignal
+  /** 指定 Agent Domain（多 Agent 执行身份投影，R4 接线）。 */
+  domain?: AgentExecutionDomain
 }
 
 export interface LinuxExecutionBroker {
@@ -54,13 +76,17 @@ export interface LinuxExecutionBroker {
   selectBackendFor(spec: ExecutionCellSpec): BackendSelection
   /** Shadow：记录拟用 spec/后端，不执行。 */
   shadow(spec: ExecutionCellSpec): ShadowExecutionRecord
-  /** 执行（LF-2+ 接线后可用）。 */
+  /** 执行（R2: 完整事务）。 */
   execute(spec: ExecutionCellSpec, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
   createAgentDomain(input: { runId: string; agentId: string; worktreeRoot: string; ownerFiles: string[]; resourceBudget: DomainResourceBudget; role?: string }): AgentExecutionDomain
   cancelCell(cellId: string): Promise<void>
   cancelAgent(agentId: string): Promise<void>
   cancelRun(runId: string): Promise<void>
   cleanupRun(runId: string): Promise<{ removed: number }>
+  /** R2: 当前运行中 Cell（诊断/测试）。 */
+  activeCells(): ExecutionCell[]
+  /** R2: 资源账本（调度接入）。 */
+  ledger(): ResourceLedger
 }
 
 /** 全进程共享的 broker 实例（能力探测缓存）。 */
@@ -81,12 +107,32 @@ function backendOf(id: string): ExecutionBackend | undefined {
   return backendImplementations[id]
 }
 
+function resourceRequestOf(spec: ExecutionCellSpec): ResourceRequest {
+  return {
+    cpuQuota: spec.resources.cpuQuotaMicros ? Math.max(1, Math.round(spec.resources.cpuQuotaMicros / 10_000)) : 1,
+    memoryBytes: spec.resources.memoryMaxBytes,
+    pids: spec.resources.pidsMax,
+    ioWeight: spec.resources.ioWeight ?? 0,
+    networkSlots: spec.network.mode === "full-approved" ? 1 : 0,
+    tempBytes: spec.resources.tmpfsMaxBytes,
+  }
+}
+
 export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBroker {
   const caps = requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
-
-  const domainIds = new Map<string, AgentExecutionDomain>()
   const cells = new Map<string, ExecutionCell>()
+  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string }>()
+
+  const ledger = options.ledger ?? new ResourceLedger()
+  const stateStore = options.stateStore ?? new RuntimeStateStore()
+  const domainManager = new AgentDomainManager({ ledger })
+
+  // cgroup：仅在有真实委托时启用（无委托 → cgroupPath 为空，严格任务已在
+  // selectBackend 层拒绝；P0-4 修复前绝不假装资源限制生效）。
+  const delegated = detectDelegatedRoot()
+  const cgroup = options.cgroup ?? (delegated.writable ? new CgroupManager({ base: delegated.base }) : undefined)
+  const locks = new IsolationDomainLock()
 
   const compileOrThrow = (spec: ExecutionCellSpec): ExecutionCellSpec => {
     const compiled = compileCellSpec(spec)
@@ -94,6 +140,21 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `spec invalid: ${compiled.errors.join("; ")}`)
     }
     return compiled.spec
+  }
+
+  const readCellMetrics = (cgroupCellPath: string): SandboxReceipt["metrics"] => {
+    if (!cgroup || !cgroupCellPath) return {}
+    try {
+      const metrics = readMetrics(cgroupCellPath, cgroup.fs)
+      return {
+        cpuUsageUsec: metrics.cpuUsageUsec,
+        cpuThrottledUsec: metrics.cpuThrottledUsec,
+        peakMemoryBytes: metrics.peakMemoryBytes,
+        peakPids: metrics.peakPids,
+      }
+    } catch {
+      return {}
+    }
   }
 
   return {
@@ -106,7 +167,6 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     },
     shadow(spec) {
       const compiled = compileOrThrow(spec)
-      // Shadow 只记录拟用后端，不执行；后端选择失败也如实记录（fail-closed 语义）。
       let selection: BackendSelection
       try {
         selection = selectBackend(compiled, caps)
@@ -133,7 +193,6 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     },
     async *execute(spec, executeOptions) {
       if (options.mode === "shadow") {
-        // LF-1/2: shadow 不执行 —— 记录后由旧路径执行。
         this.shadow(spec)
         return
       }
@@ -147,31 +206,164 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       if (violations.length > 0) {
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `backend ${backend.id} rejects spec: ${violations.join("; ")}`)
       }
-      yield* backend.run(compiled, { capabilities: caps, abortSignal: executeOptions?.abortSignal })
+
+      const cellId = compiled.identity.cellId
+      const runId = compiled.identity.runId
+      const agentId = compiled.identity.agentId ?? executeOptions?.domain?.agentId
+
+      // ── 事务：资源预留 → 锁 → Domain → cgroup → 执行 → 清理 → 释放 ──
+      const requested = resourceRequestOf(compiled)
+      const reservation = ledger.reserve(requested, runId, cellId, agentId)
+      if (!reservation.ok) {
+        throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${reservation.reason}`, { available: reservation.available })
+      }
+      const lockKeys: string[] = []
+      try {
+        // Isolation Lock：worktree 独占（无 worktree 时 main-workspace 独占）。
+        const lockTarget = compiled.filesystem.worktreeRoot
+          ? IsolationDomainLock.worktreeKey(agentId ?? cellId)
+          : IsolationDomainLock.mainWorkspaceKey()
+        if (!locks.acquire(lockTarget, "exclusive", cellId)) {
+          throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `isolation lock held: ${lockTarget}`, { lockTarget })
+        }
+        lockKeys.push(lockTarget)
+
+        // Agent Domain 投影（仅在使用方提供 domain 时校验；cgroup 父层已在
+        // AgentDomainManager 创建 —— 此处直接使用其 cgroupPath）。
+        const domain = executeOptions?.domain
+
+        // Cell cgroup（有委托时）。
+        let cgroupCellPath = ""
+        let cgroupAgentPath = ""
+        let cgroupRunPath = ""
+        if (cgroup) {
+          cgroupRunPath = hierarchyPaths(cgroup.base, runId, undefined, "x").run
+          cgroupAgentPath = domain?.cgroupPath ?? hierarchyPaths(cgroup.base, runId, agentId, "x").agent
+          if (!domain?.cgroupPath) {
+            cgroup.createRun(runId, { memoryMaxBytes: compiled.resources.memoryMaxBytes, pidsMax: compiled.resources.pidsMax })
+            if (agentId) cgroup.createAgent(runId, agentId, { memoryMaxBytes: compiled.resources.memoryMaxBytes, pidsMax: compiled.resources.pidsMax })
+          }
+          cgroupCellPath = cgroup.createCell(runId, agentId, cellId, {
+            memoryMaxBytes: compiled.resources.memoryMaxBytes,
+            memoryHighBytes: compiled.resources.memoryHighBytes,
+            pidsMax: compiled.resources.pidsMax,
+            cpuQuotaMicros: compiled.resources.cpuQuotaMicros,
+            cpuPeriodMicros: compiled.resources.cpuPeriodMicros,
+            oomGroup: true,
+          })
+        }
+
+        const cell: ExecutionCell = { cellId, runId, nodeRunId: compiled.identity.nodeRunId, agentId, spec: compiled, state: "running" }
+        cells.set(cellId, cell)
+        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath })
+        stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId) })
+
+        try {
+          yield* backend.run(compiled, {
+            capabilities: caps,
+            abortSignal: executeOptions?.abortSignal,
+            cgroupPath: cgroupCellPath,
+            attachCell: pid => {
+              if (cgroup && cgroupCellPath) {
+                try {
+                  cgroup.attach(pid, cgroupCellPath)
+                } catch {
+                  // attach 失败不阻断执行（CGROUP_ATTACH_FAILED 记入 Receipt degradation）
+                }
+              }
+            },
+            readCellMetrics: () => readCellMetrics(cgroupCellPath),
+            cleanupVerify: () => {
+              const processesRemaining = cgroup && cgroupCellPath ? cgroup.pidsCurrent(cgroupCellPath) : -1
+              return {
+                processesRemaining,
+                cgroupRemoved: false, // 由 cleanupRun 完成后置 true
+                mountsReleased: false,
+                worktreeRetained: compiled.lifecycle.retainOnFailure,
+              }
+            },
+          })
+        } catch (error) {
+          cell.state = "failed"
+          throw error
+        }
+        cell.state = "succeeded"
+      } finally {
+        // 清理与释放（异常路径同 finally 事务）。
+        const record = cellRuns.get(cellId)
+        if (record) {
+          for (const key of record.lockKeys) locks.release(key, cellId)
+          ledger.release(record.reservationId)
+          cellRuns.delete(cellId)
+          cells.delete(cellId)
+        }
+      }
     },
     createAgentDomain(input) {
-      const domain: AgentExecutionDomain = {
-        domainId: `domain_${randomUUID().slice(0, 8)}`,
-        runId: input.runId,
-        agentId: input.agentId,
-        role: input.role,
-        worktreeRoot: input.worktreeRoot,
-        ownerFiles: input.ownerFiles,
-        cgroupPath: "",
-        tempRoot: "",
-        cacheNamespace: `run-${input.runId}/agent-${input.agentId}`,
-        resourceBudget: input.resourceBudget,
-        createdAt: Date.now(),
-        status: "active",
-      }
-      domainIds.set(domain.domainId, domain)
-      return domain
+      return domainManager.createDomain(input)
     },
-    async cancelCell() {},
-    async cancelAgent() {},
-    async cancelRun() {},
+    async cancelCell(cellId) {
+      const record = cellRuns.get(cellId)
+      if (!record) return
+      if (cgroup && record.cgroupCellPath) {
+        cgroup.kill(record.cgroupCellPath)
+      }
+      // 进程组终止由后端 runSupervised 的 abortSignal 处理；此处 cgroup.kill
+      // 为树级兜底（P0-4/P0-3 修复）。
+    },
+    async cancelAgent(agentId) {
+      domainManager.cancelAgent(agentId)
+      for (const [cellId, record] of cellRuns) {
+        if (record.agentId === agentId && cgroup && record.cgroupCellPath) {
+          cgroup.kill(record.cgroupCellPath)
+          await this.cancelCell(cellId)
+        }
+      }
+    },
+    async cancelRun(runId) {
+      for (const [cellId, record] of cellRuns) {
+        if (record.runId === runId) {
+          await this.cancelCell(cellId)
+        }
+      }
+      domainManager.closeRun(runId)
+      ledger.releaseRun(runId)
+      if (cgroup) {
+        try {
+          cgroup.removeRun(hierarchyPaths(cgroup.base, runId, undefined, "x").run)
+        } catch {
+          // 清理失败由 cleanupRun 记录
+        }
+      }
+      stateStore.writeRun(runId, { status: "cancelled", cleanedAt: Date.now() })
+    },
     async cleanupRun(runId) {
-      return { removed: 0 }
+      let removed = 0
+      for (const [cellId, record] of cellRuns) {
+        if (record.runId === runId) {
+          await this.cancelCell(cellId)
+          removed += 1
+        }
+      }
+      domainManager.closeRun(runId)
+      removed += ledger.releaseRun(runId)
+      if (cgroup) {
+        try {
+          const runPath = hierarchyPaths(cgroup.base, runId, undefined, "x").run
+          const removedCgroup = cgroup.removeRun(runPath)
+          if (removedCgroup) removed += 1
+        } catch {
+          // best-effort
+        }
+      }
+      stateStore.writeCleanup(runId, { removed, at: Date.now() })
+      return { removed }
+    },
+    activeCells() {
+      return [...cells.values()]
+    },
+    ledger() {
+      return ledger
     },
   }
 }

@@ -22,6 +22,8 @@ import { isHarnessNode } from "../harness/workflow-node-adapter"
 import { createWorkflowHarnessRuntime } from "../harness/node-context-factory"
 import { executeHarnessNode } from "../execution/harness-node-executor"
 import type { WorkflowHarnessEnvironment } from "../harness/environment"
+import { enforceNodeAssignment, enforceActualWrites, ownershipDeniedResult, createWorktreeRegistry } from "../execution/workflow-execution-context"
+import type { WorkflowNodeExecutionContext } from "../agents/workspace-context"
 
 export interface SchedulerOptions {
   maxParallel?: number
@@ -88,6 +90,8 @@ export async function runScheduler(
   const harnessRuntime = options.harness
     ? createWorkflowHarnessRuntime(options.harness, `workflow:${spec.specId}`)
     : null
+  // MACP-M3: worktrees created during this run, disposed when it finishes.
+  const worktreeRegistry = createWorktreeRegistry()
   // G3 write protection covers both handler writes and H11 tool nodes
   // (write-class capabilities), so single-writer semantics apply uniformly.
   const writeNodeIds = new Set(
@@ -123,7 +127,7 @@ export async function runScheduler(
   const running = new Map<string, Promise<void>>()
   const finished = new Set<string>(spec.nodes.filter(n => store.has(n.id)).map(n => n.id))
 
-  const launch = (node: import("../types").WorkflowNodeSpec): void => {
+  const launch = (node: import("../types").WorkflowNodeSpec, enforcement: import("../execution/workflow-execution-context").NodeEnforcement): void => {
     const isWrite = writeNodeIds.has(node.id)
     const isHarness = isHarnessNode(node)
     const promise = (async () => {
@@ -188,8 +192,28 @@ export async function runScheduler(
       const lock = isWrite ? await cc.acquireWrite() : null
       try {
         const result = isHarness && harnessRuntime
-          ? await executeHarnessNode(node, harnessRuntime, store)
+          ? await executeHarnessNode(node, harnessRuntime, store, enforcement.projectRoot !== harnessRuntime.scope.projectRoot ? enforcement.projectRoot : undefined)
           : await executeNode(node, registry, store)
+        // MACP-M3 task 8/9: actual written paths vs declared ownership —
+        // only for assigned write nodes (no pool → legacy, unchanged).
+        if (result.status === "done" && isWrite && enforcement.assignment) {
+          const violation = enforceActualWrites(node, enforcement, result.output)
+          if (violation) {
+            const now = Date.now()
+            const denied: import("../types").WorkflowNodeResult = {
+              nodeId: node.id,
+              status: "failed",
+              output: null,
+              error: `workflow: ownership_denied — ${violation}`,
+              errorKind: "ownership_denied",
+              startedAt: now,
+              finishedAt: now,
+              durationMs: 0,
+            }
+            store.put(denied)
+            return denied
+          }
+        }
         if (result.status === "done") {
           if (isWrite) {
             // G5: a completed write invalidates all read results.
@@ -238,7 +262,19 @@ export async function runScheduler(
         queue.onDependencyDone(node.id)
         continue
       }
-      launch(node)
+      // MACP-M3: participant assignment — pre-check ownership of declared
+      // writes, prepare the agent worktree; denials fail the node closed.
+      const enforcement = harnessRuntime
+        ? enforceNodeAssignment(node, writeNodeIds.has(node.id), harnessRuntime, options.pool, worktreeRegistry)
+        : { assignment: null as import("../agents/assignment").ParticipantAssignment | null, projectRoot: options.harness?.scope.projectRoot ?? "" }
+      if (enforcement.deniedReason) {
+        const denied = ownershipDeniedResult(node.id, enforcement.deniedReason)
+        store.put(denied)
+        finished.add(node.id)
+        queue.onDependencyDone(node.id)
+        continue
+      }
+      launch(node, enforcement)
     }
     if (finished.size === spec.nodes.length) break
     if (running.size === 0) {
@@ -247,6 +283,9 @@ export async function runScheduler(
     }
     await Promise.race([...running.values()])
   }
+
+  // MACP-M3 task 13: dispose every worktree this run created.
+  worktreeRegistry.dispose()
 
   const results = store.all()
   const base: WorkflowRunResult = {

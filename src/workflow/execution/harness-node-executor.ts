@@ -21,11 +21,12 @@ export async function executeHarnessNode(
   node: WorkflowNodeSpec,
   runtime: WorkflowHarnessRuntime,
   store: ResultStore,
+  projectRootOverride?: string,
 ): Promise<WorkflowNodeResult> {
   const startedAt = Date.now()
   try {
     const harnessNode = buildHarnessNode(node, runtime.environment)
-    const context = createWorkflowNodeContext(runtime, node.id)
+    const context = createWorkflowNodeContext(runtime, node.id, projectRootOverride)
     const input = harnessInputFor(node)
     const { result } = await runNodeToResult(harnessNode, context, input)
     const adapted = adaptNodeResult(result, { nodeId: node.id, startedAt })

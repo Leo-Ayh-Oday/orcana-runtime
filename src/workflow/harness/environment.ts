@@ -53,6 +53,13 @@ export interface WorkflowHarnessEnvironment {
 
   /** Node context slice; defaults to a minimal empty slice. */
   context?: import("../../harness/contracts/context").ContextSlice
+
+  /** MACP-M3: explicit policy allowances for node-mode tool execution.
+   *  Without this, ToolNode derives a strict gate from the run scope
+   *  (project permission file); a write capability that is not permitted
+   *  there is blocked. `allowCapabilities` grants specific capability ids
+   *  outright (still strict: no interactive confirm). */
+  policy?: { allowCapabilities?: string[] }
 }
 
 export function isWorkflowHarnessEnvironment(value: unknown): value is WorkflowHarnessEnvironment {

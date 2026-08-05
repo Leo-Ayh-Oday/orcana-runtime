@@ -5,6 +5,7 @@ import { StreamEventAdapter } from "../state/event-adapter"
 import { TuiStore } from "../state/tui-store"
 import type { TuiState } from "../state/types"
 import { selectEvidenceSummary, selectGateSummary } from "../state/selectors"
+import { cleanAgentError } from "../state/adapter-helpers"
 import { resolveRuntimeControlIntent } from "../../runtime/control-plane"
 import { COMMANDS, formatHelpText } from "./registry"
 
@@ -151,6 +152,57 @@ function formatStatus(state: TuiState): string {
   ].join("\n")
 }
 
+/** 解析 /models 参数：<模型ID> 直接切换；<provider> 开过滤对话框；无匹配给提示。 */
+type ModelArgIntent =
+  | { kind: "dialog"; provider?: string }
+  | { kind: "switch"; providerId: string; modelId: string; displayName: string }
+  | { kind: "notfound"; providers: string[] }
+
+export function resolveModelArg(runtime: Runtime, arg: string | undefined): ModelArgIntent {
+  if (!arg) return { kind: "dialog" }
+  const needle = arg.trim().toLowerCase()
+  const all = runtime.registry.allModels
+  const providers = [...new Set(all.map(m => m.providerId))].sort()
+  const exact = all.find(m => m.id.toLowerCase() === needle)
+  if (exact) return { kind: "switch", providerId: exact.providerId, modelId: exact.id, displayName: exact.displayName ?? exact.id }
+  const asProvider = providers.find(p => p.toLowerCase() === needle)
+  if (asProvider) return { kind: "dialog", provider: asProvider }
+  const partial = all.filter(m => m.id.toLowerCase().includes(needle))
+  if (partial.length === 1) {
+    const m = partial[0]!
+    return { kind: "switch", providerId: m.providerId, modelId: m.id, displayName: m.displayName ?? m.id }
+  }
+  return { kind: "notfound", providers }
+}
+
+/** 应用模型切换（configureModel + store 状态 + 活动消息）。 */
+function applyModelSwitch(
+  context: TuiCommandContext,
+  target: { providerId: string; modelId: string; displayName: string },
+): void {
+  void context.runtime.configureModel({ providerId: target.providerId, modelId: target.modelId })
+    .then(() => {
+      context.store.dispatch({ type: "ui.model_name", name: target.modelId })
+      context.store.dispatch({
+        type: "session.started",
+        sessionId: context.runtime.sessionId,
+        repoRoot: process.cwd(),
+        provider: target.providerId,
+        model: target.modelId,
+      })
+      context.store.dispatch({ type: "ui.error_line", text: "" })
+      context.addSystemMessage(`模型已切换：${target.providerId} / ${target.displayName}`)
+    })
+    .catch(err => {
+      context.addSystemMessage(`切换模型失败：${cleanAgentError(err instanceof Error ? err.message : String(err))}`)
+    })
+}
+
+function formatProvidersList(providers: string[]): string {
+  if (providers.length === 0) return "（无已注册模型）"
+  return providers.join(", ")
+}
+
 export function dispatchTuiCommand(input: string, context: TuiCommandContext): TuiCommandDispatchResult {
   const intent = resolveRuntimeControlIntent(input, COMMANDS, { isRunning: context.isRunning() })
   if (intent.kind === "agent_prompt" || intent.kind === "empty") return "not_command"
@@ -195,11 +247,19 @@ export function dispatchTuiCommand(input: string, context: TuiCommandContext): T
       context.addSystemMessage(formatPatchStatus(state))
       return "handled"
     case "models":
-      context.openModels(arg)
+    case "connect": {
+      const modelArg = resolveModelArg(context.runtime, arg)
+      if (modelArg.kind === "switch") {
+        applyModelSwitch(context, modelArg)
+        return "handled"
+      }
+      if (modelArg.kind === "notfound") {
+        context.addSystemMessage(`未找到模型或 provider：${arg}。可用 provider：${formatProvidersList(modelArg.providers)}。\n可用 /models <模型ID> 直接切换，或 /models 打开选择器。`)
+        return "handled"
+      }
+      context.openModels(modelArg.provider)
       return "handled"
-    case "connect":
-      context.openModels(arg)
-      return "handled"
+    }
     case "effort": {
       const value = arg
       if (value === "auto" || value === "high" || value === "max") {

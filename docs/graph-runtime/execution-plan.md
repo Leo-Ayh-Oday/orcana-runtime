@@ -514,7 +514,71 @@ runScheduler:
 - [x] Replay 不重新执行已成功确定性节点 → scheduler-replay.test.ts（replayed 标记 + durationMs 0 + 工具调用计数不增）
 - [x] 旧会话兼容 → 无 cache/checkpointDir 时全量门禁 455 pass 无回归
 
-## 12. 实施记录
+## 11. G6 详细任务单（v0.7.3，Dynamic Workflow Compiler）
+
+参考稿 PR-G6：模型根据任务动态选择受控图。限制：只输出 JSON / 只能使用注册节点类型 / 只能使用注册 Handler / 不能定义任意代码 / 必须通过 Schema、DAG、Capability、Budget、Side-effect 校验 / 高风险 Graph 需要人工批准 / 默认关闭。
+
+融合架构决策：kernel 零改动；动态编译产物 = WorkflowSpec（G2 静态模板同款），与静态模板**共享 Scheduler**；五合一 validateSpec 全部复用，动态层只加三个新维度。
+
+### 11.1 设计决策
+
+| 参考稿 | 融合决策 |
+|---|---|
+| 只输出 JSON | `parseDynamicSpec`：纯 JSON.parse，拒绝任何非 JSON / 非对象载荷；永不 eval（任意代码路径不存在） |
+| 只能使用注册节点类型 | `type` 字段（read/write/verify/reduce）注册表 + 与 handler 一致性校验（type=read 但写 handler → 拒绝） |
+| 只能使用注册 Handler | 复用 validateCapabilities（knownHandlers 来自运行时 registry） |
+| Schema/DAG/Capability/Budget/Side-effect | 复用 validateSpec 五合一，零重写 |
+| 非法写并发拒绝 | G3 单写者天然串行 + maxParallel≥1 预算校验；动态层加显式断言测试 |
+| 缺少验证节点自动补齐或拒绝 | **默认拒绝**（`missing_verification` 维度：写节点必须有 verify 后继）；`autoAppendVerification` 选项可补齐（append 依赖全部写节点的 verify 节点） |
+| 高风险 Graph 人工批准 | `permission-gate.ts`：evaluate → `approved`（纯只读）/ `needs_approval`（含写节点）/ `rejected`（校验失败）；`.approve()` 解锁 spec；未经编译的 JSON 永远拿不到 spec |
+| 模型无法绕过 PermissionGate | 恶意载荷（未知 handler / 超预算 / 类型错配 / eval 字符串 / 非 JSON）→ 全 rejected，编译不产出 spec |
+| 默认关闭 | 动态编译仅显式 API，不接主链；无 config 字段变更 |
+
+### 11.2 新增文件
+
+```text
+src/workflow/dynamic/
+├── dynamic-schema.ts      # DynamicGraph JSON 结构（schemaVersion/specId/mode/maxParallel/nodes[]）+ parseDynamicSpec
+├── dynamic-compiler.ts    # compileDynamicSpec：parse → normalize → 动态维度校验（type 注册表 / 验证缺失 / 写预算）→ validateSpec
+└── permission-gate.ts     # PermissionGate：evaluate / approve / 决策类型
+```
+
+### 11.3 动态载荷结构
+
+```json
+{
+  "schemaVersion": "0.1",
+  "specId": "model-chosen-graph",
+  "mode": "read-write",
+  "maxParallel": 4,
+  "nodes": [
+    { "id": "r:locate", "type": "read", "handler": "tool.find_symbol", "input": { "query": "add" }, "dependsOn": [] },
+    { "id": "w:patch", "type": "write", "handler": "tool.apply_patch", "input": { "patches": [] }, "dependsOn": ["r:locate"] },
+    { "id": "v:verify", "type": "verify", "handler": "tool.run_targeted_verification", "input": { "files": [] }, "dependsOn": ["w:patch"] }
+  ]
+}
+```
+
+### 11.4 G6 验收映射
+
+- [x] 非法 Handler 拒绝 → dynamic-compiler.test.ts（unknown handler → rejected；read-only ctx 写 handler → rejected）
+- [x] 非法写并发拒绝 → dynamic-compiler.test.ts（maxParallel<1 / 写环 → rejected；多写节点正确串行）
+- [x] 缺少验证节点自动补齐或拒绝 → dynamic-compiler.test.ts（缺 verify → rejected；autoAppend 补齐后验证节点存在）
+- [x] 模型无法绕过 PermissionGate → permission-gate.test.ts（恶意载荷全 rejected；needs_approval 未 approve 无 spec；approve 后 spec 可执行且与静态模板共享 scheduler）
+- [x] 动态 Graph 与静态模板共享 Scheduler → permission-gate.test.ts（编译产物直接 runScheduler，G3 写/验证语义一致）
+
+| 阶段 | 版本 | 落地 | 验证 |
+|---|---|---|---|
+| G6 | v0.7.3 | Dynamic Workflow Compiler：dynamic/dynamic-schema（纯 JSON.parse，无 eval；schemaVersion/mode/maxParallel/节点结构白名单）、dynamic/dynamic-compiler（节点类型↔handler 一致性、写预算 maxWrites、验证缺失默认拒绝/autoAppendVerification 补齐、复用五合一 validateSpec）、dynamic/permission-gate（approved 只读自动放行 / needs_approval 写图待 approve() / rejected 恶意载荷无 spec）；动态产物 = WorkflowSpec，与静态模板共享 scheduler；默认关闭（纯显式 API） | 受限门禁 468 pass（新增 13 项 G6 验收） |
+
+**G6 验收映射（§11.4）：**
+- [x] 非法 Handler 拒绝 → dynamic-compiler.test.ts（unknown handler / read-only 模式写 handler 均 rejected）
+- [x] 非法写并发拒绝 → dynamic-compiler.test.ts（maxParallel<1 / 写环 → rejected）
+- [x] 缺少验证节点自动补齐或拒绝 → dynamic-compiler.test.ts（默认 rejected；autoAppendVerification 补齐并告警）
+- [x] 模型无法绕过 PermissionGate → permission-gate.test.ts（恶意载荷 rejected 无 spec 无批准路径；needs_approval 未 approve 拿不到 spec）
+- [x] 动态 Graph 与静态模板共享 Scheduler → permission-gate.test.ts（编译产物直接 runScheduler，G3 写/验证语义一致）
+
+## 13. 实施记录
 
 | 阶段 | 版本 | 落地 | 验证 |
 |---|---|---|---|

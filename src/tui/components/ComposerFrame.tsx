@@ -22,10 +22,10 @@ export interface ComposerFrameProps {
   width: number
 }
 
-/** 生成分隔线字符串，保护下限。 */
+/** 生成分隔线字符串（端点装饰，fog 色），保护下限。 */
 export function makeDivider(width: number): string {
   const w = Math.max(20, width)
-  return "─".repeat(w)
+  return `╭${"─".repeat(Math.max(0, w - 2))}╮`
 }
 
 export const ComposerFrame = React.memo(function ComposerFrame({ children, width }: ComposerFrameProps) {

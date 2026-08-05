@@ -12,7 +12,8 @@
  */
 
 import type { TuiState } from "../state/types"
-import { buildSessionLineFields } from "../components/SessionLine"
+import { renderSessionLine } from "../components/SessionLine"
+import { emptySurfaceLines } from "../components/AppShell"
 import { deriveTranscriptBlocks } from "./derive-blocks"
 import { displayModeFor, EMPTY_VIEW } from "./block-model"
 import { blockToLines, type BlockLine } from "../components/TranscriptViewport"
@@ -38,8 +39,8 @@ export function presentState(state: TuiState, opts: GoldenOptions): string {
   const out: string[] = []
   const isWorking = !state.done && !state.errorLine
 
-  // ── 1. SessionLine ──
-  const fields = buildSessionLineFields({
+  // ── 1. SessionLine（双行：品牌行 + 信息行） ──
+  const sessionLines = renderSessionLine({
     mode: state.mode,
     done: state.done,
     errorLine: state.errorLine,
@@ -54,7 +55,7 @@ export function presentState(state: TuiState, opts: GoldenOptions): string {
     cachePct: state.tokens.cacheHitRate !== undefined ? Math.round(state.tokens.cacheHitRate * 100) : 0,
     cols,
   })
-  out.push(`orcana · ${fields.map(f => f.text).join(" · ")}`)
+  out.push(...sessionLines)
 
   // ── 2. Transcript（块化 + 视口） ──
   const blocks = deriveTranscriptBlocks(state)
@@ -67,7 +68,8 @@ export function presentState(state: TuiState, opts: GoldenOptions): string {
     }
   }
 
-  const chromeRows = 3 // session(1) + composer(1) + hints(1)
+  const sessionRows = cols >= 60 ? 2 : 1
+  const chromeRows = 3 + (sessionRows - 1) // session + composer(1) + hints(1)
   const viewHeight = Math.max(4, rows - chromeRows)
   const maxOffset = Math.max(0, allLines.length - viewHeight)
   // golden 一律 auto-follow（scrollOffset = 0）
@@ -83,7 +85,15 @@ export function presentState(state: TuiState, opts: GoldenOptions): string {
     transcriptLines.push(`${line.marker} ${indent}${line.text}`)
   }
   if (hiddenBelow) transcriptLines.push("  ↓ newer")
-  out.push(transcriptLines.join("\n") || "(empty)")
+  const transcriptText = transcriptLines.join("\n")
+  if (transcriptText) {
+    out.push(transcriptText)
+  } else if (state.messages.length === 0 && state.done) {
+    // 空态：品牌面板（与 EmptySurface 一致）
+    out.push(emptySurfaceLines(state.mode, state.modelName, cols).join("\n"))
+  } else {
+    out.push("(empty)")
+  }
 
   // ── 3. Overlay（inspector） ──
   if (overlay === "inspector") {
@@ -110,10 +120,11 @@ export function presentState(state: TuiState, opts: GoldenOptions): string {
   }
 
   // ── 6. Composer + HintBar ──
-  out.push("─".repeat(Math.min(cols - 2, 20)))
+  const divider = `╭${"─".repeat(Math.max(0, Math.min(cols - 2, 20) - 2))}╮`
+  out.push(divider)
   const context = hintContext ?? (state.clarification ? "Clarification" : "Scrollback")
   const hints = hintsForContext(context, isWorking, cols)
-  out.push(hints.entries.map(e => `${e.shortcut} ${e.label.trim()}`).join("   "))
+  out.push(hints.entries.map(e => `[${e.shortcut}] ${e.label.trim()}`).join("  "))
 
   return out.join("\n")
 }

@@ -1,9 +1,9 @@
-orcana · ! gate blocked: writable-root · discussion
+orcana ✕ gate blocked: writable-root  discussion
 > 提交高风险变更
   
 | 变更被门禁拦截。
   
 + 1 gate · 1 evidence
 gate blocked: writable-root
-────────────────────
-Enter send   / commands
+╭──────────────────╮
+[Enter] send  [/] commands

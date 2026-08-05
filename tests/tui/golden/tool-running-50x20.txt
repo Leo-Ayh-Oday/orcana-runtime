@@ -1,4 +1,4 @@
-orcana · working · discussion
+orcana ◉ working  discussion
 > 实现新的 retry policy
   
 | 开始检查执行路径。
@@ -6,5 +6,5 @@ orcana · working · discussion
 + 1 tool call
     read: src/runtime/retry-policy.ts
 Running read  ·  read
-────────────────────
-Enter queue
+╭──────────────────╮
+[Enter] queue

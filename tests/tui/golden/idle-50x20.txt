@@ -1,4 +1,16 @@
-orcana · done · discussion
-(empty)
-────────────────────
-Enter send   / commands
+orcana ● done  discussion
+╭─ orcana ────────────────────────────────╮
+│                                        │
+│   ◉  Orcana Agent Runtime              │
+│      knowledge-native coding           │
+│                                        │
+│   ▸ /runtime    runtime inspector      │
+│   ▸ /gates      gate ledger            │
+│   ▸ /evidence   evidence trail         │
+│   ▸ /help       command reference      │
+│                                        │
+│   model  claude-sonnet                 │
+│   mode   discussion                    │
+╰────────────────────────────────────────╯
+╭──────────────────╮
+[Enter] send  [/] commands

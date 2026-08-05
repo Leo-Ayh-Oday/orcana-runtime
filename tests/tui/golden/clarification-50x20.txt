@@ -1,6 +1,18 @@
-orcana · done · discussion
-(empty)
+orcana ● done  discussion
+╭─ orcana ────────────────────────────────╮
+│                                        │
+│   ◉  Orcana Agent Runtime              │
+│      knowledge-native coding           │
+│                                        │
+│   ▸ /runtime    runtime inspector      │
+│   ▸ /gates      gate ledger            │
+│   ▸ /evidence   evidence trail         │
+│   ▸ /help       command reference      │
+│                                        │
+│   model  claude-sonnet                 │
+│   mode   discussion                    │
+╰────────────────────────────────────────╯
 clarify 1/1 / choose one
   选择实现方式？
-────────────────────
-↑↓ or j/k select    Enter confirm   Esc cancel
+╭──────────────────╮
+[↑↓ or j/k select]   [Enter] confirm  [Esc] cancel

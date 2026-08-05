@@ -1,15 +1,12 @@
-/** SessionLine — 唯一顶部状态行（Depthline P2）。
+/** SessionLine — 唯一顶部状态区（Depthline P2 + 视觉优化）。
  *
- *  替代 HeaderBar + StatusBar。字段优先级链（评审修正 #7）：
- *    blocked/error > running/idle > queue > mode > model > ctx > provider > branch/path
+ *  双行布局（≥60 列）：
+ *    行1  ◉ orcana ● done            （符号化状态徽标）
+ *    行2  mode discussion · deepseek-v4-pro · ctx ▓▓▓░░░░░ 25%
+ *  窄屏（<60 列）折叠为单行（字段优先级链）。
  *
- *  降级表：
- *    ≥120: branch · state · mode · provider/model · ctx · queue
- *    80–119: state · mode · model · ctx · queue
- *    60–79: state · mode · short-model · queue
- *    <60: state · mode · queue
- *
- *  buildSessionLineFields 为纯函数，供单元测试断言各档位裁剪。
+ *  buildSessionLineFields 保留为纯函数（字段链测试兼容），
+ *  renderSessionLine 为最终双行呈现文本（golden 复用）。
  */
 
 import React from "react"
@@ -133,17 +130,99 @@ function shortModel(full: string, maxLen = 40): string {
   return full.slice(0, maxLen - 3) + "..."
 }
 
+/** ctx 块条（静态文本，无动画）：▓ 已用 · ░ 空闲，按百分比着色。 */
+export function ctxBar(pct: number, slots = 8): string {
+  const clamped = Math.max(0, Math.min(100, pct))
+  const filled = Math.round((clamped / 100) * slots)
+  return "▓".repeat(filled) + "░".repeat(slots - filled)
+}
+
+/** 状态符号 + 标签（静态）。 */
+export function stateGlyph(isWorking: boolean, done: boolean, errorLine: string): { glyph: string; label: string; color: string } {
+  if (errorLine) return { glyph: "✕", label: errorLine.slice(0, 30), color: theme.error }
+  if (done) return { glyph: "●", label: "done", color: theme.success }
+  if (isWorking) return { glyph: "◉", label: stateLabel(isWorking, ""), color: theme.brand }
+  return { glyph: "○", label: "idle", color: theme.textFaint }
+}
+
+/** 双行呈现（纯函数，golden/测试复用）。窄屏折叠为单行。 */
+export function renderSessionLine(data: SessionLineData): string[] {
+  const { cols, mode, done, errorLine, isWorking, queueCount, provider, modelName, ctxPct, cachePct } = data
+  const glyph = stateGlyph(isWorking, done, errorLine)
+
+  // 行1：品牌 + 状态徽标（永不裁剪）
+  const line1 = `orcana ${glyph.glyph} ${glyph.label}`
+
+  if (cols < 60) {
+    const fields = buildSessionLineFields(data).filter(f => f.key !== "state")
+    const extra = fields.map(f => f.text).join(" · ")
+    return [extra ? `${line1}  ${extra}` : line1]
+  }
+
+  // 行2：mode · model · ctx 块条 · cache
+  const parts: string[] = []
+  if (cols >= 60) parts.push(modeLabel(mode))
+  if (cols >= 80) {
+    parts.push(provider ? `${provider}/${shortModel(modelName, 24)}` : shortModel(modelName, 24))
+    parts.push(`ctx ${ctxBar(ctxPct)} ${ctxPct}%`)
+  }
+  if (cols >= 120 && cachePct > 0) parts.push(`cache ${cachePct}%`)
+  if (queueCount > 0) parts.push(`q${queueCount}`)
+  const line2 = parts.join(" · ")
+  return line2 ? [line1, line2] : [line1]
+}
+
 export const SessionLine = React.memo(function SessionLine({ data }: { data: SessionLineData }) {
-  const fields = buildSessionLineFields(data)
+  const glyph = stateGlyph(data.isWorking, data.done, data.errorLine)
+  const twoLine = data.cols >= 60
+
+  const line2Parts: string[] = []
+  if (twoLine) {
+    line2Parts.push(modeLabel(data.mode))
+    if (data.cols >= 80) {
+      const combined = data.provider ? `${data.provider}/${data.modelName}` : data.modelName
+      line2Parts.push(shortModel(combined, 24))
+    }
+  }
+  const ctxPct = data.ctxPct
+  const ctxColor = ctxPct > 50 ? theme.error : ctxPct > 30 ? theme.warning : theme.success
+
   return (
-    <Box flexDirection="row" height={1} overflow="hidden">
-      <Text bold color={theme.brand}>orcana</Text>
-      {fields.map(field => (
-        <React.Fragment key={field.key}>
-          <Text color={theme.textFaint}> · </Text>
-          <Text color={field.color}>{field.text}</Text>
-        </React.Fragment>
-      ))}
+    <Box flexDirection="column">
+      <Box flexDirection="row" height={1} overflow="hidden">
+        <Text bold color={theme.brand}>orcana</Text>
+        <Text color={theme.textFaint}> </Text>
+        <Text color={glyph.color}>{glyph.glyph}</Text>
+        <Text color={glyph.color}>{glyph.label}</Text>
+        {data.queueCount > 0 && (
+          <Text color={theme.brand}>  q{data.queueCount}</Text>
+        )}
+      </Box>
+      {twoLine && line2Parts.length > 0 && (
+        <Box flexDirection="row" height={1} overflow="hidden">
+          <Text color={theme.textFaint}>{line2Parts[0]}</Text>
+          {line2Parts.length > 1 && (
+            <>
+              <Text color={theme.textFaint}>  ·  </Text>
+              <Text color={theme.textDim}>{line2Parts[1]}</Text>
+            </>
+          )}
+          {data.cols >= 80 && (
+            <>
+              <Text color={theme.textFaint}>  ·  </Text>
+              <Text color={ctxColor}>ctx </Text>
+              <Text color={ctxColor}>{ctxBar(data.ctxPct)}</Text>
+              <Text color={ctxColor}> {data.ctxPct}%</Text>
+              {data.cols >= 120 && data.cachePct > 0 && (
+                <>
+                  <Text color={theme.textFaint}>  ·  </Text>
+                  <Text color={data.cachePct > 80 ? theme.success : theme.warning}>cache {data.cachePct}%</Text>
+                </>
+              )}
+            </>
+          )}
+        </Box>
+      )}
     </Box>
   )
 })

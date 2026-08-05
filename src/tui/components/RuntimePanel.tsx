@@ -18,7 +18,6 @@ import { Box, Text } from "ink"
 import { C, theme } from "../theme/theme"
 import type { TuiRipplePhase } from "../state/types"
 import type { RuntimePanelData } from "../state/selectors"
-import { useClock } from "../clock"
 import { getGlyphTheme } from "../tokens"
 
 // ── 纯函数（导出供测试） ──
@@ -144,7 +143,8 @@ export interface RuntimePanelProps extends RuntimePanelData {
 
 export const RuntimePanel = React.memo(function RuntimePanel(props: RuntimePanelProps) {
   const { ripplePhase, rippleFindings, gateSummary, evidenceSummary, patchSummary, activeTools } = props
-  const { tick } = useClock()
+  // Depthline P1: tick 静态化（原 useClock 全局时钟已删除），P5 移除 ripple 动画
+  const tick = 0
   const width = props.width ?? 38
 
   // idle 时折叠为单行，节省空间

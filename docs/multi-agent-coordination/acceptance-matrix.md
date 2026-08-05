@@ -10,7 +10,7 @@
 | M3 | UNOWNED_WRITE=0 / WORKTREE_ESCAPE=0 / SHARED_WORKSPACE_MULTI_WRITE=0 / SINGLE_AGENT_REGRESSION=0 | **PASS (v0.8.3)** | ownership.test.ts 12 项：owned 写通过 / 他人文件拒绝 / declared≠actual 拒绝 / ../ 逃逸拒绝 / symlink 逃逸拒绝 / 绝对路径绕过拒绝 / planner 不可写 / 双 agent 独立 worktree 写入且主工作区不变 / 运行结束 dispose / 崩溃遗留检测 / 无 pool 与未分配节点旧行为不变；全量门禁 858 pass |
 | M4 | PERSISTENT_INTERRUPT / DOUBLE_RESUME=0 / STALE_RESUME_ACCEPTED=0 / PROCESS_BOUND_WAITING=0 | **PASS (v0.8.4)** | interrupts.test.ts 11 项：暂停+记录落盘 / 重启读取 waiting / 子图停止 / 合法回复恢复 / 错误 schema 拒 / 过期 token 拒 / 图版本变化拒 / 重复使用拒 / 工作区变化拒 / checkpoint 恢复不重跑 / digest 稳定性；全量门禁 869 pass |
 | M5 | AUTOMATIC_CONFLICT_OVERWRITE=0 / POST_MERGE_VERIFICATION / PARTIAL_INTEGRATION=0 | 待做 | — |
-| M6 | PLAN_CONTRACT_SCHEMA / HARD_CRITERION_BYPASS=0 / FAKE_DETERMINISTIC_CHECK=0 | 待做 | — |
+| M6 | PLAN_CONTRACT_SCHEMA / HARD_CRITERION_BYPASS=0 / FAKE_DETERMINISTIC_CHECK=0 | **PASS (v0.8.6)** | plan-contract.test.ts 17 项：schema 门 / 缺 ID 拒 / 重复 ID 拒 / 写任务无验证拒 / soft-only 拒 / 自动 hard 注入 / evidence 免注入 / semantic 伪装拒 / semantic 缺 review 拒 / 结构非法拒 / 缺版本拒 / evaluator 机械判定 / semantic 永不自动过 / evidence 匹配 / 编译验证节点 / 旧 doneCriteria 兼容；全量门禁 901 pass |
 | M7 | ROLE_OUTPUT_SCHEMA / SELF_APPROVAL=0 / ROLE_AUTHORITY_LEAK=0 | 待做 | — |
 | M8 | STATIC_MULTI_AGENT_PIPELINE / PLANNER_FAILURE_CODER_START=0 / UNVERIFIED_MERGE_ACCEPTED=0 / SINGLE_AGENT_DEFAULT_CHANGED=0 | 待做 | — |
 | M9 | DETERMINISTIC_ADJUDICATION / HARD_VETO_BYPASS=0 / EVIDENCE_BYPASS=0 | 待做 | — |

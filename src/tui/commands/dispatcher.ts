@@ -22,8 +22,8 @@ export interface TuiCommandContext {
   openModels: (provider?: string) => void
   openEffort: () => void
   setThinkEffort: (value: ThinkEffort) => void
-  /** Depthline P2: 打开/关闭 RuntimeInspector overlay。 */
-  toggleInspector: () => void
+  /** Depthline P3: 分发键盘动作（Command → Action 映射）。 */
+  dispatchAction: (id: string) => void
 }
 
 export type TuiCommandDispatchResult = "handled" | "pass_to_agent" | "not_command"
@@ -214,10 +214,14 @@ export function dispatchTuiCommand(input: string, context: TuiCommandContext): T
     case "status":
       context.addSystemMessage(formatStatus(state))
       return "handled"
-    case "runtime":
-      context.toggleInspector()
-      return "handled"
-    default:
+    default: {
+      // Depthline P3: Command → Action 映射（如 /runtime → runtime.open）
+      const def = COMMANDS.find(c => c.name === name)
+      if (def?.actionId) {
+        context.dispatchAction(def.actionId)
+        return "handled"
+      }
       return "pass_to_agent"
+    }
   }
 }

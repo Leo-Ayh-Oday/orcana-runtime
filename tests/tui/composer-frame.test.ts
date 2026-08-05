@@ -216,7 +216,7 @@ describe("PR-5: Scrollback vs CommandShelf key behavior", () => {
       context: "CommandShelf", bodyHeight: 30, scrollStep: 3,
     })
     expect(scrollResult).not.toBeNull()
-    expect(scrollResult!.type).toBe("scroll.pageUp")
+    expect(scrollResult).toBe("scroll.pageUp")
     expect(commandResult).toBeNull()
   })
 
@@ -228,7 +228,7 @@ describe("PR-5: Scrollback vs CommandShelf key behavior", () => {
       context: "CommandShelf", bodyHeight: 30, scrollStep: 3,
     })
     expect(scrollResult).not.toBeNull()
-    expect(scrollResult!.type).toBe("scroll.up")
+    expect(scrollResult).toBe("scroll.up")
     expect(commandResult).toBeNull()
   })
 })
@@ -236,19 +236,19 @@ describe("PR-5: Scrollback vs CommandShelf key behavior", () => {
 // ── PR-2 集成: footerHeight 计算包含分隔线 ──
 
 describe("PR-2: footerHeight includes divider lines", () => {
-  test("footerHeight = panelRows + inputRows + 1(hints) + thinkingDockRows + 2(dividers)", () => {
+  test("footerHeight = panelRows + inputRows + 1(hints) + thinkingDockRows + 1(single divider)", () => {
     const panelRows = 0
     const inputRows = 2
     const hintsRows = 1
     const thinkingDockRows = 0
-    const dividerRows = 2
+    const dividerRows = 1
     const expected = panelRows + inputRows + hintsRows + thinkingDockRows + dividerRows
-    expect(expected).toBe(5)
+    expect(expected).toBe(4)
   })
 
   test("thinkingDock 可见时 footerHeight 增加 1", () => {
-    const base = 0 + 2 + 1 + 0 + 2
-    const withThinkingDock = 0 + 2 + 1 + 1 + 2
+    const base = 0 + 2 + 1 + 0 + 1
+    const withThinkingDock = 0 + 2 + 1 + 1 + 1
     expect(withThinkingDock - base).toBe(1)
   })
 

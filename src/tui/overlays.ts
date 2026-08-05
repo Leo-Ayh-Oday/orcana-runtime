@@ -82,3 +82,4 @@ export type OverlayState =
   | { kind: "rewind"; state: RewindModalState }
   | { kind: "settings"; dialog: SettingsDialogState }
   | { kind: "runtime-inspector" }
+  | { kind: "shortcuts" }

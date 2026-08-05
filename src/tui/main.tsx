@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { render, useInput, useStdout } from "ink"
 import {
   LEGACY_CONVERSATION_HISTORY,
@@ -23,12 +23,12 @@ import { renderMessageLines } from "./components/MessageItem"
 import { cleanAgentError } from "./state/adapter-helpers"
 import { dispatchTuiCommand } from "./commands/dispatcher"
 import { resolveActiveContext } from "./input/types"
-import { resolveKeyAction } from "./input/keymap"
 import { cleanupTerminal, mouseEvents, resolveMouseModeEnabled } from "./stdin-filter"
 import { createStreamTrace, traceStartRound, traceDeltaChunk, traceFinalAccumulated, traceEndRound, traceSetStopReason, traceSetStreamError } from "./stream-trace"
 import type { StreamTraceState } from "./stream-trace"
 import { useOverlayController } from "./app/useOverlayController"
 import { matchAction } from "./presentation/actions"
+import { dispatchAction, type ActionExecutionContext } from "./presentation/dispatcher"
 import type { ModelDialogOption } from "./overlays"
 import { installProfileReporter } from "./render-metrics"
 
@@ -156,7 +156,7 @@ function useAgentStream(
   controlsRef: React.MutableRefObject<{
     openModels: (provider?: string) => void
     openEffort: () => void
-    toggleInspector: () => void
+    dispatchAction: (id: string) => void
   }>,
   store: TuiStore,
 ) {
@@ -428,7 +428,7 @@ function useAgentStream(
       openModels: controlsRef.current.openModels,
       openEffort: controlsRef.current.openEffort,
       setThinkEffort,
-      toggleInspector: controlsRef.current.toggleInspector,
+      dispatchAction: controlsRef.current.dispatchAction,
     })
     if (commandResult === "handled") {
       return
@@ -487,7 +487,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
 
   // Depthline P1: overlay 互斥状态 + settings 对话框按键由 controller 接管。
   // controls 经 ref 注入 useAgentStream，避免 controller 与 stream hook 的循环依赖。
-  const controlsRef = useRef({ openModels: () => {}, openEffort: () => {}, toggleInspector: () => {} })
+  const controlsRef = useRef({ openModels: () => {}, openEffort: () => {}, dispatchAction: (id: string) => {} })
   const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, thinkEffort, setThinkEffort, stopRun } = useAgentStream(runtime, prompt, controlsRef, store)
   thinkEffortRef.current = thinkEffort
   const overlayController = useOverlayController({
@@ -498,11 +498,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     setThinkEffort,
     buildOptions: (query, providerFilter) => buildModelOptions(runtime, runtime.modelRouter.getSessionModel(), query, providerFilter),
   })
-  controlsRef.current = {
-    openModels: overlayController.openModelPicker,
-    openEffort: overlayController.openEffort,
-    toggleInspector: () => overlayController.updateOverlay(s => s.kind === "runtime-inspector" ? { kind: "none" } : { kind: "runtime-inspector" }),
-  }
+  // controlsRef.current 在 actionContext 定义后赋值（submit 仅在用户操作时触发）
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
   const previousMaxOffsetRef = useRef(0)
@@ -564,6 +560,33 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     runtimeDialogActive: overlayController.overlay.kind === "settings",
   })
 
+  // Depthline P3: ActionExecutionContext — 单一执行上下文
+  const selectClarificationOption = useCallback(() => {
+    const q = clarification?.questions[clarification.index]
+    if (!q) return
+    const opt = q.options[clarification.selected]
+    if (opt) answerClarification({ question: q.title, key: opt.key, label: opt.label })
+  }, [clarification, answerClarification])
+
+  const actionContext = useMemo<ActionExecutionContext>(() => ({
+    store,
+    runtime,
+    isWorking,
+    overlay: overlayController.overlay,
+    bodyHeight: layout.bodyHeight,
+    scrollStep: TUI_SCROLL_STEP,
+    scrollUp,
+    scrollDown,
+    moveClarificationSelection,
+    selectClarificationOption,
+    cancelClarification,
+    updateOverlay: overlayController.updateOverlay,
+    closeOverlay: overlayController.closeOverlay,
+    stopRun,
+  }), [store, runtime, isWorking, overlayController.overlay, layout.bodyHeight, scrollUp, scrollDown, moveClarificationSelection, selectClarificationOption, cancelClarification, overlayController.updateOverlay, overlayController.closeOverlay, stopRun])
+
+  controlsRef.current.dispatchAction = (id) => dispatchAction(id as import("./presentation/actions").ActionId, actionContext)
+
   useInput((_input, key) => {
     if (showStartup) return
     // Depthline P1: settings 对话框按键由 controller 消费（不泄漏到 keymap）
@@ -571,113 +594,18 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       overlayController.handleSettingsKey(_input, key)
       return
     }
-    // Depthline P2: ActionRegistry seam — Ctrl+T 打开/关闭 RuntimeInspector
+    // Depthline P3: shortcuts 面板 — Esc 关闭，其余键吞掉
+    if (overlayController.overlay.kind === "shortcuts") {
+      if (key.escape) overlayController.closeOverlay()
+      return
+    }
+    // Depthline P3: 统一 ActionRegistry 分发（keymap/hints/面板同一数据源）
     const matched = matchAction(_input, key, activeKeyContext)
-    if (matched?.id === "runtime.open") {
-      overlayController.updateOverlay(s => s.kind === "runtime-inspector" ? { kind: "none" } : { kind: "runtime-inspector" })
+    if (matched) {
+      dispatchAction(matched.id, actionContext)
       return
     }
-    // Depthline P2: 主表面 Esc = 停止当前 run（与 HintBar "Esc stop" 一致）
-    if (key.escape && isWorking && activeKeyContext === "Scrollback") {
-      stopRun()
-      store.dispatch({ type: "ui.event_message", kind: "activity", text: "stopped by user", minIntervalMs: 0 })
-      return
-    }
-    const action = resolveKeyAction(_input, key, {
-      context: activeKeyContext,
-      bodyHeight: layout.bodyHeight,
-      scrollStep: TUI_SCROLL_STEP,
-    })
-    if (!action) return // pass through to composer
-
-    switch (action.type) {
-      // ── Confirm overlay ──
-      case "confirm.approve":
-        store.dispatch({ type: "ui.event_message", kind: "activity", text: `✓ confirmed ${overlayController.overlay.kind === "confirm" ? overlayController.overlay.request.toolName : ""}` })
-        overlayController.closeOverlay()
-        break
-      case "confirm.deny":
-        store.dispatch({ type: "ui.event_message", kind: "error", text: `✗ denied ${overlayController.overlay.kind === "confirm" ? overlayController.overlay.request.toolName : ""}` })
-        overlayController.closeOverlay()
-        break
-      case "confirm.denyAll":
-        store.dispatch({ type: "ui.event_message", kind: "error", text: "✗ denied all pending confirmations" })
-        overlayController.closeOverlay()
-        break
-      case "confirm.dismiss":
-        overlayController.closeOverlay()
-        break
-      // ── Rewind overlay ──
-      case "rewind.up":
-        overlayController.updateOverlay(s => {
-          if (s.kind !== "rewind" || s.state.phase !== "list") return s
-          return { ...s, state: { ...s.state, state: { ...s.state.state, selectedIndex: Math.max(0, s.state.state.selectedIndex - 1) } } }
-        })
-        break
-      case "rewind.down":
-        overlayController.updateOverlay(s => {
-          if (s.kind !== "rewind" || s.state.phase !== "list") return s
-          return { ...s, state: { ...s.state, state: { ...s.state.state, selectedIndex: Math.min(s.state.state.entries.length - 1, s.state.state.selectedIndex + 1) } } }
-        })
-        break
-      case "rewind.select":
-        overlayController.updateOverlay(s => {
-          if (s.kind !== "rewind") return s
-          if (s.state.phase === "list") {
-            // Move to confirm phase
-            const entry = s.state.state.entries[s.state.state.selectedIndex]
-            return {
-              ...s,
-              state: {
-                phase: "confirm" as const,
-                state: {
-                  visible: true,
-                  targetRound: entry?.round ?? 0,
-                  mode: "code" as const,
-                  previewFiles: [],
-                },
-              },
-            }
-          }
-          // Execute rewind — move to progress (stub)
-          store.dispatch({ type: "ui.event_message", kind: "activity", text: `rewind to round ${s.state.state.targetRound} (stub — backend not yet wired)` })
-          return { kind: "none" }
-        })
-        break
-      case "rewind.cancel":
-        overlayController.closeOverlay()
-        break
-      // ── Clarification ──
-      case "clarification.up":
-        moveClarificationSelection(-1)
-        break
-      case "clarification.down":
-        moveClarificationSelection(1)
-        break
-      case "clarification.select": {
-        const q = clarification?.questions[clarification.index]
-        if (!q) break
-        const opt = q.options[clarification.selected]
-        if (opt) answerClarification({ question: q.title, key: opt.key, label: opt.label })
-        break
-      }
-      case "clarification.cancel":
-        cancelClarification()
-        break
-      // ── Scrollback ──
-      case "scroll.up":
-        scrollUp(action.amount)
-        break
-      case "scroll.down":
-        scrollDown(action.amount)
-        break
-      case "scroll.pageUp":
-        scrollUp(action.amount)
-        break
-      case "scroll.pageDown":
-        scrollDown(action.amount)
-        break
-    }
+    // 未命中 → pass through to composer
   }, { isActive: !showStartup })
 
   useEffect(() => {

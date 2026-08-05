@@ -28,7 +28,7 @@ function createContext(overrides: Partial<TuiCommandContext> = {}) {
     openModels: () => {},
     openEffort: () => {},
     setThinkEffort: () => {},
-    toggleInspector: () => {},
+    dispatchAction: () => {},
     ...overrides,
   }
   return { context, store, messages }
@@ -68,6 +68,28 @@ describe("dispatchTuiCommand", () => {
     expect(dispatchTuiCommand("/status", context)).toBe("handled")
     expect(messages[0]).toContain("Status: ready")
     expect(messages[0]).toContain("Model: deepseek-v4-pro")
+  })
+
+  test("/runtime maps to runtime.open action (Command → Action 映射)", () => {
+    let dispatched: string[] = []
+    const { context } = createContext({
+      dispatchAction: id => {
+        dispatched.push(id)
+      },
+    })
+    expect(dispatchTuiCommand("/runtime", context)).toBe("handled")
+    expect(dispatched).toEqual(["runtime.open"])
+  })
+
+  test("/inspector alias also maps to runtime.open", () => {
+    let dispatched: string[] = []
+    const { context } = createContext({
+      dispatchAction: id => {
+        dispatched.push(id)
+      },
+    })
+    expect(dispatchTuiCommand("/inspector", context)).toBe("handled")
+    expect(dispatched).toEqual(["runtime.open"])
   })
 
   test("/clear resets history and store state", () => {

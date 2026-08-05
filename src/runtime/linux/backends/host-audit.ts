@@ -15,6 +15,9 @@ import type {
 import type { BackendOutcome, ExecutionBackend } from "./backend"
 import { streamBackendRun } from "./backend"
 import type { CompiledExecution } from "../contracts"
+import { existsSync, readdirSync, statSync, readFileSync } from "node:fs"
+import { join, relative } from "node:path"
+import { createHash } from "node:crypto"
 import { runSupervised, streamSupervised, type SupervisorResult } from "../process/supervisor"
 import { buildExplicitEnvironment } from "../environment"
 import { buildReceipt } from "../receipt"
@@ -65,26 +68,32 @@ export function createHostAuditBackend(): ExecutionBackend {
     },
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
+      // R3 PathGuard：执行前快照（仅 worktreeRoot），结束后真实 diff。
+      const worktreeRoot = spec.filesystem.worktreeRoot
+      const before = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
       yield* streamBackendRun("host-audit", spec, ctx,
         () => this.compile(spec, ctx.capabilities),
-        (result) => this.buildReceipt(spec, ctx.capabilities, {
-          startedAt: Date.now(),
-          finishedAt: Date.now(),
-          exitCode: result.exitCode,
-          signal: result.signal,
-          timedOut: result.timedOut,
-          cancelled: result.cancelled,
-          oomKilled: false,
-          pidLimitHit: false,
-          outputLimitHit: result.outputLimitHit,
-          tempLimitHit: false,
-          observedWrites: [],
-          observedDeletes: [],
-          unexpectedWrites: [],
-          violations: [],
-          degradationReasons: [HOST_AUDIT_DEGRADATION],
-          metrics: {},
-        }),
+        (result) => {
+          const diff = before && worktreeRoot ? pathGuardDiff(before, snapshotWorkspace(worktreeRoot)) : undefined
+          return this.buildReceipt(spec, ctx.capabilities, {
+            startedAt: Date.now(),
+            finishedAt: Date.now(),
+            exitCode: result.exitCode,
+            signal: result.signal,
+            timedOut: result.timedOut,
+            cancelled: result.cancelled,
+            oomKilled: false,
+            pidLimitHit: false,
+            outputLimitHit: result.outputLimitHit,
+            tempLimitHit: false,
+            observedWrites: diff ? [...diff.created, ...diff.changed] : [],
+            observedDeletes: diff ? diff.deleted : [],
+            unexpectedWrites: [],
+            violations: [],
+            degradationReasons: [HOST_AUDIT_DEGRADATION],
+            metrics: {},
+          })
+        },
       )
     },
 
@@ -114,6 +123,30 @@ export function createHostAuditBackend(): ExecutionBackend {
       })
     },
   }
+}
+
+/** 工作区快照（统计指纹：size:mtime，避免全量内容哈希开销）。 */
+export function snapshotWorkspace(root: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  const walk = (dir: string): void => {
+    let entries: import("node:fs").Dirent[]
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      const full = join(dir, entry.name)
+      if (entry.name === ".git" || entry.name === "node_modules") continue
+      try {
+        const st = statSync(full)
+        if (entry.isDirectory()) walk(full)
+        else {
+          // 内容指纹（时间戳在粗粒度 fs 上不可靠）。
+          const content = readFileSync(full)
+          out[relative(root, full).replace(/\\/g, "/")] = createHash("sha256").update(content).digest("hex").slice(0, 16)
+        }
+      } catch { /* 不可读跳过 */ }
+    }
+  }
+  walk(root)
+  return out
 }
 
 /** PathGuard 迁移（事后审计）：记录执行前后项目工作区的文件变化。 */

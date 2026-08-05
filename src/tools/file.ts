@@ -1,8 +1,9 @@
 /** File tools — read, write, edit. */
 
 import { readFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
-import { isAbsolute, relative, resolve } from "node:path"
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+import * as ts from "typescript"
 import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result } from "./registry"
 import { FimEditor } from "../provider/fim"
@@ -228,6 +229,8 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
   const path = String(params.path ?? "")
   const offset = Number(params.offset ?? 0)
   const limit = params.limit ? Number(params.limit) : undefined
+  const selector = params.selector as { kind?: string; start?: number; end?: number; name?: string; length?: number } | undefined
+  const expectedHash = typeof params.expectedHash === "string" ? params.expectedHash : undefined
 
   try {
     if (isRuntimeArtifact(path)) {
@@ -238,8 +241,38 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
     const buffer = await readFile(p)
     const content = buffer.toString("utf-8")
     const fingerprint = fingerprintContent(buffer)
+    // RT-6: expectedHash freshness — a stale read is a conflict, not a silent dump.
+    if (expectedHash && fingerprint.sha256 !== expectedHash) {
+      return Result.fail(`STALE_FILE: ${path} content hash does not match expectedHash (file changed since you read it)`)
+    }
     const lines = content.split("\n")
     const total = lines.length
+
+    // RT-6: selector support — lines / byte_range / symbol ranges.
+    let selectorLines: string[] | null = null
+    if (selector?.kind === "lines" && typeof selector.start === "number") {
+      const start = selector.start
+      const end = typeof selector.end === "number" ? selector.end : start + (selector.length ?? 1)
+      selectorLines = lines.slice(start, end)
+    } else if (selector?.kind === "byte_range" && typeof selector.start === "number") {
+      const length = selector.length ?? 0
+      const bytes = Buffer.from(content, "utf-8").subarray(selector.start, selector.start + length).toString("utf-8")
+      selectorLines = bytes.split("\n")
+    } else if (selector?.kind === "symbol" && typeof selector.name === "string") {
+      const span = findSymbolSpan(content, selector.name)
+      if (!span) return Result.fail(`Symbol not found: ${selector.name} in ${path}`)
+      selectorLines = lines.slice(span.start, span.end)
+    }
+    if (selectorLines) {
+      const fileState = recordRuntimeFileRead({ path: p, range: { kind: "selector" as never }, content: selectorLines.join("\n"), fingerprint, totalLines: total })
+      return Result.ok(selectorLines.join("\n"), {
+        path,
+        selected: true,
+        selectorKind: selector!.kind,
+        totalLines: total,
+        fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+      })
+    }
 
     // Sub-agent mode: large file, no explicit range → return structural analysis
     // instead of raw dump. The agent can then request specific sections with offset/limit.
@@ -502,7 +535,7 @@ function relativePath(path: string): string {
 
 export const READ_FILE: ToolDef = {
   name: "read_file",
-  description: "Read a file's contents. Pass offset and limit to read specific lines.",
+  description: "Read a file's contents. Pass offset and limit to read specific lines; selector for line/symbol/byte ranges; expectedHash for freshness.",
   isReadonly: true,
   category: "safe" as const,
   contract: {
@@ -514,10 +547,114 @@ export const READ_FILE: ToolDef = {
       path: { type: "string", description: "File path" },
       offset: { type: "integer", description: "Line offset (0-indexed)" },
       limit: { type: "integer", description: "Max lines" },
+      // RT-6: structured selection + freshness.
+      selector: {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["lines", "symbol", "byte_range"] },
+          start: { type: "integer" },
+          end: { type: "integer" },
+          name: { type: "string", description: "Symbol name for kind=symbol" },
+          length: { type: "integer" },
+        },
+      },
+      expectedHash: { type: "string", description: "Expected content hash — mismatch returns STALE_FILE" },
     },
     required: ["path"],
   },
   execute: read_file,
+}
+
+/** RT-6: TypeScript-AST symbol span (function/method/class/interface/type
+ *  alias/object member) — line numbers are 0-indexed [start, end). */
+function findSymbolSpan(content: string, symbol: string): { start: number; end: number } | null {
+  const source = ts.createSourceFile("probe.ts", content, ts.ScriptTarget.Latest, true)
+  let span: { start: number; end: number } | null = null
+  const visit = (node: ts.Node): void => {
+    if (span) return
+    const name = (node as { name?: { text?: string } }).name?.text
+    if (name === symbol) {
+      const start = source.getLineAndCharacterOfPosition(node.getStart(source)).line
+      const end = source.getLineAndCharacterOfPosition(node.getEnd()).line + 1
+      span = { start, end }
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return span
+}
+
+// ── edit_symbol (RT-6): symbol-anchored editing via TS AST ──
+
+const EDIT_SYMBOL_SCHEMA = {
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    symbol: { type: "string", description: "Function/method/class/interface/type-alias name" },
+    newText: { type: "string", description: "Replacement text for the whole symbol" },
+    dryRun: { type: "boolean", description: "Return the current symbol text + span without editing" },
+  },
+  required: ["path", "symbol"],
+} as const
+
+function edit_symbol(params: Record<string, unknown>): ToolResult {
+  const path = String(params["path"] ?? "")
+  const symbol = String(params["symbol"] ?? "")
+  const newText = typeof params["newText"] === "string" ? params["newText"] : undefined
+  const dryRun = params["dryRun"] === true
+
+  const p = resolve(path)
+  if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
+  const content = readFileSync(p, "utf-8")
+  const span = findSymbolSpan(content, symbol)
+  if (!span) return Result.fail(`Symbol not found: ${symbol} in ${path}`)
+
+  const lines = content.split("\n")
+  const current = lines.slice(span.start, span.end).join("\n")
+
+  if (dryRun) {
+    return Result.ok(current, {
+      path,
+      symbol,
+      symbolKind: "ast",
+      authority: "compiler",
+      startLine: span.start,
+      endLine: span.end,
+      dryRun: true,
+    })
+  }
+  if (newText === undefined) {
+    return Result.fail(`edit_symbol requires newText (or dryRun=true to preview): ${symbol}`)
+  }
+
+  const before = lines.slice(0, span.start).join("\n")
+  const after = lines.slice(span.end).join("\n")
+  const replacement = before + (before ? "\n" : "") + newText + (after ? "\n" : "") + after
+  const temp = join(dirname(p), `.tmp-${process.pid}-${Date.now()}`)
+  writeFileSync(temp, replacement, "utf-8")
+  renameSync(temp, p)
+  recordRuntimeFileWrite({ path: p, content: replacement })
+
+  return Result.ok(`edited symbol ${symbol} (lines ${span.start + 1}-${span.end})`, {
+    path,
+    symbol,
+    symbolKind: "ast",
+    authority: "compiler",
+    startLine: span.start,
+    endLine: span.end,
+    dryRun: false,
+  })
+}
+
+export const EDIT_SYMBOL_TOOL: ToolDef = {
+  name: "edit_symbol",
+  description: "Edit a TypeScript symbol (function/method/class/interface/type alias/object member) located via the compiler AST. Use dryRun to preview the current text and span.",
+  isReadonly: false,
+  category: "file",
+  requiresConfirmation: true,
+  inputSchema: EDIT_SYMBOL_SCHEMA as unknown as Record<string, unknown>,
+  execute: edit_symbol,
 }
 
 export const WRITE_FILE: ToolDef = {

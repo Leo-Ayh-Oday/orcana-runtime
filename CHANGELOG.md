@@ -2,7 +2,18 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.1] — 2026-08-05
+## [0.8.2] — 2026-08-05
+
+### Added (MACP-M2 — Workflow-Harness 正式适配)
+- **H11 unified node runtime for workflows** — workflow nodes may declare an H11 execution kind; model nodes run through `LlmAgentNode`, tool nodes through `ToolNode` (CapabilityExecutor), verification nodes through `VerificationNode` (H8 artifact/evidence adapter), human nodes through `HumanNode` (interrupt bridge).
+- **Single source of truth** (plan §23) — the workflow never constructs its own budget or model path: run scope (evidence ledger, artifact store, trace, cancellation), run-level budget ledger and capability registry all come from the harness environment (`SchedulerOptions.harness`).
+- **Preserved chain** — `NodeResult` evidence / diagnostics / usage are carried verbatim on the workflow node result, plus a structured `errorKind` (capability_not_found, policy_blocked, cancelled, budget exhaustion …) so downstream policy can branch without string matching.
+- **Fail-closed wiring** — a node declaring H11 execution with no harness environment, or an `llm_agent` node with no loop deps, fails instead of falling back to a handler bypass (DIRECT_LLM_BYPASS / DIRECT_TOOL_BYPASS = 0). The handler registry remains a read-only deterministic reducer surface.
+- **Governance parity** — write-class tool capabilities respect readonly mode and the single-writer lock exactly like write handlers; harness nodes are never cache-replayed.
+- **Cancellation propagation** — the run scope's abort signal reaches running nodes (tool abort signal, human `throwIfCancelled`, agent loop signal).
+- 14 tests: LlmAgentNode text/usage propagation, ToolNode capability execution + structured `capability_not_found`, VerificationNode evidence ingestion, HumanNode interrupt + invalid response diagnostic, cancellation, budget exhaustion structure, fail-closed paths, readonly write protection, M1 conditional-dependency composition.
+
+
 
 ### Added (MACP-M1 — conditional dependencies & result propagation)
 - **`WorkflowDependency { nodeId, when }`** — dependencies may now declare `terminal | succeeded | failed | accepted | rejected | blocked` conditions; `schemaVersion: "0.2"` enables them, while `"0.1"` specs keep the legacy terminal semantics (a failed upstream still lets downstream run — exactly as before).

@@ -31,13 +31,24 @@ import { evaluateCompletionGate, formatBlockedCompletion, formatCompletionEviden
 import { FlashJudge, type TestimonyLedger } from "./flash-judge"
 import { extractPromises } from "./round/post-loop"
 import { canClaimDone, deriveLastTypecheck, formatCanClaimDoneBlocked, hasFreshPassingEvidence, type EvidenceKind, type EvidenceLedger, type CanClaimDoneResult } from "./evidence-ledger"
-import { getWriteGeneration } from "../file-state"
+import { getWriteGeneration, hasCoveredUnmanagedWrites } from "../file-state"
 import type { TransactionEvidenceBinding, VerificationResult } from "../verification/result"
 import type { RippleObligation } from "../ripple/obligations"
 import type { RippleReport } from "../ripple/types"
 import type { TaskTracker } from "./task-tracker"
 import type { MasterPlan } from "./master-plan"
 import type { TaskPacket } from "./task-packet"
+
+/** [command-to-file] The completion gate requires a transaction binding
+ *  whenever the run wrote code — EXCEPT when every unmanaged (shell) write
+ *  was covered by a passing verification command running against the current
+ *  disk state. In that case the verification itself is authoritative for the
+ *  current state and the binding requirement is relaxed (no deadlock). */
+function shouldRequireEvidenceBinding(taskHadWrite: boolean): boolean {
+  if (!taskHadWrite && getWriteGeneration() <= 0) return false
+  if (hasCoveredUnmanagedWrites()) return false
+  return true
+}
 import type { UILanguage } from "./language"
 import type { AgentRunTrace } from "./run-trace"
 import type { ConfidenceEvaluator } from "../evaluator/confidence"
@@ -368,7 +379,7 @@ export class CompletionOrchestrator {
       evidence: input.evidenceLedger,
       currentGeneration: getWriteGeneration(),
       evidenceBinding: input.evidenceBinding,
-      requireEvidenceBinding: input.taskHadWrite || getWriteGeneration() > 0,
+      requireEvidenceBinding: shouldRequireEvidenceBinding(input.taskHadWrite),
       requiredKinds: explicitRequiredKinds,
     })
 
@@ -526,7 +537,7 @@ export class CompletionOrchestrator {
           // H8: no separate lastTypecheck fallback — evidence (or the round's
           // verification results, ledger-less callers) is the single source.
           const hasTypecheckEvidence = input.evidenceLedger
-        ? hasFreshPassingEvidence(input.evidenceLedger, "typecheck", getWriteGeneration(), input.evidenceBinding, input.taskHadWrite || getWriteGeneration() > 0)
+        ? hasFreshPassingEvidence(input.evidenceLedger, "typecheck", getWriteGeneration(), input.evidenceBinding, shouldRequireEvidenceBinding(input.taskHadWrite))
             : input.verificationResults.some(v => (v.kind === "typecheck" || v.kind === "lint") && v.passed)
 
           if (!hasTypecheckEvidence) {
@@ -540,7 +551,7 @@ export class CompletionOrchestrator {
         case "tests_passed":
         case "all_verification_passed": {
           const hasTestEvidence = input.evidenceLedger
-        ? hasFreshPassingEvidence(input.evidenceLedger, "test", getWriteGeneration(), input.evidenceBinding, input.taskHadWrite || getWriteGeneration() > 0)
+        ? hasFreshPassingEvidence(input.evidenceLedger, "test", getWriteGeneration(), input.evidenceBinding, shouldRequireEvidenceBinding(input.taskHadWrite))
             : input.verificationResults.some(v => (v.kind === "test" || v.kind === "smoke") && v.passed)
 
           if (!hasTestEvidence) {
@@ -553,7 +564,7 @@ export class CompletionOrchestrator {
         }
         case "build_passed": {
           const hasBuildEvidence = input.evidenceLedger
-        ? hasFreshPassingEvidence(input.evidenceLedger, "build", getWriteGeneration(), input.evidenceBinding, input.taskHadWrite || getWriteGeneration() > 0)
+        ? hasFreshPassingEvidence(input.evidenceLedger, "build", getWriteGeneration(), input.evidenceBinding, shouldRequireEvidenceBinding(input.taskHadWrite))
             : input.verificationResults.some(v => v.kind === "build" && v.passed)
 
           if (!hasBuildEvidence) {

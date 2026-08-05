@@ -15,6 +15,7 @@ import { join } from "node:path"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 import { runProcess } from "./process"
+import { recordVerificationCoverage } from "../file-state"
 
 // ── discover_verification ──
 
@@ -245,7 +246,13 @@ export const RUN_TARGETED_VERIFICATION_TOOL: ToolDef = {
     }
     const lines = runs.map((r) => `${r.passed ? "PASS" : "FAIL"} ${r.kind.padEnd(10)} ${r.command} (${r.durationMs}ms${r.issues ? `, ${r.issues} issues` : ""})`)
     const allPassed = runs.every((r) => r.passed)
-    if (allPassed) return Result.ok(lines.join("\n"), { runs, allPassed })
+    if (allPassed) {
+      // [command-to-file] This verification ran against the CURRENT disk
+      // state for the given files — record coverage of unmanaged (shell)
+      // writes so the completion gate can relax the binding requirement.
+      recordVerificationCoverage(files)
+      return Result.ok(lines.join("\n"), { runs, allPassed })
+    }
     return Result.failWithMetadata(lines.join("\n"), { runs, allPassed })
   },
 }

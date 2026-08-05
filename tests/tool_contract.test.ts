@@ -317,6 +317,10 @@ describe("ToolContract projection", () => {
       "find_symbol:a98ea218fc64e3de3ae325e2ac553b4e31a2c61237e1999b7a74ac61581b6de3",
       "find_references:0bae3b44d68cd0ee400f32a6ac0ee3c86edb0f32c861b1f146d9447766f846db",
       "project_structure:b0f2f8a46a055a9a14f03981dfe45177d20620d5946c1a2e2d82396c162909b9",
+      // RT-9: repo map tools (compiler-AST code intelligence).
+      "build_repo_map:0ea6e22fe745882cd61baf923ca8773aed04ee373cf7f553f00c2aed47c982ca",
+      "query_repo_map:fbe0a05af74e29a663ec1cd137866bc56ede4b2d4bc0a84f2bf1ff49873550f0",
+      "build_context_slice:3f9ab90184240ef72e67204ee3859e8dbfeb4bd0b75724348498834a6785d14b",
       "lsp_diagnostics:134b5b1c2a8e85e2593cb6f7f870c100522c3a00919559f4e59101c1d41ad1c4",
       "lsp_hover:e34068cc9085964da281c7ab79c5a2f6edc487bf113c416e280af3818a9a6e1b",
       "lsp_definition:c2c070697bf5a58538155b9ab990a0824322f020eef2f80822dd1b95070f6e2f",

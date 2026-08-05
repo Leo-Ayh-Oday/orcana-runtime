@@ -5,6 +5,7 @@ import { EDIT_SYMBOL_TOOL, FILE_TOOLS } from "./file"
 import { GIT_TOOLS } from "./git"
 import { LSP_DIAGNOSTICS, LSP_TOOLS } from "./lsp"
 import { META_BUILTIN_TOOL_DEFS } from "./meta"
+import { BUILD_CONTEXT_SLICE_TOOL, BUILD_REPO_MAP_TOOL, QUERY_REPO_MAP_TOOL } from "./repo-map"
 import { RUN_PROCESS_TOOL, RUN_SHELL_SCRIPT_TOOL } from "./process"
 import type { ToolDef } from "./registry"
 import { WEB_SEARCH } from "./search"
@@ -27,6 +28,9 @@ const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
   WEB_SEARCH,
   WEB_FETCH_TOOL,
   ...CODEGRAPH_TOOLS,
+  BUILD_REPO_MAP_TOOL,
+  QUERY_REPO_MAP_TOOL,
+  BUILD_CONTEXT_SLICE_TOOL,
   ...LSP_TOOLS,
   TYPECHECK_TOOL,
   TODO_WRITE_TOOL,

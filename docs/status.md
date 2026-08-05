@@ -58,7 +58,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-7.x Replay / CI | Done | 70-case deterministic replay exists with a CI core gate; H12 scripted E2E replay runs 12/12 scenarios through the real AgentHarness with rubric evaluation; PR-8.3 mini benchmark (pass@1 / false done rate / cost) runs offline with a persisted baseline and regression gate. |
 | PR-8.x TUI / CLI | Partial | Large TUI surface exists and has high targeted test coverage; final plan/evidence UX still needs acceptance gates. |
 | PR-9.x Observability | Planned | Gate/runtime telemetry exists, but a standard event taxonomy and failure taxonomy report are not complete. |
-| PR-10.x Docs / Release | Partial | `orcana doctor` (PR-10.4) is landed: version consistency, runtime, config integrity, model/auth, concurrent provider reachability probes (static only, no billed request), sandbox capability matrix, MCP server status, directory structure; human-readable + `--json`; fail count maps to exit code 1. ARCHITECTURE/SECURITY sync remains. |
+| PR-10.x Docs / Release | Done | `orcana doctor` (PR-10.4) is landed (version, runtime, config, model/auth, concurrent provider probes, sandbox matrix, MCP status, paths; `--json`; CI exit codes). ARCHITECTURE.md status table and SECURITY.md are synchronized with the v1.0 closure facts (PR-10.2/10.3): module legend matches status.md, evidence-chain invalidation (rollback + command-to-file), FreshnessGate, MCP default-untrusted, redaction boundary. |
 
 ## Current Validation Baseline
 

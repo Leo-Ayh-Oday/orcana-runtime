@@ -29,3 +29,6 @@ export {
   type ErrorCategory,
 } from "./convergence/failure-signature"
 export { RepairLoop, type RepairLoopOptions, type ConvergenceReport, type RepairAttempt, type RepairOutcome } from "./convergence/repair-loop"
+export { ResultCache, cacheKeyFor, type CacheEntry } from "./results/result-cache"
+export { saveResultCache, loadResultCache } from "./persistence/result-cache-store"
+export { buildContextSlice, sliceDependencyIds, type ContextSlice, type DependencySlice } from "./context/context-slice"

@@ -16,11 +16,32 @@ import { ConcurrencyController } from "./concurrency-controller"
 import type { HandlerRegistry } from "../execution/handler-registry"
 import { executeNode } from "../execution/node-executor"
 import { aggregateEvidence } from "../reducers/aggregate-evidence"
+import { ResultCache, cacheKeyFor } from "../results/result-cache"
 
 export interface SchedulerOptions {
   maxParallel?: number
   checkpointDir?: string
+  /** G5: read-node result cache — cache hits replay instead of re-executing;
+   *  a completed write node invalidates the cache. Optional; when absent
+   *  the scheduler behaves exactly as before (old-run compatibility). */
+  cache?: ResultCache
   onNodeFinished?: (result: import("../types").WorkflowNodeResult) => void
+}
+
+/** G5: a replayed (cache-hit) node — durationMs 0 + metadata.replayed. */
+function replayResult(result: import("../types").WorkflowNodeResult): import("../types").WorkflowNodeResult {
+  const output = result.output
+  const meta: Record<string, unknown> =
+    output && typeof output === "object" ? { ...((output as { metadata?: Record<string, unknown> }).metadata ?? {}) } : {}
+  meta.replayed = true
+  return {
+    ...result,
+    durationMs: 0,
+    output:
+      output && typeof output === "object"
+        ? { ...(output as Record<string, unknown>), metadata: meta }
+        : output,
+  }
 }
 
 export async function runScheduler(
@@ -36,8 +57,24 @@ export async function runScheduler(
 
   const mode = spec.mode ?? "readonly"
   const store = new ResultStore(spec.specId, options.checkpointDir)
+  const cache = options.cache
   const queue = new ReadyQueue(spec, store)
   const cc = new ConcurrencyController()
+
+  // G5: checkpoint restore — resumed nodes never re-execute, and their
+  // results refill the cache for later runs (replay across runs).
+  if (options.checkpointDir && store.restore(options.checkpointDir) && cache) {
+    const handlerOf = new Map(spec.nodes.map(n => [n.id, n.handler]))
+    for (const result of store.all()) {
+      const handler = handlerOf.get(result.nodeId)
+      if (!handler || registry.isWriteHandler(handler)) continue
+      const node = spec.nodes.find(n => n.id === result.nodeId)
+      if (!node) continue
+      const replayed = replayResult(result)
+      cache.put(cacheKeyFor(handler, node.input), replayed)
+      store.put(replayed)
+    }
+  }
 
   const running = new Map<string, Promise<void>>()
   const finished = new Set<string>(spec.nodes.filter(n => store.has(n.id)).map(n => n.id))
@@ -59,9 +96,27 @@ export async function runScheduler(
         store.put(rejected)
         return rejected
       }
+      // G5: read-only cache hit → replay, never re-execute.
+      if (!isWrite && cache) {
+        const hit = cache.get(cacheKeyFor(node.handler, node.input))
+        if (hit) {
+          const replayed = replayResult(hit.result)
+          store.put(replayed)
+          return replayed
+        }
+      }
       const lock = isWrite ? await cc.acquireWrite() : null
       try {
-        return await executeNode(node, registry, store)
+        const result = await executeNode(node, registry, store)
+        if (result.status === "done") {
+          if (isWrite) {
+            // G5: a completed write invalidates all read results.
+            cache?.invalidateAll()
+          } else {
+            cache?.put(cacheKeyFor(node.handler, node.input), result)
+          }
+        }
+        return result
       } finally {
         lock?.release()
       }

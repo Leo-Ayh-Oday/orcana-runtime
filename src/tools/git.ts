@@ -25,11 +25,73 @@ function capOutput(raw: string, label: string, maxChars: number): string {
   return `${head}\n\n… [${label}: ${skipped} chars trimmed — use 'path' param or re-run with line range to narrow scope]`
 }
 
+/** RT-8: structured working-tree status (porcelain=v2, NUL-separated). */
+export interface GitStatusState {
+  branch: string
+  staged: string[]
+  unstaged: string[]
+  untracked: string[]
+  conflicts: string[]
+  dirty: boolean
+}
+
+export function parsePorcelainV2(stdout: string): GitStatusState {
+  const state: GitStatusState = { branch: "", staged: [], unstaged: [], untracked: [], conflicts: [], dirty: false }
+  const sections = stdout.split("\0").filter(Boolean)
+  for (const section of sections) {
+    const line = section.split("\n").filter(Boolean)
+    for (const entry of line) {
+      if (entry.startsWith("# ")) {
+        // Metadata lines: # branch.head / # branch.ab / # branch.up / # branch.oid.
+        if (entry.startsWith("# branch.head ")) {
+          state.branch = entry.slice("# branch.head ".length)
+        }
+        continue
+      }
+      if (entry.startsWith("? ")) {
+        state.untracked.push(entry.slice(2))
+        state.dirty = true
+        continue
+      }
+      // "1 XY <sub> <mH> <mI> <mW> <hH> <hI> <path>" or "2 XY ... <path>"
+      const fields = entry.split(" ")
+      if (fields.length < 2) continue
+      const xy = fields[1]!
+      const path = fields[fields.length - 1]!
+      const x = xy[0]!
+      const y = xy[1]!
+      if (x === "U" || y === "U" || xy === "DD" || xy === "AU" || xy === "UD" || xy === "UA" || xy === "DU" || xy === "AA") {
+        state.conflicts.push(path)
+        state.dirty = true
+        continue
+      }
+      if (x !== "." && x !== " ") state.staged.push(path)
+      if (y !== "." && y !== " ") state.unstaged.push(path)
+      if (x !== "." || y !== ".") state.dirty = true
+    }
+  }
+  return state
+}
+
+function formatStatusState(state: GitStatusState): string {
+  if (!state.dirty) return "Clean working tree"
+  const lines: string[] = []
+  if (state.branch) lines.push(`branch: ${state.branch}`)
+  for (const f of state.conflicts) lines.push(`CONFLICT  ${f}`)
+  for (const f of state.staged) lines.push(`staged    ${f}`)
+  for (const f of state.unstaged) lines.push(`modified  ${f}`)
+  for (const f of state.untracked) lines.push(`untracked ${f}`)
+  return lines.join("\n")
+}
+
 async function git_status(): Promise<ToolResult> {
-  const { code, stdout, stderr } = runGit(["status", "--short"])
+  const { code, stdout, stderr } = runGit(["status", "--porcelain=v2", "-z", "--branch"])
   if (code !== 0) return Result.fail(stderr)
-  if (!stdout.trim()) return Result.ok("Clean working tree")
-  return Result.ok(capOutput(stdout, "git status", 6000))
+  if (!stdout.trim()) return Result.ok("Clean working tree", { state: { branch: "", staged: [], unstaged: [], untracked: [], conflicts: [], dirty: false } })
+  // RT-8: structured state for code consumers (plan §5 RT-8); content stays
+  // human-readable for the model.
+  const state = parsePorcelainV2(stdout)
+  return Result.ok(formatStatusState(state), { state })
 }
 
 async function git_diff(params: Record<string, unknown>): Promise<ToolResult> {
@@ -39,7 +101,14 @@ async function git_diff(params: Record<string, unknown>): Promise<ToolResult> {
   const { code, stdout, stderr } = runGit(args)
   if (code !== 0) return Result.fail(stderr)
   if (!stdout.trim()) return Result.ok("No changes")
-  return Result.ok(capOutput(stdout, "git diff", 12000))
+  // RT-8: structured numstat alongside the textual diff (model text stays
+  // capped; code consumers read the stat).
+  const stat = runGit(["diff", ...(params.staged ? ["--staged"] : []), "--numstat", ...(params.path ? ["--", String(params.path)] : [])])
+  const statLines = stat.stdout.trim().split("\n").filter(Boolean).map((line) => {
+    const [additions, deletions, ...rest] = line.split("\t")
+    return { path: rest.join("\t"), additions: Number(additions) || 0, deletions: Number(deletions) || 0 }
+  })
+  return Result.ok(capOutput(stdout, "git diff", 12000), { stat: statLines })
 }
 
 async function git_log(params: Record<string, unknown>): Promise<ToolResult> {
@@ -178,6 +247,9 @@ export const GIT_ADD: ToolDef = {
   description: "Stage files for commit. Use all=true to stage everything, or specify a path.",
   isReadonly: false,
   isConcurrencySafe: false,
+  // RT-8: mutating git tools are separated from read-only git tools at the
+  // risk level — they require confirmation like any write-class capability.
+  requiresConfirmation: true,
   category: "git" as const,
   inputSchema: {
     type: "object",
@@ -203,6 +275,8 @@ export const GIT_COMMIT: ToolDef = {
     "- 提交前应先用 git_status 检查变更、git_diff 检查内容",
   isReadonly: false,
   isConcurrencySafe: false,
+  // RT-8: mutating git tools are risk-separated from read-only git tools.
+  requiresConfirmation: true,
   category: "git" as const,
   inputSchema: {
     type: "object",

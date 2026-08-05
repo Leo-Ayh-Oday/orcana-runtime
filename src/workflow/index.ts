@@ -42,3 +42,8 @@ export {
 } from "./dynamic/dynamic-schema"
 export { compileDynamicSpec, DEFAULT_NODE_TYPES, type DynamicCompilerOptions, type DynamicCompileResult, type DynamicIssue } from "./dynamic/dynamic-compiler"
 export { PermissionGate, type GateDecision, type GateResult } from "./dynamic/permission-gate"
+export { AgentPool, type Agent, type AgentSpec, type OwnershipViolation, type RegisterResult } from "./agents/agent-pool"
+export { AgentBudget, type AgentBudgetCaps, type AgentBudgetState, type BudgetVerdict } from "./agents/agent-budget"
+export { createWorktree, worktreeRoot, type WorktreeHandle } from "./agents/worktree"
+export { detectConflicts, agentOfNode, type ConflictEntry, type ConflictReport } from "./agents/conflict-detect"
+export { mergeAgentArtifacts, MERGE_AGENTS_HANDLER, type AgentArtifact, type MergeResult } from "./agents/merge"

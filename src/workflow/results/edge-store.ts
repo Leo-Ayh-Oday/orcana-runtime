@@ -24,11 +24,12 @@ export function buildTopology(spec: WorkflowSpec): EdgeTopology {
   for (const node of spec.nodes) {
     const seen = new Set<string>()
     for (const dep of node.dependsOn) {
-      if (!nodeIds.has(dep)) throw new Error(`workflow: node "${node.id}" depends on unknown node "${dep}"`)
-      if (seen.has(dep)) continue // duplicate edges collapse
-      seen.add(dep)
+      const depId = typeof dep === "string" ? dep : dep.nodeId
+      if (!nodeIds.has(depId)) throw new Error(`workflow: node "${node.id}" depends on unknown node "${depId}"`)
+      if (seen.has(depId)) continue // duplicate edges collapse
+      seen.add(depId)
       indegree.set(node.id, (indegree.get(node.id) ?? 0) + 1)
-      successors.get(dep)?.push(node.id)
+      successors.get(depId)?.push(node.id)
     }
   }
   return { indegree, successors }

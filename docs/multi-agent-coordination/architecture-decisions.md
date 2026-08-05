@@ -5,7 +5,7 @@
 
 | ADR | 决策 | 状态 | 关联阶段 |
 |---|---|---|---|
-| ADR-001 | 条件依赖 `WorkflowDependency{nodeId, when}`；schemaVersion 0.1 字符串依赖 = terminal；0.2 = 条件依赖 | 待定 | M1 |
+| ADR-001 | 条件依赖 `WorkflowDependency{nodeId, when}`；schemaVersion 0.1 字符串依赖 = terminal；0.2 = 条件依赖。接受状态由节点输出 `metadata.acceptance` 显式声明（M1 只解释声明，声明权威在 M7/M9）。未满足条件 → 下游 `blocked` 终态（fail-closed，无死锁） | **已定案 (v0.8.1)** | M1 |
 | ADR-002 | Workflow 节点通过 H11 HarnessNode 执行（function/tool/llm_agent/verification/human），禁止旁路 | 待定 | M2 |
 | ADR-003 | Worktree 为写操作的唯一真实工作区；写任务禁止降级共享工作区 | 待定 | M3 |
 | ADR-004 | 所有权强制走规范化路径 + 实际写入路径二次比对 | 待定 | M3 |

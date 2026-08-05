@@ -17,6 +17,7 @@ import type { HandlerRegistry } from "../execution/handler-registry"
 import { executeNode } from "../execution/node-executor"
 import { aggregateEvidence } from "../reducers/aggregate-evidence"
 import { ResultCache, cacheKeyFor } from "../results/result-cache"
+import { evaluateReadiness } from "./dependency-policy"
 
 export interface SchedulerOptions {
   maxParallel?: number
@@ -177,6 +178,25 @@ export async function runScheduler(
       const node = queue.next()
       if (!node) break
       if (store.has(node.id)) {
+        queue.onDependencyDone(node.id)
+        continue
+      }
+      // MACP-M1: conditional dependencies — every dependency must satisfy
+      // its `when` condition; a finished-but-unsatisfied dependency blocks
+      // this node (fail-closed, no deadlock: blocked is terminal).
+      const readiness = evaluateReadiness(node, queue.depsOfNode(node.id), store.allAsMap())
+      if (readiness.verdict === "blocked") {
+        const blockedResult: import("../types").WorkflowNodeResult = {
+          nodeId: node.id,
+          status: "blocked",
+          output: null,
+          error: `workflow: node "${node.id}" blocked — dependency conditions unsatisfied: ${readiness.unsatisfied.map(u => `${u.nodeId}:${u.when}`).join(", ")}`,
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          durationMs: 0,
+        }
+        store.put(blockedResult)
+        finished.add(node.id)
         queue.onDependencyDone(node.id)
         continue
       }

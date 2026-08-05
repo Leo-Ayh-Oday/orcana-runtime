@@ -23,11 +23,12 @@ export function validateDAG(spec: WorkflowSpec): DAGIssue[] {
   let hasUnknown = false
   for (const node of spec.nodes) {
     for (const dep of node.dependsOn) {
-      if (!ids.has(dep)) {
+      const depId = typeof dep === "string" ? dep : dep.nodeId
+      if (!ids.has(depId)) {
         hasUnknown = true
         issues.push({
           code: "unknown_dependency",
-          message: `workflow: node "${node.id}" depends on unknown node "${dep}"`,
+          message: `workflow: node "${node.id}" depends on unknown node "${depId}"`,
         })
       }
     }

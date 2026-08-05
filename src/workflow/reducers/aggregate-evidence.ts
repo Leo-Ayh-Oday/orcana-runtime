@@ -34,7 +34,9 @@ export function aggregateEvidence(spec: WorkflowSpec, results: WorkflowNodeResul
     if (!VERIFICATION_HANDLERS.has(node.handler)) continue
     const result = byId.get(node.id)
     if (!result) continue
-    const writeNodeIds = node.dependsOn.filter(isWriteNode)
+    const writeNodeIds = node.dependsOn
+      .map(dep => (typeof dep === "string" ? dep : dep.nodeId))
+      .filter(isWriteNode)
     if (writeNodeIds.length === 0) continue
     entries.push({
       nodeId: node.id,

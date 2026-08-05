@@ -24,24 +24,29 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 | Ripple Engine 2.0 | 🟢 stable | 7 layers, 212 tests, 8.5/10 score |
 | Context Budget / Epoch | 🟢 stable | 4-layer context, tool chain guard |
 | Sandbox (Windows) | 🟢 stable | Job Object, PathGuard, env filtering, timeout |
-| Sandbox (macOS/Linux) | 🟡 partial | Degraded to env filtering + timeout only |
-| MasterPlan / TaskPacket | 🟡 partial | Wired but node→mode transition still stub |
-| ModeContract | 🟡 partial | 5 modes defined, shouldTransitionMode stub |
-| PatchTransaction | 🟡 partial | Phase 1 complete, Phase 2 atomics pending |
-| EvidenceLedger | 🟡 partial | Phase 1, dual-write with legacy verification |
-| Completion Gates | 🟡 partial | Gates inline in loop, not single-path yet |
+| Sandbox (macOS/Linux) | 🟡 partial | Degraded to env filtering + timeout + post-hoc path audit |
+| MasterPlan / TaskPacket | 🟢 stable | Zod adapter deferred (no Zod dependency); schema validation fail-closed, mode auto-flow wired |
+| ModeContract | 🟢 stable | 5 modes, shared transition context, per-run isolation |
+| PatchTransaction | 🟢 stable | Managed lifecycle (propose→apply→verify→commit), freshness base-hash, partial-commit rollback, **rollback-aware evidence invalidation (SS-Next-2B, v0.7.4)** |
+| EvidenceLedger | 🟢 stable | L1 latest-result / L2 write-generation / L3 commit-history binding; **command-to-file coverage (v0.7.6)** relaxes binding only when every unmanaged write is verified |
+| Completion Orchestrator | 🟢 stable | Single completion path: truthfulness gate + evidence chain + external gate |
 | HookSystem | 🟢 stable | SessionStart, PromptSubmit, PreToolUse, PostToolUse, Stop — all 5 lifecycle events wired (PR-7.2) |
 | Checkpoint / Rewind | 🟡 partial | SHA + SQLite base, missing CLI /rewind UX |
-| MCP Bridge | 🟡 partial | Tools only, resources/prompts deferred |
+| MCP Bridge | 🟡 partial | Tools only, trust policy (default untrusted), resources/prompts deferred |
 | Capability Registry (H9) | 🟢 stable | Unified capability descriptors + 8-step CapabilityExecutor — single execution entry for loop and future Node Runtime |
 | Context Pipeline (H10) | 🟢 stable | 13 layered context providers → ContextSlice; loop context assembly moved into the pipeline (byte-frozen) |
-| Node Runtime (H11) | 🟢 stable | HarnessNode primitives (function/tool/llm_agent/verification/human) + sequential runner; a single agent = one LlmAgentNode; mandatory policy gate and evidence chain landed (Closure R1); scheduler/Graph deferred (plan §23) |
+| Node Runtime (H11) | 🟢 stable | HarnessNode primitives (function/tool/llm_agent/verification/human) + sequential runner; single agent = one LlmAgentNode; mandatory policy gate and evidence chain (Closure R1); scheduler/Graph deferred |
+| AgentHarness 2.0 | 🟢 stable | Production entry via AgentHarness → LegacyLoopAdapter → agentLoop; replay-verified scripted provider/tools |
+| Typed Execution Graph (G0–G6, v0.7.x) | 🟢 stable | `src/workflow/`: shadow projection (G0), read-only DAG scheduler (G1), compiler + templates (G2), single-writer transactions (G3), convergent repair loop (G4), result cache + replay (G5), dynamic compiler + permission gate (G6); kernel untouched |
+| Replay harness / Mini benchmark | 🟢 stable | 70 deterministic fixtures + H12 scripted E2E (12/12) + `bench:mini` (pass@1 / false-done / cost, regression gate) |
+| `orcana doctor` | 🟢 stable | 8-check environment self-check (PR-10.4), `--json`, CI exit codes |
+| FreshnessGate / FileState | 🟢 stable | Canonical ToolContract preflight, approved-snapshot transactions, write-generation |
 | Skills Registry | 🟡 partial | Trigger-based prompt append, no lifecycle stats |
 | ModelRouter (purpose routing) | 🟡 partial | Session model pinning, cheap subcall routing off |
 | FIM Editor | 🟡 partial | DeepSeek beta API, pending tx protection |
 | State Machine | 🟡 partial | Monitoring layer, not primary behavioral driver |
 | TUI | 🟡 partial | Core working, missing plan approval/evidence/rewind UX |
-| Secret Redaction | 🟡 partial | Trace only, not unified across all paths |
+| Secret Redaction | 🟢 stable | `redactForTrace` with `allowedKeyPatterns` token-metering whitelist; trace/snapshot/cache/checkpoint all share the redactor boundary |
 | Context Map Pipeline | 🔵 planned | Interfaces exist, not fully wired |
 | Context Memory OS | 🔵 planned | Protocol-level, separate integration PR |
 | Recursive Evolution OS | 🔵 planned | Protocol-level, separate integration PR |

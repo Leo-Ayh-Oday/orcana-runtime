@@ -102,7 +102,35 @@ export interface WorkflowNodeSpec {
    *  M1: schemaVersion "0.2" specs may use conditional dependencies;
    *  "0.1" specs keep plain strings (interpreted as `terminal`). */
   dependsOn: Array<string | WorkflowDependency>
+  /** MACP-M2: optional H11 execution declaration. When present the node
+   *  executes through the Unified Node Runtime (LlmAgentNode / ToolNode /
+   *  VerificationNode / HumanNode) instead of the handler registry.
+   *  Absent (or `function`) = legacy handler/reducer path — the only
+   *  permitted deterministic reducers. */
+  execution?: WorkflowNodeExecution
 }
+
+/** MACP-M2: which HarnessNode executes this node. Inputs are declared
+ *  statically here (or, for verification, via `node.input` which carries
+ *  the upstream-produced results). The harness environment (budget, scope,
+ *  capabilities, artifacts, trace) is supplied by SchedulerOptions.harness —
+ *  the workflow never constructs its own budget or model path (single source
+ *  of truth, plan §23). */
+export type WorkflowNodeExecution =
+  | { kind: "function" }
+  | { kind: "tool"; capabilityId: string; params?: Record<string, unknown> }
+  | {
+      kind: "llm_agent"
+      prompt: string
+      maxRounds?: number
+      tools?: Array<{ name: string; description?: string }>
+      /** LEGACY_* keys pass through to AgentOptions (H1 transition). */
+      metadata?: Record<string, unknown>
+    }
+  /** `node.input` must carry `results` (VerificationResult[]); the node
+   *  ingests them as bound artifacts + evidence (H8 adapter). */
+  | { kind: "verification"; modifiedFiles?: string[]; workspaceHash?: string }
+  | { kind: "human"; prompt: string; responseSchema?: import("../harness/contracts/schema").JsonSchema }
 
 /** An executable, validated read-only DAG. */
 export interface WorkflowSpec {
@@ -138,11 +166,18 @@ export interface WorkflowNodeResult {
   /** Handler output (JSON-serializable); error message on failure. */
   output: unknown
   error?: string
+  /** MACP-M2: structured error kind from the harness node (budget/kind/etc). */
+  errorKind?: string
   /** M1: acceptance of the produced output (separate from execution). */
   acceptance?: WorkflowAcceptanceStatus
   startedAt: number
   finishedAt: number
   durationMs: number
+  /** MACP-M2: preserved from the H11 NodeResult when executed via the
+   *  Unified Node Runtime. */
+  usage?: import("../harness/contracts/nodes").NodeUsage
+  diagnostics?: import("../harness/contracts/nodes").NodeDiagnostic[]
+  evidence?: import("../agent/evidence-ledger").EvidenceEntry[]
 }
 
 export type WorkflowRunResultStatus = "done" | "blocked_no_evidence" | "write_rejected"

@@ -18,6 +18,10 @@ import { executeNode } from "../execution/node-executor"
 import { aggregateEvidence } from "../reducers/aggregate-evidence"
 import { ResultCache, cacheKeyFor } from "../results/result-cache"
 import { evaluateReadiness } from "./dependency-policy"
+import { isHarnessNode } from "../harness/workflow-node-adapter"
+import { createWorkflowHarnessRuntime } from "../harness/node-context-factory"
+import { executeHarnessNode } from "../execution/harness-node-executor"
+import type { WorkflowHarnessEnvironment } from "../harness/environment"
 
 export interface SchedulerOptions {
   maxParallel?: number
@@ -29,6 +33,10 @@ export interface SchedulerOptions {
   /** G7: agent pool — cancelled agents fail fast, per-agent budgets are
    *  charged. Optional; absent = single-agent semantics unchanged. */
   pool?: import("../agents/agent-pool").AgentPool
+  /** MACP-M2: H11 harness environment. Nodes declaring an H11 execution
+   *  kind run through the Unified Node Runtime under this environment's
+   *  scope/ledger/capabilities; without it such nodes fail closed. */
+  harness?: import("../harness/environment").WorkflowHarnessEnvironment
   onNodeFinished?: (result: import("../types").WorkflowNodeResult) => void
 }
 
@@ -70,6 +78,32 @@ export async function runScheduler(
   const cache = options.cache
   const queue = new ReadyQueue(spec, store)
   const cc = new ConcurrencyController()
+  // MACP-M2: one harness runtime per workflow run (single scope + ledger).
+  const harnessNodes = spec.nodes.filter(isHarnessNode)
+  if (harnessNodes.length > 0 && !options.harness) {
+    throw new Error(
+      `workflow: spec declares ${harnessNodes.length} H11 node(s) but no harness environment — fail closed (MACP-M2)`,
+    )
+  }
+  const harnessRuntime = options.harness
+    ? createWorkflowHarnessRuntime(options.harness, `workflow:${spec.specId}`)
+    : null
+  // G3 write protection covers both handler writes and H11 tool nodes
+  // (write-class capabilities), so single-writer semantics apply uniformly.
+  const writeNodeIds = new Set(
+    spec.nodes
+      .filter(n => {
+        if (n.execution?.kind === "tool") {
+          try {
+            return options.harness?.capabilities.resolve(n.execution.capabilityId).descriptor.sideEffect === "write"
+          } catch {
+            return false // unknown capability — the ToolNode itself fails closed
+          }
+        }
+        return registry.isWriteHandler(n.handler)
+      })
+      .map(n => n.id),
+  )
 
   // G5: checkpoint restore — resumed nodes never re-execute, and their
   // results refill the cache for later runs (replay across runs).
@@ -90,7 +124,8 @@ export async function runScheduler(
   const finished = new Set<string>(spec.nodes.filter(n => store.has(n.id)).map(n => n.id))
 
   const launch = (node: import("../types").WorkflowNodeSpec): void => {
-    const isWrite = registry.isWriteHandler(node.handler)
+    const isWrite = writeNodeIds.has(node.id)
+    const isHarness = isHarnessNode(node)
     const promise = (async () => {
       if (isWrite && mode !== "read-write") {
         // G1 write protection: write handlers never run in read-only mode.
@@ -140,8 +175,9 @@ export async function runScheduler(
           return budgetBlocked
         }
       }
-      // G5: read-only cache hit → replay, never re-execute.
-      if (!isWrite && cache) {
+      // G5: read-only cache hit → replay, never re-execute. H11 harness
+      // nodes are never cached (they are not deterministic reducers).
+      if (!isWrite && !isHarness && cache) {
         const hit = cache.get(cacheKeyFor(node.handler, node.input))
         if (hit) {
           const replayed = replayResult(hit.result)
@@ -151,12 +187,14 @@ export async function runScheduler(
       }
       const lock = isWrite ? await cc.acquireWrite() : null
       try {
-        const result = await executeNode(node, registry, store)
+        const result = isHarness && harnessRuntime
+          ? await executeHarnessNode(node, harnessRuntime, store)
+          : await executeNode(node, registry, store)
         if (result.status === "done") {
           if (isWrite) {
             // G5: a completed write invalidates all read results.
             cache?.invalidateAll()
-          } else {
+          } else if (!isHarness) {
             cache?.put(cacheKeyFor(node.handler, node.input), result)
           }
         }

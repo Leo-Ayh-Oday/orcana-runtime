@@ -10,7 +10,7 @@
 | ADR-L4 | **Host Audit 仅为降级后端**：现有 SandboxManager 迁移为 HostAuditBackend（环境过滤/超时/进程组/PathGuard/Receipt）；仅 inspect/低风险 build + `minimum=audit` + 显式允许时使用；untrusted/evolution/多 Agent 正式模板禁止 | **已定案 (v0.8.9)** | LF-2 |
 | ADR-L5 | **cgroup v2 三级层级**：`orcana.scope → run-<runId> → agent-<agentId> → cell-<cellId>`；`memory.oom.group=1`；取消 = `cgroup.kill` 树级；systemd 委托优先序（user Scope+Delegate → 已有委托子树 → 手工委托 → 降级标记），严格 Profile 无委托拒绝 | **已定案 (v0.8.11)** | LF-4 |
 | ADR-L6 | **显式环境变量系统**：子进程环境 = 空对象 → Runtime 固定变量 → Profile 允许 → Tool 申请 → Secret 注入 → 校验 → 冻结；禁止 `{...process.env, ...requested}`；默认拒绝 `*_API_KEY`/`*_TOKEN`/`AWS_*`/`SSH_AUTH_SOCK`/`DOCKER_HOST` 等 | **已定案 (v0.8.9)** | LF-2 |
-| ADR-L7 | **网络默认关闭**：新网络 namespace 默认 `none`；`loopback` 仅 Cell/Domain 内；`full-approved` 需人工批准并记录 Receipt；proxy-allowlist 为后续增强，禁止简单 DNS 预解析治理 | **已定案 (v0.8.10)** | LF-3/LF-7 |
+| ADR-L7 | **网络默认关闭**：新网络 namespace 默认 `none`；`loopback` 仅 Cell/Domain 内；`full-approved` 需人工批准并记录 Receipt；proxy-allowlist 为后续增强，禁止简单 DNS 预解析治理 | **已定案 (v0.8.14)** | LF-3/LF-7 |
 | ADR-L8 | **Isolation-Domain Lock**：`main-workspace` 独占写锁、`worktree:<agent>` 独占写锁、`cache:<type>:<key>` 独占/读写锁、`artifact:<id>` 不可变；不同 Worktree 并行写、正式工作区单写者 | **已定案 (v0.8.12)** | LF-5 |
 | ADR-L9 | **严格 Profile 禁止降级**：`allowDegradation:false` 的 Profile（untrusted/evolution）在严格隔离不可用时**拒绝执行**而非回退；`ISOLATION_REQUIREMENT_UNMET`/`DEGRADATION_NOT_ALLOWED` | **已定案 (v0.8.10)** | LF-3/LF-6 |
 | ADR-L10 | **Receipt 进入 Evidence**：每次执行产生 `SandboxReceipt`，绑定 nodeRunId/cellId/workspaceDigest/backend/profile/cellSpecDigest/resourcePolicyDigest/networkPolicyDigest；HostAudit 结果不能满足 `minimumIsolation=container` 的 Criterion | 待定 | LF-2 |

@@ -221,6 +221,11 @@ export function dispatchTuiCommand(input: string, context: TuiCommandContext): T
         context.dispatchAction(def.actionId)
         return "handled"
       }
+      // 已注册但未接入实现的命令：明确提示，绝不静默发给 agent。
+      if (def?.enabled === false) {
+        context.addSystemMessage(`/${name} 暂不可用：${def.disabledReason ?? "未接入"}`)
+        return "handled"
+      }
       return "pass_to_agent"
     }
   }

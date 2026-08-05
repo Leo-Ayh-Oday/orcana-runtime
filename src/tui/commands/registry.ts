@@ -141,6 +141,8 @@ export const COMMANDS: CommandDef[] = [
     description: "Save this session",
     category: "session",
     safeConcurrent: true,
+    enabled: false,
+    disabledReason: "会话保存面板尚未接入",
   },
   {
     name: "compact",
@@ -148,12 +150,16 @@ export const COMMANDS: CommandDef[] = [
     usage: "[preview]",
     category: "session",
     safeConcurrent: true,
+    enabled: false,
+    disabledReason: "压缩面板尚未接入",
   },
   {
     name: "sessions",
     description: "List saved sessions",
     category: "session",
     safeConcurrent: true,
+    enabled: false,
+    disabledReason: "会话列表面板尚未接入",
   },
   {
     name: "search",
@@ -161,12 +167,16 @@ export const COMMANDS: CommandDef[] = [
     usage: "<query>",
     category: "session",
     safeConcurrent: true,
+    enabled: false,
+    disabledReason: "历史搜索尚未接入",
   },
   {
     name: "undo",
     description: "Undo last write",
     category: "session",
     kind: "danger",
+    enabled: false,
+    disabledReason: "回滚面板尚未接入（rewind 为 stub）",
   },
 
   // ── 信息查询 ──

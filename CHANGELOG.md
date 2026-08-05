@@ -2,7 +2,18 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.1] — 2026-08-05
+## [0.7.2] — 2026-08-05
+
+### Added (Typed Execution Graph, G5 — Context Slice / Cache / Replay)
+- **Result cache** (`results/result-cache.ts`) — read-node results keyed by `stableHash({ handler, input })` (the G0 stableHash primitive is now consumed by the cache). Same input ⇒ cache hit ⇒ replay, never re-execute.
+- **File-change invalidation** — a completed write node invalidates the cache (superset invalidation): after any write, read results are recomputed, so modified files always produce fresh reads.
+- **Checkpoint resume wired into the scheduler** — G1's `ResultStore.restore` is finally connected: a crashed run resumes finished nodes without re-executing them, and their results refill the cache for later runs.
+- **Replay markers** — replayed nodes carry `metadata.replayed = true` and `durationMs 0`; tool execution is skipped entirely on a hit.
+- **Context slice** (`context/context-slice.ts`) — a node's execution context is explicitly its own input plus its direct dependencies' outputs; unrelated history and siblings never enter.
+- **Cache persistence** (`persistence/result-cache-store.ts`) — best-effort disk round-trip under the same `redactForTrace` boundary as checkpoints.
+- All of it is opt-in via `SchedulerOptions.cache` — old behavior is unchanged (old-run compatibility).
+
+
 
 ### Added (Typed Execution Graph, G4 — Convergent Repair Graph)
 - **RepairLoop** (`src/workflow/convergence/repair-loop.ts`) — provably convergent fix loop on top of the G3 single-writer transaction graph: each round fingerprints failures and converges.

@@ -41,15 +41,31 @@ describe("G7 conflict detection", () => {
 })
 
 describe("G7 merge node", () => {
-  test("merges agent artifacts deterministically (later wins)", () => {
+  test("identical values dedupe; differing values conflict — never overwritten (M5)", () => {
     const result = mergeAgentArtifacts({
       agents: [
         { agentId: "a1", artifact: { goal: "fix a", status: "done" }, files: ["src/a.ts"] },
         { agentId: "a2", artifact: { goal: "fix b", status: "done" }, files: ["src/b.ts"] },
       ],
     })
-    expect(result.merged).toEqual({ goal: "fix b", status: "done" })
+    // 相同值 status 去重保留；不同值 goal 进入 valueConflicts（无 later-wins）
+    expect(result.merged).toEqual({ status: "done" })
+    expect(result.valueConflicts).toHaveLength(1)
+    expect(result.valueConflicts[0]!.key).toBe("goal")
+    expect(result.valueConflicts[0]!.agents).toEqual(["a1", "a2"])
     expect(result.conflicts).toEqual([])
+  })
+
+  test("differing values for multiple keys are all reported (M5)", () => {
+    const result = mergeAgentArtifacts({
+      agents: [
+        { agentId: "a1", artifact: { goal: "fix a", version: 1 }, files: ["src/a.ts"] },
+        { agentId: "a2", artifact: { goal: "fix b", version: 2 }, files: ["src/b.ts"] },
+      ],
+    })
+    expect(result.valueConflicts).toHaveLength(2)
+    expect(result.valueConflicts.map(c => c.key).sort()).toEqual(["goal", "version"])
+    expect(result.merged).toEqual({})
   })
 
   test("same-file touches are reported as merge conflicts", () => {
@@ -66,5 +82,6 @@ describe("G7 merge node", () => {
     const result = mergeAgentArtifacts({})
     expect(result.merged).toEqual({})
     expect(result.conflicts).toEqual([])
+    expect(result.valueConflicts).toEqual([])
   })
 })

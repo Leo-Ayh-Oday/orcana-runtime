@@ -381,5 +381,16 @@ export async function runScheduler(
   if (options.interrupts?.resumeAnswer) {
     options.interrupts.onResolved?.(options.interrupts.resumeAnswer.interruptId)
   }
+  // MACP-M5: unresolved merge conflicts block the run (task 12) — the merge
+  // node reports them structurally instead of letting later agents win.
+  const mergeNode = spec.nodes.find(n => n.handler === "reduce.merge_agents")
+  if (mergeNode) {
+    const mergeResult = results.find(r => r.nodeId === mergeNode.id)
+    const output = mergeResult?.output as { metadata?: { conflicts?: unknown[]; valueConflicts?: unknown[] } } | null
+    const meta = output?.metadata
+    if (mergeResult?.status === "done" && ((meta?.conflicts?.length ?? 0) > 0 || (meta?.valueConflicts?.length ?? 0) > 0)) {
+      base.status = "blocked_conflict"
+    }
+  }
   return base
 }

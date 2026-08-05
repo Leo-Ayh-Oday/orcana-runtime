@@ -184,7 +184,7 @@ export interface WorkflowNodeResult {
   evidence?: import("../agent/evidence-ledger").EvidenceEntry[]
 }
 
-export type WorkflowRunResultStatus = "done" | "blocked_no_evidence" | "write_rejected" | "waiting_interrupt"
+export type WorkflowRunResultStatus = "done" | "blocked_no_evidence" | "write_rejected" | "waiting_interrupt" | "blocked_conflict"
 
 /** MACP-M4: a run paused at a human node — persisted, resumable. */
 export interface WorkflowWaitingInterrupt {

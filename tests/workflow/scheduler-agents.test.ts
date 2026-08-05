@@ -108,7 +108,9 @@ describe("G7 multi-agent through the scheduler", () => {
       { agentId: "a2", artifact: { filesChanged: ["b.ts"], summary: "fixed b" }, files: ["b.ts"] },
     ]
     const merged = mergeAgentArtifacts({ agents: artifacts })
-    expect(merged.merged).toEqual({ filesChanged: ["b.ts"], summary: "fixed b" })
+    // M5: 不同值不再 later-wins 覆盖 —— 进入 valueConflicts
+    expect(merged.merged).toEqual({})
+    expect(merged.valueConflicts.map(c => c.key).sort()).toEqual(["filesChanged", "summary"])
     expect(merged.conflicts).toEqual([])
   })
 })

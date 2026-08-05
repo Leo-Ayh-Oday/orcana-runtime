@@ -20,6 +20,7 @@ import type { BackendSelection } from "./backend-router"
 import { LinuxExecutionError } from "./errors"
 import { createHostAuditBackend } from "./backends/host-audit"
 import { createBubblewrapBackend } from "./backends/bubblewrap"
+import { createPodmanBackend } from "./backends/podman"
 import type { ExecutionBackend } from "./backends/backend"
 
 export interface ShadowExecutionRecord {
@@ -64,6 +65,7 @@ let shared: LinuxExecutionBroker | null = null
 const backendImplementations: Record<string, ExecutionBackend> = {
   "host-audit": createHostAuditBackend(),
   "bubblewrap": createBubblewrapBackend(),
+  "rootless-podman": createPodmanBackend(),
 }
 
 export function registerBackend(backend: ExecutionBackend): void {

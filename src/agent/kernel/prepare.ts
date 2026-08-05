@@ -137,7 +137,7 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
       explicitFilesForContext.length > 0
     ))
   if (shouldBuildContextMap) {
-    const runtimeContextMap = buildContextMap(process.cwd(), {
+    const runtimeContextMap = buildContextMap(ctx.options.projectRoot ?? process.cwd(), {
       taskId: "runtime-task",
       userRequest: ctx.effectivePrompt,
       keywords: explicitFilesForContext,

@@ -20,6 +20,7 @@ import type { HarnessEventType } from "../contracts/events"
 import type { ToolDescriptor, ToolResult } from "../../tools/registry"
 import type { HookSystem } from "../../hooks"
 import type { ToolPolicyResult } from "../../agent/tool-execution/policy"
+import type { ToolExecutionContext } from "./execution-context"
 import { evaluateToolPolicy } from "../../agent/tool-execution/policy"
 import { executeSingleTool, type ParallelToolResult } from "../../agent/tool-execution/single-executor"
 import { appendHookWarnings, runToolAfterHook, runToolBeforeHook } from "../../agent/round/pre-loop"
@@ -68,6 +69,9 @@ export interface CapabilityExecuteInput {
   // ── shared ──
   artifactTracker?: CapabilityArtifactTracker
   abortSignal?: AbortSignal
+  /** RT-3: explicit run-scoped execution context (node mode wires it from
+   *  the run scope; loop mode keeps the legacy loose parameters). */
+  context?: ToolExecutionContext
 }
 
 export interface CapabilityExecutionResult {
@@ -197,8 +201,8 @@ export async function executeCapability(
       // Node mode: the registered capability handler.
       input.emit?.("tool.call.started", { toolName: descriptor.id, toolCallId: input.toolCallId })
       const response = await handler.execute(effectiveParams, {
-        abortSignal: input.abortSignal,
-        metadata: { capabilityId: descriptor.id },
+        abortSignal: input.abortSignal ?? input.context?.signal,
+        metadata: { capabilityId: descriptor.id, ...(input.context ? { runContext: input.context } : {}) },
       })
       if (!response.ok) {
         const message = response.error ?? "capability execution failed"

@@ -51,7 +51,8 @@ export interface VerificationContext {
   round: number
   intentPolicy: { mode: string }
   effectivePrompt: string
-  options: { autoFinishOnVerifiedWrite?: boolean }
+  /** RT-3: projectRoot threaded through so path checks never use a hidden cwd. */
+  options: { autoFinishOnVerifiedWrite?: boolean; projectRoot?: string }
 
   planning: AgentRunState["planning"]
   execution: AgentRunState["execution"]
@@ -175,7 +176,7 @@ export async function* runRippleVerificationPhase(
       setCascadeFiles(new Set())
     }
     const missingNarrowFiles = ctx.intentPolicy.mode === "narrow_edit"
-      ? missingExplicitRequiredFiles(ctx.effectivePrompt, modifiedFilesThisRound)
+      ? missingExplicitRequiredFiles(ctx.effectivePrompt, modifiedFilesThisRound, ctx.options.projectRoot ?? process.cwd())
       : []
     // PR-3.1: narrow edit auto-complete extracted to CompletionOrchestrator helper
     const narrowResult = checkNarrowEditCompletion({
@@ -307,7 +308,7 @@ export async function* runRuntimeSelfEditGate(
   ctx: VerificationContext,
 ): AsyncGenerator<StreamEvent, RuntimeSelfEditOutput, unknown> {
   const { execution, verificationState, modifiedFilesThisRound, verificationResultsThisRound, round, maxRounds } = ctx
-  const runtimeFilesThisRound = [...modifiedFilesThisRound].filter(path => isRuntimeSourceFile(path))
+  const runtimeFilesThisRound = [...modifiedFilesThisRound].filter(path => isRuntimeSourceFile(path, ctx.options.projectRoot ?? process.cwd()))
   if (runtimeFilesThisRound.length > 0) {
     execution.runtimeSelfEditFiles = new Set([...execution.runtimeSelfEditFiles, ...runtimeFilesThisRound])
   }

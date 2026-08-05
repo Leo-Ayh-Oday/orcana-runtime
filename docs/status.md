@@ -23,7 +23,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | Provider / ModelRouter | Partial | `src/provider/router.ts`, `src/provider/capabilities.ts`, `src/provider/stream-lifecycle.ts`, runtime model config and provider tests | Built-in metadata now derives from the config catalog and provider aborts close safely; complete purpose/cost trace coverage is still pending |
 | Replay harness | Done | `src/agent/replay-harness.ts`, `tests/replay_harness.test.ts`, 70 deterministic replay fixtures, CI core gate, `evals/harness/` H12 scripted E2E suite (12 scenarios, all passing), `evals/mini-benchmark.ts` (PR-8.3) | E2E replay runs via `bun run eval:replay` (12/12, rubric + floors + history); mini benchmark runs via `bun run bench:mini` with persisted baseline and regression gate (pass@1 100%, false done rate 0%) |
 | TUI / CLI operator UX | Partial | TUI tests, command dispatcher, command shelf, composer, runtime panels | Plan approval and evidence report UX still need completion checks |
-| Observability | Partial | `AgentRunTrace`, gate telemetry, runtime panels | RunTrace event taxonomy is not fully standardized |
+| Observability | Done | `AgentRunTrace`, gate telemetry, runtime panels, `src/telemetry/taxonomy.ts` | PR-10.1 taxonomy is landed: finite 9-category event classification (lifecycle/model/tool/gate/verification/evidence/workflow/error/internal), canonical event table, category summaries, unknown-type discoverability |
 | Docs / release | Partial | `README.md`, `ARCHITECTURE.md`, `SECURITY.md` exist; `orcana doctor` landed (PR-10.4) | v1.0 architecture/status/security doc synchronization remains |
 
 ## Strong Single PR Mapping
@@ -57,7 +57,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-6.x Provider | Partial | Registry metadata derives from the canonical config catalog and provider streams close cleanly on abort. Structured output, transcript, and purpose/cost trace enforcement remain incomplete. |
 | PR-7.x Replay / CI | Done | 70-case deterministic replay exists with a CI core gate; H12 scripted E2E replay runs 12/12 scenarios through the real AgentHarness with rubric evaluation; PR-8.3 mini benchmark (pass@1 / false done rate / cost) runs offline with a persisted baseline and regression gate. |
 | PR-8.x TUI / CLI | Partial | Large TUI surface exists and has high targeted test coverage; final plan/evidence UX still needs acceptance gates. |
-| PR-9.x Observability | Planned | Gate/runtime telemetry exists, but a standard event taxonomy and failure taxonomy report are not complete. |
+| PR-9.x Observability | Done | Gate/runtime telemetry exists; PR-10.1 event taxonomy (9 categories, canonical event table, summarize, unknown-type discovery) is landed and tested; finer-grained evidence invalidation intentionally remains the conservative global write-generation (L2) by design. |
 | PR-10.x Docs / Release | Done | `orcana doctor` (PR-10.4) is landed (version, runtime, config, model/auth, concurrent provider probes, sandbox matrix, MCP status, paths; `--json`; CI exit codes). ARCHITECTURE.md status table and SECURITY.md are synchronized with the v1.0 closure facts (PR-10.2/10.3): module legend matches status.md, evidence-chain invalidation (rollback + command-to-file), FreshnessGate, MCP default-untrusted, redaction boundary. |
 
 ## Current Validation Baseline

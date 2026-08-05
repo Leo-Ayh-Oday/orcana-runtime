@@ -23,7 +23,7 @@ import type { TransactionEvidenceBinding, VerificationKind } from "../verificati
 import type { FileTransaction, TransactionSnapshot } from "../tools/transaction"
 import { createTransaction, rollbackTransaction, rollbackTransactionPaths } from "../tools/transaction"
 import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
-import { hasRuntimeUnmanagedWrites } from "../file-state/runtime-file-state"
+import { hasRuntimeUnmanagedWrites, recordRuntimeRollback } from "../file-state/runtime-file-state"
 
 // ── PatchTransaction types ──
 
@@ -669,6 +669,49 @@ export function currentTransactionEvidenceBinding(): TransactionEvidenceBinding 
   }
 }
 
+/** [SS-Next-2B] Advance the committed-transaction evidence state after a
+ *  rollback. The stateId chain now includes the rollback (separate marker
+ *  namespace "rb" so it can never collide with a commit), so evidence bound
+ *  to the pre-rollback history fails the L3 binding match. */
+export function recordRollbackInEvidenceState(txId: string): void {
+  const evidenceState = committedTransactionEvidenceState()
+  evidenceState.stateId = `txstate_${createHash("sha256")
+    .update(`${evidenceState.stateId}\0rb\0${txId}`)
+    .digest("hex")
+    .slice(0, 32)}`
+  evidenceState.transactionCount += 1
+  evidenceState.latestTransactionId = txId
+}
+
+/** [SS-Next-2B] Roll back a committed transaction with full evidence
+ *  invalidation: reverts the files, advances the write-generation (L2
+ *  freshness fails) and the commit-history binding (L3 fails). Unlike an
+ *  unmanaged write, the rollback does NOT poison the binding — subsequent
+ *  verification can produce fresh, authoritative evidence again. */
+export function rollbackCommittedTransaction(
+  txId: string,
+  cwd = process.cwd(),
+): { restored: string[]; deleted: string[] } {
+  const result = rollbackTransaction(txId, cwd)
+  recordRollbackInEvidenceState(txId)
+  recordRuntimeRollback([...result.restored, ...result.deleted])
+  return result
+}
+
+/** [SS-Next-2B] Partial (committed-paths) variant of
+ *  rollbackCommittedTransaction — used when a multi-file commit conflicts
+ *  partway through. */
+export function rollbackCommittedTransactionPaths(
+  txId: string,
+  paths: string[],
+  cwd = process.cwd(),
+): { restored: string[]; deleted: string[] } {
+  const result = rollbackTransactionPaths(txId, paths, cwd)
+  recordRollbackInEvidenceState(txId)
+  recordRuntimeRollback([...result.restored, ...result.deleted])
+  return result
+}
+
 /** Get all managed transactions (active and completed). */
 export function getAllManagedTransactions(): ManagedPatchTransaction[] {
   return [...transactionRegistry().values()]
@@ -1023,10 +1066,10 @@ export async function applyAndCommit(
               .slice(0, err.committedCount)
               .map(file => file.relativePath)
             if (committedPaths.length > 0) {
-              rollbackTransactionPaths(mpt.patch.fileTransaction.id, committedPaths, mpt.cwd)
+              rollbackCommittedTransactionPaths(mpt.patch.fileTransaction.id, committedPaths, mpt.cwd)
             }
           } else {
-            rollbackTransaction(mpt.patch.fileTransaction.id, mpt.cwd)
+            rollbackCommittedTransaction(mpt.patch.fileTransaction.id, mpt.cwd)
           }
         } catch {
           /* best-effort reversion */

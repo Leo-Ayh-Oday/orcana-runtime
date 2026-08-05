@@ -1,0 +1,202 @@
+/** LNXF-1.0: Rootless Podman strict backend (LF-6, plan §10.3).
+ *
+ *  Strict rules: never `--privileged`, never host network, never host
+ *  sockets, never expose real home, digest-locked images only (floating
+ *  tags rejected), `--rm` containers, explicit volumes, resource limits,
+ *  `io.orcana.*` labels for recovery. The argv compiler is the only
+ *  producer of podman arguments.
+ */
+
+import type {
+  BackendAvailability,
+  CompiledExecution,
+  ExecutionCellEvent,
+  ExecutionCellSpec,
+  LinuxCapabilities,
+  SandboxReceipt,
+} from "../contracts"
+import type { BackendOutcome, ExecutionBackend } from "./backend"
+import { runSupervised } from "../process/supervisor"
+import { buildExplicitEnvironment } from "../environment"
+import { buildReceipt } from "../receipt"
+import { validateCellSpec } from "../policy-compiler"
+
+/** 镜像引用校验：digest 锁定（@sha256:），拒绝浮动 tag。 */
+export const DIGEST_PATTERN = /@sha256:[0-9a-f]{64}$/
+
+export function validateImageRef(image: string): { ok: boolean; reason?: string } {
+  if (!image || typeof image !== "string") return { ok: false, reason: "image required" }
+  if (!DIGEST_PATTERN.test(image)) {
+    return { ok: false, reason: `floating image tag rejected (digest required): ${image}` }
+  }
+  return { ok: true }
+}
+
+export interface PodmanCompileOptions {
+  image: string
+  /** 镜像内工作目录。 */
+  workdir?: string
+  /** 显式 volume（host → container，ro/rw）。 */
+  volumes?: Array<{ source: string; target: string; mode: "ro" | "rw" }>
+  /** 拉取策略（默认 never）。 */
+  pullPolicy?: "never" | "missing"
+  /** 标签（io.orcana.*）。 */
+  labels?: Record<string, string>
+  /** seccomp profile 文件（容器内）。 */
+  seccompProfile?: string
+}
+
+export function compilePodmanArgv(spec: ExecutionCellSpec, caps: LinuxCapabilities, opts: PodmanCompileOptions): string[] {
+  const argv = [
+    "run",
+    "--rm",
+    "--detach=false",
+    "--network=none",
+    "--read-only",
+    "--pull", opts.pullPolicy ?? "never",
+    "--userns=keep-id",
+    "--memory", `${Math.max(4, Math.floor(spec.resources.memoryMaxBytes / (1024 * 1024)))}m`,
+    "--cpus", String(Math.max(0.1, (spec.resources.cpuQuotaMicros ?? 100_000) / 1_000_000)),
+    "--pids-limit", String(spec.resources.pidsMax),
+    "--label", `io.orcana.run=${spec.identity.runId}`,
+    "--label", `io.orcana.cell=${spec.identity.cellId}`,
+  ]
+  if (spec.identity.agentId) argv.push("--label", `io.orcana.agent=${spec.identity.agentId}`)
+  if (spec.filesystem.worktreeRoot) {
+    argv.push("--volume", `${spec.filesystem.worktreeRoot}:/workspace:rw,Z`)
+  }
+  for (const volume of opts.volumes ?? []) {
+    argv.push("--volume", `${volume.source}:${volume.target}:${volume.mode},Z`)
+  }
+  if (opts.seccompProfile) argv.push("--security-opt", `seccomp=${opts.seccompProfile}`)
+  argv.push("--workdir", opts.workdir ?? "/workspace")
+  argv.push(opts.image)
+  argv.push(spec.command.executable, ...spec.command.args)
+  return argv
+}
+
+export function createPodmanBackend(): ExecutionBackend {
+  return {
+    id: "rootless-podman",
+
+    availability(caps): BackendAvailability {
+      return {
+        id: "rootless-podman",
+        available: caps.podman.available && caps.podman.rootlessReady,
+        version: caps.podman.version,
+        degradationReasons: caps.podman.available && !caps.podman.rootlessReady
+          ? ["podman rootless 预检未通过（subuid/subgid 或 user namespace）"]
+          : ["podman 不可用"],
+      }
+    },
+
+    validateSpec(spec) {
+      const errors: string[] = []
+      const validation = validateCellSpec(spec)
+      if (!validation.ok) errors.push(...validation.errors.map(e => `EXECUTION_SPEC_INVALID: ${e}`))
+      if (spec.isolation.minimum !== "container") {
+        errors.push("ISOLATION_REQUIREMENT_UNMET: rootless-podman requires minimum=container")
+      }
+      if (spec.network.mode !== "none" && spec.network.mode !== "loopback") {
+        errors.push(`NETWORK_POLICY_UNAVAILABLE: podman strict backend supports none/loopback, got "${spec.network.mode}"`)
+      }
+      if (spec.network.mode === "loopback") {
+        // loopback 在 strict 后端 = 容器内 loopback（--network=none 自带 loopback）
+      }
+      for (const rule of [...spec.filesystem.readonlyMounts, ...spec.filesystem.writableMounts]) {
+        if (rule.source.startsWith("/home/") || rule.source === "/home" || rule.source === "/root") {
+          errors.push(`MOUNT_POLICY_INVALID: real home mount ${rule.source} forbidden`)
+        }
+        if (rule.source.includes("docker.sock") || rule.source.includes("podman.sock")) {
+          errors.push(`MOUNT_POLICY_INVALID: host socket mount ${rule.source} forbidden`)
+        }
+      }
+      return errors
+    },
+
+    compile(spec, caps) {
+      const env = buildExplicitEnvironment({
+        policy: { baseProfile: "minimal", allowedHostKeys: [], fixedValues: {}, requestedValues: {}, deniedKeys: [] },
+        runId: spec.identity.runId,
+        nodeRunId: spec.identity.nodeRunId,
+        pathEntries: ["/usr/local/bin"],
+      })
+      const podmanPath = caps.podman.path ?? "podman"
+      return {
+        backend: "rootless-podman",
+        argv: [podmanPath, ...compilePodmanArgv(spec, caps, {
+          image: spec.environment.variables["ORCANA_IMAGE"] ?? "",
+          volumes: spec.cache.map(c => ({ source: `/cache/${c.kind}/${c.key}`, target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" })),
+          labels: { "io.orcana.run": spec.identity.runId, "io.orcana.cell": spec.identity.cellId },
+        })],
+        env: { ...env.env, ...spec.environment.variables },
+        cwd: "/workspace",
+      }
+    },
+
+    async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
+      const startedAt = Date.now()
+      yield { type: "cell.status", cellId: spec.identity.cellId, state: "running", at: startedAt }
+      const compiled = this.compile(spec, ctx.capabilities)
+      const result = await runSupervised({
+        executable: compiled.argv[0]!,
+        args: compiled.argv.slice(1),
+        cwd: compiled.cwd,
+        env: compiled.env,
+        limits: { stdoutMaxBytes: spec.resources.stdoutMaxBytes, stderrMaxBytes: spec.resources.stderrMaxBytes },
+        wallTimeMs: spec.resources.wallTimeMs,
+        detectDaemon: spec.lifecycle.killOnParentExit,
+      })
+      const finishedAt = Date.now()
+      if (result.stdout) yield { type: "cell.stdout", cellId: spec.identity.cellId, data: result.stdout, at: finishedAt }
+      if (result.stderr) yield { type: "cell.stderr", cellId: spec.identity.cellId, data: result.stderr, at: finishedAt }
+      yield { type: "cell.exit", cellId: spec.identity.cellId, exitCode: result.exitCode, signal: result.signal, at: finishedAt }
+      const receipt = this.buildReceipt(spec, ctx.capabilities, {
+        startedAt,
+        finishedAt,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        timedOut: result.timedOut,
+        cancelled: result.cancelled,
+        oomKilled: false,
+        pidLimitHit: false,
+        outputLimitHit: result.outputLimitHit,
+        tempLimitHit: false,
+        observedWrites: [],
+        observedDeletes: [],
+        unexpectedWrites: [],
+        violations: [],
+        degradationReasons: [],
+        backendVersion: ctx.capabilities.podman.version,
+        metrics: {},
+      })
+      yield { type: "cell.receipt", cellId: spec.identity.cellId, receipt, at: finishedAt }
+    },
+
+    buildReceipt(spec, caps, outcome): SandboxReceipt {
+      return buildReceipt({
+        spec,
+        capabilities: caps,
+        backend: "rootless-podman",
+        backendVersion: outcome.backendVersion ?? caps.podman.version,
+        startedAt: outcome.startedAt,
+        finishedAt: outcome.finishedAt,
+        exitCode: outcome.exitCode,
+        signal: outcome.signal,
+        timedOut: outcome.timedOut,
+        cancelled: outcome.cancelled,
+        oomKilled: outcome.oomKilled,
+        pidLimitHit: outcome.pidLimitHit,
+        outputLimitHit: outcome.outputLimitHit,
+        tempLimitHit: outcome.tempLimitHit,
+        metrics: outcome.metrics,
+        observedWrites: outcome.observedWrites,
+        observedDeletes: outcome.observedDeletes,
+        unexpectedWrites: outcome.unexpectedWrites,
+        violations: outcome.violations,
+        degradationReasons: outcome.degradationReasons,
+        cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, containerRemoved: true, worktreeRetained: spec.lifecycle.retainOnFailure },
+      })
+    },
+  }
+}

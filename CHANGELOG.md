@@ -2,7 +2,19 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.9] — 2026-08-05
+## [0.8.0] — 2026-08-05
+
+### Added (Typed Execution Graph, G7 — T3R Multi-Agent, Graph Runtime finale)
+- **Agent Pool** (`src/workflow/agents/agent-pool.ts`) — register agents with disjoint file ownership (overlaps rejected with a structured violation report), owner lookup, `canWrite` checks, and cancellation; cancelled agents fail fast.
+- **Per-agent budget** (`agent-budget.ts`) — node/write caps; exceeding a cap blocks only that agent's subgraph (`budget_exhausted`), other agents keep running.
+- **Worktree isolation** (`worktree.ts`) — `git worktree add --detach` for git repos, directory snapshot fallback for non-git projects; `dispose` cleans up.
+- **Conflict detection** (`conflict-detect.ts`) — same-file cross-agent writes produce an evidence-backed conflict report (fingerprints); failed writes never count.
+- **Merge node** (`merge.ts`) — `reduce.merge_agents` deterministic merge (later-wins) with structural conflict reporting.
+- **Scheduler wiring** — optional `pool` in `SchedulerOptions`: cancelled agents fail fast, budgets are charged per node; the G3 single-writer lock and evidence gate are untouched. No pool = unchanged single-agent semantics.
+- **Prerequisites verified** (PR-G7 gate): G0–G6 stable, PatchTransaction Phase 2 (temp→swap atomic + TOCTOU + partial rollback), Replay/Checkpoint stable; the "single-agent bottleneck" data premise is proxied by the deterministic evidence (H12 blocked/failed cases, G4 convergence rounds) until live-eval credit returns.
+- 17 new tests: pool/ownership/cancellation, budget verdicts, worktree isolation + dispose, conflict reports, merge semantics, two-agent scheduler runs, cancellation and budget isolation between agents.
+
+
 
 ### Added (Strong Single v1.0, PR-10.1 — RunTrace event taxonomy)
 - **Standardized event classification** (`src/telemetry/taxonomy.ts`) — the free-form `RunTraceEvent.type` strings now map onto a finite 9-category set: `lifecycle / model / tool / gate / verification / evidence / workflow / error / internal`.

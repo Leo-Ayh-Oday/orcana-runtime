@@ -301,6 +301,9 @@ describe("ToolContract projection", () => {
       "apply_patch:32f957d0c5a55edf5802407d790a899e376c3b65e36aa007e80f20cc80f48c2c",
       "apply_patch_transaction:33c36dc0ba9db0f502dea29d9fc87c36b8516eebbf869fa8b9da6cd8d8581fb8",
       "shell:5163d7bdacab8e07f9c612a574d9fbf53feb9d417114b2f53ff4b8cb8e669969",
+      // RT-7: parameterized process tools (shell:false).
+      "run_process:904970bc3466b22c32f8b9190412826e2ebed5fd9b0f650cdef920372919a2e2",
+      "run_shell_script:8473abd04bebbaeac7d587d6c9dd1b937cc0a657111b5d91033d4e46bccc50d4",
       "start_service:483dc391fdcd57e97a5664b0f6215072fbccc10efe6c9426222792e6f6d45ea5",
       "git_status:a5085bd45df5b65723dff6a2f114372f62bf76ca8f3548e167770235281b72bf",
       "git_diff:4ba26f60a84a579be5f4ab90e5258470061fa6ce1dc9239669e03fcd88d90fef",

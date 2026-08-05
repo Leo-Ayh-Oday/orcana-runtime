@@ -84,9 +84,13 @@ async function startService(params: Record<string, unknown>) {
   const resolvedCwd = resolve(process.cwd(), cwd)
   if (!existsSync(resolvedCwd)) return Result.fail(`cwd not found: ${cwd}`)
 
-  const proc = spawn(command, {
+  // RT-7: parameterized spawn (shell:false) — explicit shell executable +
+  // args, detached process group, no command-string injection surface.
+  const shellPath = process.platform === "win32" ? "cmd.exe" : "/bin/sh"
+  const shellArgs = process.platform === "win32" ? ["/c", command] : ["-c", command]
+  const proc = spawn(shellPath, shellArgs, {
     cwd: resolvedCwd,
-    shell: true,
+    shell: false,
     detached: true,
     stdio: "ignore",
     windowsHide: true,

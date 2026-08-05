@@ -59,6 +59,10 @@ export const Result = {
   fail(error: string, content?: string): ToolResult {
     return { success: false, content: content ?? error, error }
   },
+  /** RT-7: failure with structured metadata (exitCode, signal, stdout…). */
+  failWithMetadata(error: string, metadata?: Record<string, unknown>): ToolResult {
+    return { success: false, content: error, error, metadata }
+  },
   blocked(reason: string, metadata?: Record<string, unknown>): ToolResult {
     return {
       success: false,

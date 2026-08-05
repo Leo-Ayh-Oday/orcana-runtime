@@ -24,5 +24,8 @@ export {
   recordRuntimeFileWrite,
   resetRuntimeFileStateLedger,
   runWithRuntimeFileStateContext,
+  getUnmanagedWritePaths,
+  hasCoveredUnmanagedWrites,
+  recordVerificationCoverage,
 } from "./runtime-file-state"
 export type { RuntimeFileStateContext } from "./runtime-file-state"

@@ -352,13 +352,14 @@ export class ProjectingRunTrace implements TraceLike {
   }
 }
 
-/** Wrap a run trace in shadow projection ("off" returns it unchanged). */
+/** Wrap a run trace in shadow projection ("off" returns it unchanged).
+ *  "readonly" mode projects identically (G1 execution happens out-of-band). */
 export function wrapRunTrace(
   runTrace: TraceLike,
-  mode: "off" | "shadow",
+  mode: "off" | "shadow" | "readonly",
   prompt: string,
 ): { trace: TraceLike; projector?: WorkflowProjector } {
-  if (mode !== "shadow") return { trace: runTrace }
+  if (mode === "off") return { trace: runTrace }
   const projector = new WorkflowProjector(runTrace.runId, prompt)
   return { trace: new ProjectingRunTrace(runTrace, projector), projector }
 }

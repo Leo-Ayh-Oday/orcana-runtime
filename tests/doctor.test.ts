@@ -7,7 +7,7 @@ describe("orcana doctor", () => {
   test("report contains all eight checks", async () => {
     const report = await runDoctor({ json: true })
     const ids = report.checks.map(c => c.id)
-    expect(ids).toEqual(["version", "runtime", "config", "model", "provider", "sandbox", "mcp", "paths"])
+    expect(ids).toEqual(["version", "runtime", "config", "model", "provider", "sandbox", "mcp", "paths", "linux-foundation"])
   })
 
   test("every check has a label, status and detail", async () => {

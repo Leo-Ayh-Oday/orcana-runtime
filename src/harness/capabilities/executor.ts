@@ -225,6 +225,13 @@ export async function executeCapability(
             ? shaped.metadata as Record<string, unknown>
             : undefined,
         }
+        // RT-13 (TL-018): successful handler runs must close the trace pair —
+        // the started event was emitted before the handler executed.
+        input.emit?.("tool.call.completed", {
+          toolName: descriptor.id,
+          toolCallId: input.toolCallId,
+          ok: true,
+        })
       }
     }
   } catch (error) {

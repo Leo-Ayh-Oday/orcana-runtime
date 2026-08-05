@@ -105,6 +105,9 @@ function cacheKey(url: string, summarize: boolean, engine: string): string {
   return `${url}|summarize=${summarize}|engine=${engine}`
 }
 
+/** Export for cache-key contract tests (TL-011: modes never share entries). */
+export const webFetchCacheKey = cacheKey
+
 function injectionMetadata(text: string): Record<string, unknown> {
   const labels = detectPromptInjection(text)
   if (labels.length === 0) return {}

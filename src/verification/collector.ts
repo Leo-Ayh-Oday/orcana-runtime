@@ -4,7 +4,8 @@
  *  Timeouts: typecheck/test 3min, build 2min, lint 1min, smoke 30s
  */
 
-import { execSync } from "node:child_process"
+import { execShellLegacy } from "../runtime/legacy-process"
+const execSync = execShellLegacy
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { VerificationKind, VerificationResult } from "./result"

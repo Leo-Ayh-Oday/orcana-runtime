@@ -41,6 +41,11 @@ export interface LinuxBrokerOptions {
   onShadow?: (record: ShadowExecutionRecord) => void
 }
 
+export interface ExecuteOptions {
+  /** 取消信号（透传到后端 runSupervised）。 */
+  abortSignal?: AbortSignal
+}
+
 export interface LinuxExecutionBroker {
   probe(options?: { refresh?: boolean }): LinuxCapabilities
   /** 编译并校验一个执行 spec（Policy Compiler 唯一入口）。 */
@@ -50,7 +55,7 @@ export interface LinuxExecutionBroker {
   /** Shadow：记录拟用 spec/后端，不执行。 */
   shadow(spec: ExecutionCellSpec): ShadowExecutionRecord
   /** 执行（LF-2+ 接线后可用）。 */
-  execute(spec: ExecutionCellSpec): AsyncIterable<ExecutionCellEvent>
+  execute(spec: ExecutionCellSpec, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
   createAgentDomain(input: { runId: string; agentId: string; worktreeRoot: string; ownerFiles: string[]; resourceBudget: DomainResourceBudget; role?: string }): AgentExecutionDomain
   cancelCell(cellId: string): Promise<void>
   cancelAgent(agentId: string): Promise<void>
@@ -126,7 +131,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       options.onShadow?.(record)
       return record
     },
-    async *execute(spec) {
+    async *execute(spec, executeOptions) {
       if (options.mode === "shadow") {
         // LF-1/2: shadow 不执行 —— 记录后由旧路径执行。
         this.shadow(spec)
@@ -142,7 +147,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       if (violations.length > 0) {
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `backend ${backend.id} rejects spec: ${violations.join("; ")}`)
       }
-      yield* backend.run(compiled, { capabilities: caps })
+      yield* backend.run(compiled, { capabilities: caps, abortSignal: executeOptions?.abortSignal })
     },
     createAgentDomain(input) {
       const domain: AgentExecutionDomain = {

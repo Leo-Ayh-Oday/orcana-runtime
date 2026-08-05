@@ -1,12 +1,12 @@
 /** Shell tool — execute commands with streaming progress. */
 
-import { spawn } from "node:child_process"
 import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result, isNonInteractive } from "./registry"
 import { buildVerificationResult } from "../verification/result"
 import type { SandboxManager } from "../sandbox/sandbox"
 import { recordRuntimeObservedWrites } from "../file-state"
 import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
+import { executeProcess, type ProcessEvent } from "../runtime/process-executor"
 
 const SHELL_RESULT_MAX_CHARS = 8000
 
@@ -93,93 +93,69 @@ async function shell(
     : timeoutSec
   sandbox?.snapshotWorkspace()
 
-  return new Promise(resolve => {
-    const startedAt = Date.now()
-    const childEnv = sandboxed && verdict.injectedEnv
-      ? verdict.injectedEnv
-      : process.env
-    const proc = spawn(command, {
-      shell: true,
-      stdio: ["ignore", "pipe", "pipe"] as const,
-      windowsHide: sandboxed,
-      env: childEnv as Record<string, string | undefined>,
-    })
-    if (sandboxed && proc.pid && sandbox) sandbox.track(proc.pid)
-    const stdoutChunks: string[] = []
-    const stderrChunks: string[] = []
-    let timedOut = false
-    let aborted = false
-    const abortHandler = () => {
-      aborted = true
-      void sandbox?.cleanup()
-      terminateProcess(proc)
+  const stdoutChunks: string[] = []
+  const stderrChunks: string[] = []
+  let timedOut = false
+  let aborted = false
+  let exitCode: number | null = null
+  for await (const event of executeProcess({
+    command: shellExecutable(),
+    args: shellArgs(command),
+    env: sandboxed && verdict.injectedEnv ? (verdict.injectedEnv as Record<string, string>) : undefined,
+    timeoutMs: effectiveTimeout * 1000,
+    abortSignal: context?.abortSignal,
+  })) {
+    switch (event.type) {
+      case "stdout":
+        stdoutChunks.push(event.data)
+        onProgress?.(event.data)
+        break
+      case "stderr":
+        stderrChunks.push(event.data)
+        onProgress?.(event.data)
+        break
+      case "exit":
+        exitCode = event.exitCode
+        timedOut = event.signal === "timeout"
+        aborted = event.signal === "aborted"
+        break
     }
-    context?.abortSignal?.addEventListener("abort", abortHandler, { once: true })
+  }
 
-    const timer = setTimeout(() => {
-      timedOut = true
-      terminateProcess(proc)
-    }, effectiveTimeout * 1000)
-
-    proc.stdout?.on("data", (data: Buffer) => {
-      const text = data.toString()
-      stdoutChunks.push(text)
-      onProgress?.(text)
+  const startedAt = Date.now()
+  const sandboxReport = observeWorkspaceWrites(sandbox)
+  if (aborted) {
+    return Result.fail(`Command aborted${sandboxReport}`)
+  }
+  if (timedOut) {
+    return shellResult({
+      command,
+      success: false,
+      error: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}`,
+      content: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}${sandboxReport}`,
+      durationMs: Date.now() - startedAt,
     })
-
-    proc.stderr?.on("data", (data: Buffer) => {
-      const text = data.toString()
-      stderrChunks.push(text)
-      onProgress?.(text)
+  }
+  let output = stdoutChunks.join("").trim() || "(empty output)"
+  if (stderrChunks.length) output += `\n[stderr]\n${stderrChunks.join("").trim()}`
+  if (sandboxReport) output += sandboxReport
+  const code = exitCode ?? 0
+  if (code !== 0) {
+    return shellResult({
+      command,
+      success: false,
+      error: `Command exited with code ${code}`,
+      content: output.slice(0, 8000),
+      exitCode: code,
+      durationMs: Date.now() - startedAt,
     })
-
-    proc.on("error", (err) => {
-      clearTimeout(timer)
-      context?.abortSignal?.removeEventListener("abort", abortHandler)
-      resolve(Result.fail(`Failed to spawn: ${err.message}`))
-    })
-
-    proc.on("close", (code) => {
-      clearTimeout(timer)
-      context?.abortSignal?.removeEventListener("abort", abortHandler)
-      const sandboxReport = observeWorkspaceWrites(sandbox)
-      if (aborted) {
-        resolve(Result.fail(`Command aborted${sandboxReport}`))
-        return
-      }
-      if (timedOut) {
-        resolve(shellResult({
-          command,
-          success: false,
-          error: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}`,
-          content: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}${sandboxReport}`,
-          durationMs: Date.now() - startedAt,
-        }))
-        return
-      }
-      let output = stdoutChunks.join("").trim() || "(empty output)"
-      if (stderrChunks.length) output += `\n[stderr]\n${stderrChunks.join("").trim()}`
-      if (sandboxReport) output += sandboxReport
-      const exitCode = code ?? 0
-      if (exitCode !== 0) {
-        resolve(shellResult({
-          command,
-          success: false,
-          error: `Command exited with code ${exitCode}`,
-          content: output.slice(0, 8000),
-          exitCode,
-          durationMs: Date.now() - startedAt,
-        }))
-        return
-      }
-      resolve(shellResult({
-        command,
-        success: true,
-        content: output.slice(0, 8000),
-        exitCode,
-        durationMs: Date.now() - startedAt,
-      }))
-    })
+  }
+  return shellResult({
+    command,
+    success: true,
+    content: output.slice(0, 8000),
+    exitCode: code,
+    durationMs: Date.now() - startedAt,
   })
 }
 
@@ -224,80 +200,44 @@ export async function* shellStream(
   }
   const sandboxed = sandbox?.needsSandbox(command) ?? false
   const childEnv = sandboxed && verdict.injectedEnv
-    ? verdict.injectedEnv
-    : process.env
+    ? (verdict.injectedEnv as Record<string, string>)
+    : undefined
   sandbox?.snapshotWorkspace()
 
-  const proc = spawn(command, {
-    shell: true,
-    stdio: ["ignore", "pipe", "pipe"] as const,
-    windowsHide: sandboxed,
-    env: childEnv as Record<string, string | undefined>,
-  })
-  if (sandboxed && proc.pid && sandbox) sandbox.track(proc.pid)
-  const startedAt = Date.now()
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
   let timedOut = false
   let aborted = false
-  let finished = false
   let spawnError = ""
+  let exitCode: number | null = null
+  for await (const event of executeProcess({
+    command: shellExecutable(),
+    args: shellArgs(command),
+    env: childEnv,
+    timeoutMs: timeoutSec * 1000,
+    abortSignal: context?.abortSignal,
+  })) {
+    if (event.type === "exit" && event.signal === "error") spawnError = "failed to spawn"
 
-  const abortHandler = () => {
-    aborted = true
-    void sandbox?.cleanup()
-    terminateProcess(proc)
+    switch (event.type) {
+      case "stdout":
+        stdoutChunks.push(event.data)
+        yield { type: "progress", data: event.data }
+        break
+      case "stderr":
+        stderrChunks.push(event.data)
+        yield { type: "progress", data: `\n[stderr]\n${event.data}` }
+        break
+      case "exit":
+        exitCode = event.exitCode
+        timedOut = event.signal === "timeout"
+        aborted = event.signal === "aborted"
+        break
+    }
   }
-  context?.abortSignal?.addEventListener("abort", abortHandler, { once: true })
-
-  const timer = setTimeout(() => {
-    timedOut = true
-    terminateProcess(proc)
-  }, timeoutSec * 1000)
-
-  const closed = new Promise<void>((resolve) => {
-    proc.stdout?.on("data", (data: Buffer) => {
-      const text = data.toString()
-      stdoutChunks.push(text)
-    })
-
-    proc.stderr?.on("data", (data: Buffer) => {
-      const text = data.toString()
-      stderrChunks.push(text)
-    })
-
-    proc.on("error", (err) => {
-      spawnError = err.message
-      finished = true
-      clearTimeout(timer)
-      resolve()
-    })
-    proc.on("close", () => {
-      finished = true
-      clearTimeout(timer)
-      resolve()
-    })
-  })
-
-  // Yield progress chunks while process is running
-  let lastStdoutLen = 0
-  let lastStderrLen = 0
-  while (!finished && !timedOut && !aborted) {
-    await Promise.race([closed, new Promise(r => setTimeout(r, 100))])
-
-    const newStdout = stdoutChunks.slice(lastStdoutLen)
-    const newStderr = stderrChunks.slice(lastStderrLen)
-    lastStdoutLen = stdoutChunks.length
-    lastStderrLen = stderrChunks.length
-
-    const combined = [...newStdout, ...(newStderr.length ? ["\n[stderr]"] : []), ...newStderr].join("")
-    if (combined) yield { type: "progress", data: combined }
-  }
-  context?.abortSignal?.removeEventListener("abort", abortHandler)
+  const startedAt = Date.now()
 
   if (aborted) {
-    clearTimeout(timer)
-    await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 100))])
     const sandboxReport = observeWorkspaceWrites(sandbox)
     yield { type: "done", data: Result.fail(`Command aborted${sandboxReport}`) }
     return
@@ -328,14 +268,14 @@ export async function* shellStream(
     ? output.slice(0, SHELL_RESULT_MAX_CHARS) + `\n\n… [shell 输出被截断：${output.length} 字符，仅显示前 ${SHELL_RESULT_MAX_CHARS}。用 timeout 参数缩短命令输出，或用 findstr/grep 过滤。]`
     : output
 
-  const exitCode = proc.exitCode ?? 0
-  if (exitCode !== 0) {
+  const code = exitCode ?? 0
+  if (code !== 0) {
     yield { type: "done", data: shellResult({
       command,
       success: false,
-      error: `Command exited with code ${exitCode}`,
+      error: `Command exited with code ${code}`,
       content: display,
-      exitCode,
+      exitCode: code,
       durationMs: Date.now() - startedAt,
       truncated: truncated ? output.length : undefined,
     }) }
@@ -345,7 +285,7 @@ export async function* shellStream(
     command,
     success: true,
     content: display,
-    exitCode,
+    exitCode: code,
     durationMs: Date.now() - startedAt,
     truncated: truncated ? output.length : undefined,
   }) }
@@ -359,21 +299,13 @@ function observeWorkspaceWrites(sandbox: SandboxManager | null): string {
   return `\n\n[沙箱文件守护]\n${report.violations.map(change => `  ${change.kind}: ${change.path}`).join("\n")}`
 }
 
-function terminateProcess(proc: ReturnType<typeof spawn>): void {
-  if (proc.pid && process.platform === "win32") {
-    const killer = spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    })
-    killer.unref()
-    return
-  }
-  try { proc.kill("SIGTERM") } catch { /* process already exited */ }
-  setTimeout(() => {
-    if (proc.exitCode === null) {
-      try { proc.kill("SIGKILL") } catch { /* process already exited */ }
-    }
-  }, 2000).unref?.()
+/** shell:true 的等价显式调用（POSIX sh -c；Windows cmd /c）。 */
+function shellExecutable(): string {
+  return process.platform === "win32" ? "cmd.exe" : "/bin/sh"
+}
+
+function shellArgs(command: string): string[] {
+  return process.platform === "win32" ? ["/c", command] : ["-c", command]
 }
 
 function shellResult(input: {

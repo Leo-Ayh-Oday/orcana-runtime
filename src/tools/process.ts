@@ -5,14 +5,15 @@
  *  run_shell_script  — explicit shell type (bash/sh/cmd/powershell) via the
  *                      shell executable + args, never shell:true.
  *
- *  Shared core: process groups (tree-kill on timeout/cancel), AbortSignal
- *  support, structured exitCode/signal. Legacy shell stays as an adapter
- *  (src/tools/shell.ts) pending gradual deprecation.
+ *  R1: 进程执行统一走 ProcessExecutor（Linux → Broker/Backend；Windows →
+ *  legacy）。环境由 Environment Compiler 构造，禁止宿主环境继承（密钥类
+ *  键任何层级都拒绝）。Legacy shell 保留在 src/tools/shell.ts（待迁移）。
  */
 
 import { spawn } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
+import { collectProcessRun } from "../runtime/process-executor"
 
 export interface RunProcessParams {
   command: string
@@ -37,58 +38,13 @@ export interface RunProcessResult {
 
 /** Parameterized process execution — never shell:true. */
 export function runProcess(params: RunProcessParams): Promise<RunProcessResult> {
-  const { command, args } = params
-  const timeoutMs = params.timeoutMs ?? 120_000
-  return new Promise((resolve) => {
-    const startedAt = Date.now()
-    const detached = params.detached ?? process.platform !== "win32"
-    const proc = spawn(command, args, {
-      cwd: params.cwd,
-      env: params.env ? { ...process.env, ...params.env } : process.env,
-      stdio: ["ignore", "pipe", "pipe"] as const,
-      detached,
-      windowsHide: true,
-    })
-    const stdoutChunks: string[] = []
-    const stderrChunks: string[] = []
-    proc.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk.toString("utf-8")))
-    proc.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk.toString("utf-8")))
-
-    let settled = false
-    let timedOut = false
-    let aborted = false
-    const finish = (result: Omit<RunProcessResult, "durationMs" | "timedOut" | "aborted">) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      params.abortSignal?.removeEventListener("abort", abortHandler)
-      resolve({
-        ...result,
-        durationMs: Date.now() - startedAt,
-        timedOut,
-        aborted,
-      })
-    }
-
-    const abortHandler = () => {
-      aborted = true
-      terminateTree(proc)
-      // The process emits close; resolve immediately for the caller.
-      finish({ exitCode: null, signal: "aborted", stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") })
-    }
-    params.abortSignal?.addEventListener("abort", abortHandler, { once: true })
-
-    const timer = setTimeout(() => {
-      timedOut = true
-      terminateTree(proc)
-    }, timeoutMs)
-
-    proc.on("error", (err) => {
-      finish({ exitCode: null, signal: null, stdout: stdoutChunks.join(""), stderr: err.message })
-    })
-    proc.on("close", (code, signal) => {
-      finish({ exitCode: code, signal, stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") })
-    })
+  return collectProcessRun({
+    command: params.command,
+    args: params.args,
+    cwd: params.cwd,
+    env: params.env,
+    timeoutMs: params.timeoutMs ?? 120_000,
+    abortSignal: params.abortSignal,
   })
 }
 

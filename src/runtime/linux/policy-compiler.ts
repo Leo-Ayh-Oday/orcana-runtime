@@ -14,6 +14,7 @@ import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
 import { existsSync, realpathSync } from "node:fs"
 import type { ExecutionCellSpec, MountRule } from "./contracts"
 import { LinuxExecutionError } from "./errors"
+import { hostKeyDenied } from "./environment"
 
 /** 系统根目录集合 —— 默认只读白名单（plan §10.2）。 */
 export const SYSTEM_READONLY_PATHS = [
@@ -142,6 +143,11 @@ export function validateCellSpec(spec: ExecutionCellSpec): ValidateSpecResult {
   }
   if (!spec.command.cwd || !isAbsolute(spec.command.cwd)) errors.push("command.cwd must be absolute")
   if (spec.environment.inheritHost !== false) errors.push("environment.inheritHost must be false (no host env inheritance)")
+  // P1-7 关闭：spec 声明的环境键不得落入默认拒绝集（密钥/凭证/代理）。
+  const deniedDeclared = Object.keys(spec.environment.variables).filter(k => hostKeyDenied(k))
+  const deniedAllowed = (spec.environment.allowedHostKeys ?? []).filter(k => hostKeyDenied(k))
+  if (deniedDeclared.length > 0) errors.push(`environment.variables contains denied keys: ${deniedDeclared.join(", ")}`)
+  if (deniedAllowed.length > 0) errors.push(`environment.allowedHostKeys contains denied keys: ${deniedAllowed.join(", ")}`)
   if (spec.resources.memoryMaxBytes <= 0) errors.push("resources.memoryMaxBytes must be positive")
   if (spec.resources.pidsMax <= 0) errors.push("resources.pidsMax must be positive")
   if (spec.resources.wallTimeMs <= 0) errors.push("resources.wallTimeMs must be positive")

@@ -1,8 +1,8 @@
 /** Post-loop utilities: diagnostics, ripple verification, thinking compaction, state machine updates.
  *  Extracted from loop.ts to keep the main agent loop under size thresholds. */
 
-import { execSync } from "node:child_process"
 import { existsSync } from "node:fs"
+import { collectProcessRun } from "../../runtime/process-executor"
 import { resolve } from "node:path"
 import type { ProviderMessage } from "../../provider/types"
 import { getLSPClient } from "../../lsp/client"
@@ -11,7 +11,7 @@ import { AgentState, StateMachine } from "../state-machine"
 
 // ── Post-edit diagnostics ──
 
-export function runPostEditDiagnostics(path: string, result: { success: boolean; content: string }) {
+export async function runPostEditDiagnostics(path: string, result: { success: boolean; content: string }) {
   if (!path.endsWith(".py") && !path.endsWith(".ts") && !path.endsWith(".tsx")) return
   // A custom or failed write adapter may report a path without materializing it.
   // There can be no file-local diagnostics in that case, and a full-project tsc
@@ -20,8 +20,8 @@ export function runPostEditDiagnostics(path: string, result: { success: boolean;
   try {
     let diagnostics = ""
     if (path.endsWith(".py")) {
-      const out = execSync(`ruff check "${path}" --output-format concise`, { encoding: "utf-8", timeout: 10000 })
-      if (out.trim()) diagnostics = out.trim()
+      const ruff = await collectProcessRun({ command: "ruff", args: ["check", path, "--output-format", "concise"], timeoutMs: 10000 })
+      if (ruff.stdout.trim()) diagnostics = ruff.stdout.trim()
     }
     if (path.endsWith(".ts") || path.endsWith(".tsx")) {
       // LSP fast path: notify change + read cached diagnostics for this file
@@ -33,7 +33,7 @@ export function runPostEditDiagnostics(path: string, result: { success: boolean;
         diagnostics = lspResult.summary
       } else if (!lsp.isAvailable) {
         // LSP unavailable — fall back to full tsc (preserved ground truth)
-        const check = runTypeScriptNoEmit(process.cwd())
+        const check = await runTypeScriptNoEmit(process.cwd())
         const out = check.passed ? "" : check.output
         if (out.trim() && out.includes(path)) diagnostics = out.trim().split("\n").filter(l => l.includes(path)).join("\n")
       }
@@ -44,7 +44,7 @@ export function runPostEditDiagnostics(path: string, result: { success: boolean;
 
 // ── Ripple verification ──
 
-export function runRippleVerification(modifiedFiles: Set<string>): { passed: boolean; available: boolean; issues: number; output?: string } {
+export async function runRippleVerification(modifiedFiles: Set<string>): Promise<{ passed: boolean; available: boolean; issues: number; output?: string }> {
   const tsFiles = [...modifiedFiles].filter(path => path.endsWith(".ts") || path.endsWith(".tsx"))
   if (!tsFiles.length) return { passed: true, available: true, issues: 0 }
   if (!tsFiles.some(path => existsSync(resolve(path)))) return { passed: true, available: true, issues: 0 }

@@ -13,7 +13,9 @@ import type {
   SandboxReceipt,
 } from "../contracts"
 import type { BackendOutcome, ExecutionBackend } from "./backend"
-import { runSupervised } from "../process/supervisor"
+import { streamBackendRun } from "./backend"
+import type { CompiledExecution } from "../contracts"
+import { runSupervised, streamSupervised, type SupervisorResult } from "../process/supervisor"
 import { buildExplicitEnvironment } from "../environment"
 import { buildReceipt } from "../receipt"
 import { validateCellSpec } from "../policy-compiler"
@@ -43,54 +45,47 @@ export function createHostAuditBackend(): ExecutionBackend {
 
     compile(spec) {
       const env = buildExplicitEnvironment({
-        policy: { baseProfile: "minimal", allowedHostKeys: [], fixedValues: {}, requestedValues: {}, deniedKeys: [] },
+        policy: {
+          baseProfile: spec.profile === "inspect" || spec.profile === "untrusted" ? "minimal" : "build",
+          allowedHostKeys: spec.environment.allowedHostKeys ?? [],
+          fixedValues: {},
+          requestedValues: spec.environment.variables,
+          deniedKeys: [],
+        },
         runId: spec.identity.runId,
         nodeRunId: spec.identity.nodeRunId,
+        pathEntries: spec.environment.pathEntries,
       })
       return {
         backend: "host-audit",
         argv: [spec.command.executable, ...spec.command.args],
-        env: { ...env.env, ...spec.environment.variables },
+        env: env.env,
         cwd: spec.command.cwd,
       }
     },
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
-      const startedAt = Date.now()
-      yield { type: "cell.status", cellId: spec.identity.cellId, state: "running", at: startedAt }
-      const compiled = this.compile(spec, ctx.capabilities)
-      const result = await runSupervised({
-        executable: spec.command.executable,
-        args: spec.command.args,
-        cwd: spec.command.cwd,
-        env: compiled.env,
-        limits: { stdoutMaxBytes: spec.resources.stdoutMaxBytes, stderrMaxBytes: spec.resources.stderrMaxBytes },
-        wallTimeMs: spec.resources.wallTimeMs,
-        detectDaemon: spec.lifecycle.killOnParentExit,
-      })
-      const finishedAt = Date.now()
-      if (result.stdout) yield { type: "cell.stdout", cellId: spec.identity.cellId, data: result.stdout, at: finishedAt }
-      if (result.stderr) yield { type: "cell.stderr", cellId: spec.identity.cellId, data: result.stderr, at: finishedAt }
-      yield { type: "cell.exit", cellId: spec.identity.cellId, exitCode: result.exitCode, signal: result.signal, at: finishedAt }
-      const receipt = this.buildReceipt(spec, ctx.capabilities, {
-        startedAt,
-        finishedAt,
-        exitCode: result.exitCode,
-        signal: result.signal,
-        timedOut: result.timedOut,
-        cancelled: result.cancelled,
-        oomKilled: false,
-        pidLimitHit: false,
-        outputLimitHit: result.outputLimitHit,
-        tempLimitHit: false,
-        observedWrites: [],
-        observedDeletes: [],
-        unexpectedWrites: [],
-        violations: [],
-        degradationReasons: [HOST_AUDIT_DEGRADATION],
-        metrics: {},
-      })
-      yield { type: "cell.receipt", cellId: spec.identity.cellId, receipt, at: finishedAt }
+      yield* streamBackendRun("host-audit", spec, ctx,
+        () => this.compile(spec, ctx.capabilities),
+        (result) => this.buildReceipt(spec, ctx.capabilities, {
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          exitCode: result.exitCode,
+          signal: result.signal,
+          timedOut: result.timedOut,
+          cancelled: result.cancelled,
+          oomKilled: false,
+          pidLimitHit: false,
+          outputLimitHit: result.outputLimitHit,
+          tempLimitHit: false,
+          observedWrites: [],
+          observedDeletes: [],
+          unexpectedWrites: [],
+          violations: [],
+          degradationReasons: [HOST_AUDIT_DEGRADATION],
+          metrics: {},
+        }),
+      )
     },
 
     buildReceipt(spec, caps, outcome): SandboxReceipt {

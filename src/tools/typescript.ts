@@ -1,8 +1,8 @@
-import { execSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
+import { collectProcessRun } from "../runtime/process-executor"
 
 const TYPECHECK_RESULT_MAX_CHARS = 2000
 
@@ -19,7 +19,7 @@ export function getTscCommand(cwd = process.cwd()): string {
     : ["tsc"]
   for (const name of names) {
     const local = resolve(cwd, "node_modules", ".bin", name)
-    if (existsSync(local)) return `"${local}"`
+    if (existsSync(local)) return local
   }
   return "tsc"
 }
@@ -33,18 +33,13 @@ function countIssues(output: string): number {
   return matches?.length ?? (output.trim() ? 1 : 0)
 }
 
-export function runTypeScriptNoEmit(cwd = process.cwd()): TypeScriptCheckResult {
+export async function runTypeScriptNoEmit(cwd = process.cwd()): Promise<TypeScriptCheckResult> {
   const command = getTscCommand(cwd)
   try {
-    const out = execSync(`${command} --noEmit --pretty false 2>&1`, {
-      encoding: "utf-8",
-      timeout: 15000,
-      cwd,
-    })
-    return { passed: true, available: true, issues: 0, output: out.trim() }
-  } catch (e) {
-    const err = e as { stdout?: string | Buffer; stderr?: string | Buffer; message?: string }
-    const output = String(err.stdout ?? err.stderr ?? err.message ?? "").trim()
+    const r = await collectProcessRun({ command, args: ["--noEmit", "--pretty", "false"], cwd, timeoutMs: 15000 })
+    return { passed: true, available: true, issues: 0, output: r.stdout.trim() }
+  } catch (error) {
+    const output = error instanceof Error ? error.message : String(error)
     return {
       passed: false,
       available: !looksUnavailable(output),
@@ -73,7 +68,7 @@ export const TYPECHECK_TOOL: ToolDef = {
   },
   execute: async (): Promise<ToolResult> => {
     const startedAt = Date.now()
-    const result = runTypeScriptNoEmit()
+    const result = await runTypeScriptNoEmit()
     const verification = {
       kind: "typecheck" as const,
       command: "tsc --noEmit",

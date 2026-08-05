@@ -25,6 +25,8 @@ export interface SupervisorOptions {
   abortSignal?: AbortSignal
   /** 退出后扫描进程组，统计逃逸后代（后台 daemon / double-fork）。 */
   detectDaemon?: boolean
+  /** 实时输出回调（流式消费者用；数据到达即调用）。 */
+  onOutput?: (stream: "stdout" | "stderr", data: Buffer) => void
 }
 
 export interface SupervisorResult {
@@ -65,8 +67,14 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
 
-  proc.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(limiter.absorb("stdout", chunk).toString("utf-8")))
-  proc.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(limiter.absorb("stderr", chunk).toString("utf-8")))
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    options.onOutput?.("stdout", chunk)
+    stdoutChunks.push(limiter.absorb("stdout", chunk).toString("utf-8"))
+  })
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    options.onOutput?.("stderr", chunk)
+    stderrChunks.push(limiter.absorb("stderr", chunk).toString("utf-8"))
+  })
 
   return new Promise<SupervisorResult>((resolve) => {
     let settled = false
@@ -98,6 +106,7 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
       finish(null, "aborted", 0)
     }
     options.abortSignal?.addEventListener("abort", onAbort, { once: true })
+    if (options.abortSignal?.aborted) onAbort()
 
     proc.on("error", () => {
       finish(null, "error", 0)
@@ -114,4 +123,30 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
       finish(null, "timeout", 0)
     }, options.wallTimeMs)
   })
+}
+
+export type StreamedSupervisorEvent =
+  | { type: "stdout"; data: string; at: number }
+  | { type: "stderr"; data: string; at: number }
+  | { type: "exit"; result: SupervisorResult; at: number }
+
+/** 流式版监督执行：stdout/stderr 数据到达即产出（真实流式，非退出后批处理）。 */
+export async function* streamSupervised(options: SupervisorOptions): AsyncGenerator<StreamedSupervisorEvent> {
+  const chunks: Array<{ stream: "stdout" | "stderr"; data: string; at: number }> = []
+  const resultPromise = runSupervised({ ...options, onOutput: (stream, data) => chunks.push({ stream, data: data.toString("utf-8"), at: Date.now() }) })
+  let result: SupervisorResult | null = null
+  let lastIndex = 0
+  const settled = resultPromise.then(r => { result = r })
+  while (true) {
+    if (chunks.length > lastIndex) {
+      while (chunks.length > lastIndex) {
+        const chunk = chunks[lastIndex++]!
+        yield { type: chunk.stream, data: chunk.data, at: chunk.at }
+      }
+      continue
+    }
+    if (result) break
+    await Promise.race([settled, new Promise(r => setTimeout(r, 15))])
+  }
+  yield { type: "exit", result, at: Date.now() }
 }

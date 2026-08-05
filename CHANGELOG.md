@@ -2,7 +2,16 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.9] — 2026-08-05
+## [0.8.10] — 2026-08-05
+
+### Added (LNXF-3 — Bubblewrap 快速后端)
+- **Bubblewrap backend** — default fast backend for inspect/build/test/service profiles: user/mount/PID/IPC/UTS/net namespaces, `--die-with-parent`, `--new-session`, `--clearenv`; fresh PID `/proc`, minimal `/dev`, independent tmpfs for `/tmp` and `/run`, seven read-only system roots, empty `/home/orcana`, worktree bound rw at `/workspace`, `--chdir`. The argv compiler is the only producer of bwrap arguments — models/tools can never assemble them.
+- **Policy enforcement** — `minimum=container` rejected (`ISOLATION_REQUIREMENT_UNMET`); network other than none/loopback rejected (`NETWORK_POLICY_UNAVAILABLE`); real-home and host-socket mounts rejected (`MOUNT_POLICY_INVALID`); strict profiles refuse degradation when bwrap is unavailable (`BWRAP_DEGRADATION_IN_STRICT: 0`).
+- **Explicit env** — compiled environment carries only Runtime fixed vars + spec variables; no host secret inheritance.
+- **Receipts** — bubblewrap backend receipts with full digest binding and empty degradation reasons when healthy.
+- 16 tests: argv compilation (namespaces/layout/forbidden mounts), policy rejections, strict-no-degradation; 5 true-sandbox tests (home hidden, no project escape, fresh pid ns, network none, receipt) run automatically when bwrap is installed, skipped otherwise. Full gate 975 pass, bench no regression.
+
+
 
 ### Added (LNXF-2 — 统一进程核心与 Host Audit 后端)
 - **Process supervisor** — POSIX process groups, explicit environments, output limits, unified timeout/cancel, and daemon detection (post-exit group scan reports orphans from double-fork / background daemons). Tree termination: SIGTERM → grace → SIGKILL with polling to zero, zombie processes excluded (they cannot be killed and are reaped by init), `/proc`-based group counting (no ps dependency).

@@ -23,6 +23,7 @@ import { getDefaultAuthStore, type AuthStore } from "../config/auth-store"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../provider/types"
 import { buildTools, type ToolDef, type ToolDescriptor } from "../tools/registry"
 import { assembleRuntimeToolDefs } from "../tools/builtins"
+import { selectToolDefs, type TaskProfile } from "../harness/capabilities/router"
 import type { HookSystem } from "../hooks"
 import { createDefaultHookSystem } from "../hooks/defaults"
 import { StagedContextManager } from "../context/staged"
@@ -77,6 +78,11 @@ export interface RuntimeBootstrapOptions {
   allowMissingProviderAuth?: boolean
   /** Read API keys from user/system env vars. Default follows config.runtime.allowEnvKeys, which defaults false. */
   useEnvAuth?: boolean
+  /** RT-12: optional capability-router disclosure profile (trims the tool
+   *  list to the stable core + task specialists; omit for full disclosure). */
+  toolDisclosure?: {
+    profile: TaskProfile
+  }
 }
 
 export interface Runtime {
@@ -316,7 +322,17 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
 
   // ── 4. Tools ──
   const mcpToolDefs = mcpResult.tools
-  const allToolDefs = assembleRuntimeToolDefs(mcpToolDefs)
+  let allToolDefs = assembleRuntimeToolDefs(mcpToolDefs)
+  // RT-12: optional capability-router disclosure. When a task profile is
+  // provided, the tool list is trimmed to the stable core + matching
+  // specialists (schema economy); default (no profile) keeps full disclosure.
+  if (options.toolDisclosure?.profile) {
+    const { tools: routed, decision } = selectToolDefs(options.toolDisclosure.profile, allToolDefs)
+    allToolDefs = routed
+    if (options.mcpOnStatus) {
+      options.mcpOnStatus(`Tools: ${decision.capabilityIds.length} disclosed (${decision.reason}, ~${decision.tokenEstimate} schema tokens)`)
+    }
+  }
   const tools = buildTools(...allToolDefs)
 
   // ── 5. Hooks ──

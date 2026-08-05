@@ -44,6 +44,11 @@ export class ResultStore {
     return [...this.results.values()]
   }
 
+  /** M1: results as a lookup map (readiness evaluation). */
+  allAsMap(): Map<string, WorkflowNodeResult> {
+    return new Map(this.results)
+  }
+
   /** Incremental checkpoint write (best-effort). */
   private persist(): void {
     if (!this.checkpointFile) return

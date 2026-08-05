@@ -17,7 +17,14 @@ export function normalizeSpec(spec: WorkflowSpec): WorkflowSpec {
       throw new Error(`workflow: duplicate node id "${node.id}"`)
     }
     seenIds.add(node.id)
-    const deps = [...new Set(node.dependsOn)]
+    const deps: Array<import("../types").WorkflowDependency | string> = []
+    const seen = new Set<string>()
+    for (const dep of node.dependsOn) {
+      const depId = typeof dep === "string" ? dep : dep.nodeId
+      if (seen.has(depId)) continue
+      seen.add(depId)
+      deps.push(dep)
+    }
     byId.set(node.id, { ...node, dependsOn: deps })
   }
 

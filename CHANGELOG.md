@@ -2,6 +2,13 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.21] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-12)
+- **Capability Router** — layered dynamic tool disclosure: always-on stable core (`read_file` / `run_process` / `apply_patch` / `git_status` / `verify_claim` — `read_file` with selectors covers the plan's not-yet-created `inspect_file`) + task-selected specialist groups (code intelligence / verification / git ops / web research / service ops); interaction-critical meta tools always present.
+- **Schema economy** — per-profile token estimates; small context budgets collapse disclosure to the stable core; excluded tools are listed as fallback for on-demand disclosure (TL-017: simple tasks never load web/MCP/LSP schemas).
+- **Bootstrap wiring** — `toolDisclosure.profile` option trims the runtime tool list; default keeps full disclosure (no behavior change).
+
 ## [0.5.20] — 2026-08-05
 
 ### Security (Tool Runtime 2.0, RT-11)

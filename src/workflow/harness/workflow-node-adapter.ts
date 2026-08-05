@@ -92,10 +92,12 @@ export function isHarnessNode(node: WorkflowNodeSpec): boolean {
 }
 
 /** Build the H11 node; throws when the environment cannot honor the
- *  declared execution kind (fail-closed, no bypass). */
+ *  declared execution kind (fail-closed, no bypass). `respondOverride`
+ *  (MACP-M4) supplies the resumed human answer. */
 export function buildHarnessNode(
   node: WorkflowNodeSpec,
   environment: WorkflowHarnessEnvironment,
+  respondOverride?: { respond?: (interrupt: { interruptId: string; kind: import("../../harness/contracts/interrupt").InterruptKind; prompt: string; responseSchema: import("../../harness/contracts/schema").JsonSchema }) => Promise<unknown> },
 ): HarnessNode<unknown, unknown> {
   const execution = node.execution
   if (!execution || execution.kind === "function") {
@@ -128,9 +130,10 @@ export function buildHarnessNode(
     case "human":
       return createHumanNode({
         id: node.id,
-        respond: environment.respond
-          ? async interrupt => environment.respond!(interrupt)
-          : undefined,
+        respond: respondOverride?.respond
+          ?? (environment.respond
+            ? async interrupt => environment.respond!(interrupt)
+            : undefined),
       }) as HarnessNode<unknown, unknown>
   }
 }

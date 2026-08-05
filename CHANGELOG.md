@@ -2,7 +2,16 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.6.0] — 2026-08-05
+## [0.7.0] — 2026-08-05
+
+### Added (Typed Execution Graph, G3 — Graph Runtime first usable release)
+- **Single-writer transaction graph** — read-write `WorkflowSpec`s execute the whitelisted write handlers (`tool.apply_patch` via the patch transaction tool, `tool.run_process`, `tool.run_targeted_verification`) under a single-writer lock: write nodes serialize globally (FIFO) while read nodes keep the parallel budget.
+- **Write protection stays layered** — read-only specs reject write handlers at runtime; the write whitelist is enforced at registration, validation and execution.
+- **Transaction semantics** — apply_patch nodes reuse the existing transaction chain (dry-run validation of every patch → atomic commit → automatic rollback on conflict, file left untouched).
+- **Evidence gate** — verification nodes bind to the write nodes they verify (`aggregate-evidence`); a run whose write nodes lack passing verification completes as `blocked_no_evidence` instead of done.
+- **Write templates** — `narrow_fix` (locate → read → patch → verify) and `test_repair` (run tests → read → patch → verify), structure-enforced write→verify edges, stable spec ids.
+
+
 
 ### Version strategy
 - **0.6.0** consolidates every feature line before the Typed Execution Graph: Tool Runtime 2.0 (RT-7..13, previously unpublished as npm versions) + TUI convergence work (user track). The Graph Runtime series starts at **0.7.0** (G3 = Single Writer Transaction Graph) and continues on 0.7.x.

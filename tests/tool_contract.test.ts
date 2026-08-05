@@ -304,7 +304,13 @@ describe("ToolContract projection", () => {
       // RT-7: parameterized process tools (shell:false).
       "run_process:904970bc3466b22c32f8b9190412826e2ebed5fd9b0f650cdef920372919a2e2",
       "run_shell_script:8473abd04bebbaeac7d587d6c9dd1b937cc0a657111b5d91033d4e46bccc50d4",
-      "start_service:483dc391fdcd57e97a5664b0f6215072fbccc10efe6c9426222792e6f6d45ea5",
+      // RT-11: service supervisor split (service_start/status/logs/stop) +
+      // legacy start_service forwarder.
+      "service_start:6b4790966eb28a6ac6c1a97b7b6b09ce4fa65bcf1830f2a1ed76ae2a4e55039b",
+      "service_status:960cfdff68d4bfde85e2eebc9d3ff40100a294fdcbf9b029a630ca627bd592de",
+      "service_logs:ab37f21ab69e8d1ae9c67d156748a556a9984dd1e1d68d3fb46b64b4bc341843",
+      "service_stop:e8939a7db699faa2dd3cdf5cc4db22d06da736209181387fced3c9d1c424bf35",
+      "start_service:58ab6ab83e51a2579406c0f78708c729fb0f28d09051dd995868ca4ae39368b5",
       "git_status:a5085bd45df5b65723dff6a2f114372f62bf76ca8f3548e167770235281b72bf",
       "git_diff:4ba26f60a84a579be5f4ab90e5258470061fa6ce1dc9239669e03fcd88d90fef",
       "git_log:866a6ce10058db55e50a7b426fa9e8fdb519b31665e1ce1e9289f99f417f2fa5",
@@ -313,7 +319,9 @@ describe("ToolContract projection", () => {
       "git_add:90ff859594f85801b119c8bfe7b6ae193d9896395b2017f4ad02ba0b0b7967e2",
       "git_commit:15ab4e682d3c466f16222b4701c56843da719139f06b710c6a8fd0cedff5b0ba",
       "web_search:7948eb13fabc637739a6abc0176e635404e3ad30776e14cc1f5e05f52ed117b0",
-      "web_fetch:e58f5947a76b35bd7bf1013812e3a374fcc070c1659ee8eb2aca18cecca58ed8",
+      // RT-11: web_fetch hardened (SSRF DNS/IP policy, streaming bounds,
+      // cache-key mode split, prompt-injection flagging).
+      "web_fetch:dc0d33b261a2357308d2a793b59858f1129ecd14713be4ed819c9344f00d442b",
       "find_symbol:a98ea218fc64e3de3ae325e2ac553b4e31a2c61237e1999b7a74ac61581b6de3",
       "find_references:0bae3b44d68cd0ee400f32a6ac0ee3c86edb0f32c861b1f146d9447766f846db",
       "project_structure:b0f2f8a46a055a9a14f03981dfe45177d20620d5946c1a2e2d82396c162909b9",

@@ -9,7 +9,7 @@ import { BUILD_CONTEXT_SLICE_TOOL, BUILD_REPO_MAP_TOOL, QUERY_REPO_MAP_TOOL } fr
 import { RUN_PROCESS_TOOL, RUN_SHELL_SCRIPT_TOOL } from "./process"
 import type { ToolDef } from "./registry"
 import { WEB_SEARCH } from "./search"
-import { START_SERVICE_TOOL } from "./service"
+import { SERVICE_TOOLS, START_SERVICE_TOOL } from "./service"
 import { SHELL_TOOL } from "./shell"
 import { TODO_WRITE_TOOL } from "./todo"
 import { TYPECHECK_TOOL } from "./typescript"
@@ -24,6 +24,7 @@ const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
   SHELL_TOOL,
   RUN_PROCESS_TOOL,
   RUN_SHELL_SCRIPT_TOOL,
+  ...SERVICE_TOOLS,
   START_SERVICE_TOOL,
   ...GIT_TOOLS,
   WEB_SEARCH,

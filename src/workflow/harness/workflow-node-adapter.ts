@@ -21,6 +21,29 @@ import { createHumanNode } from "../../harness/nodes/human-node"
 import type { WorkflowNodeSpec } from "../types"
 import type { WorkflowHarnessEnvironment } from "./environment"
 import type { VerificationResult } from "../../verification/result"
+import type { NodePolicyContext } from "../../harness/capabilities/policy-adapter"
+import { PermissionGate } from "../../agent/permission"
+
+/** Strict-mode policy context with explicit capability allowances (no
+ *  interactive confirm channel; writable boundary = run project root). */
+function allowedPolicyContext(
+  environment: WorkflowHarnessEnvironment,
+  capabilityId: string,
+): NodePolicyContext | undefined {
+  const allowed = environment.policy?.allowCapabilities
+  if (!allowed || !allowed.includes(capabilityId)) return undefined
+  const gate = new PermissionGate()
+  gate.allow(capabilityId)
+  return {
+    permissionGate: gate,
+    permissionMode: "strict",
+    input: {},
+    toolCallId: undefined,
+    name: capabilityId,
+    projectRoot: environment.scope.projectRoot,
+    writableRoots: [environment.scope.projectRoot],
+  }
+}
 
 /** Input the harness node will receive for this workflow node. */
 export function harnessInputFor(node: WorkflowNodeSpec): unknown {
@@ -85,7 +108,10 @@ export function buildHarnessNode(
       }
       return createToolNode({
         id: node.id,
-        policyContext: undefined, // derived from run scope (strict, fail-closed)
+        // MACP-M3: explicit allowances override the strict derived gate; the
+        // derived gate (project permission file, fail-closed) remains the
+        // default when the environment declares none.
+        policyContext: allowedPolicyContext(environment, execution.capabilityId),
         tools: environment.tools,
       }) as HarnessNode<unknown, unknown>
     }

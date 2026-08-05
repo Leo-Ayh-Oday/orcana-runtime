@@ -17,6 +17,9 @@ export interface AgentSpec {
   ownerFiles: string[]
   /** Worktree root for this agent's writes. */
   worktree: string
+  /** MACP-M3: may this agent write at all? Planner/Reviewer default to
+   *  false — they must not write the project workspace. */
+  writable?: boolean
   budget?: { maxWrites?: number; maxNodes?: number }
 }
 
@@ -26,6 +29,8 @@ export interface Agent {
   ownerFiles: string[]
   /** Worktree root for this agent's writes. */
   worktree: string
+  /** MACP-M3: false = this participant may never write (planner/reviewer). */
+  writable: boolean
   cancelled: boolean
   budget: AgentBudget
 }
@@ -63,6 +68,7 @@ export class AgentPool {
     for (const file of spec.ownerFiles) this.owners.set(file, spec.id)
     const agent: Agent = {
       ...spec,
+      writable: spec.writable ?? true,
       cancelled: false,
       budget: new AgentBudget(spec.budget),
     }

@@ -16,6 +16,13 @@ export { buildReceipt, receiptComplete, cellSpecDigest, computePolicyDigest } fr
 export { validateCellSpec, compileCellSpec, validateMountSet } from "./policy-compiler"
 export { selectBackend, backendAvailability } from "./backend-router"
 export { PROFILE_DEFAULTS, profileDefaults, isStrictProfile, applyProfileDefaults } from "./profiles"
+export { ResourceLedger, defaultHostReserve, cpuQuotaFromCores } from "./scheduler/resource-ledger"
+export { FairQueue, PRIORITY_WEIGHT } from "./scheduler/queue"
+export type { QueuePriority, QueueItem } from "./scheduler/queue"
+export { IsolationDomainLock } from "./workspace/isolation-lock"
+export type { LockKind } from "./workspace/isolation-lock"
+export { CacheManager, PortLeaseManager, validateBindAddress, SHARED_READONLY_KINDS } from "./workspace/cache-port"
+export { AgentDomainManager } from "./workspace/agent-domain"
 export { LinuxExecutionError, LINUX_ERROR_CODES, LINUX_ERROR_OUTCOME } from "./errors"
 export type { LinuxErrorCode, LinuxErrorOutcome } from "./errors"
 export type {

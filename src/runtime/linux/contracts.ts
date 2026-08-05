@@ -177,7 +177,7 @@ export interface AgentExecutionDomain {
   status: "active" | "cancelling" | "closed" | "failed"
 }
 
-export type ExecutionCellState = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out" | "blocked"
+export type ExecutionCellState = "pending" | "waiting_resources" | "waiting_backend" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out" | "blocked"
 
 export interface ExecutionCell {
   cellId: string

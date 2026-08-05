@@ -57,6 +57,9 @@ describe("AppShell idle render (P1 gate: idle 2s → activeTimers = 0)", () => {
           scrollDown={noop}
           setInputChrome={noop}
           overlay={{ kind: "none" }}
+          blocks={[]}
+          view={{ selectedBlockId: null, displayModes: new Map() }}
+          onView={() => {}}
           thinkingEffort="auto"
         />,
         { stdout },

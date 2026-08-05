@@ -21,7 +21,10 @@ import { getCommandHints } from "../commands/registry"
 import type { ClarificationQuestion } from "../../agent/clarification"
 import { selectRightRail } from "../state/selectors"
 import type { TuiState, TuiMode } from "../state/types"
-import { Scrollback, type ScrollbackScrollState } from "./Scrollback"
+import type { ScrollbackScrollState } from "./Scrollback"
+import { TranscriptViewport } from "./TranscriptViewport"
+import type { TranscriptBlock, TranscriptViewState } from "../presentation/block-model"
+import type { TranscriptViewAction } from "../presentation/block-view-state"
 import { SessionLine, type SessionLineData } from "./SessionLine"
 import { ActivityLine } from "./ActivityLine"
 import { InteractionSlot, ClarificationPanel, type ClarificationWizardState } from "./InteractionSlot"
@@ -337,6 +340,10 @@ export interface AppShellProps {
   setInputChrome: (chrome: InputChromeState) => void
   /** Depthline P1: 互斥 overlay（confirm / rewind / settings / runtime-inspector）。 */
   overlay: OverlayState
+  /** Depthline P4: 转录块 + 视图状态。 */
+  blocks: readonly TranscriptBlock[]
+  view: TranscriptViewState
+  onView: (action: TranscriptViewAction) => void
   thinkingEffort: ThinkEffort
   /** PR-1: Answer pending question from agent */
   onAnswerQuestion?: (answer: string) => void
@@ -345,7 +352,7 @@ export interface AppShellProps {
 }
 
 export function AppShell(props: AppShellProps) {
-  const { state, runtime, prompt, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, overlay, thinkingEffort } = props
+  const { state, runtime, prompt, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, overlay, blocks, view, onView, thinkingEffort } = props
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout?.rows ?? 32)
   const cols = stdout?.columns ?? 96
@@ -451,20 +458,19 @@ export function AppShell(props: AppShellProps) {
         </Box>
       )}
 
-      {/* Body: Transcript（单画布，无右栏） */}
+      {/* Body: Transcript（单画布，无右栏，Depthline P4 块化渲染） */}
       <Box flexDirection="column" height={effectiveBodyHeight} flexGrow={1}>
         {empty ? (
           <EmptySurface mode={state.mode} modelName={state.modelName} />
         ) : (
-          <Scrollback
-            messages={state.messages}
+          <TranscriptViewport
+            blocks={blocks}
+            view={view}
+            onView={onView}
             width={cols - 2}
             height={Math.max(4, effectiveBodyHeight - 1)}
-            status={state.status}
-            round={state.round}
             scrollOffset={scrollOffset}
             onScrollState={onScrollState}
-            hasActiveTools={state.tools.some(t => t.status === "running")}
           />
         )}
       </Box>

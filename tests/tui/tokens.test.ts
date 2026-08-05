@@ -55,6 +55,8 @@ describe("glyph theme: ASCII (default)", () => {
       g.arrowDown,
       g.dot,
       g.separator,
+      g.collapseClosed,
+      g.collapseOpen,
     ].join("")
     for (const ch of allChars) {
       expect(ch.charCodeAt(0)).toBeLessThan(128)

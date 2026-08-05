@@ -5,6 +5,7 @@ import { EDIT_SYMBOL_TOOL, FILE_TOOLS } from "./file"
 import { GIT_TOOLS } from "./git"
 import { LSP_DIAGNOSTICS, LSP_TOOLS } from "./lsp"
 import { META_BUILTIN_TOOL_DEFS } from "./meta"
+import { RUN_PROCESS_TOOL, RUN_SHELL_SCRIPT_TOOL } from "./process"
 import type { ToolDef } from "./registry"
 import { WEB_SEARCH } from "./search"
 import { START_SERVICE_TOOL } from "./service"
@@ -19,6 +20,8 @@ const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
   APPLY_PATCH_TOOL,
   APPLY_PATCH_TRANSACTION_TOOL,
   SHELL_TOOL,
+  RUN_PROCESS_TOOL,
+  RUN_SHELL_SCRIPT_TOOL,
   START_SERVICE_TOOL,
   ...GIT_TOOLS,
   WEB_SEARCH,

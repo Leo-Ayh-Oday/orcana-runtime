@@ -36,6 +36,10 @@ export interface CapabilityDescriptor {
   idempotent: boolean
   cancellable: boolean
   producesEvidence: boolean
+
+  /** RT-2: migration source — "legacy" for ToolDef-projected capabilities
+   *  (via tool-adapter), "native" for hand-written capability handlers. */
+  source?: "legacy" | "native"
 }
 
 export interface CapabilityHandler {

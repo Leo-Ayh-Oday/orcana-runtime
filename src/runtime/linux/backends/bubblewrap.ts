@@ -53,9 +53,13 @@ export interface BwrapCompileOptions {
   tmpfs?: Array<{ target: string; sizeBytes: number }>
   /** 显式隐藏路径（在布局之后隐藏，实现为不挂载——编译期校验拒绝）。 */
   hiddenPaths?: string[]
+  /** 缓存挂载（target → 宿主源；rw 缓存由 cacheMountsRw 表达）。 */
   cacheMounts?: Array<{ target: string; source: string }>
-  /** 允许 loopback 时注入 /etc/hosts 与网络 namespace 保持（bwrap 无网桥，
-   *  loopback 通过不 --unshare-net 或使用 netns —— LF-3 仅支持 none/loopback）。 */
+  /** rw 缓存挂载（rw-locked 缓存独占写）。 */
+  cacheMountsRw?: Array<{ target: string; source: string }>
+  /** 沙盒内环境（--setenv 逐项注入；P1-1 修复）。 */
+  setenv?: Record<string, string>
+  /** loopback 模式：netns 内显式拉起 lo（none 模式不注入）。 */
   loopbackOnly?: boolean
   seccompFile?: string
 }
@@ -109,8 +113,16 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
   for (const cache of opts.cacheMounts ?? []) {
     argv.push("--ro-bind", cache.source, cache.target)
   }
+  for (const cache of opts.cacheMountsRw ?? []) {
+    argv.push("--bind", cache.source, cache.target)
+  }
 
-  // seccomp 可选。
+  // 沙盒内环境（P1-1：--clearenv 后 --setenv 注入 compiled.env）。
+  for (const [key, value] of Object.entries(opts.setenv ?? {})) {
+    argv.push("--setenv", key, value)
+  }
+
+  // seccomp 可选（R3：真实 BPF 文件）。
   if (opts.seccompFile) {
     argv.push("--seccomp", opts.seccompFile)
   }
@@ -119,6 +131,13 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
   argv.push("--chdir", "/workspace")
 
   return argv
+}
+
+/** loopback 模式命令包装：netns 内先拉起 lo 再执行目标（P1-2 修复）。 */
+export function loopbackWrapper(caps: LinuxCapabilities, target: string, args: string[]): { executable: string; args: string[] } {
+  // bwrap --unshare-net 创建的新 netns 中 lo 默认 down；绑定 127.0.0.1 需要 lo up。
+  const inner = ["ip", "link", "set", "lo", "up", "2>/dev/null;", "exec", JSON.stringify(target), ...args.map(a => JSON.stringify(a))]
+  return { executable: "/bin/sh", args: ["-c", inner.join(" "), "sh", target, ...args] }
 }
 
 export function createBubblewrapBackend(): ExecutionBackend {
@@ -170,18 +189,32 @@ export function createBubblewrapBackend(): ExecutionBackend {
         nodeRunId: spec.identity.nodeRunId,
         pathEntries: ["/usr/local/bin"],
       })
+      const tmpfs = [
+        ...defaultTmpfs(),
+        ...spec.filesystem.tmpfsMounts.map(t => ({ target: t.target, sizeBytes: t.sizeBytes })),
+      ]
       const argv = compileBwrapArgv(spec, caps, {
         worktreeRoot: spec.filesystem.worktreeRoot,
-        tmpfs: defaultTmpfs(),
+        extraReadonly: spec.filesystem.readonlyMounts,
+        extraWritable: spec.filesystem.writableMounts,
+        tmpfs,
         hiddenPaths: spec.filesystem.hiddenPaths,
         loopbackOnly: spec.network.mode === "loopback",
-        cacheMounts: spec.cache.map(c => ({ target: c.target, source: `/cache/${c.kind}/${c.key}` })),
+        cacheMounts: spec.cache.filter(c => c.mode === "ro").map(c => ({ target: c.target, source: `/cache/${c.kind}/${c.key}` })),
+        cacheMountsRw: spec.cache.filter(c => c.mode === "rw-locked").map(c => ({ target: c.target, source: `/cache/${c.kind}/${c.key}` })),
+        setenv: env.env,
+        seccompFile: spec.environment.variables["ORCANA_SECCOMP_FILE"] ?? undefined,
       })
       // 编译不依赖 binary 存在（执行时由 run 层校验）；PATH 解析兜底。
       const bwrapPath = caps.bubblewrap.path ?? "bwrap"
+      const targetExec = spec.command.executable
+      const targetArgs = spec.command.args
+      const entry = spec.network.mode === "loopback"
+        ? loopbackWrapper(caps, targetExec, targetArgs)
+        : { executable: targetExec, args: targetArgs }
       return {
         backend: "bubblewrap",
-        argv: [bwrapPath, ...argv, spec.command.executable, ...spec.command.args],
+        argv: [bwrapPath, ...argv, entry.executable, ...entry.args],
         env: env.env,
         cwd: "/workspace",
       }

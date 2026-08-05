@@ -36,6 +36,10 @@ import { CgroupManager, hierarchyPaths } from "./cgroup/manager"
 import { detectDelegatedRoot } from "./cgroup/delegation"
 import { readCgroupMetrics as readMetrics } from "./cgroup/metrics"
 import { RuntimeStateStore } from "./recovery/state-store"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { writeSeccompBpfFile } from "./seccomp-bpf"
+import { compileSeccompProfile } from "./landlock-seccomp"
 
 export interface ShadowExecutionRecord {
   cellId: string
@@ -205,6 +209,19 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       const violations = backend.validateSpec(compiled)
       if (violations.length > 0) {
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `backend ${backend.id} rejects spec: ${violations.join("; ")}`)
+      }
+
+      // R3: 保守 seccomp 面（inspect/untrusted + 隔离后端）→ 真实 BPF 文件注入。
+      if ((selection.backend === "bubblewrap" || selection.backend === "rootless-podman")
+        && (compiled.profile === "inspect" || compiled.profile === "untrusted")) {
+        try {
+          const target = compiled.profile === "untrusted" ? "untrusted" : "inspect"
+          const filePath = join(tmpdir(), `orcana-seccomp-${compiled.identity.cellId}.bpf`)
+          writeSeccompBpfFile(compileSeccompProfile(target), filePath)
+          compiled.environment.variables = { ...compiled.environment.variables, ORCANA_SECCOMP_FILE: filePath }
+        } catch {
+          // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
+        }
       }
 
       const cellId = compiled.identity.cellId

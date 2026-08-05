@@ -46,6 +46,10 @@ export interface PodmanCompileOptions {
   labels?: Record<string, string>
   /** seccomp profile 文件（容器内）。 */
   seccompProfile?: string
+  /** 容器内环境（--env 注入；P1-5 修复）。 */
+  env?: Record<string, string>
+  /** 容器 cidfile（恢复/清理验证用；P1-6 修复）。 */
+  cidfile?: string
 }
 
 export function compilePodmanArgv(spec: ExecutionCellSpec, caps: LinuxCapabilities, opts: PodmanCompileOptions): string[] {
@@ -57,12 +61,17 @@ export function compilePodmanArgv(spec: ExecutionCellSpec, caps: LinuxCapabiliti
     "--read-only",
     "--pull", opts.pullPolicy ?? "never",
     "--userns=keep-id",
+    "--cap-drop=ALL",
+    "--security-opt", "no-new-privileges",
+    "--tmpfs", "/tmp",
+    "--tmpfs", "/run",
     "--memory", `${Math.max(4, Math.floor(spec.resources.memoryMaxBytes / (1024 * 1024)))}m`,
     "--cpus", String(Math.max(0.1, (spec.resources.cpuQuotaMicros ?? 100_000) / 1_000_000)),
     "--pids-limit", String(spec.resources.pidsMax),
     "--label", `io.orcana.run=${spec.identity.runId}`,
     "--label", `io.orcana.cell=${spec.identity.cellId}`,
   ]
+  if (opts.cidfile) argv.push("--cidfile", opts.cidfile)
   if (spec.identity.agentId) argv.push("--label", `io.orcana.agent=${spec.identity.agentId}`)
   if (spec.filesystem.worktreeRoot) {
     argv.push("--volume", `${spec.filesystem.worktreeRoot}:/workspace:rw,Z`)
@@ -71,6 +80,9 @@ export function compilePodmanArgv(spec: ExecutionCellSpec, caps: LinuxCapabiliti
     argv.push("--volume", `${volume.source}:${volume.target}:${volume.mode},Z`)
   }
   if (opts.seccompProfile) argv.push("--security-opt", `seccomp=${opts.seccompProfile}`)
+  for (const [key, value] of Object.entries(opts.env ?? {})) {
+    argv.push("--env", `${key}=${value}`)
+  }
   argv.push("--workdir", opts.workdir ?? "/workspace")
   argv.push(opts.image)
   argv.push(spec.command.executable, ...spec.command.args)
@@ -135,12 +147,16 @@ export function createPodmanBackend(): ExecutionBackend {
         pathEntries: ["/usr/local/bin"],
       })
       const podmanPath = caps.podman.path ?? "podman"
+      const cidfile = `/tmp/orcana-${spec.identity.runId}-${spec.identity.cellId}.cid`
       return {
         backend: "rootless-podman",
         argv: [podmanPath, ...compilePodmanArgv(spec, caps, {
           image,
           volumes: spec.cache.map(c => ({ source: `/cache/${c.kind}/${c.key}`, target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" })),
           labels: { "io.orcana.run": spec.identity.runId, "io.orcana.cell": spec.identity.cellId },
+          env: env.env,
+          cidfile,
+          seccompProfile: spec.environment.variables["ORCANA_SECCOMP_FILE"] ?? undefined,
         })],
         env: env.env,
         cwd: "/workspace",

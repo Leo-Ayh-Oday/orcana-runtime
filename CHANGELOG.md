@@ -2,7 +2,22 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.6] — 2026-08-05
+## [0.7.7] — 2026-08-05
+
+### Added (Strong Single v1.0, PR-10.4 — `orcana doctor`)
+- **Full environment self-check** (`src/diagnostics/doctor.ts`) — `orcana doctor` now emits a complete diagnostic report with eight checks:
+  - **version** — runtime-resolved package version;
+  - **runtime** — Node ≥ 20, Bun presence, session-store capability;
+  - **config** — global config existence + JSONC parse integrity;
+  - **model / auth** — provider/model resolution and credential source (auth.json / env / local / missing);
+  - **provider reachability** — concurrent probes (any HTTP response proves the endpoint is alive; local Ollama/LM Studio ports included; never a billed model request);
+  - **sandbox** — OS capability matrix with rating (cgroups/PathGuard/network isolation/…);
+  - **MCP** — server config validation + enabled state;
+  - **paths** — config/session/workflow directory readiness.
+- **Output** — human-readable by default, `--json` for structured `DoctorReport`; warn/fail counts printed; fail count > 0 maps to exit code 1 (CI-friendly).
+- 5 structural tests (check completeness, shape, counts, version echo).
+
+
 
 ### Fixed (Strong Single v1.0 — command-to-file coverage)
 - **Unmanaged-write deadlock closed**: shell/`run_process` writes used to poison the transaction binding (`currentTransactionEvidenceBinding → undefined`) and force the completion gate to require a binding forever — any run that legitimately used a command after editing could never complete.

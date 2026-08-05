@@ -22,6 +22,8 @@ export interface TuiCommandContext {
   openModels: (provider?: string) => void
   openEffort: () => void
   setThinkEffort: (value: ThinkEffort) => void
+  /** Depthline P2: 打开/关闭 RuntimeInspector overlay。 */
+  toggleInspector: () => void
 }
 
 export type TuiCommandDispatchResult = "handled" | "pass_to_agent" | "not_command"
@@ -211,6 +213,9 @@ export function dispatchTuiCommand(input: string, context: TuiCommandContext): T
     }
     case "status":
       context.addSystemMessage(formatStatus(state))
+      return "handled"
+    case "runtime":
+      context.toggleInspector()
       return "handled"
     default:
       return "pass_to_agent"

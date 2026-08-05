@@ -118,6 +118,13 @@ export const COMMANDS: CommandDef[] = [
     usage: "<auto|high|max>",
     category: "runtime",
   },
+  {
+    name: "runtime",
+    description: "Toggle runtime inspector",
+    aliases: ["inspector"],
+    category: "runtime",
+    safeConcurrent: true,
+  },
 
   // ── 会话管理 ──
   {

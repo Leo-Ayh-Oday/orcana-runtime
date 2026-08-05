@@ -1,7 +1,7 @@
-/** ComposerFrame — 固定底部输入框的 frame 包装（PR-2）。
+/** ComposerFrame — 固定底部输入框的 frame 包装（PR-2 + Depthline P2）。
  *
  *  职责：
- *    - 上下轻分隔线（──────────────────）
+ *    - 输入框上方单条细线分隔（Depthline P2：删底部第二根分隔线）
  *    - 包装 OrcanaComposer，使输入框视觉上成为固定 frame
  *    - 不包含命令面板逻辑（CommandShelf 由 OrcanaComposer 内部渲染）
  *
@@ -9,11 +9,6 @@
  *    - 分隔线使用 theme.border 色，轻量不抢眼
  *    - 分隔线宽度跟随终端宽度，窄屏保护下限 20 字符
  *    - 纯展示组件，不持有状态
- *
- *  验收（PR-2 plan）：
- *    - 输入框始终固定在底部
- *    - running 输出不会把输入框顶走
- *    - Footer 不再重复 ctx/cache/model（由 StatusBar 承担）
  */
 
 import React from "react"
@@ -27,9 +22,7 @@ export interface ComposerFrameProps {
   width: number
 }
 
-/** 生成分隔线字符串，保护下限。
- *  - 宽度 < 20 时用 20（极窄屏保护）
- *  - 使用全角横线 ─ 保持视觉一致性 */
+/** 生成分隔线字符串，保护下限。 */
 export function makeDivider(width: number): string {
   const w = Math.max(20, width)
   return "─".repeat(w)
@@ -39,12 +32,9 @@ export const ComposerFrame = React.memo(function ComposerFrame({ children, width
   const divider = makeDivider(width)
   return (
     <Box flexDirection="column">
-      {/* 顶部分隔线 */}
+      {/* 单条顶部分隔线 */}
       <Text color={theme.border}>{divider}</Text>
-      {/* 输入区（OrcanaComposer 或其子内容） */}
       {children}
-      {/* 底部分隔线 */}
-      <Text color={theme.border}>{divider}</Text>
     </Box>
   )
 })

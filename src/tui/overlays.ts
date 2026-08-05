@@ -81,3 +81,4 @@ export type OverlayState =
   | { kind: "confirm"; request: ConfirmRequest; position: string }
   | { kind: "rewind"; state: RewindModalState }
   | { kind: "settings"; dialog: SettingsDialogState }
+  | { kind: "runtime-inspector" }

@@ -28,6 +28,7 @@ function createContext(overrides: Partial<TuiCommandContext> = {}) {
     openModels: () => {},
     openEffort: () => {},
     setThinkEffort: () => {},
+    toggleInspector: () => {},
     ...overrides,
   }
   return { context, store, messages }

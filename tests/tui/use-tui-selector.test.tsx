@@ -28,11 +28,11 @@ function newStore(): TuiStore {
   return store
 }
 
-function mockStdout(): PassThrough & { columns: number; rows: number } {
+function mockStdout(): NodeJS.WriteStream {
   const out = new PassThrough() as PassThrough & { columns: number; rows: number }
   out.columns = 80
   out.rows = 24
-  return out
+  return out as unknown as NodeJS.WriteStream
 }
 
 // ── createSelectorSnapshot（纯函数） ──
@@ -134,19 +134,6 @@ describe("dispatchMany notification", () => {
 })
 
 // ── React 集成 ──
-
-function renderCounterLabel(props: { store: TuiStore; label: string; get: () => string }): () => string {
-  const { store, label, get } = props
-  let renders = 0
-  const Counter = React.memo(function Counter() {
-    const value = useTuiSelector(store, get)
-    renders++
-    return <Text>{`${label}:${value}`}</Text>
-  })
-  const stdout = mockStdout()
-  const { unmount } = render(<Counter />, { stdout })
-  return { count: () => renders, unmount }
-}
 
 describe("useTuiSelector (React)", () => {
   test("unrelated store update does not re-render the component", async () => {

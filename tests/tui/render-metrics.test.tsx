@@ -18,11 +18,11 @@ import { useLocalTick } from "../../src/tui/thinking/useLocalTick"
 import { FormattedLineCache } from "../../src/tui/components/Scrollback"
 import type { TuiMessage } from "../../src/tui/state/types"
 
-function mockStdout(): PassThrough & { columns: number; rows: number } {
+function mockStdout(): NodeJS.WriteStream {
   const out = new PassThrough() as PassThrough & { columns: number; rows: number }
   out.columns = 80
   out.rows = 24
-  return out
+  return out as unknown as NodeJS.WriteStream
 }
 
 function makeMsg(id: string, text: string): TuiMessage {

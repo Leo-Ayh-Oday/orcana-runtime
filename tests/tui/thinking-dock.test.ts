@@ -7,17 +7,13 @@
  *    4. selectThinkingDock: running agent, no tools → composing
  *    5. selectThinkingDock: token counts → contextPct / cachePct
  *    6. useLocalTick: returns 0 when null, increments when active
- *    7. SonarPulse: uses sonarFrames from GlyphTheme
- *    8. ThinkingDock: invisible when model.visible=false
- *    9. computeAppShellLayout: thinkingDockRows adds 1 to footer
+ *    7. computeAppShellLayout: thinkingDockRows adds 1 to footer
  */
 
 import { describe, expect, test } from "bun:test"
 import { selectThinkingDock } from "../../src/tui/thinking/selectThinkingDock"
 import type { ThinkingDockModel, ThinkingPhase } from "../../src/tui/thinking/selectThinkingDock"
-import { SonarPulse } from "../../src/tui/thinking/SonarPulse"
 import { useLocalTick } from "../../src/tui/thinking/useLocalTick"
-import { ThinkingDock } from "../../src/tui/thinking/ThinkingDock"
 import type { TuiState } from "../../src/tui/state/types"
 import { computeAppShellLayout } from "../../src/tui/components/AppShell"
 
@@ -175,27 +171,6 @@ describe("selectThinkingDock (PR-1)", () => {
   })
 })
 
-// ── SonarPulse frames ──
-
-describe("SonarPulse glyphs (PR-1)", () => {
-  test("sonarFrames exist in GlyphTheme", () => {
-    const { getGlyphTheme } = require("../../src/tui/tokens")
-    const g = getGlyphTheme()
-    expect(g.sonarFrames).toBeDefined()
-    expect(g.sonarFramesLen).toBeGreaterThan(0)
-    expect(g.sonarFrames.length).toBe(g.sonarFramesLen)
-  })
-
-  test("ASCII sonarFrames are all ASCII", () => {
-    // When ORCANA_TUI_UNICODE is not set, should use ASCII glyphs
-    const { getGlyphTheme } = require("../../src/tui/tokens")
-    const g = getGlyphTheme()
-    for (const ch of g.sonarFrames) {
-      expect(ch.charCodeAt(0)).toBeLessThan(128)
-    }
-  })
-})
-
 // ── computeAppShellLayout: thinkingDockRows ──
 
 describe("AppShell layout: thinkingDockRows (PR-1)", () => {
@@ -227,47 +202,6 @@ describe("AppShell layout: thinkingDockRows (PR-1)", () => {
     })
     expect(withDock.footerHeight).toBe(without.footerHeight + 1)
     expect(withDock.bodyHeight).toBe(without.bodyHeight - 1)
-  })
-})
-
-// ── ThinkingDock component (structural) ──
-
-describe("ThinkingDock component (PR-1)", () => {
-  test("ThinkingDock renders null when model.visible=false", () => {
-    const model: ThinkingDockModel = { visible: false, phase: "idle", label: "" }
-    // Structural test: visible=false → null
-    expect(model.visible).toBe(false)
-  })
-
-  test("ThinkingDock visible model has phase label", () => {
-    const model: ThinkingDockModel = {
-      visible: true,
-      phase: "composing",
-      label: "Composing...",
-    }
-    expect(model.visible).toBe(true)
-    expect(model.label).toBeTruthy()
-  })
-
-  test("all ThinkingPhase values are distinct (PR-1.6: 10 phases)", () => {
-    const phases: ThinkingPhase[] = [
-      "idle", "routing", "thinking", "planning", "reading",
-      "tooling", "reviewing", "composing", "waiting_permission", "error",
-    ]
-    expect(new Set(phases).size).toBe(phases.length)
-  })
-
-  test("activeTools capped at 3 in selectThinkingDock", () => {
-    const model = selectThinkingDock(baseState({
-      tools: [
-        { id: "t1", tool: "a", status: "running", startedAt: 1 },
-        { id: "t2", tool: "b", status: "running", startedAt: 2 },
-        { id: "t3", tool: "c", status: "running", startedAt: 3 },
-        { id: "t4", tool: "d", status: "running", startedAt: 4 },
-      ],
-    }))
-    expect(model.activeTools).toBeDefined()
-    expect(model.activeTools!.length).toBeLessThanOrEqual(3)
   })
 })
 

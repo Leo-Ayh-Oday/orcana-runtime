@@ -2,6 +2,13 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.12] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-3)
+- **Kernel project root is explicit** — `AgentOptions.projectRoot` (harness always passes the run scope root); kernel context, permission config loading, sandbox init, context map and coordinator path checks resolve against it instead of a hidden `process.cwd()` (`kernel/context.ts`, `prepare.ts`, `verification/coordinator.ts`).
+- **ToolExecutionContext threaded into node-mode handlers** — `CapabilityExecuteInput.context`; `ToolNode` builds it from the run scope (strict approval, run cancellation signal) and the executor hands it to handlers via `metadata.runContext`; `contextFromRunScope` / `buildExecutionContext` with `readableRoots`/`writableRoots`/`ApprovalContext`/`Clock`.
+- **Parallel run isolation tests** — two run scopes executing concurrently keep artifact stores disjoint; cancelling one run's signal never aborts the other.
+
 ## [0.5.11] — 2026-08-05
 
 ### Added (Tool Runtime 2.0, RT-2)

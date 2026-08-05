@@ -393,7 +393,70 @@ tests/workflow/
 
 ---
 
-## 8. 实施记录
+## 8. G4 详细任务单（v0.7.1，Convergent Repair Graph）
+
+参考稿 PR-G4 验收：重复失败不无限重试 / seen 与 confirmed 分离 / 两轮 dry 后退出 / 指标改善能继续执行 / 预算耗尽输出结构化阻塞报告 / 同一错误不会通过改变措辞绕过检测。
+
+融合架构决策：**kernel 零改动**（参考稿列出的 meta-agent/loop/completion-orchestrator 修改全部由 workflow 层能力取代，与 G0–G3 一致）；收敛循环构建在 G3 单写者 + evidence 门之上。
+
+### 8.1 设计决策
+
+| 参考稿 | 融合决策 |
+|---|---|
+| 改 meta-agent/loop | 不动；新增 `src/workflow/convergence/repair-loop.ts` 闭环（执行修复图 → 校验 evidence → 判定收敛） |
+| 失败重试语义 | 失败签名指纹（handler + 错误类别，**非 message 全文**）入 `seen`；同签名不再重复执行同一修复手段 |
+| "两轮 dry 后退出" | 连续 2 轮无新签名且无指标改善 → 退出 `dry` |
+| "指标改善能继续执行" | 每轮 verified passed 数 / 失败数变化 → 改善重置 dry 计数 |
+| 预算耗尽 | `ConvergenceReport` 结构化输出（阻塞节点 + seen 签名 + 尝试次数 + 剩余预算） |
+| 措辞绕过 | `classifyError` 正则白名单 → 有限错误类别集合；同类别不同措辞 → 同签名，dedupe 命中 |
+
+### 8.2 新增文件
+
+```text
+src/workflow/convergence/
+├── failure-signature.ts    # classifyError（类别白名单）+ fingerprintFailure（handler|类别）
+├── repair-loop.ts          # RepairLoop：attempts/dryRounds/budget/seen/confirmed + 每轮执行
+└── index.ts                # barrel
+```
+
+### 8.3 循环语义
+
+```text
+RepairLoop.run(初始修复图 spec) → ConvergenceReport
+每轮:
+  1. 执行修复图（runScheduler，read-write）
+  2. 失败节点 → fingerprint → seen 集合（重复签名 → dryRound 计数）
+  3. evidence 中 passed 数 > 上一轮 → 指标改善，dryRounds 归零
+  4. run.status done → confirmed（写节点 + 绑定 evidence）→ 退出 done
+  5. dryRounds >= 2 → 退出 dry
+  6. attempts >= maxAttempts → 退出 max_attempts
+  7. budget 耗尽 → 退出 budget_exhausted（附报告）
+```
+
+签名去重语义：同签名第 2+ 次出现**不重复执行同一修复**（跳过该节点变体），保证"重复失败不无限重试"。
+
+### 8.4 G4 验收映射
+
+- [x] 重复失败不无限重试 → repair-loop.test.ts（maxAttempts 硬上限 + 同签名 dedupe 计数）
+- [x] seen 与 confirmed 分离 → repair-loop.test.ts（seen 只收失败签名；confirmed 只收带 evidence 的写节点）
+- [x] 两轮 dry 后退出 → repair-loop.test.ts（dryRounds=2 → outcome dry）
+- [x] 指标改善能继续执行 → repair-loop.test.ts（第 2 轮 verified passed 增加 → 继续，非 dry 退出）
+- [x] 预算耗尽输出结构化阻塞报告 → repair-loop.test.ts（budget_exhausted + blocked 清单非空）
+- [x] 同一错误不会通过改变措辞绕过检测 → failure-signature.test.ts（同类别不同 message → 同签名）
+
+| 阶段 | 版本 | 落地 | 验证 |
+|---|---|---|---|
+| G4 | v0.7.1 | Convergent Repair Graph：convergence/failure-signature（错误类别白名单，措辞变体归并）、convergence/repair-loop（RepairLoop：seen/confirmed 分离、同签名 dedupe、两轮 dry 退出、指标改善继续、maxAttempts 硬上限、预算耗尽结构化报告）；scheduler 完成门补强（写节点 failed → 即使验证节点 passed 也不 done，G3 语义缺口修复）；kernel 零改动 | 受限门禁 442 pass（新增 12 项 G4 验收） |
+
+**G4 验收映射（§8.4）：**
+- [x] 重复失败不无限重试 → repair-loop.test.ts（maxAttempts 硬上限 + 同签名 dedupe 计数）
+- [x] seen 与 confirmed 分离 → repair-loop.test.ts（seen 只收写节点失败签名；confirmed 只收带 passed evidence 的写节点）
+- [x] 两轮 dry 后退出 → repair-loop.test.ts（dryRounds=2 → outcome dry）
+- [x] 指标改善能继续执行 → repair-loop.test.ts（第 2 轮写失败数下降 → done，dryRounds=0）
+- [x] 预算耗尽输出结构化阻塞报告 → repair-loop.test.ts（budget_exhausted + blocked 清单非空）
+- [x] 同一错误不会通过改变措辞绕过检测 → failure-signature.test.ts（同类别不同 message → 同签名）
+
+## 10. 实施记录
 
 | 阶段 | 版本 | 落地 | 验证 |
 |---|---|---|---|

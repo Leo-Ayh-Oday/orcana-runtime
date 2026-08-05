@@ -81,6 +81,16 @@ export interface WorkflowTraceEvent {
 // ── G1: executable DAG (read-only scheduler) ──
 
 /** One executable node in a read-only WorkflowSpec. */
+/** MACP-M1: conditional dependency — a node only unblocks when its
+ *  dependency's result satisfies `when`. schemaVersion "0.1" specs treat
+ *  every dependency as `terminal` (existing behavior). */
+export type WorkflowDependencyWhen = "terminal" | "succeeded" | "failed" | "accepted" | "rejected" | "blocked"
+
+export interface WorkflowDependency {
+  nodeId: string
+  when: WorkflowDependencyWhen
+}
+
 export interface WorkflowNodeSpec {
   /** Stable id within the spec: "tool:read_file:1" / "reduce:dedupe:1". */
   id: string
@@ -88,13 +98,17 @@ export interface WorkflowNodeSpec {
   handler: string
   /** Static inputs for this node. */
   input: Record<string, unknown>
-  /** Node ids this node depends on (their results feed the edge store). */
-  dependsOn: string[]
+  /** Node ids this node depends on (their results feed the edge store).
+   *  M1: schemaVersion "0.2" specs may use conditional dependencies;
+   *  "0.1" specs keep plain strings (interpreted as `terminal`). */
+  dependsOn: Array<string | WorkflowDependency>
 }
 
 /** An executable, validated read-only DAG. */
 export interface WorkflowSpec {
-  schemaVersion: "0.1"
+  /** "0.1" = terminal dependencies (legacy). "0.2" = conditional
+   *  dependencies (MACP-M1). */
+  schemaVersion: "0.1" | "0.2"
   specId: string
   nodes: WorkflowNodeSpec[]
   /** Optional budget caps. */
@@ -104,7 +118,18 @@ export interface WorkflowSpec {
   mode?: "readonly" | "read-write"
 }
 
-export type WorkflowNodeResultStatus = "done" | "failed"
+export type WorkflowNodeResultStatus = "done" | "failed" | "blocked"
+
+/** MACP-M1: execution vs acceptance separation. A node may execute
+ *  successfully while its output is not accepted (planner plan rejected,
+ *  coder evidence insufficient, reviewer hard veto). */
+export type WorkflowAcceptanceStatus =
+  | "not_required"
+  | "accepted"
+  | "rejected"
+  | "needs_repair"
+  | "needs_replan"
+  | "needs_human"
 
 /** Result of a single node execution (edge payload + terminal state). */
 export interface WorkflowNodeResult {
@@ -113,6 +138,8 @@ export interface WorkflowNodeResult {
   /** Handler output (JSON-serializable); error message on failure. */
   output: unknown
   error?: string
+  /** M1: acceptance of the produced output (separate from execution). */
+  acceptance?: WorkflowAcceptanceStatus
   startedAt: number
   finishedAt: number
   durationMs: number

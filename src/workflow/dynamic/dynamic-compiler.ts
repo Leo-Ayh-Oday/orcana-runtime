@@ -134,8 +134,9 @@ function findUnverifiedWrites(spec: WorkflowSpec, nodeTypes: Record<string, stri
   const verified = new Set<string>()
   for (const node of spec.nodes) {
     for (const dep of node.dependsOn ?? []) {
-      if (writeIds.has(dep) && nodeTypes["verify"]?.includes(node.handler)) {
-        verified.add(dep)
+      const depId = typeof dep === "string" ? dep : dep.nodeId
+      if (writeIds.has(depId) && nodeTypes["verify"]?.includes(node.handler)) {
+        verified.add(depId)
       }
     }
   }

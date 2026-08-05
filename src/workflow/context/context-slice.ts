@@ -29,7 +29,8 @@ export interface ContextSlice {
 export function buildContextSlice(node: WorkflowNodeSpec, results: WorkflowNodeResult[]): ContextSlice {
   const byId = new Map(results.map(r => [r.nodeId, r]))
   const dependencies: DependencySlice[] = []
-  for (const depId of node.dependsOn ?? []) {
+  for (const dep of node.dependsOn ?? []) {
+    const depId = typeof dep === "string" ? dep : dep.nodeId
     const result = byId.get(depId)
     if (!result) continue
     dependencies.push({
@@ -43,5 +44,5 @@ export function buildContextSlice(node: WorkflowNodeSpec, results: WorkflowNodeR
 
 /** The set of dependency node ids a node context is built from. */
 export function sliceDependencyIds(node: WorkflowNodeSpec): string[] {
-  return node.dependsOn ?? []
+  return (node.dependsOn ?? []).map(dep => (typeof dep === "string" ? dep : dep.nodeId))
 }

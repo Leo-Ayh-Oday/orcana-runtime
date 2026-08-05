@@ -73,8 +73,8 @@ export function parseDynamicSpec(raw: unknown, path = "dynamic"): DynamicParseRe
   if (!isPlainObject(raw)) {
     return { ok: false, reason: `${path}: must be a JSON object` }
   }
-  if (raw["schemaVersion"] !== "0.1") {
-    return { ok: false, reason: `${path}: schemaVersion must be "0.1"` }
+  if (raw["schemaVersion"] !== "0.1" && raw["schemaVersion"] !== "0.2") {
+    return { ok: false, reason: `${path}: schemaVersion must be "0.1" or "0.2"` }
   }
   if (typeof raw["specId"] !== "string") {
     return { ok: false, reason: `${path}: specId must be a string` }

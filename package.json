@@ -67,7 +67,8 @@
     "test:live": "bun test tests/code_as_action.test.ts tests/fullstack_depth.test.ts tests/knowledge_pipeline.test.ts",
     "typecheck": "tsc --noEmit --pretty false",
     "test:watch": "node scripts/run-tests.cjs --watch",
-    "bench:mini": "bun run evals/mini-benchmark.ts --report"
+    "bench:mini": "bun run evals/mini-benchmark.ts --report",
+    "eval:linux": "bun run evals/linux-sandbox-eval.ts"
   },
   "engines": {
     "node": ">=20"

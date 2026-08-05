@@ -13,6 +13,7 @@ import { START_SERVICE_TOOL } from "./service"
 import { SHELL_TOOL } from "./shell"
 import { TODO_WRITE_TOOL } from "./todo"
 import { TYPECHECK_TOOL } from "./typescript"
+import { CLASSIFY_COMMAND_FAILURE_TOOL, DISCOVER_VERIFICATION_TOOL, RUN_TARGETED_VERIFICATION_TOOL, VERIFY_CLAIM_TOOL } from "./verification"
 import { WEB_FETCH_TOOL } from "./webfetch"
 
 const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
@@ -33,6 +34,10 @@ const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
   BUILD_CONTEXT_SLICE_TOOL,
   ...LSP_TOOLS,
   TYPECHECK_TOOL,
+  DISCOVER_VERIFICATION_TOOL,
+  RUN_TARGETED_VERIFICATION_TOOL,
+  CLASSIFY_COMMAND_FAILURE_TOOL,
+  VERIFY_CLAIM_TOOL,
   TODO_WRITE_TOOL,
   ASK_USER_TOOL,
 ])

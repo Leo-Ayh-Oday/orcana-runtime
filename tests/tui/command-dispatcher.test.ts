@@ -34,6 +34,19 @@ function createContext(overrides: Partial<TuiCommandContext> = {}) {
   return { context, store, messages }
 }
 
+/** 带模型目录 + configureModel spy 的 runtime stub。 */
+function modelRuntime(models: Array<{ id: string; displayName?: string; providerId: string }>) {
+  const calls: Array<{ providerId: string; modelId: string }> = []
+  return {
+    registry: { allModels: models, listProviders: () => [...new Set(models.map(m => m.providerId))] },
+    sessionId: "test-session",
+    configureModel: async (input: { providerId: string; modelId: string }) => {
+      calls.push({ providerId: input.providerId, modelId: input.modelId })
+    },
+    calls,
+  }
+}
+
 describe("dispatchTuiCommand", () => {
   test("returns not_command for normal prompts", () => {
     const { context } = createContext()
@@ -53,7 +66,9 @@ describe("dispatchTuiCommand", () => {
 
   test("uses runtime command aliases for local TUI commands", () => {
     let openedProvider: string | undefined
+    const rt = modelRuntime([{ id: "deepseek/deepseek-v4-pro", displayName: "V4 Pro", providerId: "deepseek" }])
     const { context } = createContext({
+      runtime: rt as never,
       openModels: provider => {
         openedProvider = provider
       },
@@ -122,5 +137,51 @@ describe("dispatchTuiCommand", () => {
     const { context, messages } = createContext({ isRunning: () => true })
     expect(dispatchTuiCommand("/sessions", context)).toBe("handled")
     expect(messages[0]).toContain("暂不可用")
+  })
+
+  test("/model <id> 直接切换模型（精确匹配）", async () => {
+    const rt = modelRuntime([
+      { id: "deepseek-v3", displayName: "DeepSeek V3", providerId: "deepseek" },
+      { id: "deepseek-v4-pro", displayName: "V4 Pro", providerId: "deepseek" },
+    ])
+    const { context, store, messages } = createContext({ runtime: rt as never })
+    expect(dispatchTuiCommand("/model deepseek-v3", context)).toBe("handled")
+    await Promise.resolve()
+    expect(rt.calls).toEqual([{ providerId: "deepseek", modelId: "deepseek-v3" }])
+    expect(store.getState().modelName).toBe("deepseek-v3")
+    expect(messages[0]).toContain("模型已切换")
+  })
+
+  test("/models <前缀> 唯一命中时直接切换", async () => {
+    const rt = modelRuntime([
+      { id: "anthropic/claude-sonnet", displayName: "Claude Sonnet", providerId: "anthropic" },
+      { id: "anthropic/claude-opus", displayName: "Claude Opus", providerId: "anthropic" },
+    ])
+    const { context, messages } = createContext({ runtime: rt as never })
+    expect(dispatchTuiCommand("/models sonnet", context)).toBe("handled")
+    await Promise.resolve()
+    expect(rt.calls).toEqual([{ providerId: "anthropic", modelId: "anthropic/claude-sonnet" }])
+    expect(messages[0]).toContain("模型已切换")
+  })
+
+  test("/model <provider> 打开过滤对话框", () => {
+    const rt = modelRuntime([
+      { id: "anthropic/claude-sonnet", providerId: "anthropic" },
+      { id: "deepseek/deepseek-v4-pro", providerId: "deepseek" },
+    ])
+    let openedProvider: string | undefined
+    const { context } = createContext({ runtime: rt as never, openModels: p => { openedProvider = p } })
+    expect(dispatchTuiCommand("/model anthropic", context)).toBe("handled")
+    expect(openedProvider).toBe("anthropic")
+  })
+
+  test("/model <未知> 提示可用 provider，不静默发 agent", async () => {
+    const rt = modelRuntime([{ id: "deepseek/deepseek-v4-pro", providerId: "deepseek" }])
+    const { context, messages } = createContext({ runtime: rt as never })
+    expect(dispatchTuiCommand("/model nope-123", context)).toBe("handled")
+    await Promise.resolve()
+    expect(messages[0]).toContain("未找到模型或 provider")
+    expect(messages[0]).toContain("deepseek")
+    expect(rt.calls).toEqual([])
   })
 })

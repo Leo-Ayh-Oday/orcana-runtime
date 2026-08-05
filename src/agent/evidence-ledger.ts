@@ -17,7 +17,9 @@ import type { TaskTracker } from "./task-tracker"
 // ── Evidence types ──
 
 /** The four evidence types. Narrower than VerificationKind (which includes lint/smoke/unknown). */
-export type EvidenceKind = "typecheck" | "test" | "build" | "manual"
+export type EvidenceKind =
+  | "typecheck" | "test" | "build" | "manual"
+  | "sandbox_execution" | "sandbox_cleanup"
 
 /** A single piece of verification evidence. */
 export interface EvidenceEntry {
@@ -33,6 +35,16 @@ export interface EvidenceEntry {
   issues?: number
   /** Unix timestamp (ms) when this evidence was collected. */
   timestamp: number
+  /** R5: 沙盒执行证据绑定（SandboxReceipt 摘要）。 */
+  receiptDigest?: string
+  /** R5: 实际后端（host-audit/bubblewrap/rootless-podman）。 */
+  backend?: string
+  /** R5: 清理已验证（进程归零 + cgroup 移除）。 */
+  cleanupVerified?: boolean
+  /** R5: 网络模式（none/loopback/...）。 */
+  networkMode?: string
+  /** R5: 是否发生降级。 */
+  degraded?: boolean
   /** Optional link to the PatchTransaction that produced the code under verification. */
   txId?: string
   /** [PR-2 / I-2] Write-generation at collection time. If a later write bumps the
@@ -103,6 +115,8 @@ export function evidenceKindLabel(kind: EvidenceKind): string {
     case "test": return "测试"
     case "build": return "构建"
     case "manual": return "人工验证"
+    case "sandbox_execution": return "沙盒执行"
+    case "sandbox_cleanup": return "沙盒清理验证"
   }
 }
 
@@ -440,6 +454,8 @@ export function formatEvidenceLedgerStatus(ledger: EvidenceLedger): string {
     test: [],
     build: [],
     manual: [],
+    sandbox_execution: [],
+    sandbox_cleanup: [],
   }
 
   for (const e of ledger.entries) {
@@ -545,4 +561,49 @@ export function deserializeLedger(data: SerializedLedger): EvidenceLedger {
       stale: e.stale,
     })),
   }
+}
+
+// ── R5: SandboxReceipt → Evidence ──
+
+/** R5: 沙盒 Receipt 入账（审计 §26 Evidence 接入）。
+ *
+ *  仅完整 Receipt（backend + digests + 已结束）可入账；不完整 Receipt 拒绝
+ *  （SANDBOX_RECEIPT_INCOMPLETE: 0）。sandbox_execution 证据绑定
+ *  receiptDigest/backend/networkMode/degraded；清理验证通过（进程归零 +
+ *  cgroup 移除）额外产生 sandbox_cleanup 证据。
+ */
+export function ingestSandboxReceipt(
+  ledger: EvidenceLedger,
+  receipt: import("../runtime/linux/contracts").SandboxReceipt,
+): EvidenceEntry | null {
+  if (receipt.finishedAt <= 0 || !receipt.cellSpecDigest || !receipt.backend) return null
+  const cleanupVerified = receipt.cleanup.processesRemaining === 0 && receipt.cleanup.cgroupRemoved === true
+  const entry: EvidenceEntry = {
+    id: generateEvidenceId(),
+    kind: "sandbox_execution",
+    command: `sandbox:${receipt.backend}:${receipt.profile}`,
+    output: `backend=${receipt.backend} profile=${receipt.profile} exit=${receipt.exitCode} degraded=${receipt.degradationReasons.length > 0}`,
+    passed: receipt.exitCode === 0 && !receipt.timedOut && !receipt.cancelled,
+    timestamp: receipt.finishedAt,
+    receiptDigest: receipt.cellSpecDigest,
+    backend: receipt.backend,
+    cleanupVerified,
+    networkMode: receipt.networkMode,
+    degraded: receipt.degradationReasons.length > 0,
+  }
+  addEvidence(ledger, entry)
+  if (cleanupVerified) {
+    addEvidence(ledger, {
+      id: generateEvidenceId(),
+      kind: "sandbox_cleanup",
+      command: "cleanup:verified",
+      output: "processesRemaining=0 cgroupRemoved=true",
+      passed: true,
+      timestamp: receipt.finishedAt,
+      receiptDigest: receipt.cellSpecDigest,
+      backend: receipt.backend,
+      cleanupVerified: true,
+    })
+  }
+  return entry
 }

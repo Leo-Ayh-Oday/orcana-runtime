@@ -51,3 +51,63 @@ export const AUTO_SECURITY_CRITERION: CompletionCriterion = {
   check: { type: "evidence", evidenceKind: "ownership" },
   description: "M3 ownership policy + escape defenses must have produced passing evidence",
 }
+
+// ── R5: 沙盒完成条件（审计 §26 类型化 Criterion） ──
+
+/** 沙盒执行证据必须存在且通过（receipt 完整入账）。 */
+export const SANDBOX_EXECUTION_CRITERION: CompletionCriterion = {
+  id: "sys.sandbox_execution",
+  title: "存在通过验证的沙盒执行证据（完整 Receipt）",
+  hard: true,
+  mode: "deterministic",
+  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+}
+
+/** 隔离后端必须达到 namespace 级（bubblewrap/podman，非 host-audit）。 */
+export const SANDBOX_BACKEND_CRITERION: CompletionCriterion = {
+  id: "sys.sandbox_backend",
+  title: "执行后端 >= namespace 级（无 host-audit）",
+  hard: true,
+  mode: "deterministic",
+  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  description: "由证据的 backend 字段判定：backend ∈ {bubblewrap, rootless-podman} 且 degraded=false",
+}
+
+/** 严格任务禁止降级。 */
+export const SANDBOX_NO_DEGRADATION_CRITERION: CompletionCriterion = {
+  id: "sys.sandbox_no_degradation",
+  title: "严格任务无降级",
+  hard: true,
+  mode: "deterministic",
+  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  description: "由证据的 degraded=false 判定；host-audit 或降级 = 不满足",
+}
+
+/** 资源限制已施加（cgroup 绑定）。 */
+export const SANDBOX_RESOURCE_LIMIT_CRITERION: CompletionCriterion = {
+  id: "sys.resource_limit_applied",
+  title: "资源限制已施加",
+  hard: false,
+  mode: "deterministic",
+  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  description: "由证据的 cleanupVerified 与 Receipt metrics 判定",
+}
+
+/** 网络隔离（none 模式）。 */
+export const SANDBOX_NETWORK_ISOLATED_CRITERION: CompletionCriterion = {
+  id: "sys.network_isolated",
+  title: "执行网络隔离（none）",
+  hard: false,
+  mode: "deterministic",
+  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  description: "由证据的 networkMode=none 判定",
+}
+
+/** 清理已验证（进程归零 + cgroup 移除）。 */
+export const SANDBOX_CLEANUP_CRITERION: CompletionCriterion = {
+  id: "sys.sandbox_cleanup_verified",
+  title: "清理已验证",
+  hard: true,
+  mode: "deterministic",
+  check: { type: "evidence", evidenceKind: "sandbox_cleanup" },
+}

@@ -208,7 +208,101 @@ tests/workflow/
 
 ---
 
-## 5. 发布流程（每阶段固定）
+## 5. G2 详细任务单（v0.5.25，Workflow Compiler + Templates）
+
+参考稿 PR-G2 验收：相同输入产生稳定 Graph / Graph Schema 有版本 / 循环、未知 Handler、非法副作用被拒绝 / MasterPlan 可转换为 WorkflowSpec / WorkflowSpec 可展示回 MasterPlan 状态。
+
+### 5.1 设计决策（融合特色架构）
+
+| 参考稿 | 融合决策 |
+|---|---|
+| 修改 `src/agent/master-plan.ts` / `task-packet.ts` / `plan-validator.ts` | **不改 kernel**。新增 adapter 只读消费 `MasterPlan` / `TaskPacket` 类型（PlanNode.dependsOn → edge；`_packet` → node input） |
+| 新写 dag-validator | 复用 G1 `edge-store`（buildTopology/detectCycle）+ 新增未知依赖检查 |
+| 修改 context-map.ts | 不做（G5 接 Context Slice 时再说） |
+| 首批模板全部只读 | code_explain / security_audit / research_report，handler 全走 G1 只读白名单 |
+| 验证节点 | G2 模板不含验证子图（G3 接）——节点 input 可声明 `verify` 字段但只读模式下被忽略并记录 |
+
+### 5.2 新增文件
+
+```text
+src/workflow/
+├── validation/
+│   ├── index.ts                   # validateSpec 聚合入口（全量校验，返回报告）
+│   ├── schema-validator.ts        # node input 浅校验（对象/数组/标量类型 + handler schema 存在性）
+│   ├── dag-validator.ts           # 未知依赖 + 环（复用 edge-store）
+│   ├── capability-validator.ts    # handler 已注册 + 存在性
+│   ├── budget-validator.ts        # 节点数上限（默认 200）+ maxParallel ≥ 1
+│   └── side-effect-validator.ts   # 只读模式：全部 handler ∈ 只读白名单
+├── compiler/
+│   ├── master-plan-adapter.ts     # MasterPlan（含 TaskPacket）→ WorkflowSpec
+│   ├── template-compiler.ts       # 模板 id → WorkflowSpec（输入插值）
+│   └── graph-normalizer.ts        # id 稳定化 / 去重边 / 拓扑序输出
+├── templates/
+│   ├── registry.ts                # 模板注册表 + list/get
+│   ├── code-explain.ts            # read_file + find_symbol + find_references → 解释节点
+│   ├── security-audit.ts          # project_structure + read_file ×N + reduce.merge_diagnostics
+│   └── research-report.ts         # git_status + git_diff + find_symbol + read_file
+└── projection/
+    └── plan-projection.ts         # WorkflowRunResult → PlanNode 状态回写（spec → plan）
+```
+
+### 5.3 编译映射
+
+```text
+MasterPlan
+  └─ node.dependsOn → WorkflowNodeSpec.dependsOn（blockedBy 反向推导，重复边折叠）
+  └─ node._packet（TaskPacket）
+       ├─ goal/title → 节点 input.tag（稳定编译：goal 哈希进 specId）
+       ├─ scope/doneCriteria → input.scope（只读模板忽略执行，G3 接）
+       └─ contextBudget.maxToolCalls → budget 元数据
+  └─ 无 packet 节点 → handler 由 intent 推断（research/audit 模板场景）
+       ├─ "research"/"explain" → tool.read_file / tool.find_symbol 组合
+       └─ 无法推断 → 编译失败（明确报错，不静默降级）
+```
+
+- 稳定 Graph：specId = stableHash(goal + node 标题序列 + dependsOn)；同输入必同输出
+- Graph Schema：`WorkflowSpec.schemaVersion = "0.1"`（G1 已定义，G2 不改结构）
+
+### 5.4 模板（首批，全部只读）
+
+| 模板 | 节点序列（handler） | 输入 |
+|---|---|---|
+| code_explain | find_symbol → find_references → read_file → read_file | {query, path} |
+| security_audit | project_structure → read_file ×N（glob 展开）→ merge_diagnostics | {path} |
+| research_report | git_status → git_diff → find_symbol → read_file | {path, scope} |
+
+模板 = 静态 WorkflowSpec 生成器（输入插值），可叠加 maxParallel。注册表校验：模板输出必须通过 validateSpec（写 handler 直接编译失败）。
+
+### 5.5 反向投影（spec → plan）
+
+```text
+WorkflowRunResult + MasterPlan
+  └─ node.id ↔ plan.node.id（adapter 保留原始 id）
+  └─ status: done → "done"；failed → "blocked"（reactCount+1 由调用方决定）
+  └─ result.output.metadata → node.evidence 摘要
+```
+
+### 5.6 G2 验收测试
+
+```text
+tests/workflow/
+├── compiler-master-plan.test.ts   # 稳定编译（同输入同 spec）/ packet 编译 / 无 packet 推断
+├── validation.test.ts             # 环/未知依赖/未知 handler/写 handler/预算界 全拒绝
+├── templates.test.ts              # 三模板编译 + 只读性 + validateSpec 通过
+└── plan-projection.test.ts        # run result → plan 状态回写
+```
+
+### 5.7 G2 验收映射
+
+- [ ] 相同输入产生稳定 Graph → compiler-master-plan.test.ts
+- [ ] Graph Schema 有版本 → schemaVersion 断言
+- [ ] 循环、未知 Handler、非法副作用被拒绝 → validation.test.ts（dag/capability/side-effect）
+- [ ] MasterPlan 可转换为 WorkflowSpec → compiler-master-plan.test.ts
+- [ ] WorkflowSpec 可展示回 MasterPlan 状态 → plan-projection.test.ts
+
+---
+
+## 6. 发布流程（每阶段固定）
 
 一个阶段一个 patch 版本：五门禁（typecheck / test / build / `npm pack --dry-run` / `git diff --check`）→ `feat:` commit → `chore: release v0.5.x` commit → push → gh release → npm publish。显式 git add（禁 `git add -A`），绝不触碰 `src/tui/**`、`tests/tui/**`。
 
@@ -228,3 +322,14 @@ tests/workflow/
 - [x] 下游依赖正确等待 → scheduler-deps.test.ts（diamond/chain 顺序断言）
 - [x] Graph 可以 checkpoint → result-store.test.ts（增量落盘 + restore + redact）
 - [x] Scheduler 无死锁 → scheduler-deadlock.test.ts（环/自环预检 + restored 全量不挂起）
+
+| 阶段 | 版本 | 落地 | 验证 |
+|---|---|---|---|
+| G2 | v0.5.25 | Compiler + Templates：validation/（dag/capability/budget/side-effect/schema 五合一 validateSpec）、compiler/（master-plan-adapter 含 TaskPacket 编译 + 中英推断、graph-normalizer 稳定序、template-compiler）、templates/（code_explain / security_audit / research_report 全只读）、projection/plan-projection（spec → plan 状态回写）；kernel 零侵入 | 受限门禁 415 pass（新增 24 项 G2 验收） |
+
+**G2 验收映射（§5.7）：**
+- [x] 相同输入产生稳定 Graph → compiler-master-plan.test.ts（specId + 节点序双稳定）
+- [x] Graph Schema 有版本 → schemaVersion "0.1" 断言
+- [x] 循环、未知 Handler、非法副作用被拒绝 → validation.test.ts（dag/capability/side-effect/schema/budget）
+- [x] MasterPlan 可转换为 WorkflowSpec → compiler-master-plan.test.ts（packet + 推断 + dependsOn 前缀化）
+- [x] WorkflowSpec 可展示回 MasterPlan 状态 → plan-projection.test.ts（done/blocked/evidence 摘要）

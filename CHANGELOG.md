@@ -2,7 +2,27 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.5.25] — 2026-08-05
+## [0.6.0] — 2026-08-05
+
+### Version strategy
+- **0.6.0** consolidates every feature line before the Typed Execution Graph: Tool Runtime 2.0 (RT-7..13, previously unpublished as npm versions) + TUI convergence work (user track). The Graph Runtime series starts at **0.7.0** (G3 = Single Writer Transaction Graph) and continues on 0.7.x.
+
+### Added (Tool Runtime 2.0, RT-7..13)
+- **Parameterized process execution** — `run_process` / `run_shell_script` (RT-7): `shell:false` default, args arrays, process groups, timeout kill-tree, stdout/stderr artifacts.
+- **Structured git** — `git_status` / `git_diff` porcelain=v2 + numstat parsing, write-tool risk separation (RT-8).
+- **Repo map** — `build_repo_map` / `query_repo_map` / `build_context_slice` with authority/confidence metadata (RT-9).
+- **Verification toolchain** — `discover_verification` / `run_targeted_verification` / `classify_command_failure` / `verify_claim` (RT-10).
+- **Web/Service/MCP hardening** (RT-11) — SSRF DNS/IP re-validation per redirect hop, streaming byte budgets + decompression-bomb protection, summarize-mode-separated web cache keys, prompt-injection flagging; service lease (`service_start`/`status`/`logs`/`stop`) with run-end auto-cleanup; MCP trust policy (unknown tools default to non-readonly high-risk + first-run approval).
+- **Capability router** (RT-12) — layered dynamic tool disclosure with token estimation and fallback sets.
+- **Production tool eval** (RT-13) — TL-001..020 scenarios; executor trace-pair fix.
+
+### Added (TUI — user track)
+- Visual convergence (7-token palette + golden matrix), block model (collapsible tool groups), action registry (single key/hint source), container language + branded empty state, Depthline canvas layout, slash-command guard.
+
+### Fixed
+- Trace token metering redaction (G0 fix, included in 0.5.23+).
+
+
 
 ### Added (Typed Execution Graph, G2)
 - **Workflow compiler** — `compileMasterPlan()`: MasterPlan nodes (+ attached TaskPackets) compile into validated `WorkflowSpec`s with stable ids (specId = hash of goal + node identities), normalized topological order and deduplicated edges; kernel/`master-plan.ts` untouched. Handler inference for packet-less nodes covers zh + en titles with plan-intent fallback.

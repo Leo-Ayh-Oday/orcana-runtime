@@ -7,6 +7,11 @@ export interface RuntimeFileStateContext {
   ledger: FileStateLedger
   writeGeneration: number
   unmanagedWriteObserved: boolean
+  /** [command-to-file] Exact paths written outside managed tools. */
+  unmanagedWritePaths: Set<string>
+  /** [command-to-file] Every unmanaged write path was covered by a
+   *  verification command that ran against the current disk state. */
+  unmanagedWritesCovered: boolean
 }
 
 const runtimeFileStateStorage = new AsyncLocalStorage<RuntimeFileStateContext>()
@@ -14,7 +19,13 @@ const runtimeFileStateStorage = new AsyncLocalStorage<RuntimeFileStateContext>()
 export function createRuntimeFileStateContext(
   ledger = new FileStateLedger(),
 ): RuntimeFileStateContext {
-  return { ledger, writeGeneration: 0, unmanagedWriteObserved: false }
+  return {
+    ledger,
+    writeGeneration: 0,
+    unmanagedWriteObserved: false,
+    unmanagedWritePaths: new Set(),
+    unmanagedWritesCovered: false,
+  }
 }
 
 // Compatibility-only state for direct tool/unit-test calls. Production Agent
@@ -42,6 +53,35 @@ export function hasRuntimeUnmanagedWrites(): boolean {
   return getRuntimeFileStateContext().unmanagedWriteObserved
 }
 
+/** [command-to-file] Exact paths the run observed written outside the
+ *  managed file tools (shell / run_process writes). */
+export function getUnmanagedWritePaths(): string[] {
+  return [...getRuntimeFileStateContext().unmanagedWritePaths]
+}
+
+/** [command-to-file] True when a verification command covered every
+ *  unmanaged write path — the current disk state has been verified, so the
+ *  transaction binding requirement can be relaxed for the completion gate. */
+export function hasCoveredUnmanagedWrites(): boolean {
+  const context = getRuntimeFileStateContext()
+  return context.unmanagedWritesCovered && context.unmanagedWritePaths.size === 0
+}
+
+/** [command-to-file] Record the file set a passing verification command ran
+ *  against. Paths it covered are removed from the unmanaged-write set; when
+ *  the set becomes empty, the run's unmanaged writes are fully covered. */
+export function recordVerificationCoverage(files: string[]): void {
+  const context = getRuntimeFileStateContext()
+  if (files.length === 0 || context.unmanagedWritePaths.size === 0) return
+  for (const file of files) {
+    if (!file) continue
+    context.unmanagedWritePaths.delete(resolve(file))
+  }
+  if (context.unmanagedWritePaths.size === 0) {
+    context.unmanagedWritesCovered = true
+  }
+}
+
 export function runWithRuntimeFileStateContext<T>(
   context: RuntimeFileStateContext,
   callback: () => T,
@@ -53,8 +93,11 @@ export function runWithRuntimeFileStateContext<T>(
  * file tools (for example a shell command). A batch is one state transition;
  * callers only need freshness invalidation, not a per-file counter. */
 export function recordRuntimeObservedWrites(paths: string[]): number {
+  const context = getRuntimeFileStateContext()
   const changed = new Set(paths.map(path => resolve(path)))
-  if (changed.size === 0) return getRuntimeFileStateContext().writeGeneration
+  if (changed.size === 0) return context.writeGeneration
+  for (const path of changed) context.unmanagedWritePaths.add(path)
+  context.unmanagedWritesCovered = false
   return recordRuntimeUnmanagedWrite()
 }
 
@@ -87,6 +130,8 @@ export function resetRuntimeFileStateLedger(ledger = new FileStateLedger()): Fil
     activeContext.ledger = ledger
     activeContext.writeGeneration = 0
     activeContext.unmanagedWriteObserved = false
+    activeContext.unmanagedWritePaths.clear()
+    activeContext.unmanagedWritesCovered = false
     return activeContext.ledger
   }
 

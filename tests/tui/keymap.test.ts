@@ -54,27 +54,27 @@ describe("resolveActiveContext", () => {
 
 describe("resolveKeyAction: Clarification context", () => {
   test("j → clarification.down", () => {
-    expect(resolveKeyAction("j", k(), clarificationCtx())).toEqual({ type: "clarification.down" })
+    expect(resolveKeyAction("j", k(), clarificationCtx())).toBe("clarification.down")
   })
 
   test("k → clarification.up", () => {
-    expect(resolveKeyAction("k", k(), clarificationCtx())).toEqual({ type: "clarification.up" })
+    expect(resolveKeyAction("k", k(), clarificationCtx())).toBe("clarification.up")
   })
 
   test("upArrow → clarification.up", () => {
-    expect(resolveKeyAction("", k({ upArrow: true }), clarificationCtx())).toEqual({ type: "clarification.up" })
+    expect(resolveKeyAction("", k({ upArrow: true }), clarificationCtx())).toBe("clarification.up")
   })
 
   test("downArrow → clarification.down", () => {
-    expect(resolveKeyAction("", k({ downArrow: true }), clarificationCtx())).toEqual({ type: "clarification.down" })
+    expect(resolveKeyAction("", k({ downArrow: true }), clarificationCtx())).toBe("clarification.down")
   })
 
   test("return → clarification.select", () => {
-    expect(resolveKeyAction("", k({ return: true }), clarificationCtx())).toEqual({ type: "clarification.select" })
+    expect(resolveKeyAction("", k({ return: true }), clarificationCtx())).toBe("clarification.select")
   })
 
   test("escape → clarification.cancel", () => {
-    expect(resolveKeyAction("", k({ escape: true }), clarificationCtx())).toEqual({ type: "clarification.cancel" })
+    expect(resolveKeyAction("", k({ escape: true }), clarificationCtx())).toBe("clarification.cancel")
   })
 
   test("unknown key returns null (pass-through to composer)", () => {
@@ -84,24 +84,24 @@ describe("resolveKeyAction: Clarification context", () => {
 })
 
 describe("resolveKeyAction: Scrollback context", () => {
-  test("PageUp → scroll.pageUp", () => {
+  test("PageUp → scroll.pageUp (amount 由 dispatcher 计算)", () => {
     expect(resolveKeyAction("", k({ pageUp: true }), scrollCtx({ bodyHeight: 24 })))
-      .toEqual({ type: "scroll.pageUp", amount: 20 })
+      .toBe("scroll.pageUp")
   })
 
-  test("PageDown → scroll.pageDown", () => {
+  test("PageDown → scroll.pageDown (amount 由 dispatcher 计算)", () => {
     expect(resolveKeyAction("", k({ pageDown: true }), scrollCtx({ bodyHeight: 40 })))
-      .toEqual({ type: "scroll.pageDown", amount: 36 })
+      .toBe("scroll.pageDown")
   })
 
   test("Ctrl+Up → scroll.up", () => {
     expect(resolveKeyAction("", k({ ctrl: true, upArrow: true }), scrollCtx({ scrollStep: 5 })))
-      .toEqual({ type: "scroll.up", amount: 5 })
+      .toBe("scroll.up")
   })
 
   test("Ctrl+Down → scroll.down", () => {
     expect(resolveKeyAction("", k({ ctrl: true, downArrow: true }), scrollCtx({ scrollStep: 3 })))
-      .toEqual({ type: "scroll.down", amount: 3 })
+      .toBe("scroll.down")
   })
 
   test("Ctrl without arrow returns null (no action)", () => {
@@ -124,44 +124,42 @@ describe("Context priority: Clarification > Scrollback", () => {
     expect(resolveKeyAction("", k({ pageUp: true }), clarificationCtx())).toBeNull()
   })
 
-  test("Ctrl+Up in Clarification → clarification.up (Ctrl modifier consumed)", () => {
-    expect(resolveKeyAction("", k({ ctrl: true, upArrow: true }), clarificationCtx()))
-      .toEqual({ type: "clarification.up" })
+  test("Ctrl+Up in Clarification → null（修饰键精确匹配，↑ 不带 Ctrl）", () => {
+    expect(resolveKeyAction("", k({ ctrl: true, upArrow: true }), clarificationCtx())).toBeNull()
   })
 
-  test("Ctrl+Down in Clarification → clarification.down (Ctrl modifier consumed)", () => {
-    expect(resolveKeyAction("", k({ ctrl: true, downArrow: true }), clarificationCtx()))
-      .toEqual({ type: "clarification.down" })
+  test("Ctrl+Down in Clarification → null", () => {
+    expect(resolveKeyAction("", k({ ctrl: true, downArrow: true }), clarificationCtx())).toBeNull()
   })
 
   test("escape IS handled in Clarification context (cancel)", () => {
     expect(resolveKeyAction("", k({ escape: true }), clarificationCtx()))
-      .toEqual({ type: "clarification.cancel" })
+      .toBe("clarification.cancel")
   })
 
-  test("escape is NOT handled in Scrollback context", () => {
-    expect(resolveKeyAction("", k({ escape: true }), scrollCtx())).toBeNull()
+  test("escape → run.stop in Scrollback context（dispatcher 空闲时 no-op）", () => {
+    expect(resolveKeyAction("", k({ escape: true }), scrollCtx())).toBe("run.stop")
   })
 })
 
 describe("resolveKeyAction: Confirm context", () => {
   test("y/Y → confirm.approve", () => {
-    expect(resolveKeyAction("y", k(), confirmCtx())).toEqual({ type: "confirm.approve" })
-    expect(resolveKeyAction("Y", k(), confirmCtx())).toEqual({ type: "confirm.approve" })
+    expect(resolveKeyAction("y", k(), confirmCtx())).toBe("confirm.approve")
+    expect(resolveKeyAction("Y", k(), confirmCtx())).toBe("confirm.approve")
   })
 
   test("n/N → confirm.deny", () => {
-    expect(resolveKeyAction("n", k(), confirmCtx())).toEqual({ type: "confirm.deny" })
-    expect(resolveKeyAction("N", k(), confirmCtx())).toEqual({ type: "confirm.deny" })
+    expect(resolveKeyAction("n", k(), confirmCtx())).toBe("confirm.deny")
+    expect(resolveKeyAction("N", k(), confirmCtx())).toBe("confirm.deny")
   })
 
   test("a/A → confirm.denyAll", () => {
-    expect(resolveKeyAction("a", k(), confirmCtx())).toEqual({ type: "confirm.denyAll" })
-    expect(resolveKeyAction("A", k(), confirmCtx())).toEqual({ type: "confirm.denyAll" })
+    expect(resolveKeyAction("a", k(), confirmCtx())).toBe("confirm.denyAll")
+    expect(resolveKeyAction("A", k(), confirmCtx())).toBe("confirm.denyAll")
   })
 
   test("escape → confirm.dismiss", () => {
-    expect(resolveKeyAction("", k({ escape: true }), confirmCtx())).toEqual({ type: "confirm.dismiss" })
+    expect(resolveKeyAction("", k({ escape: true }), confirmCtx())).toBe("confirm.dismiss")
   })
 
   test("unknown keys return null (no accidental confirm/deny)", () => {
@@ -172,37 +170,37 @@ describe("resolveKeyAction: Confirm context", () => {
 
 describe("resolveKeyAction: RewindList context", () => {
   test("j/down → rewind.down", () => {
-    expect(resolveKeyAction("j", k(), rewindListCtx())).toEqual({ type: "rewind.down" })
-    expect(resolveKeyAction("", k({ downArrow: true }), rewindListCtx())).toEqual({ type: "rewind.down" })
+    expect(resolveKeyAction("j", k(), rewindListCtx())).toBe("rewind.down")
+    expect(resolveKeyAction("", k({ downArrow: true }), rewindListCtx())).toBe("rewind.down")
   })
 
   test("k/up → rewind.up", () => {
-    expect(resolveKeyAction("k", k(), rewindListCtx())).toEqual({ type: "rewind.up" })
-    expect(resolveKeyAction("", k({ upArrow: true }), rewindListCtx())).toEqual({ type: "rewind.up" })
+    expect(resolveKeyAction("k", k(), rewindListCtx())).toBe("rewind.up")
+    expect(resolveKeyAction("", k({ upArrow: true }), rewindListCtx())).toBe("rewind.up")
   })
 
   test("return → rewind.select", () => {
-    expect(resolveKeyAction("", k({ return: true }), rewindListCtx())).toEqual({ type: "rewind.select" })
+    expect(resolveKeyAction("", k({ return: true }), rewindListCtx())).toBe("rewind.select")
   })
 
   test("escape → rewind.cancel", () => {
-    expect(resolveKeyAction("", k({ escape: true }), rewindListCtx())).toEqual({ type: "rewind.cancel" })
+    expect(resolveKeyAction("", k({ escape: true }), rewindListCtx())).toBe("rewind.cancel")
   })
 })
 
 describe("resolveKeyAction: RewindConfirm context", () => {
   test("y/Y → rewind.select (confirm)", () => {
-    expect(resolveKeyAction("y", k(), rewindConfirmCtx())).toEqual({ type: "rewind.select" })
-    expect(resolveKeyAction("Y", k(), rewindConfirmCtx())).toEqual({ type: "rewind.select" })
+    expect(resolveKeyAction("y", k(), rewindConfirmCtx())).toBe("rewind.select")
+    expect(resolveKeyAction("Y", k(), rewindConfirmCtx())).toBe("rewind.select")
   })
 
   test("n/N → rewind.cancel", () => {
-    expect(resolveKeyAction("n", k(), rewindConfirmCtx())).toEqual({ type: "rewind.cancel" })
-    expect(resolveKeyAction("N", k(), rewindConfirmCtx())).toEqual({ type: "rewind.cancel" })
+    expect(resolveKeyAction("n", k(), rewindConfirmCtx())).toBe("rewind.cancel")
+    expect(resolveKeyAction("N", k(), rewindConfirmCtx())).toBe("rewind.cancel")
   })
 
   test("escape → rewind.cancel", () => {
-    expect(resolveKeyAction("", k({ escape: true }), rewindConfirmCtx())).toEqual({ type: "rewind.cancel" })
+    expect(resolveKeyAction("", k({ escape: true }), rewindConfirmCtx())).toBe("rewind.cancel")
   })
 })
 

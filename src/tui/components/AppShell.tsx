@@ -33,6 +33,7 @@ import { resolveActiveContext } from "../input/types"
 import { ConfirmModal } from "./ConfirmModal"
 import { RewindModal } from "./RewindModal"
 import { RuntimeInspector } from "./overlays/RuntimeInspector"
+import { ShortcutsPanel } from "./overlays/ShortcutsPanel"
 import { extractRuntimeCounters } from "../format-runtime"
 import { selectThinkingDock } from "../thinking"
 import { renderMetrics } from "../render-metrics"
@@ -442,6 +443,11 @@ export function AppShell(props: AppShellProps) {
             errorLine={state.errorLine}
             width={cols}
           />
+        </Box>
+      )}
+      {overlay.kind === "shortcuts" && (
+        <Box marginBottom={1}>
+          <ShortcutsPanel width={cols} />
         </Box>
       )}
 

@@ -52,6 +52,8 @@ export interface CommandDef {
   disabledReason?: string
   /** 空 query 时的优先级（默认 0）。 */
   priority?: number
+  /** Depthline P3: 映射到 keyboard Action（Command 与 Action 独立，可映射）。 */
+  actionId?: string
 }
 
 /** PR-4: category → kind 回退映射。
@@ -124,6 +126,7 @@ export const COMMANDS: CommandDef[] = [
     aliases: ["inspector"],
     category: "runtime",
     safeConcurrent: true,
+    actionId: "runtime.open",
   },
 
   // ── 会话管理 ──

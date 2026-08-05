@@ -45,7 +45,6 @@ import { shouldSkipProviderPurpose } from "../provider/cost-policy"
 import { playStartupScreen } from "./startup-screen"
 import { playInkStartupScreen } from "./ink-startup"
 import { HookSystem } from "../hooks"
-import { AgentRunTrace } from "../agent/run-trace"
 import { findPendingClarification } from "../agent/clarification"
 import { createRuntime } from "../runtime/bootstrap"
 import type { MultiProvider } from "../provider/multi"
@@ -185,7 +184,7 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
     process.stdout.write(`${dim(">")}  ${cliPrompt}\n\n`)
     try {
       if (shouldUseChatLite(cliPrompt) && !shouldSkipProviderPurpose("chat_lite")) await runLiteTurn(multiProvider, modelRouter, cliPrompt, history, compactor)
-      else await runTurn(runtime.harness, cliPrompt, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint)
+      else await runTurn(runtime.harness, cliPrompt, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint, runtime.startRunTrace)
     } finally {
       runtime.dispose()
     }
@@ -286,7 +285,7 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
 
     lastUsage = null
     if (shouldUseChatLite(input) && !shouldSkipProviderPurpose("chat_lite") && !findPendingClarification(history)) await runLiteTurn(multiProvider, modelRouter, input, history, compactor)
-    else await runTurn(runtime.harness, input, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint)
+    else await runTurn(runtime.harness, input, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint, runtime.startRunTrace)
     if (history.length % 5 === 0 && history.length > 0) {
       setSessionId(persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId))
     }
@@ -413,6 +412,7 @@ async function runTurn(
   thinkEffort: "auto" | "high" | "max",
   sessionId: string,
   resumeFromCheckpoint: SessionCheckpoint | null,
+  startRunTrace: (prompt: string) => { record(type: string, data?: unknown): void; runId: string; file: string },
 ) {
   prevInput = 0
   prevOutput = 0
@@ -452,7 +452,8 @@ async function runTurn(
   const warmHistory = dynamicMemoryContext
     ? [...history, { role: "assistant" as const, content: dynamicMemoryContext }]
     : [...history]
-  const runTrace = AgentRunTrace.start(process.cwd(), prompt)
+  // G0: unified factory — workflow shadow projection wraps the trace when configured.
+  const runTrace = startRunTrace(prompt)
   let planNeedsReinvoke = false
 
   // H1: per-invocation options travel via AgentRunInput.metadata; runtime

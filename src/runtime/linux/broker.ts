@@ -18,6 +18,8 @@ import { compileCellSpec } from "./policy-compiler"
 import { selectBackend } from "./backend-router"
 import type { BackendSelection } from "./backend-router"
 import { LinuxExecutionError } from "./errors"
+import { createHostAuditBackend } from "./backends/host-audit"
+import type { ExecutionBackend } from "./backends/backend"
 
 export interface ShadowExecutionRecord {
   cellId: string
@@ -56,6 +58,19 @@ export interface LinuxExecutionBroker {
 
 /** 全进程共享的 broker 实例（能力探测缓存）。 */
 let shared: LinuxExecutionBroker | null = null
+
+/** 已注册后端实现（仅 backends/ 目录可注册）。 */
+const backendImplementations: Record<string, ExecutionBackend> = {
+  "host-audit": createHostAuditBackend(),
+}
+
+export function registerBackend(backend: ExecutionBackend): void {
+  backendImplementations[backend.id] = backend
+}
+
+function backendOf(id: string): ExecutionBackend | undefined {
+  return backendImplementations[id]
+}
 
 export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBroker {
   const caps = requireLinuxPlatform()
@@ -109,11 +124,21 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     },
     async *execute(spec) {
       if (options.mode === "shadow") {
-        // LF-1: shadow 不执行 —— 记录后由旧路径执行。
+        // LF-1/2: shadow 不执行 —— 记录后由旧路径执行。
         this.shadow(spec)
         return
       }
-      throw new LinuxExecutionError("PROCESS_START_FAILED", "broker execution not yet wired (LF-2+ backends)")
+      const compiled = compileOrThrow(spec)
+      const selection = selectBackend(compiled, caps)
+      const backend = backendOf(selection.backend)
+      if (!backend) {
+        throw new LinuxExecutionError("PROCESS_START_FAILED", `no backend implementation for "${selection.backend}"`)
+      }
+      const violations = backend.validateSpec(compiled)
+      if (violations.length > 0) {
+        throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `backend ${backend.id} rejects spec: ${violations.join("; ")}`)
+      }
+      yield* backend.run(compiled, { capabilities: caps })
     },
     createAgentDomain(input) {
       const domain: AgentExecutionDomain = {

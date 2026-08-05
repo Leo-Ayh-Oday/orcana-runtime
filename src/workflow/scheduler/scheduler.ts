@@ -1,24 +1,21 @@
-/** Scheduler (G1): parallel read-only DAG execution.
+/** Scheduler (G1–G3): parallel read-only + single-writer DAG execution.
  *
- *  Semantics (plan G1 §4.4):
- *    - ready queue (indegree 0) → bounded concurrency pool;
- *    - failure isolation: a failed node keeps its result, its dependents
- *      still run (the edge passes the failed result through);
- *    - deadlock guard: no ready + no running + still pending ⇒ dependency
- *      cycle ⇒ rejected (the spec is also cycle-checked up front);
- *    - incremental checkpoint: every finished node lands in the ResultStore
- *      immediately; restore() skips finished nodes.
- *
- *  Write tools can never reach this path: handler registration rejects them
- *  and the tool executor re-verifies isReadonly per call.
+ *  G1/G2 semantics: ready queue, bounded read concurrency, failure
+ *  isolation, deadlock guard, incremental checkpoints.
+ *  G3 additions: read-write specs execute whitelisted write handlers
+ *  under a single-writer lock (ConcurrencyController), and the completion
+ *  gate rejects runs whose write nodes lack passing verification evidence
+ *  (status "blocked_no_evidence").
  */
 
 import type { WorkflowRunResult, WorkflowSpec } from "../types"
 import { detectCycle } from "../results/edge-store"
 import { ResultStore } from "../results/result-store"
 import { ReadyQueue } from "./ready-queue"
+import { ConcurrencyController } from "./concurrency-controller"
 import type { HandlerRegistry } from "../execution/handler-registry"
 import { executeNode } from "../execution/node-executor"
+import { aggregateEvidence } from "../reducers/aggregate-evidence"
 
 export interface SchedulerOptions {
   maxParallel?: number
@@ -37,14 +34,38 @@ export async function runScheduler(
   const cycle = detectCycle(spec)
   if (cycle) throw new Error(`workflow: cycle detected: ${cycle.join(" → ")}`)
 
+  const mode = spec.mode ?? "readonly"
   const store = new ResultStore(spec.specId, options.checkpointDir)
   const queue = new ReadyQueue(spec, store)
+  const cc = new ConcurrencyController()
 
   const running = new Map<string, Promise<void>>()
   const finished = new Set<string>(spec.nodes.filter(n => store.has(n.id)).map(n => n.id))
 
   const launch = (node: import("../types").WorkflowNodeSpec): void => {
-    const promise = executeNode(node, registry, store).then(result => {
+    const isWrite = registry.isWriteHandler(node.handler)
+    const promise = (async () => {
+      if (isWrite && mode !== "read-write") {
+        // G1 write protection: write handlers never run in read-only mode.
+        const rejected: import("../types").WorkflowNodeResult = {
+          nodeId: node.id,
+          status: "failed",
+          output: null,
+          error: `workflow: write handler "${node.handler}" rejected in ${mode} mode`,
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          durationMs: 0,
+        }
+        store.put(rejected)
+        return rejected
+      }
+      const lock = isWrite ? await cc.acquireWrite() : null
+      try {
+        return await executeNode(node, registry, store)
+      } finally {
+        lock?.release()
+      }
+    })().then(result => {
       running.delete(node.id)
       finished.add(node.id)
       queue.onDependencyDone(node.id)
@@ -54,12 +75,10 @@ export async function runScheduler(
   }
 
   while (true) {
-    // Fill concurrency slots.
     while (running.size < maxParallel && queue.hasReady) {
       const node = queue.next()
       if (!node) break
       if (store.has(node.id)) {
-        // Restored checkpoint result: count as finished dependency, never re-run.
         queue.onDependencyDone(node.id)
         continue
       }
@@ -67,16 +86,27 @@ export async function runScheduler(
     }
     if (finished.size === spec.nodes.length) break
     if (running.size === 0) {
-      // Nothing running and nothing ready but work remains ⇒ deadlock.
       const blocked = spec.nodes.filter(n => !finished.has(n.id)).map(n => n.id)
       throw new Error(`workflow: deadlock — no ready node while ${blocked.length} pending (${blocked.join(", ")})`)
     }
     await Promise.race([...running.values()])
   }
 
-  return {
+  const results = store.all()
+  const base: WorkflowRunResult = {
     specId: spec.specId,
     finishedAt: Date.now(),
-    results: store.all(),
+    status: "done",
+    results,
   }
+
+  const hasWriteNode = spec.nodes.some(n => registry.isWriteHandler(n.handler))
+  if (hasWriteNode) {
+    const evidence = aggregateEvidence(spec, results)
+    base.evidence = evidence
+    if (!evidence.some(e => e.passed)) {
+      base.status = "blocked_no_evidence"
+    }
+  }
+  return base
 }

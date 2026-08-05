@@ -309,7 +309,91 @@ tests/workflow/
 
 ---
 
-## 5. 实施记录
+## 7. G3 详细任务单（v0.7.0，Single Writer Transaction Graph）
+
+参考稿 PR-G3 验收：任何时间最多一个写节点 / 写节点必须持有 WorkspaceWriteLock / 失败自动 rollback / 验证结果绑定事务和节点 / 无 Evidence 不能完成 / 非 Workflow 模式无回归。完成 G3 后 Graph Runtime 具备真实可用价值。
+
+### 7.1 设计决策（融合特色架构）
+
+| 参考稿 | 融合决策 |
+|---|---|
+| 修改 `src/agent/patch-transaction.ts` / `evidence-ledger.ts` / `completion-orchestrator.ts` | **不改 kernel**。写节点复用既有事务链：`apply_patch` 工具（executeApplyPatchTransaction：dry-run 全验证 → 原子提交 → 失败回滚）+ `run_targeted_verification`（验证）+ `run_process`（测试执行） |
+| 新建 transaction-executor | 包装写 handler：**WorkspaceWriteLock 获取 → 执行 → 释放**；无锁直接拒绝 |
+| 单写者 | concurrency-controller：读节点并行（maxParallel），写节点全局串行（写槽位 = 1） |
+| 无 Evidence 不能完成 | run 结束聚合检查：read-write spec 必须有写节点对应的 passed 验证 evidence，否则 run 状态 `blocked_no_evidence`（不抛错，结构化返回） |
+| 首批写模板 | `narrow_fix`（定位→读→修复→定向验证）、`test_repair`（跑测试→读→修复→再验证） |
+
+### 7.2 新增/修改文件
+
+```text
+src/workflow/
+├── types.ts                        # + WorkflowSpec.mode: "readonly" | "read-write"；WorkflowRunResult.evidence
+├── execution/
+│   ├── transaction-executor.ts     # 写节点执行器（写锁 + handler 包装）
+│   └── handler-registry.ts         # + registerWriteTool（read-write 白名单，仅 3 个）
+├── scheduler/
+│   ├── concurrency-controller.ts   # 读/写槽位控制（写槽位恒 1）
+│   └── scheduler.ts                # 增强：写节点排队 + evidence 完成门
+├── reducers/
+│   └── aggregate-evidence.ts       # 验证节点结果 → evidence 汇总（绑定节点 + 事务）
+├── templates/
+│   ├── narrow-fix.ts               # 写模板
+│   └── test-repair.ts              # 写模板
+└── validation/
+    └── capability-validator.ts     # + read-write 白名单校验（WRITE_HANDLERS）
+```
+
+### 7.3 写白名单（read-write 模式）
+
+| handler | 工具 | 语义 |
+|---|---|---|
+| `tool.apply_patch` | apply_patch | 统一 diff 事务（dry-run 全验证 → 原子提交 → 回滚） |
+| `tool.run_process` | run_process | 测试/验证命令（受控参数化，无 shell） |
+| `tool.run_targeted_verification` | run_targeted_verification | 定向验证（typecheck/测试集） |
+
+readonly 模式（G1/G2）行为不变：以上 handler 在只读 spec 中被 validation 拒绝。
+
+### 7.4 单写者语义
+
+```text
+scheduler 主循环（读节点照旧并行）
+  └─ write 节点：concurrency-controller.acquireWrite()
+       ├─ 已有写节点在跑 → 等待（FIFO）
+       └─ 获得写槽 → transaction-executor（锁内执行）
+             ├─ handler 拒绝（未注册写白名单）→ failed
+             └─ 完成 → releaseWrite() → 后继读节点继续
+完成 → evidence 门：写节点存在 ⇒ 必须有 passed 验证 evidence
+```
+
+### 7.5 验证与 Evidence
+
+- narrow_fix / test_repair 模板强制"写节点 → 验证节点"结构（编译期保证：写 handler 节点 must have 后继验证节点，否则模板编译失败）
+- `aggregate-evidence` reducer：收集验证节点输出（passed/issues）→ 绑定写节点 id 列表 → run 结果 `evidence[]`
+- 完成门：写节点且验证全未通过 → `blocked_no_evidence`
+
+### 7.6 G3 验收测试
+
+```text
+tests/workflow/
+├── transaction-executor.test.ts     # 写锁强制（无锁拒绝）/ apply_patch 事务成功/失败回滚
+├── scheduler-write-serial.test.ts   # 多写节点串行（写槽位 1，读仍并行）
+├── evidence-gate.test.ts            # 写节点无 passed 验证 → blocked_no_evidence
+├── aggregate-evidence.test.ts       # reducer 汇总 + 绑定
+└── write-templates.test.ts          # narrow_fix / test_repair 编译 + 写→验证结构强制
+```
+
+### 7.7 G3 验收映射
+
+- [ ] 任何时间最多一个写节点 → scheduler-write-serial.test.ts（时间戳断言不重叠）
+- [ ] 写节点必须持有 WorkspaceWriteLock → transaction-executor.test.ts（无锁调用被拒）
+- [ ] 失败自动 rollback → transaction-executor.test.ts（apply_patch 冲突 → 文件恢复原状）
+- [ ] 验证结果绑定事务和节点 → aggregate-evidence.test.ts
+- [ ] 无 Evidence 不能完成 → evidence-gate.test.ts
+- [ ] 非 Workflow 模式无回归 → 受限门禁全量（workflow.mode 默认 off）
+
+---
+
+## 8. 实施记录
 
 | 阶段 | 版本 | 落地 | 验证 |
 |---|---|---|---|
@@ -334,3 +418,15 @@ tests/workflow/
 - [x] 循环、未知 Handler、非法副作用被拒绝 → validation.test.ts（dag/capability/side-effect/schema/budget）
 - [x] MasterPlan 可转换为 WorkflowSpec → compiler-master-plan.test.ts（packet + 推断 + dependsOn 前缀化）
 - [x] WorkflowSpec 可展示回 MasterPlan 状态 → plan-projection.test.ts（done/blocked/evidence 摘要）
+
+| 阶段 | 版本 | 落地 | 验证 |
+|---|---|---|---|
+| G3 | v0.7.0 | Single Writer Transaction Graph：execution/transaction-executor（写白名单 3 工具 + 锁内执行）、scheduler/concurrency-controller（写槽位=1 FIFO）、scheduler 增强（写节点串行 + readonly 模式运行时拒绝 + evidence 完成门 blocked_no_evidence）、reducers/aggregate-evidence（验证绑定写节点）、templates/narrow-fix + test_repair（write→verify 结构强制）、validation read-write 模式；kernel/patch-transaction 零改动（写节点走 APPLY_PATCH_TRANSACTION_TOOL 既有事务/回滚语义） | 受限门禁 430 pass（新增 15 项 G3 验收） |
+
+**G3 验收映射（§7.7）：**
+- [x] 任何时间最多一个写节点 → scheduler-write-serial.test.ts（重叠断言）
+- [x] 写节点必须持有 WorkspaceWriteLock → transaction-executor.test.ts（单槽互斥 + 锁释放）
+- [x] 失败自动 rollback → transaction-executor.test.ts（hunk 不匹配 → 文件原样）
+- [x] 验证结果绑定事务和节点 → aggregate-evidence.test.ts
+- [x] 无 Evidence 不能完成 → evidence-gate.test.ts（blocked_no_evidence）
+- [x] 非 Workflow 模式无回归 → 全量受限门禁 430 pass（workflow.mode 默认 off）

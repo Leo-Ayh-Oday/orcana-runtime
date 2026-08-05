@@ -99,6 +99,9 @@ export interface WorkflowSpec {
   nodes: WorkflowNodeSpec[]
   /** Optional budget caps. */
   maxParallel?: number
+  /** G3: "readonly" (default) rejects write handlers; "read-write" allows
+   *  the whitelisted write handlers under single-writer semantics. */
+  mode?: "readonly" | "read-write"
 }
 
 export type WorkflowNodeResultStatus = "done" | "failed"
@@ -115,8 +118,13 @@ export interface WorkflowNodeResult {
   durationMs: number
 }
 
+export type WorkflowRunResultStatus = "done" | "blocked_no_evidence" | "write_rejected"
+
 export interface WorkflowRunResult {
   specId: string
   finishedAt: number
+  status: WorkflowRunResultStatus
   results: WorkflowNodeResult[]
+  /** G3: verification evidence bound to write nodes (aggregate-evidence). */
+  evidence?: Array<{ nodeId: string; writeNodeIds: string[]; passed: boolean; summary?: string }>
 }

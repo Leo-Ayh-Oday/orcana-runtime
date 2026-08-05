@@ -103,4 +103,24 @@ describe("dispatchTuiCommand", () => {
     expect(store.getState().messages).toEqual([])
     expect(store.getState().status).toBe("ready")
   })
+
+  test("registered-but-unimplemented commands emit a notice instead of passing to agent", () => {
+    const { context, messages } = createContext()
+    expect(dispatchTuiCommand("/save", context)).toBe("handled")
+    expect(messages[0]).toContain("/save 暂不可用")
+    expect(messages[0]).toContain("尚未接入")
+  })
+
+  test("all unimplemented session commands are blocked, never sent to agent", () => {
+    for (const cmd of ["/compact", "/sessions", "/search", "/undo"]) {
+      const { context } = createContext()
+      expect(dispatchTuiCommand(cmd, context), cmd).toBe("handled")
+    }
+  })
+
+  test("disabled commands are still handled (not queued) while agent is running", () => {
+    const { context, messages } = createContext({ isRunning: () => true })
+    expect(dispatchTuiCommand("/sessions", context)).toBe("handled")
+    expect(messages[0]).toContain("暂不可用")
+  })
 })

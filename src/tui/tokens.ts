@@ -52,6 +52,9 @@ export interface GlyphTheme {
   arrowDown: string
   dot: string
   separator: string
+  /** Depthline P4: block 折叠标记（collapsed / expanded）。 */
+  collapseClosed: string
+  collapseOpen: string
   /** PR-5: 消息 marker — 8 种类型双轨制（ASCII fallback / Unicode 增强） */
   markerUser: string
   markerAssistant: string
@@ -107,6 +110,8 @@ const ASCII_GLYPHS: GlyphTheme = {
   arrowDown: "v",
   dot: ".",
   separator: "-",
+  collapseClosed: "+",
+  collapseOpen: "-",
   // PR-5: ASCII markers（保持现有视觉，避免破坏 gutter 对齐）
   markerUser: ">",
   markerAssistant: "|",
@@ -162,6 +167,8 @@ const UNICODE_GLYPHS: GlyphTheme = {
   arrowDown: "↓",
   dot: "·",
   separator: "·",
+  collapseClosed: "▸",
+  collapseOpen: "▾",
   // PR-5: Unicode markers（计划 D.1 视觉规范：⏺⎿◈◆▸✎）
   markerUser: "›",
   markerAssistant: "⏺",

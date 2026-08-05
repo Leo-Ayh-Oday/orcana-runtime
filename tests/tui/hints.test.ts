@@ -16,19 +16,19 @@ describe("hintsForContext: 主表面", () => {
     const model = hintsForContext("Scrollback", false, 100)
     expect(model.hidden).toBe(false)
     expect(model.entries.length).toBe(3)
-    expect(model.entries[0]).toEqual({ shortcut: "Enter", label: " send" })
-    expect(model.entries[2].shortcut).toBe("Ctrl+?")
-    expect(model.entries[2].label).toBe(" shortcuts")
+    expect(model.entries[0]!).toEqual({ shortcut: "Enter", label: " send" })
+    expect(model.entries[2]!.shortcut).toBe("Ctrl+?")
+    expect(model.entries[2]!.label).toBe(" shortcuts")
   })
 
   test("busy：Enter queue · Esc stop · Ctrl+T activity（≤3）", () => {
     const model = hintsForContext("Scrollback", true, 100)
     expect(model.entries.length).toBe(3)
-    expect(model.entries[0]).toEqual({ shortcut: "Enter", label: " queue" })
-    expect(model.entries[1].shortcut).toBe("Esc")
-    expect(model.entries[1].label).toBe(" stop")
-    expect(model.entries[2].shortcut).toBe("Ctrl+T")
-    expect(model.entries[2].label).toBe(" activity")
+    expect(model.entries[0]!).toEqual({ shortcut: "Enter", label: " queue" })
+    expect(model.entries[1]!.shortcut).toBe("Esc")
+    expect(model.entries[1]!.label).toBe(" stop")
+    expect(model.entries[2]!.shortcut).toBe("Ctrl+T")
+    expect(model.entries[2]!.label).toBe(" activity")
   })
 
   test("窄屏（<60）busy：只显示 Enter queue", () => {
@@ -38,17 +38,17 @@ describe("hintsForContext: 主表面", () => {
 
   test("Confirm context：approve · deny · deny all 派生自注册表", () => {
     const model = hintsForContext("Confirm", false, 100)
-    expect(model.entries[0].shortcut).toBe("Y")
-    expect(model.entries[0].label).toBe(" approve")
-    expect(model.entries[1].shortcut).toBe("N")
-    expect(model.entries[2].shortcut).toBe("A")
+    expect(model.entries[0]!.shortcut).toBe("Y")
+    expect(model.entries[0]!.label).toBe(" approve")
+    expect(model.entries[1]!.shortcut).toBe("N")
+    expect(model.entries[2]!.shortcut).toBe("A")
   })
 
   test("CommandShelf：↑↓ select 引导 + Enter run · Tab insert · Esc close", () => {
     const model = hintsForContext("CommandShelf", false, 100)
-    expect(model.entries[0].label).toBe(" ")
-    expect(model.entries[1]).toEqual({ shortcut: "Enter", label: " run" })
-    expect(model.entries[2]).toEqual({ shortcut: "Tab", label: " insert" })
+    expect(model.entries[0]!.label).toBe(" ")
+    expect(model.entries[1]!).toEqual({ shortcut: "Enter", label: " run" })
+    expect(model.entries[2]!).toEqual({ shortcut: "Tab", label: " insert" })
   })
 })
 
@@ -67,7 +67,7 @@ describe("formatShortcutLines（Ctrl+? 面板）", () => {
     expect(joined).toContain("Toggle runtime inspector")
     expect(joined).toContain("Stop current run")
     expect(joined).toContain("Show shortcut overview")
-    expect(joined).not.toContain("Toggle block expansion")
+    expect(joined).toContain("Toggle block expansion") // P4 block 动作已启用
     expect(joined).not.toMatch(/\u001b\[/)
   })
 

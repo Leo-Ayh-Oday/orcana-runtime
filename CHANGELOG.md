@@ -2,7 +2,13 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.7] — 2026-08-05
+## [0.7.8] — 2026-08-05
+
+### Docs (Strong Single v1.0, PR-10.2 / PR-10.3)
+- **ARCHITECTURE.md** — module status table realigned to the v1.0 closure facts: PatchTransaction, EvidenceLedger, Completion Orchestrator, MasterPlan/TaskPacket, ModeContract and Secret Redaction moved to 🟢 stable (with the SS-Next-2B rollback and command-to-file details); new rows for AgentHarness 2.0, Typed Execution Graph (G0–G6), replay/mini-benchmark, `orcana doctor` and FreshnessGate.
+- **SECURITY.md** — supported-version table refreshed; key management now documents `~/.orcana/auth.json` (0600) and the `ORCANA_*`/legacy `DEEPSEEK_*` env mirror; MCP default-untrusted trust policy; the redaction boundary (shared across trace/snapshots/cache/checkpoints with the token-metering whitelist); a new evidence-chain section (L1/L2/L3, rollback-aware invalidation, command-to-file coverage) and the FreshnessGate write-preflight boundary; completion-gate bypass added to the report list.
+
+
 
 ### Added (Strong Single v1.0, PR-10.4 — `orcana doctor`)
 - **Full environment self-check** (`src/diagnostics/doctor.ts`) — `orcana doctor` now emits a complete diagnostic report with eight checks:

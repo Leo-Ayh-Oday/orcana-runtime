@@ -9,7 +9,7 @@ import { Result } from "./registry"
 import { FimEditor } from "../provider/fim"
 import { cascadeAwareDecision, formatRippleBlock, getRippleProgram, previewEdit, tightenRippleDecision } from "../ripple/engine"
 import { getRuntimeContextBudgetMode } from "../agent/runtime-context"
-import { createTransaction, rollbackTransaction } from "./transaction"
+import { createTransaction } from "./transaction"
 import {
   applyAndCommit,
   checkBaseHash,
@@ -17,6 +17,7 @@ import {
   computeBaseHash,
   PatchFreshnessConflictError,
   PatchPathConflictError,
+  rollbackCommittedTransaction,
   type ManagedPatchTransaction,
 } from "../agent/patch-transaction"
 import { fingerprintContent, recordRuntimeFileRead, recordRuntimeFileWrite } from "../file-state"
@@ -817,7 +818,9 @@ async function rollback_transaction(params: Record<string, unknown>): Promise<To
   const transactionId = String(params.transactionId ?? params.transaction_id ?? "")
   if (!transactionId) return Result.fail("transactionId is required")
   try {
-    const result = rollbackTransaction(transactionId)
+    // SS-Next-2B: rollback invalidates pre-rollback evidence (write-generation
+    // L2 + commit-history binding L3) while keeping the binding usable.
+    const result = rollbackCommittedTransaction(transactionId)
     const changed = [...result.restored, ...result.deleted]
     return Result.ok(`Rolled back ${transactionId}: restored ${result.restored.length}, deleted ${result.deleted.length}`, {
       transactionId,

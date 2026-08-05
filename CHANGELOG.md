@@ -2,7 +2,15 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.5.24] — 2026-08-05
+## [0.5.25] — 2026-08-05
+
+### Added (Typed Execution Graph, G2)
+- **Workflow compiler** — `compileMasterPlan()`: MasterPlan nodes (+ attached TaskPackets) compile into validated `WorkflowSpec`s with stable ids (specId = hash of goal + node identities), normalized topological order and deduplicated edges; kernel/`master-plan.ts` untouched. Handler inference for packet-less nodes covers zh + en titles with plan-intent fallback.
+- **Validation suite** — `validateSpec()` aggregates five checkers: DAG (unknown dependencies, cycles, empty specs), capability (unknown / write handlers), side-effect (write nodes in read-only mode), budget (200-node cap, maxParallel ≥ 1) and input schema (shallow typing).
+- **Read-only templates** — `code_explain` (find_symbol → find_references → read_file), `security_audit` (project_structure → read_file fan-out → merge_diagnostics), `research_report` (git_status → git_diff → symbol/file reads); all validated read-only at compile time, stable output for equal inputs.
+- **Plan projection** — `projectResultsToPlan()` writes run results back onto MasterPlan status (done / blocked + evidence head summary).
+
+
 
 ### Added (Typed Execution Graph, G1)
 - **Read-only DAG scheduler** — `src/workflow/`: bounded-concurrency parallel execution over a validated `WorkflowSpec`; ready queue (indegree 0), failure isolation (a failed node's siblings and dependents keep running), deadlock guard (cycles rejected up front, self-loops included).

@@ -2,7 +2,17 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.5] — 2026-08-05
+## [0.8.6] — 2026-08-05
+
+### Added (MACP-M6 — 类型化计划契约)
+- **CompletionCriterion** — completion conditions are now typed: stable ID, hard/soft weight, deterministic/semantic mode, and one of five structured checks (command / file_exists / file_content / evidence / semantic_review). Natural-language conditions MUST be declared `semantic_review` — they can never be smuggled into grep-style checks (FAKE_DETERMINISTIC_CHECK: 0), and `semantic_review` never auto-passes (human adjudication is the only resolution).
+- **TypedPlanContract** — planner output is machine-checkable: `version` (bound to criterion IDs; any modification must produce a new version), `criteria`, typed `tasks` (scope + criterionIds + writes). A JSON Schema gate (shared validator keyword subset) rejects structurally invalid plans (PLAN_CONTRACT_SCHEMA: PASS).
+- **Enforcement rules** — duplicate or malformed criterion IDs rejected; write tasks MUST bind at least one deterministic command/evidence verification criterion and one hard criterion (HARD_CRITERION_BYPASS: 0); key permission/security conditions (ownership + path escape) are automatically injected as a hard criterion (`sys.ownership_and_no_escape`) unless the task already binds ownership evidence.
+- **Criterion evaluator** — deterministic checks evaluate mechanically against a context (command runner, file system, evidence ledger); `compileCriterionVerifications` compiles deterministic criteria into verification nodes (task 10).
+- **Compatibility** — legacy TaskPacket `doneCriteria` stays displayable; typed criteria are an optional extension.
+- 17 tests covering all rejection paths, evaluation semantics and compile behavior.
+
+
 
 ### Added (MACP-M5 — 冲突安全合并，替换 later-wins)
 - **later-wins removed from the production path** — `reduce.merge_agents` never overwrites fields: identical values deduplicate, differing values for the same key become `valueConflicts` (structural, never silent).

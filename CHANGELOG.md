@@ -2,7 +2,19 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.2] — 2026-08-05
+## [0.8.3] — 2026-08-05
+
+### Added (MACP-M3 — 真实工作区隔离与所有权强制)
+- **Ownership as enforcement, not declaration** — `ownerFiles` / `worktree` / `canWrite` on `AgentPool` now constrain every write node: the declared path is authorized before launch (normalized + owned) and the actual written paths reported by the tool are re-verified afterwards (`metadata.paths` is mandatory for assigned write nodes — missing it fails the node).
+- **Escape defenses** — `../` traversal, absolute-path bypass, symlink escape (realpath of the nearest existing ancestor) and case variance (normalized lower-case keys) are all rejected; ownership matches on the project-relative path so worktree copies validate identically.
+- **Worktree isolation** — assigned write nodes execute with the agent worktree as their resolution root (shared ledger/artifacts/cancellation); two agents write into their own worktrees and the main workspace stays untouched until merge (merge itself is MACP-M5). Worktree creation failure fails the write node — no silent degradation to the shared workspace; read-only nodes keep the shared workspace.
+- **Lifecycle** — worktrees are reused per agent within a run and disposed when the run finishes; `detectLegacyWorktrees()` identifies leftovers from crashed runs.
+- **Participant capability** — `AgentSpec.writable: false` marks planners/reviewers that must never write the project workspace.
+- **Explicit policy allowances** — `harness.policy.allowCapabilities` grants node-mode tool execution (still strict: no interactive confirm channel); the strict scope-derived gate stays the default.
+- **Zero regression** — no pool / unassigned nodes behave exactly as before (SINGLE_AGENT_REGRESSION: 0).
+- 12 tests: owned write passes, another agent's file rejected, declared≠actual rejected, `../`/symlink/absolute escapes rejected, planner write denied, dual-worktree isolation with untouched main workspace, dispose at run end, legacy detection, no-pool regression.
+
+
 
 ### Added (MACP-M2 — Workflow-Harness 正式适配)
 - **H11 unified node runtime for workflows** — workflow nodes may declare an H11 execution kind; model nodes run through `LlmAgentNode`, tool nodes through `ToolNode` (CapabilityExecutor), verification nodes through `VerificationNode` (H8 artifact/evidence adapter), human nodes through `HumanNode` (interrupt bridge).

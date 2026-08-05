@@ -2,7 +2,16 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.3] — 2026-08-05
+## [0.8.4] — 2026-08-05
+
+### Added (MACP-M4 — 持久化中断、人工等待与恢复)
+- **Persistent interrupts** — a workflow run can pause at a human node instead of blocking the process: the interrupt record is persisted to `.orcana/workflow/interrupts/<id>.json`, the run returns `waiting_interrupt` with a resume token, and the process is released (PROCESS_BOUND_WAITING: 0). Downstream subgraphs do not run while waiting; in-flight nodes drain, then the run exits.
+- **Resume flow** — a validated reply is checked against the token (base64url binding spec digest + expiry + interrupt id), the stored record (status `waiting`, not expired), the current graph version (`computeSpecDigest` — any spec change invalidates outstanding tokens), the recorded response schema, and workspace freshness (a changed workspace since the interrupt requires re-verification and rejects the resume). Resuming injects the answer at the interrupted node; completed nodes are restored from the checkpoint and never re-execute.
+- **One-time tokens** — resolving the record (or cancelling) makes the token permanently invalid (DOUBLE_RESUME: 0).
+- **Failure transparency** — the interrupt never produces a `failed` node result: `WorkflowInterruptError` propagates to the scheduler which emits the waiting outcome; the H11 HumanNode is not even started while paused.
+- 11 tests: pause + persisted record, restart reads waiting state, subgraph stop, valid resume completes, wrong schema rejected, expired token rejected, graph-version change rejected, token reuse rejected, workspace change rejected, checkpoint no-re-execute, spec digest stability.
+
+
 
 ### Added (MACP-M3 — 真实工作区隔离与所有权强制)
 - **Ownership as enforcement, not declaration** — `ownerFiles` / `worktree` / `canWrite` on `AgentPool` now constrain every write node: the declared path is authorized before launch (normalized + owned) and the actual written paths reported by the tool are re-verified afterwards (`metadata.paths` is mandatory for assigned write nodes — missing it fails the node).

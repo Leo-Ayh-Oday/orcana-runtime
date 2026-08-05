@@ -629,6 +629,10 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   }), [store, runtime, isWorking, overlayController.overlay, layout.bodyHeight, scrollUp, scrollDown, moveClarificationSelection, selectClarificationOption, cancelClarification, overlayController.updateOverlay, overlayController.closeOverlay, stopRun, blockNav])
 
   controlsRef.current.dispatchAction = (id) => dispatchAction(id as import("./presentation/actions").ActionId, actionContext)
+  // 修复：/models、/effort 等斜杠命令经 dispatcher 调用 openModels/openEffort，
+  // 必须接到 overlayController 的面板打开器，否则命令"handled"但无任何反应。
+  controlsRef.current.openModels = overlayController.openModelPicker
+  controlsRef.current.openEffort = overlayController.openEffort
 
   useInput((_input, key) => {
     if (showStartup) return

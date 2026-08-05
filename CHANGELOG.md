@@ -2,7 +2,17 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.10] — 2026-08-05
+## [0.8.11] — 2026-08-05
+
+### Added (LNXF-4 — cgroup v2 资源治理)
+- **Delegation detection** — `detectDelegatedRoot` follows the priority chain (systemd user scope+delegate → existing subtree → manual → none) with a real write probe; `enableControllers` enables only controllers the hierarchy actually offers (fs injectable for tests). No delegation ⇒ resource isolation is explicitly degraded; strict profiles refuse.
+- **Three-level hierarchy** — `orcana.scope → run-<runId> → agent-<agentId>|system → cell-<cellId>` with run/agent/cell creation and per-level limits: `cpu.max`, `cpu.weight`, `memory.high`, `memory.max`, `memory.swap.max`, `memory.oom.group=1` (whole cell dies together), `pids.max`, `io.weight`.
+- **Tree kill** — `cgroup.kill` per cell/agent/run (cancellation hierarchy, handles concurrent forks); `removeCell`/`removeRun` cleanup; `createdPaths` leak tracking; `scanOrcanaScopes` finds leftover run scopes for crash recovery.
+- **Metrics** — `readCgroupMetrics` (cpu.stat usage/throttled, memory.peak, pids.peak, oom_kill events); `cleanupRunCgroups`.
+- The cgroup filesystem layer is injectable (`CgroupFs`) so the full lifecycle — creation, controller writes, attach, kill, cleanup, metrics, leftovers — is unit-tested; true-kernel tests activate automatically when a writable delegated subtree exists.
+- 13 tests; full gate 988 pass, bench no regression.
+
+
 
 ### Added (LNXF-3 — Bubblewrap 快速后端)
 - **Bubblewrap backend** — default fast backend for inspect/build/test/service profiles: user/mount/PID/IPC/UTS/net namespaces, `--die-with-parent`, `--new-session`, `--clearenv`; fresh PID `/proc`, minimal `/dev`, independent tmpfs for `/tmp` and `/run`, seven read-only system roots, empty `/home/orcana`, worktree bound rw at `/workspace`, `--chdir`. The argv compiler is the only producer of bwrap arguments — models/tools can never assemble them.

@@ -32,3 +32,6 @@ export type { RetryPolicy } from "./retry"
 export { buildExecutionContext, contextFromRunScope, systemClock } from "./execution-context"
 export type { ApprovalContext, Clock, ToolExecutionContext } from "./execution-context"
 export { validateJsonSchema } from "./schema-validator"
+// RT-2: capability mode flag.
+export { CAPABILITY_MODE_DEFAULT, getCapabilityMode, isEnabledMode, isShadowMode } from "./flags"
+export type { CapabilityMode } from "./flags"

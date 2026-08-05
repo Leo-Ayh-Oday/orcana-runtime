@@ -76,6 +76,8 @@ export function projectCapabilityDescriptor(tool: ToolDescriptor): CapabilityDes
     idempotent: contract.access === "readonly",
     cancellable: !contract.execution.cooperativeCancellation,
     producesEvidence: contract.state.updates.includes("evidence"),
+    // RT-2: every ToolDef-projected capability is a legacy migration source.
+    source: "legacy",
   })
 }
 

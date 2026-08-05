@@ -25,9 +25,11 @@ export const HintBar = React.memo(function HintBar({ busy, activeContext, width 
     <Box>
       {model.entries.map((entry: HintEntry, index) => (
         <React.Fragment key={index}>
-          {index > 0 && <Text> </Text>}
+          {index > 0 && <Text>  </Text>}
+          <Text color={theme.textFaint}>[</Text>
           <Text color={theme.brand}>{entry.shortcut}</Text>
-          <Text color={theme.textFaint}>{entry.label}</Text>
+          <Text color={theme.textFaint}>]</Text>
+          <Text color={theme.textDim}> {entry.label}</Text>
         </React.Fragment>
       ))}
     </Box>

@@ -46,7 +46,7 @@ export function InkStartupScreen({ version, toolsCount, thinkingEffort, modelNam
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.textFaint}>/help commands  /sessions history  /compact memory  /stats telemetry</Text>
+        <Text color={theme.textFaint}>/help commands  /runtime inspector  /gates ledger  /stats telemetry</Text>
       </Box>
     </Box>
   )

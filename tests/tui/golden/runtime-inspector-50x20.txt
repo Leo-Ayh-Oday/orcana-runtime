@@ -1,4 +1,4 @@
-orcana · done · discussion
+orcana ● done  discussion
 > 检查运行状态
   
 | 运行状态如下。
@@ -13,5 +13,5 @@ orcana · done · discussion
 │ evidence  1 accepted · 0 failed
 │ patches   1 committed
 ╰───────────╯
-────────────────────
-Enter send   / commands
+╭──────────────────╮
+[Enter] send  [/] commands

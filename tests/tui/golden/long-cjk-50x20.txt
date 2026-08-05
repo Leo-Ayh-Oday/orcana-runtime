@@ -1,7 +1,7 @@
-orcana · done · discussion
+orcana ● done  discussion
 > 请分析这个长文本的性能影响
   
 | 这是一个非常长的中文回答，用来验证 CJK 宽字符在窄终端下的换行与截断行为是否稳定，同时验证 Depthline 呈现在混合宽度文本下不会发生视觉抖动或行宽溢出。
   
-────────────────────
-Enter send   / commands
+╭──────────────────╮
+[Enter] send  [/] commands

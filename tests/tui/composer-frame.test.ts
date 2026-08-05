@@ -34,10 +34,11 @@ describe("PR-2: makeDivider", () => {
     expect(makeDivider(20).length).toBe(20)
   })
 
-  test("使用全角横线 ─ 字符", () => {
+  test("端点半框装饰 ╭╮（与空态面板/状态栏统一容器语言）", () => {
     const divider = makeDivider(40)
-    expect(divider).toMatch(/^─+$/)
-    expect(divider.charAt(0)).toBe("─")
+    expect(divider).toMatch(/^╭─+╮$/)
+    expect(divider.charAt(0)).toBe("╭")
+    expect(divider.charAt(divider.length - 1)).toBe("╮")
   })
 
   test("空字符串不出现（下限保护）", () => {

@@ -50,3 +50,17 @@ Multi-Agent Production Template: BLOCKED
 ```
 
 v0.8.15 保留（不删除），作为组件/契约层基线；生产接线闭合在下一版本线（Linux Production Integration Closure）完成前，禁止宣布 Freeze、禁止开始 M8。核心缺口：Broker 未成为真实执行入口、cgroup 未绑定进程、资源调度未进 Graph、Receipt 含推定值、直接 spawn 旁路 36 处、三个后端存在环境/镜像/加固缺口。
+
+## Linux Production Integration Closure（审计修复记录，v0.8.16）
+
+| 阶段 | 修复 | 状态 |
+|---|---|---|
+| R0 | Foundation Freeze 撤销（IMPLEMENTED / INCOMPLETE / SHADOW / BLOCKED） | **完成** (45581df) |
+| R1 | ProcessExecutor 统一入口：run_process/run_shell_script/legacy shell/git/typescript/codegraph/verification/ruff 全部经 Broker 执行；P1-7 环境后门关闭；abortSignal 全链路；流式输出；AST 门禁旁路=0（允许列表仅 linux runtime + executor + legacy-process + tools/process）；遗留 sync/长期进程收拢 legacy-process（R1.2 标注） | **完成** (ec6bb44) |
+| R2 | Broker 执行事务：资源预留/Isolation Lock/Agent Domain/cgroup 创建+attach/真实指标/清理验证/取消与清理真实现 | **完成** (0931317) |
+| R3 | 后端真实性：seccomp-BPF 文件生成+注入（bwrap --seccomp / podman seccomp-opt）、bwrap --setenv/mounts/tmpfs/cache-rw/loopback lo-up、podman --env/--cap-drop=ALL/no-new-privileges/--tmpfs/--cidfile、host-audit 真 PathGuard（内容指纹 diff） | **完成** (99adc30) |
+| R4 | ResourceLedger 接入 Graph 调度（不足时等待而非先启动）；启动 Janitor 接线（boot-id 崩溃恢复）；Agent 身份统一（AgentPool↔AgentDomain）为 R4.2 待办 | **完成** (87358af) |
+| R5 | SandboxReceipt→Evidence（sandbox_execution/sandbox_cleanup 证据 + 硬条件 sandbox_* criterion，清理未验证不产生证据） | **完成** (5365099) |
+| R6 | 真实验收 CI Lane（真实 bwrap / 真实 rootless podman + digest 解析 / cgroup 委托探测）—— GitHub 账号解锁后生效 | **完成** (8dee0b2) |
+
+剩余待办（下一轮）：R4.2 Agent 身份统一（ParticipantAssignment → AgentPool → Linux Domain 单权威）、H11 NodeContext 消费 Cell/Receipt、长期进程（service/mcp/lsp）Service Cell 化（R1.2）、真实 cgroup/podman 机器上的端到端验收。

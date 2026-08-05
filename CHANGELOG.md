@@ -2,7 +2,15 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.8] — 2026-08-05
+## [0.7.9] — 2026-08-05
+
+### Added (Strong Single v1.0, PR-10.1 — RunTrace event taxonomy)
+- **Standardized event classification** (`src/telemetry/taxonomy.ts`) — the free-form `RunTraceEvent.type` strings now map onto a finite 9-category set: `lifecycle / model / tool / gate / verification / evidence / workflow / error / internal`.
+- **Specialized-first prefix rules** — `verification_started` is verification (not lifecycle), `mode_transition` is gate, `model_selected` is model; unknown types land in `internal` for discoverability.
+- **Canonical event table** — every category documents its runtime-produced event types; a category summary (`summarizeTrace`) counts per-category and lists unknown types for future taxonomy rules.
+- 6 tests covering per-category classification, unknown-type discovery, summaries and canonical-table consistency.
+
+
 
 ### Docs (Strong Single v1.0, PR-10.2 / PR-10.3)
 - **ARCHITECTURE.md** — module status table realigned to the v1.0 closure facts: PatchTransaction, EvidenceLedger, Completion Orchestrator, MasterPlan/TaskPacket, ModeContract and Secret Redaction moved to 🟢 stable (with the SS-Next-2B rollback and command-to-file details); new rows for AgentHarness 2.0, Typed Execution Graph (G0–G6), replay/mini-benchmark, `orcana doctor` and FreshnessGate.

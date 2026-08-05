@@ -2,7 +2,17 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.0] — 2026-08-05
+## [0.7.1] — 2026-08-05
+
+### Added (Typed Execution Graph, G4 — Convergent Repair Graph)
+- **RepairLoop** (`src/workflow/convergence/repair-loop.ts`) — provably convergent fix loop on top of the G3 single-writer transaction graph: each round fingerprints failures and converges.
+- **Failure signatures** (`failure-signature.ts`) — finite error-category whitelist; rewording never bypasses dedupe (`handler nodeId | category`).
+- **Convergence semantics** — seen/confirmed separation; the same signature never re-executes the same failed fix; two consecutive dry rounds exit `dry`; metric gain (passing evidence up, failing writes down) keeps the loop going; `maxAttempts` hard cap; budget exhaustion emits a structured blocked report (`budget_exhausted` with blocked node list, seen signatures, attempt counts).
+
+### Fixed
+- **Scheduler completion gate (G3 semantic gap)** — a failed write node now never completes the run, even when a verification node reported `passed`; status is `blocked_no_evidence` so the repair loop can converge instead of declaring done.
+
+
 
 ### Added (Typed Execution Graph, G3 — Graph Runtime first usable release)
 - **Single-writer transaction graph** — read-write `WorkflowSpec`s execute the whitelisted write handlers (`tool.apply_patch` via the patch transaction tool, `tool.run_process`, `tool.run_targeted_verification`) under a single-writer lock: write nodes serialize globally (FIFO) while read nodes keep the parallel budget.

@@ -14,7 +14,7 @@ import React, { useEffect, useRef, useState } from "react"
 import { Box, Text } from "ink"
 import { theme } from "./theme/theme"
 import { VERSION_LABEL } from "../version"
-import { useClock } from "./clock"
+import { reducedMotion } from "./motion"
 
 // ── PR-9: 类型 ──
 
@@ -200,7 +200,6 @@ export function LogoAnimation({
   variant?: LogoVariant
   onComplete?: () => void
 }) {
-  const { reducedMotion } = useClock()
   const [frame, setFrame] = useState<LogoFrame>(reducedMotion ? 3 : 0)
   const calledRef = useRef(false)
 

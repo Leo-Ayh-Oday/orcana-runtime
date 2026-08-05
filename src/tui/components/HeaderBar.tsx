@@ -20,7 +20,6 @@ import { Box, Text } from "ink"
 import { theme } from "../theme/theme"
 import type { TuiMode } from "../state/types"
 import { fitText } from "./MessageItem"
-import { useClock } from "../clock"
 
 export interface HeaderBarProps {
   modelName: string
@@ -67,14 +66,12 @@ function shortModel(full: string, maxLen = 24): string {
   return full.slice(0, maxLen - 3) + "..."
 }
 
-// ── 状态组件 ──
+/** 状态组件 ── Depthline P1: ActivityPulse 动画已静态化（不再消费全局 tick）。
+ *  P2 由 SessionLine 接管，P5 由 ActivityLine 提供唯一 pulse。 */
 
-/** 4-frame 轻量 pulse: "working [..  ]" → "working [... ]" → "working [ ...]" → "working [  ..]" */
+/** 静态 working 标签（原 4-frame pulse 移除）。 */
 function ActivityPulse({ label, color }: { label: string; color: string }) {
-  const { tick } = useClock()
-  const frames = ["[..  ]", "[... ]", "[ ...]", "[  ..]"]
-  const frame = frames[tick % 4] ?? "[....]"
-  return <Text color={color}>{label} {frame}</Text>
+  return <Text color={color}>{label}</Text>
 }
 
 /** 从 status 文本派生短标签。 */

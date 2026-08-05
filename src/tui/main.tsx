@@ -15,11 +15,10 @@ import {
   recommendedOptionIndex,
   synthesizeClarificationAnswer,
 } from "./state/adapter-helpers"
-import { AppShell, type ClarificationWizardState, type InputChromeState } from "./components/AppShell"
-import type { ModelDialogOption, RuntimeDialogState, ThinkEffort } from "./components/AppShell"
+import { AppShell, type ClarificationWizardState, type InputChromeState, useAppLayout } from "./components/AppShell"
+import type { ThinkEffort } from "./components/AppShell"
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import { adjustScrollOffsetForGrowth, type ScrollbackScrollState } from "./components/Scrollback"
-import type { TaskProgressState } from "./components/PlanPanel"
 import { renderMessageLines } from "./components/MessageItem"
 import { cleanAgentError } from "./state/adapter-helpers"
 import { dispatchTuiCommand } from "./commands/dispatcher"
@@ -28,35 +27,17 @@ import { resolveKeyAction } from "./input/keymap"
 import { cleanupTerminal, mouseEvents, resolveMouseModeEnabled } from "./stdin-filter"
 import { createStreamTrace, traceStartRound, traceDeltaChunk, traceFinalAccumulated, traceEndRound, traceSetStopReason, traceSetStreamError } from "./stream-trace"
 import type { StreamTraceState } from "./stream-trace"
-import type { ConfirmRequest } from "./confirm-stubs"
-import type { RewindModalState } from "./components/RewindModal"
+import { useOverlayController } from "./app/useOverlayController"
+import type { ModelDialogOption } from "./overlays"
+import { installProfileReporter } from "./render-metrics"
 
 type ModelHistoryRole = "user" | "assistant"
 
-// ── Phase 5: Modal state ──
-
-interface TuiModalState {
-  confirm: { request: ConfirmRequest; position: string } | null
-  rewind: RewindModalState | null
-  runtime: RuntimeDialogState | null
-}
-
-function emptyModalState(): TuiModalState {
-  return { confirm: null, rewind: null, runtime: null }
-}
-
-/** 是否有任何 modal 激活 → composer disabled */
-function isModalActive(modal: TuiModalState): boolean {
-  return modal.confirm !== null || modal.rewind !== null || modal.runtime !== null
-}
-
 import { tuiTokens } from "./tokens"
-import { ClockContext, REDUCED_MOTION, effectiveTick } from "./clock"
 import { markTokenActivity, markToolActivity, resetStalledDetection } from "./pending-activity"
 
 const TUI_STARTUP_MS = tuiTokens.motion.startupMs
 const TUI_STREAM_FLUSH_MS = tuiTokens.motion.streamFlushMs
-const TUI_FRAME_MS = tuiTokens.motion.frameMs
 const TUI_SCROLL_STEP = tuiTokens.layout.scrollStep
 const TUI_MOUSE_MODE = resolveMouseModeEnabled(process.env.ORCANA_TUI_MOUSE)
 
@@ -162,62 +143,21 @@ export function buildModelOptions(runtime: Runtime, currentModel: string, query 
   return [...catalogOptions, ...customOption]
 }
 
-function clampIndex(index: number, length: number): number {
-  if (length <= 0) return 0
-  if (index < 0) return length - 1
-  if (index >= length) return 0
-  return index
-}
-
 function effortLabel(value: ThinkEffort): string {
   if (value === "auto") return "自动"
   if (value === "high") return "高"
   return "最大"
 }
 
-function modelSeedFromQuery(query: string): string {
-  const value = query.trim()
-  if (!value || value === "/" || value.toLowerCase() === "custom" || value === "自定义") return ""
-  return value
-}
-
-function normalizeBaseUrl(raw: string, fallback?: string): string | undefined {
-  const value = raw.trim() || fallback?.trim() || ""
-  return value || undefined
-}
-
-function isValidBaseUrl(value: string | undefined): boolean {
-  return !value || /^https?:\/\//i.test(value)
-}
-
 function useAgentStream(
   runtime: Runtime,
   prompt: string | undefined,
-  controls: {
+  controlsRef: React.MutableRefObject<{
     openModels: (provider?: string) => void
     openEffort: () => void
-  },
+  }>,
+  store: TuiStore,
 ) {
-  const storeRef = useRef<TuiStore | null>(null)
-  if (storeRef.current === null) {
-    storeRef.current = new TuiStore()
-    const currentModel = runtime.modelRouter.getSessionModel()
-    const provider = runtime.registry.resolveModel(currentModel)?.providerId
-    storeRef.current.dispatch({
-      type: "session.started",
-      sessionId: runtime.sessionId,
-      repoRoot: process.cwd(),
-      provider,
-      model: currentModel,
-    })
-    // If there's an initial prompt, mark as starting; otherwise ready
-    if (prompt?.trim()) {
-      storeRef.current.dispatch({ type: "ui.status", text: "starting..." })
-      storeRef.current.dispatch({ type: "ui.done", done: false })
-    }
-  }
-  const store = storeRef.current
-
   const adapterRef = useRef<StreamEventAdapter | null>(null)
   if (adapterRef.current === null) {
     adapterRef.current = new StreamEventAdapter()
@@ -480,8 +420,8 @@ function useAgentStream(
         runtime.dispose()
         process.exit(0)
       },
-      openModels: controls.openModels,
-      openEffort: controls.openEffort,
+      openModels: controlsRef.current.openModels,
+      openEffort: controlsRef.current.openEffort,
       setThinkEffort,
     })
     if (commandResult === "handled") {
@@ -503,7 +443,7 @@ function useAgentStream(
     }
 
     runAgent(newPrompt)
-  }, [addSystemMessage, runAgent, store, adapter, runtime, controls.openModels, controls.openEffort, setThinkEffort])
+  }, [addSystemMessage, runAgent, store, adapter, runtime, controlsRef, setThinkEffort])
 
   useEffect(() => {
     if (!prompt?.trim()) return
@@ -517,63 +457,62 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout.rows ?? 32)
   const cols = stdout.columns ?? 96
-  const [modal, setModal] = useState<TuiModalState>(emptyModalState)
   const thinkEffortRef = useRef<ThinkEffort>("auto")
-  const openModels = useCallback((provider?: string) => {
+
+  // Depthline P1: store 创建前移（原在 useAgentStream 内部），供 overlay controller 复用
+  const storeRef = useRef<TuiStore | null>(null)
+  if (storeRef.current === null) {
+    storeRef.current = new TuiStore()
     const currentModel = runtime.modelRouter.getSessionModel()
-    const options = buildModelOptions(runtime, currentModel, "", provider)
-    setModal(m => ({
-      ...m,
-      runtime: {
-        type: "models",
-        phase: "list",
-        query: "",
-        selected: 0,
-        options,
-        providerFilter: provider,
-        error: provider && options.length === 0 ? `没有找到 provider：${provider}` : undefined,
-      },
-    }))
-  }, [runtime])
-  const openEffort = useCallback(() => {
-    const options: ThinkEffort[] = ["auto", "high", "max"]
-    const selected = Math.max(0, options.indexOf(thinkEffortRef.current))
-    setModal(m => ({
-      ...m,
-      runtime: {
-        type: "effort",
-        selected,
-        current: thinkEffortRef.current,
-      },
-    }))
-  }, [])
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, store, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, { openModels, openEffort })
+    const provider = runtime.registry.resolveModel(currentModel)?.providerId
+    storeRef.current.dispatch({
+      type: "session.started",
+      sessionId: runtime.sessionId,
+      repoRoot: process.cwd(),
+      provider,
+      model: currentModel,
+    })
+    if (prompt?.trim()) {
+      storeRef.current.dispatch({ type: "ui.status", text: "starting..." })
+      storeRef.current.dispatch({ type: "ui.done", done: false })
+    }
+  }
+  const store = storeRef.current
+
+  // Depthline P1: overlay 互斥状态 + settings 对话框按键由 controller 接管。
+  // controls 经 ref 注入 useAgentStream，避免 controller 与 stream hook 的循环依赖。
+  const controlsRef = useRef({ openModels: () => {}, openEffort: () => {} })
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, controlsRef, store)
   thinkEffortRef.current = thinkEffort
-  const [tick, setTick] = useState(0)
+  const overlayController = useOverlayController({
+    runtime,
+    store,
+    getCurrentModel: () => runtime.modelRouter.getSessionModel(),
+    getCurrentEffort: () => thinkEffortRef.current,
+    setThinkEffort,
+    buildOptions: (query, providerFilter) => buildModelOptions(runtime, runtime.modelRouter.getSessionModel(), query, providerFilter),
+  })
+  controlsRef.current = {
+    openModels: overlayController.openModelPicker,
+    openEffort: overlayController.openEffort,
+  }
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
   const previousMaxOffsetRef = useRef(0)
   const [autoFollow, setAutoFollow] = useState(true)
   const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1 })
   const [showStartup, setShowStartup] = useState(process.env.ORCANA_TUI_SPLASH !== "off")
-  // TuiState.task 是 unknown（reducer 不感知 TaskProgressState 形状），这里做一次类型收窄
-  const task = state.task as TaskProgressState | undefined
   const isWorking = !state.done && !state.errorLine
 
-  // 布局计算（与 AppShell computeAppShellLayout 保持一致）
-  // OrcanaComposer 多行布局：TextArea(textRows 行) + 状态行(1行) + 可能的粘贴指示(1行)
-  // 命令面板打开时占 5 行（3 条候选 + 标题 + 空行）
-  // FooterHints 占 1 行，footerHeight 需额外 +1
-  const question = clarification?.questions[clarification.index]
-  const clarificationRows = clarification ? Math.min(10, 4 + (question?.options.length ?? 0)) : 0
-  const taskRows = task ? (task.phase === "planning" ? 3 : Math.min(5, 1 + Math.min(3, task.steps.length))) : 0
-  const panelRows = clarificationRows || taskRows
-  const textRows = inputChrome.textRows > 0 ? inputChrome.textRows : 1
-  const inputRows = inputChrome.commandOpen
-    ? 5
-    : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
-  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1))
-  const bodyHeight = Math.max(10, rows - footerHeight - 3)
+  // Depthline P1: 布局单一事实源（useAppLayout），原重复手算已删除
+  const layout = useAppLayout({
+    rows,
+    cols,
+    state,
+    clarification,
+    inputChrome,
+    overlayActive: overlayController.overlay.kind !== "none",
+  })
 
   const scrollUp = useCallback((amount = TUI_SCROLL_STEP) => {
     setAutoFollow(false)
@@ -602,14 +541,6 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   }, [stdout])
 
   useEffect(() => {
-    if (REDUCED_MOTION) return
-    const animated = showStartup || isWorking || Boolean(clarification) || task?.phase === "planning"
-    if (!animated) return
-    const timer = setInterval(() => setTick(n => n + 1), isWorking ? TUI_FRAME_MS : Math.max(TUI_FRAME_MS, 500))
-    return () => clearInterval(timer)
-  }, [clarification, isWorking, showStartup, task?.phase])
-
-  useEffect(() => {
     if (!showStartup) return
     const timer = setTimeout(() => setShowStartup(false), TUI_STARTUP_MS)
     return () => clearTimeout(timer)
@@ -619,351 +550,66 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   // PR-5: 新增 CommandShelf context — 命令菜单打开时不让 Scrollback 抢键
   const activeKeyContext = resolveActiveContext({
     clarificationActive: !!clarification,
-    confirmActive: modal.confirm !== null,
-    rewindListActive: modal.rewind?.phase === "list",
-    rewindConfirmActive: modal.rewind?.phase === "confirm",
+    confirmActive: overlayController.overlay.kind === "confirm",
+    rewindListActive: overlayController.overlay.kind === "rewind" && overlayController.overlay.state.phase === "list",
+    rewindConfirmActive: overlayController.overlay.kind === "rewind" && overlayController.overlay.state.phase === "confirm",
     commandOpen: inputChrome.commandOpen,
-    runtimeDialogActive: modal.runtime !== null,
+    runtimeDialogActive: overlayController.overlay.kind === "settings",
   })
 
   useInput((_input, key) => {
     if (showStartup) return
-    if (modal.runtime) {
-      const runtimeDialog = modal.runtime
-      if (key.escape) {
-        setModal(m => ({ ...m, runtime: null }))
-        return
-      }
-      if (runtimeDialog.type === "effort") {
-        const options: ThinkEffort[] = ["auto", "high", "max"]
-        if (key.upArrow) {
-          setModal(m => m.runtime?.type === "effort" ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected - 1, options.length) } } : m)
-          return
-        }
-        if (key.downArrow) {
-          setModal(m => m.runtime?.type === "effort" ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected + 1, options.length) } } : m)
-          return
-        }
-        if (key.return) {
-          const value = options[runtimeDialog.selected] ?? "auto"
-          setThinkEffort(value)
-          setModal(m => ({ ...m, runtime: null }))
-          return
-        }
-        return
-      }
-
-      if (runtimeDialog.phase === "list") {
-        if (key.upArrow) {
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "list"
-            ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected - 1, m.runtime.options.length) } }
-            : m)
-          return
-        }
-        if (key.downArrow || key.tab) {
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "list"
-            ? { ...m, runtime: { ...m.runtime, selected: clampIndex(m.runtime.selected + 1, m.runtime.options.length) } }
-            : m)
-          return
-        }
-        if (key.backspace || key.delete) {
-          setModal(m => {
-            if (m.runtime?.type !== "models" || m.runtime.phase !== "list") return m
-            const query = m.runtime.query.slice(0, -1)
-            return {
-              ...m,
-              runtime: {
-                ...m.runtime,
-                query,
-                selected: 0,
-                options: buildModelOptions(runtime, state.modelName, query, m.runtime.providerFilter),
-              },
-            }
-          })
-          return
-        }
-        if (key.return) {
-          const selected = runtimeDialog.options[runtimeDialog.selected]
-          if (!selected) return
-          if (selected.custom) {
-            setModal(m => ({
-              ...m,
-              runtime: {
-                type: "models",
-                phase: "custom",
-                providerId: selected.providerId,
-                providerName: selected.providerName,
-                modelValue: modelSeedFromQuery(runtimeDialog.query),
-              },
-            }))
-            return
-          }
-          if (!selected.configured) {
-            setModal(m => ({
-              ...m,
-              runtime: {
-                type: "models",
-                phase: "key",
-                providerId: selected.providerId,
-                providerName: selected.providerName,
-                modelId: selected.modelId,
-                modelName: selected.modelName,
-                keyValue: "",
-              },
-            }))
-            return
-          }
-          void runtime.configureModel({ providerId: selected.providerId, modelId: selected.modelId })
-            .then(() => {
-              store.dispatch({ type: "ui.model_name", name: selected.modelId })
-              store.dispatch({ type: "session.started", sessionId: runtime.sessionId, repoRoot: process.cwd(), provider: selected.providerId, model: selected.modelId })
-              store.dispatch({ type: "ui.error_line", text: "" })
-              store.dispatch({ type: "ui.event_message", kind: "activity", text: `模型已切换：${selected.providerName} / ${selected.modelName}`, minIntervalMs: 0 })
-              setModal(m => ({ ...m, runtime: null }))
-            })
-            .catch(err => {
-              const message = cleanAgentError(err instanceof Error ? err.message : String(err))
-              setModal(m => m.runtime?.type === "models" ? { ...m, runtime: { ...m.runtime, error: message } } : m)
-            })
-          return
-        }
-        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
-          const inputText = _input.replace(/\r?\n/g, "")
-          if (!inputText) return
-          setModal(m => {
-            if (m.runtime?.type !== "models" || m.runtime.phase !== "list") return m
-            const query = `${m.runtime.query}${inputText}`
-            return {
-              ...m,
-              runtime: {
-                ...m.runtime,
-                query,
-                selected: 0,
-                options: buildModelOptions(runtime, state.modelName, query, m.runtime.providerFilter),
-                error: undefined,
-              },
-            }
-          })
-          return
-        }
-        return
-      }
-
-      if (runtimeDialog.phase === "custom") {
-        if (key.backspace || key.delete) {
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "custom"
-            ? { ...m, runtime: { ...m.runtime, modelValue: m.runtime.modelValue.slice(0, -1), error: undefined } }
-            : m)
-          return
-        }
-        if (key.return) {
-          const modelId = runtimeDialog.modelValue.trim()
-          if (!modelId) {
-            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "custom"
-              ? { ...m, runtime: { ...m.runtime, error: "请输入模型 ID 后再回车。" } }
-              : m)
-            return
-          }
-          setModal(m => ({
-            ...m,
-            runtime: {
-              type: "models",
-              phase: "url",
-              providerId: runtimeDialog.providerId,
-              providerName: runtimeDialog.providerName,
-              modelId,
-              modelName: modelId,
-              baseUrlValue: "",
-              defaultBaseUrl: runtime.config.providers?.[runtimeDialog.providerId]?.baseUrl,
-            },
-          }))
-          return
-        }
-        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
-          const inputText = _input.replace(/\r?\n/g, "")
-          if (!inputText) return
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "custom"
-            ? { ...m, runtime: { ...m.runtime, modelValue: `${m.runtime.modelValue}${inputText}`, error: undefined } }
-            : m)
-          return
-        }
-        return
-      }
-
-      if (runtimeDialog.phase === "url") {
-        if (key.backspace || key.delete) {
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
-            ? { ...m, runtime: { ...m.runtime, baseUrlValue: m.runtime.baseUrlValue.slice(0, -1), error: undefined } }
-            : m)
-          return
-        }
-        if (key.return) {
-          const baseUrl = normalizeBaseUrl(runtimeDialog.baseUrlValue, runtimeDialog.defaultBaseUrl)
-          if (!baseUrl) {
-            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
-              ? { ...m, runtime: { ...m.runtime, error: "请输入 API URL，例如 https://api.example.com/v1。" } }
-              : m)
-            return
-          }
-          if (!isValidBaseUrl(baseUrl)) {
-            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
-              ? { ...m, runtime: { ...m.runtime, error: "URL 必须以 http:// 或 https:// 开头。" } }
-              : m)
-            return
-          }
-          if (runtimeDialog.providerId === "custom" || !runtime.isProviderConfigured(runtimeDialog.providerId)) {
-            setModal(m => ({
-              ...m,
-              runtime: {
-                type: "models",
-                phase: "key",
-                providerId: runtimeDialog.providerId,
-                providerName: runtimeDialog.providerName,
-                modelId: runtimeDialog.modelId,
-                modelName: runtimeDialog.modelName,
-                keyValue: "",
-                custom: true,
-                baseUrl,
-              },
-            }))
-            return
-          }
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
-            ? { ...m, runtime: { ...m.runtime, error: "正在保存自定义模型..." } }
-            : m)
-          void runtime.configureModel({
-            providerId: runtimeDialog.providerId,
-            modelId: runtimeDialog.modelId,
-            custom: true,
-            displayName: runtimeDialog.modelName,
-            baseUrl,
-          })
-            .then(() => {
-              store.dispatch({ type: "ui.model_name", name: runtimeDialog.modelId })
-              store.dispatch({ type: "session.started", sessionId: runtime.sessionId, repoRoot: process.cwd(), provider: runtimeDialog.providerId, model: runtimeDialog.modelId })
-              store.dispatch({ type: "ui.error_line", text: "" })
-              store.dispatch({ type: "ui.event_message", kind: "activity", text: `已保存自定义模型：${runtimeDialog.providerName} / ${runtimeDialog.modelName}`, minIntervalMs: 0 })
-              setModal(m => ({ ...m, runtime: null }))
-            })
-            .catch(err => {
-              const message = cleanAgentError(err instanceof Error ? err.message : String(err))
-              setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
-                ? { ...m, runtime: { ...m.runtime, error: message } }
-                : m)
-            })
-          return
-        }
-        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
-          const inputText = _input.replace(/\r?\n/g, "")
-          if (!inputText) return
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "url"
-            ? { ...m, runtime: { ...m.runtime, baseUrlValue: `${m.runtime.baseUrlValue}${inputText}`, error: undefined } }
-            : m)
-          return
-        }
-        return
-      }
-
-      if (runtimeDialog.phase === "key") {
-        if (key.backspace || key.delete) {
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
-            ? { ...m, runtime: { ...m.runtime, keyValue: m.runtime.keyValue.slice(0, -1), error: undefined } }
-            : m)
-          return
-        }
-        if (key.return) {
-          const apiKey = runtimeDialog.keyValue.trim()
-          if (!apiKey) {
-            setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
-              ? { ...m, runtime: { ...m.runtime, error: "请输入 API key 后再回车。" } }
-              : m)
-            return
-          }
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
-            ? { ...m, runtime: { ...m.runtime, error: "正在保存 key 并切换模型..." } }
-            : m)
-          void runtime.configureModel({
-            providerId: runtimeDialog.providerId,
-            modelId: runtimeDialog.modelId,
-            apiKey,
-            custom: runtimeDialog.custom,
-            displayName: runtimeDialog.modelName,
-            baseUrl: runtimeDialog.baseUrl,
-          })
-            .then(() => {
-              store.dispatch({ type: "ui.model_name", name: runtimeDialog.modelId })
-              store.dispatch({ type: "session.started", sessionId: runtime.sessionId, repoRoot: process.cwd(), provider: runtimeDialog.providerId, model: runtimeDialog.modelId })
-              store.dispatch({ type: "ui.error_line", text: "" })
-              store.dispatch({ type: "ui.event_message", kind: "activity", text: `已保存 key，并切换到 ${runtimeDialog.providerName} / ${runtimeDialog.modelName}`, minIntervalMs: 0 })
-              setModal(m => ({ ...m, runtime: null }))
-            })
-            .catch(err => {
-              const message = cleanAgentError(err instanceof Error ? err.message : String(err))
-              setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
-                ? { ...m, runtime: { ...m.runtime, error: message } }
-                : m)
-            })
-          return
-        }
-        if (_input && !key.ctrl && !key.meta && !key.return && !key.escape) {
-          const inputText = _input.replace(/\r?\n/g, "")
-          if (!inputText) return
-          setModal(m => m.runtime?.type === "models" && m.runtime.phase === "key"
-            ? { ...m, runtime: { ...m.runtime, keyValue: `${m.runtime.keyValue}${inputText}`, error: undefined } }
-            : m)
-          return
-        }
-      }
+    // Depthline P1: settings 对话框按键由 controller 消费（不泄漏到 keymap）
+    if (overlayController.overlay.kind === "settings") {
+      overlayController.handleSettingsKey(_input, key)
       return
     }
     const action = resolveKeyAction(_input, key, {
       context: activeKeyContext,
-      bodyHeight,
+      bodyHeight: layout.bodyHeight,
       scrollStep: TUI_SCROLL_STEP,
     })
     if (!action) return // pass through to composer
 
     switch (action.type) {
-      // ── Confirm modal ──
+      // ── Confirm overlay ──
       case "confirm.approve":
-        store.dispatch({ type: "ui.event_message", kind: "activity", text: `✓ confirmed ${modal.confirm?.request.toolName ?? ""}` })
-        setModal(emptyModalState())
+        store.dispatch({ type: "ui.event_message", kind: "activity", text: `✓ confirmed ${overlayController.overlay.kind === "confirm" ? overlayController.overlay.request.toolName : ""}` })
+        overlayController.closeOverlay()
         break
       case "confirm.deny":
-        store.dispatch({ type: "ui.event_message", kind: "error", text: `✗ denied ${modal.confirm?.request.toolName ?? ""}` })
-        setModal(emptyModalState())
+        store.dispatch({ type: "ui.event_message", kind: "error", text: `✗ denied ${overlayController.overlay.kind === "confirm" ? overlayController.overlay.request.toolName : ""}` })
+        overlayController.closeOverlay()
         break
       case "confirm.denyAll":
         store.dispatch({ type: "ui.event_message", kind: "error", text: "✗ denied all pending confirmations" })
-        setModal(emptyModalState())
+        overlayController.closeOverlay()
         break
       case "confirm.dismiss":
-        setModal(emptyModalState())
+        overlayController.closeOverlay()
         break
-      // ── Rewind modal ──
+      // ── Rewind overlay ──
       case "rewind.up":
-        setModal(m => {
-          if (!m.rewind || m.rewind.phase !== "list") return m
-          const s = m.rewind.state
-          return { ...m, rewind: { ...m.rewind, state: { ...s, selectedIndex: Math.max(0, s.selectedIndex - 1) } } }
+        overlayController.updateOverlay(s => {
+          if (s.kind !== "rewind" || s.state.phase !== "list") return s
+          return { ...s, state: { ...s.state, state: { ...s.state.state, selectedIndex: Math.max(0, s.state.state.selectedIndex - 1) } } }
         })
         break
       case "rewind.down":
-        setModal(m => {
-          if (!m.rewind || m.rewind.phase !== "list") return m
-          const s = m.rewind.state
-          return { ...m, rewind: { ...m.rewind, state: { ...s, selectedIndex: Math.min(s.entries.length - 1, s.selectedIndex + 1) } } }
+        overlayController.updateOverlay(s => {
+          if (s.kind !== "rewind" || s.state.phase !== "list") return s
+          return { ...s, state: { ...s.state, state: { ...s.state.state, selectedIndex: Math.min(s.state.state.entries.length - 1, s.state.state.selectedIndex + 1) } } }
         })
         break
       case "rewind.select":
-        setModal(m => {
-          if (!m.rewind) return m
-          if (m.rewind.phase === "list") {
+        overlayController.updateOverlay(s => {
+          if (s.kind !== "rewind") return s
+          if (s.state.phase === "list") {
             // Move to confirm phase
-            const entry = m.rewind.state.entries[m.rewind.state.selectedIndex]
+            const entry = s.state.state.entries[s.state.state.selectedIndex]
             return {
-              ...m,
-              rewind: {
+              ...s,
+              state: {
                 phase: "confirm" as const,
                 state: {
                   visible: true,
@@ -974,16 +620,13 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
               },
             }
           }
-          if (m.rewind.phase === "confirm") {
-            // Execute rewind — move to progress (stub)
-            store.dispatch({ type: "ui.event_message", kind: "activity", text: `rewind to round ${m.rewind.state.targetRound} (stub — backend not yet wired)` })
-            return emptyModalState()
-          }
-          return m
+          // Execute rewind — move to progress (stub)
+          store.dispatch({ type: "ui.event_message", kind: "activity", text: `rewind to round ${s.state.state.targetRound} (stub — backend not yet wired)` })
+          return { kind: "none" }
         })
         break
       case "rewind.cancel":
-        setModal(emptyModalState())
+        overlayController.closeOverlay()
         break
       // ── Clarification ──
       case "clarification.up":
@@ -1049,7 +692,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   }, [scrollUp, scrollDown])
 
   return (
-    <ClockContext.Provider value={effectiveTick(tick)}>
+    <>
       <TuiInputGuard />
       <AppShell
         state={state}
@@ -1068,18 +711,18 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
         scrollUp={scrollUp}
         scrollDown={scrollDown}
         setInputChrome={setInputChrome}
-        confirmModal={modal.confirm}
-        rewindModal={modal.rewind}
-        runtimeDialog={modal.runtime}
+        overlay={overlayController.overlay}
         thinkingEffort={thinkEffort}
         onAnswerQuestion={answerQuestion}
         onCancelQuestion={cancelQuestion}
       />
-    </ClockContext.Provider>
+    </>
   )
 }
 
 export async function startInkTUI(prompt?: string) {
+  // Depthline P1: ORCANA_TUI_PROFILE=1 时记录 render/timer 指标，退出时输出
+  installProfileReporter()
   // PR-6: API key 可来自 env、auth store 或 config，由 createRuntime 统一解析。
   // 这里不再硬编码检查 DEEPSEEK_API_KEY，让 bootstrap 抛出更有用的错误信息。
   // Lazy-import to avoid circular dependency at module load time

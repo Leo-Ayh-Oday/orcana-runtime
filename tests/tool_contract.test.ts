@@ -326,6 +326,11 @@ describe("ToolContract projection", () => {
       "lsp_definition:c2c070697bf5a58538155b9ab990a0824322f020eef2f80822dd1b95070f6e2f",
       "lsp_references:5c90731b68387837636e725b831bb9dddf11400ccaf1a479403d3f899e6f85da",
       "typecheck:988b2d28102d1855754fb4992112700eed5b2e3694415eb62164ac9c9f79212b",
+      // RT-10: verification toolchain.
+      "discover_verification:73d82b4d0cb949b00268578ec302857846f9f2e790d2525bef83455da41f0eb8",
+      "run_targeted_verification:9062eabd7a1a1da2751e39c83cfef7dd84966cdb5b41831ef4d8e79abbc99dd0",
+      "classify_command_failure:289a8ef428a338d15cb5e87f012176f39e716625928a4455fe89eed5ebeda61a",
+      "verify_claim:205bcc3be00282f1d9e964fa72d8a61414e9df2f31f99255b890480a19832ff7",
       "todo_write:83c856ad9f049954503075059a5733bff3ab3b3ea3f5be45b451442973d915c7",
       "ask_user:4fa0bfcb5dae3d6c85ae94f8f57453525c1eb743f7a94e245f2f6e4945ab09dd",
       "task:6e2c71b5c3f9ac407b80832d68ca44538c3bc924fb93425ed3be4356aabc2b7d",

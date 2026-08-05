@@ -2,6 +2,12 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.11] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-2)
+- **Capability mode feature flag** — `ORCANA_CAPABILITIES_MODE` (`legacy` default / `shadow` / `enabled`; unknown values fall back to legacy, never silently enabled).
+- **Shadow divergence observation** — in `shadow` mode the executor records `capability.shadow_mismatch` events when the new contract sees a schema divergence from the legacy path, leaving the result untouched (observe only); `legacy`/`enabled` keep validation authoritative. `CapabilityDescriptor.source` marks ToolDef-projected capabilities as `"legacy"`.
+
 ## [0.5.10] — 2026-08-05
 
 ### Added (Tool Runtime 2.0, RT-1)

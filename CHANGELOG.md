@@ -2,7 +2,16 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.12] — 2026-08-05
+## [0.8.13] — 2026-08-05
+
+### Added (LNXF-6 — Rootless Podman 严格后端)
+- **Strict container backend** for untrusted/evolution/dependency profiles — argv compiler produces `--rm`, `--network=none`, `--read-only`, `--pull never`, `--userns=keep-id`, `--memory/--cpus/--pids-limit` from the cell spec, explicit worktree volume (`/workspace:rw,Z`) and cache volumes (ro / rw per request), `io.orcana.run/cell/agent` labels for recovery.
+- **Hard prohibitions** — `--privileged` can never appear, host network never used, host sockets and real home never mounted (policy-level rejection), floating image tags rejected (`FLOATING_IMAGE_ACCEPTED: 0`); images must be digest-locked (`@sha256:`).
+- **Strictness** — `minimum=container` required; unavailable/rootless-unready podman refuses strict profiles instead of degrading (`STRICT_BACKEND_DEGRADED: 0`).
+- Receipts record `rootless-podman` backend with `containerRemoved: true` cleanup.
+- 13 tests: image policy, argv strictness, policy rejections, no-degradation, profile mapping; 2 true-container tests run when rootless podman is ready. Full gate 1022 pass, bench no regression.
+
+
 
 ### Added (LNXF-5 — Agent Execution Domain 与并发调度)
 - **Resource ledger** — atomic reservation before start (all-or-nothing; overcommit is rejected, `RESOURCE_OVERCOMMIT: 0`), host reserves (1 core or 15% CPU, 1 GB or 20% memory, whichever larger), per-run/per-agent release, cell concurrency cap.

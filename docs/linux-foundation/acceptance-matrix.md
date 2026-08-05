@@ -25,3 +25,28 @@
 ## 安全指标（冻结）
 
 凭证可见 0 / Home 可见路径 0 / none 外网连接 0 / 未授权写入 0 / 未授权 Socket 挂载 0 / 严格静默降级 0 / 取消遗留进程 0 / 跨 Agent 修改 0 / spawn 旁路 0 / 进化实验正式区写入 0 / 无 Receipt 执行 0 / 无 Receipt 完成声明 0。
+
+## 独立审计修正（2026-08-05，审计基线 v0.8.15 / cd25260）
+
+| 裁决 | 状态 |
+|---|---|
+| LINUX_ARCHITECTURE_DIRECTION | PASS |
+| LINUX_COMPONENT_PRIMITIVES | PASS_WITH_ISSUES |
+| PRODUCTION_RUNTIME_WIRING | FAIL |
+| SINGLE_PROCESS_ENTRY | FAIL |
+| CGROUP_RUNTIME_ENFORCEMENT | FAIL |
+| RESOURCE_AWARE_GRAPH_SCHEDULING | FAIL |
+| SANDBOX_RECEIPT_TRUSTWORTHINESS | FAIL |
+| FOUNDATION_FREEZE | **REVOKE** |
+| MULTI_AGENT_M8 | **BLOCK** |
+
+**Foundation Freeze 正式撤销。** 当前真实状态：
+
+```text
+Linux Foundation Components:   IMPLEMENTED
+Production Integration:        INCOMPLETE
+Default Linux Execution:       SHADOW
+Multi-Agent Production Template: BLOCKED
+```
+
+v0.8.15 保留（不删除），作为组件/契约层基线；生产接线闭合在下一版本线（Linux Production Integration Closure）完成前，禁止宣布 Freeze、禁止开始 M8。核心缺口：Broker 未成为真实执行入口、cgroup 未绑定进程、资源调度未进 Graph、Receipt 含推定值、直接 spawn 旁路 36 处、三个后端存在环境/镜像/加固缺口。

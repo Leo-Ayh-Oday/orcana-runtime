@@ -302,9 +302,10 @@ tests/workflow/
 
 ---
 
-## 6. 发布流程（每阶段固定）
+## 6. 发布流程与版本线（2026-08-05 调整）
 
-一个阶段一个 patch 版本：五门禁（typecheck / test / build / `npm pack --dry-run` / `git diff --check`）→ `feat:` commit → `chore: release v0.5.x` commit → push → gh release → npm publish。显式 git add（禁 `git add -A`），绝不触碰 `src/tui/**`、`tests/tui/**`。
+- **版本线调整**：0.6.0 已发布（Tool Runtime 2.0 完整 + TUI 收敛汇总）。**Graph Runtime 系列从 0.7.0 开始**：G3 完成 → v0.7.0（Graph Runtime 首个真实可用版），G4..G7 依次 0.7.x。
+- 每阶段流程固定：五门禁（typecheck / test / build / `npm pack --dry-run` / `git diff --check`）→ `feat:` commit → `chore: release v0.7.x` commit → push → gh release → npm publish。显式 git add（禁 `git add -A`），绝不触碰 `src/tui/**`、`tests/tui/**`。
 
 ---
 

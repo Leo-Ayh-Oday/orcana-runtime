@@ -2,6 +2,12 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.13] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-4)
+- **Output limiting** — `limitOutput` stores oversized results verbatim in the run's artifact store and returns a preview + artifact ref (`CapabilityDescriptor.maxOutputBytes`, default 8000 = legacy shell cap); the node-mode executor truncates handler output into `… [output truncated: full content in artifact <id>]` without ever returning raw megabytes.
+- **First-batch output schemas** — structured target schemas declared for `typecheck` / `git_status` / `git_diff` / `lsp_diagnostics` / `web_search` (`FIRST_BATCH_OUTPUT_SCHEMAS`) as the migration contract for RT-8/9/10.
+
 ## [0.5.12] — 2026-08-05
 
 ### Added (Tool Runtime 2.0, RT-3)

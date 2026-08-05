@@ -1,6 +1,18 @@
 # Orcana TUI Depthline 重构方案（v2）
 
-> 状态：方案冻结，待实施（IMPLEMENTATION_READY）
+> 状态：**已实施完成（2026-08-05）**
+>
+> 实施记录：
+> | 阶段 | commit | 内容 |
+> |---|---|---|
+> | P1 性能与状态底座 | `6e66679` | 删全局 ClockContext、Scrollback 去 tick、useTuiSelector、Overlay union、settings controller 抽离、render-metrics |
+> | P2 单画布骨架 | `824187b` | SessionLine / ActivityLine / InteractionSlot / HintBar / LegacyPlanAdapter / RuntimeInspector、停渲染 RightRail/StatusBar/ModeContract、ActionRegistry seam |
+> | P3 Action Registry | `d9bc2ba` | 27 动作注册表、定义与执行分离、keymap 薄封装、Ctrl+? 快捷键面板、Command→Action 映射、Esc stop |
+> | P4 Block 模型 | `def4600` | deriveTranscriptBlocks（结构化输入、禁文本解析）、TranscriptViewState reducer + prune、ToolGroup 归组、ExecutionSummaryBlock、TranscriptViewport |
+> | P5 视觉收敛 | `3b91f6d` | 7-token 调色板、FlowLine/多色/动画删除、splash 简化、依赖清理（figlet/ink-big-text/ink-gradient/boxen）、44 张 golden 快照 |
+> | 收尾清理 | （后续 commit） | 删除未渲染死组件：HeaderBar/StatusBar/RightRail/RuntimePanel/ModeContract/FooterHints/StreamingBlock/ThinkingDock/SonarPulse + 旧视图 app/dashboard/conversation |
+>
+> 门禁基线：`tests/tui` 698 pass（含 golden 矩阵）· typecheck 0 错误 · build 全绿 · pack:check + smoke:release 通过
 > 基线：`bun run typecheck` 0 errors + `bun test tests/tui` 全绿（426+）
 > 约束：Ink + React 可行 · ASCII fallback 全覆盖 · 不复制 Grok Build / Claude Code 源码
 > 方向来源：Grok Build TUI 主链路分析（scrollback 主画布 / 结构化块 / 单职责输入 / Action Registry）+ 一轮评审修正（6 项）

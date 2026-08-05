@@ -456,7 +456,65 @@ RepairLoop.run(初始修复图 spec) → ConvergenceReport
 - [x] 预算耗尽输出结构化阻塞报告 → repair-loop.test.ts（budget_exhausted + blocked 清单非空）
 - [x] 同一错误不会通过改变措辞绕过检测 → failure-signature.test.ts（同类别不同 message → 同签名）
 
-## 10. 实施记录
+## 10. G5 详细任务单（v0.7.2，Context Slice / 缓存与 Replay）
+
+参考稿 PR-G5 验收：节点不继承无关历史 / 只读节点可按输入哈希命中缓存 / 修改文件后相关缓存失效 / Checkpoint 可从中断节点恢复 / Replay 不重新执行已成功确定性节点 / 旧会话兼容。
+
+融合架构决策：**kernel 与 context/、session/ 零改动**（参考稿列出的 staged/context-map/context-epoch/checkpoint/migration 修改全部由 workflow 层能力取代）；G5 建立在 G1 checkpoint（ResultStore.restore 已有但 scheduler 未接线）之上。
+
+### 10.1 设计决策
+
+| 参考稿 | 融合决策 |
+|---|---|
+| Context Slice（staged/context-map） | `src/workflow/context/context-slice.ts`：`buildContextSlice` 显式化 scheduler 已隐含的依赖语义——节点上下文 = 自身 input + 直接 dependsOn 结果，无关节点/历史不进入 |
+| 只读节点按输入哈希命中 | `src/workflow/results/result-cache.ts`：key = `stableHashString({ handler, input })`（G0 stableHash 消费）；读节点 done 后写缓存 |
+| 修改文件后失效 | **写节点成功完成 → `invalidateAll()`**（超集失效：写后的只读结果全部重算，满足"相关缓存失效"且无逐文件追踪复杂度） |
+| Checkpoint 中断恢复 | scheduler 接线 `store.restore(checkpointDir)`（G1 已交付原语未接线）；恢复节点不重执行 |
+| Replay 不重执行 | 两层：checkpoint 恢复的节点跳过执行；cache 命中节点以 `replayed` 标记 + durationMs 0 直接落结果 |
+| 旧会话兼容 | 全部可选接入：`cache` 仅经 SchedulerOptions 注入（默认 undefined → 行为不变）；config/workflow 无新字段 |
+
+### 10.2 新增文件
+
+```text
+src/workflow/results/result-cache.ts        # ResultCache（Map + hit/miss 计数 + snapshot/restoreEntries）
+src/workflow/persistence/result-cache-store.ts  # 落盘/加载（best-effort，redactForTrace 同 checkpoint）
+src/workflow/context/context-slice.ts       # buildContextSlice（依赖子图上下文，显式化）
+```
+
+### 10.3 接入点（scheduler）
+
+```text
+SchedulerOptions + cache?: ResultCache
+runScheduler:
+  1. 有 checkpointDir → store.restore()（中断恢复，恢复节点不再执行）
+  2. restore 的只读节点结果 → 回填 cache（跨运行复用）
+  3. launch 前：只读节点 cache 命中 → store.put(replayed)（durationMs 0 + metadata.replayed），跳过 executeNode
+  4. 只读节点 done → cache.put(inputHash, result)
+  5. 写节点成功完成 → cache.invalidateAll()（文件失效）
+```
+
+### 10.4 G5 验收映射
+
+- [x] 节点不继承无关历史 → context-slice.test.ts（上下文只含直接依赖，无关节点断言缺席）
+- [x] 只读节点按输入哈希命中缓存 → result-cache.test.ts（同 key 二次命中 + 不同 key miss）
+- [x] 修改文件后相关缓存失效 → scheduler-replay.test.ts（写节点成功后同 input 只读节点重新执行）
+- [x] Checkpoint 可从中断节点恢复 → scheduler-replay.test.ts（恢复后不重执行已完成节点）
+- [x] Replay 不重新执行已成功确定性节点 → scheduler-replay.test.ts（replayed 标记 + durationMs 0 + handler 执行计数不增）
+- [x] 旧会话兼容 → 默认无 cache/checkpointDir 时全量门禁无回归（442 pass 基线）
+
+| 阶段 | 版本 | 落地 | 验证 |
+|---|---|---|---|
+| G5 | v0.7.2 | Context Slice / 缓存与 Replay：results/result-cache（inputHash = stableHash({handler, input})，G0 stableHash 正式消费；写节点成功 → invalidateAll 超集失效）、persistence/result-cache-store（落盘/加载，redactForTrace 同 checkpoint）、context/context-slice（依赖子图上下文显式化）、scheduler 接线（restore 中断恢复 + 恢复结果回填 cache + 只读命中 replayResult 标记 replayed/durationMs 0 + 写完成失效）；全部可选注入，默认行为不变 | 受限门禁 455 pass（新增 13 项 G5 验收） |
+
+**G5 验收映射（§10.4）：**
+- [x] 节点不继承无关历史 → context-slice.test.ts（上下文只含直接依赖，兄弟/无关节点断言缺席）
+- [x] 只读节点按输入哈希命中缓存 → result-cache.test.ts（同 key 二次命中 + 不同 key miss + failed 不缓存）
+- [x] 修改文件后相关缓存失效 → result-cache.test.ts（写节点完成后同 input 只读节点重新执行，读到的内容为写后值）
+- [x] Checkpoint 可从中断节点恢复 → scheduler-replay.test.ts（恢复节点不重执行，结果回填 cache）
+- [x] Replay 不重新执行已成功确定性节点 → scheduler-replay.test.ts（replayed 标记 + durationMs 0 + 工具调用计数不增）
+- [x] 旧会话兼容 → 无 cache/checkpointDir 时全量门禁 455 pass 无回归
+
+## 12. 实施记录
 
 | 阶段 | 版本 | 落地 | 验证 |
 |---|---|---|---|

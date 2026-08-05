@@ -25,13 +25,17 @@ export interface ValidationContext {
   handlerInputKind?: Record<string, "object" | "array" | "any">
 }
 
-/** Validate a spec for read-only execution (G1/G2 scheduler contract). */
+/** Validate a spec for execution (G1 read-only / G3 read-write contract). */
 export function validateSpec(spec: WorkflowSpec, ctx: ValidationContext): ValidationReport {
   const issues: ValidationIssue[] = [
     ...validateDAG(spec),
     ...validateBudget(spec.nodes.length, spec.maxParallel),
-    ...validateCapabilities(spec.nodes, { knownHandlers: ctx.knownHandlers, readonlyHandlers: ctx.readonlyHandlers }),
-    ...validateSideEffects(spec.nodes, ctx.readonlyHandlers),
+    ...validateCapabilities(spec.nodes, {
+      knownHandlers: ctx.knownHandlers,
+      readonlyHandlers: ctx.readonlyHandlers,
+      mode: spec.mode ?? "readonly",
+    }),
+    ...validateSideEffects(spec.nodes, ctx.readonlyHandlers, spec.mode ?? "readonly"),
     ...validateSchema(spec.nodes, {
       handlerInputKind: ctx.handlerInputKind ?? {},
     }),

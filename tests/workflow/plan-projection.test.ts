@@ -7,6 +7,7 @@ import type { WorkflowRunResult } from "../../src/workflow/types"
 const RUN: WorkflowRunResult = {
   specId: "plan-abc",
   finishedAt: 1,
+  status: "done",
   results: [
     { nodeId: "plan:1", status: "done", output: { content: "payment module analyzed: 3 files, 2 services", metadata: {} }, startedAt: 0, finishedAt: 1, durationMs: 1 },
     { nodeId: "plan:2", status: "done", output: { content: "3 commits since last release", metadata: {} }, startedAt: 0, finishedAt: 1, durationMs: 1 },

@@ -15,6 +15,8 @@ export interface CapabilityContext {
   knownHandlers: Set<string>
   /** Handler ids known to be read-only (whitelist). */
   readonlyHandlers: Set<string>
+  /** G3: spec mode — read-only specs reject write handlers entirely. */
+  mode?: "readonly" | "read-write"
 }
 
 export function validateCapabilities(
@@ -22,6 +24,7 @@ export function validateCapabilities(
   ctx: CapabilityContext,
 ): CapabilityIssue[] {
   const issues: CapabilityIssue[] = []
+  const mode = ctx.mode ?? "readonly"
   for (const node of nodes) {
     if (!ctx.knownHandlers.has(node.handler)) {
       issues.push({
@@ -30,7 +33,7 @@ export function validateCapabilities(
       })
       continue
     }
-    if (!ctx.readonlyHandlers.has(node.handler)) {
+    if (mode === "readonly" && !ctx.readonlyHandlers.has(node.handler)) {
       issues.push({
         code: "write_handler",
         message: `workflow: node "${node.id}" uses write handler "${node.handler}" in read-only mode`,

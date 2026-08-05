@@ -27,6 +27,7 @@ import { appendHookWarnings, runToolAfterHook, runToolBeforeHook } from "../../a
 import { validateJsonSchema } from "./schema-validator"
 import { getCapabilityMode } from "./flags"
 import { budgetKindsFor } from "./descriptor"
+import { DEFAULT_MAX_OUTPUT_BYTES, limitOutput } from "./output-limiter"
 import { projectCapabilityDescriptor, toolCapabilityHandler } from "./tool-adapter"
 import { buildNodePolicyInput, type NodePolicyContext } from "./policy-adapter"
 import { createDefaultNodePolicyContext } from "../nodes/context"
@@ -255,6 +256,26 @@ export async function executeCapability(
     } else {
       const message = `result failed schema validation: ${schemaErrors.join("; ")}`
       result = { success: false, content: message, error: message }
+    }
+  }
+
+  // RT-4: output limiting — oversized results go to the artifact store; the
+  // caller receives a preview + artifact ref (never raw megabytes).
+  const outputStore = input.context?.artifactStore
+  if (result.success && outputStore && input.context && typeof result.content === "string" && result.content.length > (descriptor.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES)) {
+    const limited = await limitOutput({
+      content: result.content,
+      maxBytes: descriptor.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+      runId: input.context.runId,
+      nodeRunId: input.context.nodeRunId,
+      producedBy: descriptor.id,
+      store: outputStore,
+    })
+    if (limited.artifactId) {
+      result = {
+        ...result,
+        content: `${limited.preview}\n\n… [output truncated: full content in artifact ${limited.artifactId}]`,
+      }
     }
   }
 

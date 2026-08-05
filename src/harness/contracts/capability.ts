@@ -40,6 +40,10 @@ export interface CapabilityDescriptor {
   /** RT-2: migration source — "legacy" for ToolDef-projected capabilities
    *  (via tool-adapter), "native" for hand-written capability handlers. */
   source?: "legacy" | "native"
+
+  /** RT-4: output budget in bytes — oversized results are stored as
+   *  artifacts and the model receives a preview + ref (default 8000). */
+  maxOutputBytes?: number
 }
 
 export interface CapabilityHandler {

@@ -16,11 +16,11 @@ import { AppShell, type InputChromeState } from "../../src/tui/components/AppShe
 import type { ScrollbackScrollState } from "../../src/tui/components/Scrollback"
 import type { Runtime } from "../../src/runtime/bootstrap"
 
-function mockStdout(): PassThrough & { columns: number; rows: number } {
+function mockStdout(): NodeJS.WriteStream {
   const out = new PassThrough() as PassThrough & { columns: number; rows: number }
   out.columns = 100
   out.rows = 30
-  return out
+  return out as unknown as NodeJS.WriteStream
 }
 
 const noop = () => {}

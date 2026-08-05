@@ -1,13 +1,13 @@
-/** AppShell — Orcana TUI 主界面布局。
+/** AppShell — Orcana TUI 主界面布局（Depthline P2：单画布骨架）。
  *
  *  职责：
- *    - 组合 HeaderBar / StatusBar / Scrollback / RightRail / PlanPanel / OrcanaComposer / FooterHints
- *    - 宽屏 (>= tuiTokens.layout.breakpointCompact cols)：Scrollback + RightRail 并排
- *    - 窄屏 (< tuiTokens.layout.breakpointCompact cols)：隐藏 RightRail
+ *    - 组合 SessionLine / Transcript / ActivityLine / InteractionSlot / Composer / HintBar
+ *    - 默认无永久 RightRail / StatusBar / ModeContract（能力迁入 RuntimeInspector overlay）
+ *    - Overlay 互斥渲染：confirm / rewind / settings / runtime-inspector
  *    - splash 启动画面保留但不是主功能
- *    - 消费 PR-1 TuiState（通过 selectors + 直接字段）
  *
- *  从 main.tsx 的 ChatApp 渲染部分提取，ChatApp 保留为状态管理层。 */
+ *  永久 chrome ≤ 4 行：SessionLine(1) + ActivityLine(0/1) + Composer(2-8) + HintBar(1)。
+ */
 
 import React from "react"
 import { Box, Text, useStdout } from "ink"
@@ -19,48 +19,39 @@ import type { SlashCommandHint } from "../input"
 import { OrcanaComposer } from "./OrcanaComposer"
 import { getCommandHints } from "../commands/registry"
 import type { ClarificationQuestion } from "../../agent/clarification"
-import { selectRightRail, selectRuntimePanel } from "../state/selectors"
+import { selectRightRail } from "../state/selectors"
 import type { TuiState, TuiMode } from "../state/types"
-import { HeaderBar } from "./HeaderBar"
-import { StatusBar } from "./StatusBar"
 import { Scrollback, type ScrollbackScrollState } from "./Scrollback"
-import { RightRail, classifyRailState } from "./RightRail"
-import { PlanPanel, FlowLine, type TaskProgressState } from "./PlanPanel"
-import { FooterHints } from "./FooterHints"
+import { SessionLine, type SessionLineData } from "./SessionLine"
+import { ActivityLine } from "./ActivityLine"
+import { InteractionSlot, ClarificationPanel, type ClarificationWizardState } from "./InteractionSlot"
+import { LegacyPlanAdapter } from "./LegacyPlanAdapter"
+import { HintBar } from "./HintBar"
 import { ComposerFrame } from "./ComposerFrame"
 import { fitText } from "./MessageItem"
 import { resolveActiveContext } from "../input/types"
-import { ModeContract, ModeBadge } from "./ModeContract"
 import { ConfirmModal } from "./ConfirmModal"
 import { RewindModal } from "./RewindModal"
-import { QuestionPanel } from "./QuestionPanel"
-import { extractRuntimeCounters, formatRuntimeCounters } from "../format-runtime"
-import { ThinkingDock, selectThinkingDock } from "../thinking"
+import { RuntimeInspector } from "./overlays/RuntimeInspector"
+import { extractRuntimeCounters } from "../format-runtime"
+import { selectThinkingDock } from "../thinking"
 import { renderMetrics } from "../render-metrics"
 import type { OverlayState, SettingsDialogState, ThinkEffort, ModelDialogOption } from "../overlays"
+import type { TaskProgressState } from "./PlanPanel"
 
 // Depthline P1: overlay 类型已移至 ../overlays，此处 re-export 保持向后兼容
 export type { ThinkEffort, ModelDialogOption, OverlayState } from "../overlays"
 export type { SettingsDialogState as RuntimeDialogState } from "../overlays"
 export type { SettingsDialogState } from "../overlays"
+// Depthline P2: ClarificationWizardState 移至 InteractionSlot，re-export 向后兼容
+export type { ClarificationWizardState } from "./InteractionSlot"
+export { ClarificationPanel } from "./InteractionSlot"
+export type { TaskProgressState } from "./PlanPanel"
 
 // ── 常量 ──
 
-/** 命令列表来自 CommandRegistry（PR-4 单一数据源）。
- *  保留 SlashCommandHint 类型的 re-export 供旧代码兼容。 */
+/** 命令列表来自 CommandRegistry（PR-4 单一数据源）。 */
 export const SLASH_COMMANDS: SlashCommandHint[] = getCommandHints()
-
-// ── ClarificationWizardState（从 main.tsx 提取） ──
-
-export interface ClarificationWizardState {
-  originalPrompt: string
-  questions: ClarificationQuestion[]
-  index: number
-  selected: number
-  answers: Array<{ question: string; key: string; label: string }>
-  extraPrompt?: string
-  rawText: string
-}
 
 // ── 内部组件 ──
 
@@ -70,7 +61,7 @@ function EmptySurface({ mode, modelName }: { mode: TuiMode; modelName: string })
       <Box flexDirection="row">
         <Text color={theme.brand} bold>Orcana</Text>
         <Text color={theme.textDim}>  mode:</Text>
-        <ModeBadge mode={mode} />
+        <Text color={theme.brand}>{mode}</Text>
         <Text color={theme.textDim}>  {modelName}</Text>
       </Box>
       <Box height={1} />
@@ -82,42 +73,6 @@ function EmptySurface({ mode, modelName }: { mode: TuiMode; modelName: string })
       <Text color={theme.textDim}>  /help  — all commands</Text>
       <Box height={1} />
       <Text color={theme.textDim}>Type your request or / for commands.</Text>
-    </Box>
-  )
-}
-
-function ClarificationPanel({ wizard, width }: { wizard: ClarificationWizardState; width: number }) {
-  const question = wizard.questions[wizard.index]
-  if (!question) return null
-  const flowWidth = Math.max(18, Math.min(width - 4, 72))
-
-  return (
-    <Box flexDirection="column" paddingX={1} marginBottom={1}>
-      <Box flexDirection="row">
-        <Text color={theme.brand}>clarify </Text>
-        <Text color={theme.textDim}>{wizard.index + 1}/{wizard.questions.length}</Text>
-        <Text color={theme.textDim}> / choose one</Text>
-      </Box>
-      <Text color={theme.text}>{fitText(question.title, Math.max(18, width - 4))}</Text>
-      {question.options.map((option, index) => {
-        const selected = index === wizard.selected
-        return (
-          <Box key={`${question.id}-${option.key}`} flexDirection="row">
-            <Box width={3}>
-              <Text color={selected ? theme.brand : theme.textFaint}>{selected ? ">" : " "}</Text>
-            </Box>
-            <Box width={4}>
-              <Text color={selected ? theme.brand : theme.info}>{option.key}.</Text>
-            </Box>
-            <Text color={selected ? theme.text : theme.textDim}>
-              {fitText(option.label, Math.max(18, width - 12))}
-              {option.recommended ? " [recommended]" : ""}
-            </Text>
-          </Box>
-        )
-      })}
-      <FlowLine width={flowWidth} active />
-      <Text color={theme.textFaint}>Up/Down or j/k select  Enter confirm  Esc cancel</Text>
     </Box>
   )
 }
@@ -254,42 +209,6 @@ function RuntimeDialog({ dialog, width }: { dialog: SettingsDialogState; width: 
   )
 }
 
-// ── AppShell ──
-
-export interface InputChromeState {
-  commandOpen: boolean
-  pasteCount: number
-  /** TextArea 当前行数（1-3），用于动态计算 footerHeight */
-  textRows: number
-  commandRows?: number
-}
-
-export interface AppShellProps {
-  state: TuiState
-  runtime: Runtime
-  prompt?: string
-  scrollOffset: number
-  scrollState: ScrollbackScrollState
-  onScrollState: (state: ScrollbackScrollState) => void
-  showStartup: boolean
-  clarification: ClarificationWizardState | null
-  inputChrome: InputChromeState
-  submit: (value: string) => void
-  answerClarification: (answer: { question: string; key: string; label: string }) => void
-  moveClarificationSelection: (delta: number) => void
-  cancelClarification: () => void
-  scrollUp: (amount?: number) => void
-  scrollDown: (amount?: number) => void
-  setInputChrome: (chrome: InputChromeState) => void
-  /** Depthline P1: 互斥 overlay（confirm / rewind / settings）。 */
-  overlay: OverlayState
-  thinkingEffort: ThinkEffort
-  /** PR-1: Answer pending question from agent */
-  onAnswerQuestion?: (answer: string) => void
-  /** Dismiss the pending question without answering. */
-  onCancelQuestion?: () => void
-}
-
 // ── 布局计算（纯函数，便于测试） ──
 
 export interface AppShellLayoutInput {
@@ -382,11 +301,46 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
   const inputRows = inputChrome.commandOpen
     ? textRows + Math.max(1, inputChrome.commandRows ?? 5)
     : textRows + 1 + (inputChrome.pasteCount > 0 ? 1 : 0)
-  // PR-1: ThinkingDock 在 footer 中占 1 行
-  // PR-2: ComposerFrame 上下分隔线各占 1 行（+2）
-  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1 + thinkingDockRows + 2))
+  // Depthline P2: 单条 Composer 分隔线（+1，原 +2）
+  const footerHeight = Math.max(2, Math.min(rows - 8, panelRows + inputRows + 1 + thinkingDockRows + 1))
   const bodyHeight = Math.max(10, rows - footerHeight - 3)
   return { showDash, mode, clarificationRows, taskRows, panelRows, inputRows, footerHeight, bodyHeight }
+}
+
+// ── 主组件 ──
+
+export interface InputChromeState {
+  commandOpen: boolean
+  pasteCount: number
+  /** TextArea 当前行数（1-3），用于动态计算 footerHeight */
+  textRows: number
+  commandRows?: number
+}
+
+export interface AppShellProps {
+  state: TuiState
+  runtime: Runtime
+  prompt?: string
+  scrollOffset: number
+  scrollState: ScrollbackScrollState
+  onScrollState: (state: ScrollbackScrollState) => void
+  showStartup: boolean
+  clarification: ClarificationWizardState | null
+  inputChrome: InputChromeState
+  submit: (value: string) => void
+  answerClarification: (answer: { question: string; key: string; label: string }) => void
+  moveClarificationSelection: (delta: number) => void
+  cancelClarification: () => void
+  scrollUp: (amount?: number) => void
+  scrollDown: (amount?: number) => void
+  setInputChrome: (chrome: InputChromeState) => void
+  /** Depthline P1: 互斥 overlay（confirm / rewind / settings / runtime-inspector）。 */
+  overlay: OverlayState
+  thinkingEffort: ThinkEffort
+  /** PR-1: Answer pending question from agent */
+  onAnswerQuestion?: (answer: string) => void
+  /** Dismiss the pending question without answering. */
+  onCancelQuestion?: () => void
 }
 
 export function AppShell(props: AppShellProps) {
@@ -396,7 +350,6 @@ export function AppShell(props: AppShellProps) {
   const cols = stdout?.columns ?? 96
 
   // 派生数据
-  const task = state.task as TaskProgressState | undefined
   const rightRail = selectRightRail(state)
   const isWorking = !state.done && !state.errorLine
   const modalActive = overlay.kind !== "none"
@@ -404,14 +357,13 @@ export function AppShell(props: AppShellProps) {
   // PR-1: ThinkingDock 视图模型（PR-1.6: 传入 confirmActive 触发 waiting_permission phase）
   const thinkingDock = selectThinkingDock(state, { confirmActive: overlay.kind === "confirm" })
 
-  // Phase 2: 布局计算 — 四档模式 (tiny/narrow/standard/comfortable)
+  // Depthline P1: 布局单一事实源
   const layout = useAppLayout({ rows, cols, state, clarification, inputChrome, overlayActive: modalActive })
   const effectiveBodyHeight = computeEffectiveBodyHeight(layout, modalActive)
 
   // Visual Step 2: 统一计数器
   const counters = extractRuntimeCounters(state)
   const provider = state.session.provider
-  const runtimePanel = selectRuntimePanel(state)
 
   // ── splash 启动画面 ──
   if (showStartup) {
@@ -432,7 +384,6 @@ export function AppShell(props: AppShellProps) {
   const empty = state.messages.length === 0 && state.done && !prompt?.trim()
 
   // Phase 5: 当前键盘上下文（modal > clarification > CommandShelf > scrollback）
-  // PR-5: 新增 commandOpen → CommandShelf context
   const activeKeyContext = resolveActiveContext({
     clarificationActive: !!clarification,
     confirmActive: overlay.kind === "confirm",
@@ -442,35 +393,29 @@ export function AppShell(props: AppShellProps) {
     runtimeDialogActive: overlay.kind === "settings",
   })
 
+  // SessionLine 数据（Depthline P2）
+  const sessionData: SessionLineData = {
+    mode: state.mode,
+    done: state.done,
+    errorLine: state.errorLine,
+    status: state.status,
+    isWorking,
+    queueCount: state.queueCount,
+    provider,
+    modelName: state.modelName,
+    branch: state.session.branch,
+    repoRoot: state.session.repoRoot,
+    ctxPct: counters.ctxPct,
+    cachePct: counters.cachePct,
+    cols,
+  }
+
   renderMetrics.incAppShellRender()
 
   return (
     <Box flexDirection="column" height={rows} paddingX={1}>
-      {/* HeaderBar (Phase 4a: single-line status bar) */}
-      <HeaderBar
-        modelName={state.modelName}
-        provider={provider}
-        mode={state.mode}
-        done={state.done}
-        errorLine={state.errorLine}
-        status={state.status}
-        queueCount={state.queueCount}
-        cols={cols}
-        isWorking={isWorking}
-        round={counters.round}
-        ctxPct={counters.ctxPct}
-        cachePct={counters.cachePct}
-      />
-
-      {/* StatusBar (Phase 2: narrow mode absorbs RightRail runtime info) */}
-      <StatusBar
-        counters={counters}
-        cols={cols}
-        ripplePhase={rightRail.runtime.ripplePhase}
-        narrow={layout.mode === "tiny" || layout.mode === "narrow"}
-        railState={classifyRailState(rightRail).state}
-        blockedReason={classifyRailState(rightRail).blockedReason}
-      />
+      {/* SessionLine — 唯一顶部状态行 */}
+      <SessionLine data={sessionData} />
 
       {/* Depthline P1: Overlay 互斥渲染 */}
       {overlay.kind === "confirm" && (
@@ -488,56 +433,52 @@ export function AppShell(props: AppShellProps) {
           <RuntimeDialog dialog={overlay.dialog} width={cols - 4} />
         </Box>
       )}
-
-      {/* Body: Scrollback + RightRail */}
-      <Box flexDirection="row" height={effectiveBodyHeight} flexGrow={1}>
-        <Box flexDirection="column" flexGrow={1} marginRight={1}>
-          <Box flexDirection="column" flexGrow={1}>
-            {empty ? (
-              <EmptySurface mode={state.mode} modelName={state.modelName} />
-            ) : (
-              <Scrollback
-                messages={state.messages}
-                width={cols - (layout.showDash ? tuiTokens.layout.rail.max : 2)}
-                height={Math.max(4, effectiveBodyHeight - 1)}
-                status={state.status}
-                round={state.round}
-                scrollOffset={scrollOffset}
-                onScrollState={onScrollState}
-                hasActiveTools={state.tools.some(t => t.status === "running")}
-              />
-            )}
-          </Box>
+      {overlay.kind === "runtime-inspector" && (
+        <Box marginBottom={1}>
+          <RuntimeInspector
+            data={rightRail}
+            status={state.status}
+            done={state.done}
+            errorLine={state.errorLine}
+            width={cols}
+          />
         </Box>
+      )}
 
-        {layout.showDash && (
-          <Box flexDirection="row">
-            <Text color={theme.border}>│</Text>
-            <Box width={layout.mode === "comfortable" ? tuiTokens.layout.rail.ideal : tuiTokens.layout.rail.min} flexDirection="column" paddingLeft={1}>
-              <ModeContract mode={state.mode} width={Math.max(24, tuiTokens.layout.rail.min - 4)} />
-              <Box height={1} />
-              <RightRail {...rightRail} />
-            </Box>
-          </Box>
+      {/* Body: Transcript（单画布，无右栏） */}
+      <Box flexDirection="column" height={effectiveBodyHeight} flexGrow={1}>
+        {empty ? (
+          <EmptySurface mode={state.mode} modelName={state.modelName} />
+        ) : (
+          <Scrollback
+            messages={state.messages}
+            width={cols - 2}
+            height={Math.max(4, effectiveBodyHeight - 1)}
+            status={state.status}
+            round={state.round}
+            scrollOffset={scrollOffset}
+            onScrollState={onScrollState}
+            hasActiveTools={state.tools.some(t => t.status === "running")}
+          />
         )}
       </Box>
 
-      {/* Footer: PlanPanel/ClarificationPanel + ThinkingDock + ComposerFrame + FooterHints */}
+      {/* Footer: LegacyPlanAdapter + ActivityLine + InteractionSlot + Composer + HintBar */}
       <Box flexDirection="column" height={layout.footerHeight}>
-        {state.pendingQuestion && props.onAnswerQuestion ? (
-          <QuestionPanel
-            question={state.pendingQuestion}
-            onAnswer={props.onAnswerQuestion}
-            onCancel={props.onCancelQuestion}
-          />
-        ) : clarification ? (
-          <ClarificationPanel wizard={clarification} width={cols} />
-        ) : (
-          <PlanPanel task={task} width={cols} />
+        {overlay.kind !== "runtime-inspector" && (
+          <LegacyPlanAdapter task={state.task as TaskProgressState | undefined} width={cols} />
         )}
-        {/* PR-1: ThinkingDock — 固定运行态显示，不进入 messages */}
-        <ThinkingDock model={thinkingDock} width={cols - 4} />
-        {/* PR-2: ComposerFrame — 固定输入框 frame，上下分隔线 */}
+        {overlay.kind !== "runtime-inspector" && (
+          <ActivityLine model={thinkingDock} width={cols - 4} />
+        )}
+        <InteractionSlot
+          clarification={clarification}
+          pendingQuestion={state.pendingQuestion}
+          width={cols}
+          onAnswerQuestion={props.onAnswerQuestion}
+          onCancelQuestion={props.onCancelQuestion}
+        />
+        {/* Depthline P2: ComposerFrame — 单条顶部分隔线 */}
         <ComposerFrame width={cols - 2}>
           <OrcanaComposer
             onSubmit={props.submit}
@@ -558,7 +499,7 @@ export function AppShell(props: AppShellProps) {
             onChromeChange={props.setInputChrome}
           />
         </ComposerFrame>
-        <FooterHints
+        <HintBar
           busy={isWorking}
           activeContext={activeKeyContext}
           width={cols}

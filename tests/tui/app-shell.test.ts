@@ -192,7 +192,7 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
     expect(layout.footerHeight).toBeGreaterThanOrEqual(1)
   })
 
-  test("footerHeight = panelRows + inputRows + 1(FooterHints) + 2(ComposerFrame dividers) in normal case", () => {
+  test("footerHeight = panelRows + inputRows + 1(ActivityLine) + 1(HintBar) + 1(single ComposerFrame divider) in normal case", () => {
     const layout = computeAppShellLayout({
       rows: 40,
       cols: 80,
@@ -203,10 +203,10 @@ describe("AppShell layout: bodyHeight and footerHeight constraints", () => {
       inputChrome: defaultInputChrome,
     })
     // No panel, no task → panelRows=0, textRows=1 → inputRows=1+1=2
-    // PR-2: +2 for ComposerFrame top/bottom dividers → footerHeight=0+2+1+2=5
+    // Depthline P2: 单条 ComposerFrame 分隔线（+1，原 +2）→ footerHeight=0+2+1+1=4
     expect(layout.panelRows).toBe(0)
     expect(layout.inputRows).toBe(2)
-    expect(layout.footerHeight).toBe(5)
+    expect(layout.footerHeight).toBe(4)
   })
 
   test("bodyHeight + footerHeight + 3 ≈ rows (normal case)", () => {

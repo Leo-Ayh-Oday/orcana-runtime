@@ -2,7 +2,18 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.4] — 2026-08-05
+## [0.8.5] — 2026-08-05
+
+### Added (MACP-M5 — 冲突安全合并，替换 later-wins)
+- **later-wins removed from the production path** — `reduce.merge_agents` never overwrites fields: identical values deduplicate, differing values for the same key become `valueConflicts` (structural, never silent).
+- **Per-agent result bundles** (`AgentResultBundle`) — outputs stay isolated under their agent id (no field overwriting); patches / evidence / files indexed per file.
+- **Conflict policy** (`buildConflictSet`) — same-file identical patches deduplicate (not a conflict); different patches produce a `FileConflict` (never auto-overwritten) plus a derived symbol-level conflict; contract-level collisions are declared via `outputs.contracts`. All sets are order-independent (sorted agents/writers).
+- **Integration plan** — disjoint writes and deduped files enter `automatic`; everything else blocks.
+- **Transactional integration** (`integrateWithVerification`) — automatic files merge through a single-writer `FileTransaction`; post-merge whole-workspace verification is MANDATORY (per-agent pre-merge verification never substitutes); any failure or interruption rolls the official workspace back to its exact pre-merge state (no half-written files). Unresolved conflicts return `blocked_conflict` and never touch the official workspace; agent worktrees are preserved until adjudication ends.
+- **Scheduler status** — a merge node reporting `conflicts` or `valueConflicts` sets the run status to `blocked_conflict`.
+- 14 new tests + G7 merge tests updated to the conflict-safe semantics.
+
+
 
 ### Added (MACP-M4 — 持久化中断、人工等待与恢复)
 - **Persistent interrupts** — a workflow run can pause at a human node instead of blocking the process: the interrupt record is persisted to `.orcana/workflow/interrupts/<id>.json`, the run returns `waiting_interrupt` with a resume token, and the process is released (PROCESS_BOUND_WAITING: 0). Downstream subgraphs do not run while waiting; in-flight nodes drain, then the run exits.

@@ -12,21 +12,7 @@ import type { Key } from "ink"
 import { matchAction, findAction } from "../../src/tui/presentation/actions"
 
 function key(overrides: Partial<Key> = {}): Key {
-  return {
-    ctrl: false,
-    meta: false,
-    shift: false,
-    upArrow: false,
-    downArrow: false,
-    pageUp: false,
-    pageDown: false,
-    return: false,
-    escape: false,
-    tab: false,
-    backspace: false,
-    delete: false,
-    ...overrides,
-  }
+  return overrides as Key
 }
 
 describe("matchAction", () => {

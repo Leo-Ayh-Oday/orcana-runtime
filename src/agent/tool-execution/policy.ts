@@ -5,7 +5,13 @@ import { inferToolCategory, type ToolCategory } from "../permission"
 import type { TaskTracker } from "../task-tracker"
 import type { RippleObligation } from "../../ripple/obligations"
 import { enforceModeTools, type ModeContract } from "../mode-contract"
-import { getToolRisk, isHighRisk, formatRiskBlockMessage } from "../tool-risk"
+import { getToolRisk } from "../tool-risk"
+// RT-5: the gate chain is factored into policy modules (single execution
+// order, shared by loop and node runtime — no per-path safety bypasses).
+import { formatRiskBlockMessage, highRiskConfirmationGate, isHighRisk } from "../../harness/capabilities/policy/risk-policy"
+import { approvalDecision } from "../../harness/capabilities/policy/approval-policy"
+import { networkToolBlocked } from "../../harness/capabilities/policy/network-policy"
+import { checkWritePaths } from "../../harness/capabilities/policy/writable-root-policy"
 
 // ── Types ──
 
@@ -27,6 +33,10 @@ export interface ToolPolicyInput {
   contextReadinessBlockers?: string[]
   /** PR 8: active mode contract for tool enforcement. */
   modeContract?: ModeContract
+  /** RT-5: writable roots for path-boundary enforcement (node mode passes
+   *  the run scope's [projectRoot]; loop mode omits it → gate skipped). */
+  projectRoot?: string
+  writableRoots?: string[]
 }
 
 export interface ToolPolicyBlocked {
@@ -92,19 +102,25 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
   // unknown write-class capabilities fail closed (strict ask) instead of
   // passing through unexamined. The loop always passes a tool, so this branch
   // is byte-identical there.
+  // RT-5: the ask→allow promotion rule lives in approval-policy.
   const risk = tool ? getToolRisk(toolCall.name, toolCall.input, tool) : null
   if (tool || toolCall.name !== "unknown") {
     const perm = permissionGate.check(toolCall.name, toolCall.input, tool, { riskLevel: risk?.level })
     if (!perm.allowed) {
-      const isFullModeAsk = perm.level === "ask" && permissionMode === "full"
-      if (!isFullModeAsk) {
-        // Hard block (deny or ask in strict mode)
+      const decision = approvalDecision({
+        gateLevel: perm.level,
+        permissionMode,
+        riskLevel: risk?.level ?? 0,
+      })
+      if (!decision.allowed) {
+        // Hard block (deny, or ask in strict mode) — high-risk denials carry
+        // the enriched risk message (existing behavior).
         const blockMsg = risk && isHighRisk(risk.level)
           ? formatRiskBlockMessage(toolCall.name, risk, toolCall.input)
           : PermissionGate.formatBlockedMessage(toolCall.name, perm, toolCall.input)
         return {
           allowed: false,
-          reason: `permission:${perm.level}`,
+          reason: decision.reason ?? `permission:${perm.level}`,
           blockMessage: blockMsg,
           category: cat,
           incrementRateLimit: cat,
@@ -114,6 +130,28 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
       }
       // full mode: ask is promoted to allow for Risk 0-3.
       // Risk 4-5 promotion is rejected by a later gate (Gate 8).
+    }
+  }
+
+  // Gate 2.5 (RT-5): writable-root boundary — write-style calls whose paths
+  // escape the declared writable roots are rejected here, BEFORE any handler
+  // runs. Single shared boundary for file/patch/git writers (node mode passes
+  // writableRoots; loop mode omits them → this gate is skipped, unchanged).
+  if (input.projectRoot && tool && !tool.defn.isReadonly) {
+    const rootCheck = checkWritePaths(toolCall.input, {
+      projectRoot: input.projectRoot,
+      writableRoots: input.writableRoots,
+    })
+    if (rootCheck && !rootCheck.allowed) {
+      return {
+        allowed: false,
+        reason: "writable_root",
+        blockMessage: `写路径边界已阻止：${rootCheck.reason ?? "path outside writable roots"}`,
+        category: cat,
+        incrementRateLimit: cat,
+        source: "policy:writable_root",
+        priority: 2,
+      }
     }
   }
 
@@ -176,16 +214,17 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
     }
   }
 
-  // Gate 7: Web search failure
-  if (tool && toolCall.name === "web_search" && webSearchFailedThisTurn) {
+  // Gate 7: Web search failure (RT-5: network-policy owns the boundary)
+  const networkGate = networkToolBlocked(toolCall.name, webSearchFailedThisTurn, webSearchFailReason)
+  if (networkGate) {
     return {
       allowed: false,
-      reason: "web_search_failed",
-      blockMessage: `⚠️ 网页搜索不可用：${webSearchFailReason || "SearXNG Docker 未运行"}。\n\n解决方案（你来决定）：\n1) 启动 SearXNG Docker 容器修复搜索\n2) 用 web_fetch 直接访问已知 URL\n3) 用本地代码搜索 (findstr / grep) 代替\n4) 向用户报告搜索不可用，继续现有的本地分析`,
+      reason: networkGate.reason,
+      blockMessage: networkGate.blockMessage,
       category: cat,
       incrementRateLimit: cat,
       source: "policy:web_search_failed",
-      priority: 7,
+      priority: networkGate.priority,
     }
   }
 
@@ -209,15 +248,17 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
   // This gate fires LAST so more specific gates (readonly, ripple, planning,
   // context_readiness, mode_contract) take priority in their blocking reasons.
   // Only applies in "full" permission mode where ask→allow promotion happens.
-  if (tool && risk && isHighRisk(risk.level) && permissionMode === "full") {
+  // RT-5: the gate logic lives in risk-policy.
+  const riskGate = highRiskConfirmationGate(tool, toolCall.input, permissionMode)
+  if (riskGate) {
     return {
       allowed: false,
-      reason: `tool_risk:${risk.level}`,
-      blockMessage: formatRiskBlockMessage(toolCall.name, risk, toolCall.input),
+      reason: riskGate.reason,
+      blockMessage: riskGate.blockMessage,
       category: cat,
       incrementRateLimit: cat,
-      source: `policy:tool_risk:${risk.level}`,
-      priority: 8,
+      source: `policy:tool_risk:${riskGate.riskLevel}`,
+      priority: riskGate.priority,
     }
   }
 

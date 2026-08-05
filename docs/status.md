@@ -24,7 +24,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | Replay harness | Done | `src/agent/replay-harness.ts`, `tests/replay_harness.test.ts`, 70 deterministic replay fixtures, CI core gate, `evals/harness/` H12 scripted E2E suite (12 scenarios, all passing), `evals/mini-benchmark.ts` (PR-8.3) | E2E replay runs via `bun run eval:replay` (12/12, rubric + floors + history); mini benchmark runs via `bun run bench:mini` with persisted baseline and regression gate (pass@1 100%, false done rate 0%) |
 | TUI / CLI operator UX | Partial | TUI tests, command dispatcher, command shelf, composer, runtime panels | Plan approval and evidence report UX still need completion checks |
 | Observability | Partial | `AgentRunTrace`, gate telemetry, runtime panels | RunTrace event taxonomy is not fully standardized |
-| Docs / release | Planned | `README.md`, `ARCHITECTURE.md`, `SECURITY.md` exist | v1.0 architecture/status/security docs need synchronization |
+| Docs / release | Partial | `README.md`, `ARCHITECTURE.md`, `SECURITY.md` exist; `orcana doctor` landed (PR-10.4) | v1.0 architecture/status/security doc synchronization remains |
 
 ## Strong Single PR Mapping
 
@@ -58,7 +58,7 @@ This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is
 | PR-7.x Replay / CI | Done | 70-case deterministic replay exists with a CI core gate; H12 scripted E2E replay runs 12/12 scenarios through the real AgentHarness with rubric evaluation; PR-8.3 mini benchmark (pass@1 / false done rate / cost) runs offline with a persisted baseline and regression gate. |
 | PR-8.x TUI / CLI | Partial | Large TUI surface exists and has high targeted test coverage; final plan/evidence UX still needs acceptance gates. |
 | PR-9.x Observability | Planned | Gate/runtime telemetry exists, but a standard event taxonomy and failure taxonomy report are not complete. |
-| PR-10.x Docs / Release | Planned | Update architecture, roadmap, security, and `orcana doctor` after the runtime gates are stable. |
+| PR-10.x Docs / Release | Partial | `orcana doctor` (PR-10.4) is landed: version consistency, runtime, config integrity, model/auth, concurrent provider reachability probes (static only, no billed request), sandbox capability matrix, MCP server status, directory structure; human-readable + `--json`; fail count maps to exit code 1. ARCHITECTURE/SECURITY sync remains. |
 
 ## Current Validation Baseline
 

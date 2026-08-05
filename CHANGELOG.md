@@ -2,7 +2,19 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.8] — 2026-08-05
+## [0.8.9] — 2026-08-05
+
+### Added (LNXF-2 — 统一进程核心与 Host Audit 后端)
+- **Process supervisor** — POSIX process groups, explicit environments, output limits, unified timeout/cancel, and daemon detection (post-exit group scan reports orphans from double-fork / background daemons). Tree termination: SIGTERM → grace → SIGKILL with polling to zero, zombie processes excluded (they cannot be killed and are reaped by init), `/proc`-based group counting (no ps dependency).
+- **Explicit environment system** — child env = Runtime fixed vars → profile → tool requests → secret injection → policy freeze; `{...process.env, ...requested}` is structurally impossible. Default-denied: `*_API_KEY`, `*_TOKEN`, `AWS_*`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, `DOCKER_HOST`, `KUBECONFIG`, `DATABASE_URL`, proxies. `HOST_ENV_SECRET_LEAK` detection.
+- **Output limiter** — hard caps on stdout/stderr with truncation markers (OUTPUT_LIMIT_BYPASS: 0).
+- **Secret bindings** — sealed-file (0600) / environment delivery, expiry rejection, cleanup callback, redacted from trace.
+- **Host Audit backend** — the degraded backend: requires `minimum=audit` + explicit degradation, explicit env, timeout, process group, PathGuard (post-hoc) migration, full `SandboxReceipt`.
+- **Broker execution** — `execute()` wired for enabled mode (compile → selectBackend → backend.run → receipts); `registerBackend` extension point; unified `src/runtime/linux/index.ts` export surface (ADR-L1 consumption boundary).
+- **Static gate** — a test asserts direct `spawn`/`execFile`/`Bun.spawn`/`shell:true` calls in `src/` stay ≤ the LF-0 baseline (36), with the runtime process/backends directories whitelisted.
+- 21 tests; full gate 959 pass, bench no regression.
+
+
 
 ### Added (LNXF-1 — Linux 契约、能力探测与 Shadow 模式)
 - **Linux execution foundation contracts** — `LinuxCapabilities` (cgroup v2 + controllers + delegation, 8 namespaces, bubblewrap/podman/Landlock/seccomp/tmpfs/systemd probes with explicit degradation reasons), `ExecutionCellSpec` (immutable/serializable/hashable/replayable; `inheritHost: false` enforced; policyDigest binding), `SandboxReceipt` (identity + 5 policy digests + outcomes + metrics + observed writes + cleanup), MountRule/TmpfsRule/SecretBinding/CacheMountRequest/DomainResourceBudget/ResourceRequest/PortLease/BackendAvailability.

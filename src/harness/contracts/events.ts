@@ -56,6 +56,10 @@ export const HARNESS_EVENT_TYPES = {
   toolCallCompleted: "tool.call.completed",
   toolCallFailed: "tool.call.failed",
 
+  // RT-2 (Tool Runtime 2.0): shadow-mode divergence observation — the new
+  // contract ran in the dark and saw something the legacy path did not.
+  capabilityShadowMismatch: "capability.shadow_mismatch",
+
   artifactCreated: "artifact.created",
   artifactStale: "artifact.stale",
   evidenceRecorded: "evidence.recorded",

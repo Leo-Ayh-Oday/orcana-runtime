@@ -41,6 +41,8 @@ export interface CapabilityDescriptorPartial {
   idempotent?: boolean
   cancellable?: boolean
   producesEvidence?: boolean
+  /** RT-2: migration source marker. */
+  source?: "legacy" | "native"
 }
 
 /** Build a full descriptor from a partial, applying conservative defaults. */
@@ -58,6 +60,7 @@ export function createCapabilityDescriptor(partial: CapabilityDescriptorPartial)
     idempotent: partial.idempotent ?? false,
     cancellable: partial.cancellable ?? true,
     producesEvidence: partial.producesEvidence ?? false,
+    source: partial.source,
   }
 }
 

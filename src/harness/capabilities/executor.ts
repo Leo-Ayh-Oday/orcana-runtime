@@ -24,6 +24,7 @@ import { evaluateToolPolicy } from "../../agent/tool-execution/policy"
 import { executeSingleTool, type ParallelToolResult } from "../../agent/tool-execution/single-executor"
 import { appendHookWarnings, runToolAfterHook, runToolBeforeHook } from "../../agent/round/pre-loop"
 import { validateJsonSchema } from "./schema-validator"
+import { getCapabilityMode } from "./flags"
 import { budgetKindsFor } from "./descriptor"
 import { projectCapabilityDescriptor, toolCapabilityHandler } from "./tool-adapter"
 import { buildNodePolicyInput, type NodePolicyContext } from "./policy-adapter"
@@ -234,10 +235,23 @@ export async function executeCapability(
   }
 
   // Step 6: Result Schema Validation
+  // RT-2: shadow mode observes the new contract in the dark — a divergence
+  // from the old (schema-less) path is recorded on the event stream
+  // (capability.shadow_mismatch) and the result is left as produced, so the
+  // shadow never disturbs the user's task. legacy (default) and enabled both
+  // make the validation authoritative: failures block (existing behavior).
   const schemaErrors = validateJsonSchema(result, descriptor.outputSchema)
   if (schemaErrors.length > 0) {
-    const message = `result failed schema validation: ${schemaErrors.join("; ")}`
-    result = { success: false, content: message, error: message }
+    if (getCapabilityMode() === "shadow") {
+      input.emit?.("capability.shadow_mismatch", {
+        capabilityId: descriptor.id,
+        check: "output_schema",
+        errors: schemaErrors,
+      })
+    } else {
+      const message = `result failed schema validation: ${schemaErrors.join("; ")}`
+      result = { success: false, content: message, error: message }
+    }
   }
 
   // Step 7: Artifact / Evidence

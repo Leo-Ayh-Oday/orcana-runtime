@@ -86,8 +86,8 @@ export interface CgroupManagerOptions {
 }
 
 export class CgroupManager {
-  private readonly fs: CgroupFs
-  private readonly base: string
+  readonly fs: CgroupFs
+  readonly base: string
   private readonly created: string[] = []
 
   constructor(options: CgroupManagerOptions) {

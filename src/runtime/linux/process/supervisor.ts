@@ -27,6 +27,8 @@ export interface SupervisorOptions {
   detectDaemon?: boolean
   /** 实时输出回调（流式消费者用；数据到达即调用）。 */
   onOutput?: (stream: "stdout" | "stderr", data: Buffer) => void
+  /** spawn 完成回调（cgroup attach 用）。 */
+  onSpawn?: (pid: number) => void
 }
 
 export interface SupervisorResult {
@@ -64,6 +66,7 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
   const startedAt = Date.now()
   const limiter = createOutputLimiter(options.limits)
   const { proc, pid } = spawnSupervised(options)
+  options.onSpawn?.(pid)
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
 
@@ -133,7 +136,10 @@ export type StreamedSupervisorEvent =
 /** 流式版监督执行：stdout/stderr 数据到达即产出（真实流式，非退出后批处理）。 */
 export async function* streamSupervised(options: SupervisorOptions): AsyncGenerator<StreamedSupervisorEvent> {
   const chunks: Array<{ stream: "stdout" | "stderr"; data: string; at: number }> = []
-  const resultPromise = runSupervised({ ...options, onOutput: (stream, data) => chunks.push({ stream, data: data.toString("utf-8"), at: Date.now() }) })
+  const resultPromise = runSupervised({
+    ...options,
+    onOutput: (stream, data) => chunks.push({ stream, data: data.toString("utf-8"), at: Date.now() }),
+  })
   let result: SupervisorResult | null = null
   let lastIndex = 0
   const settled = resultPromise.then(r => { result = r })

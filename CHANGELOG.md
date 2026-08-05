@@ -2,7 +2,18 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.4] — 2026-08-05
+## [0.7.5] — 2026-08-05
+
+### Added (Strong Single v1.0, PR-8.3 — SWE-style Mini Benchmark)
+- **`evals/mini-benchmark.ts`** — deterministic, offline, no-LLM benchmark: runs the H12 scripted scenario suite (12 cases, hr-core + hr-dual) through the real AgentHarness and aggregates three indicators:
+  - **pass@1** — share of scenarios whose single run passes assertions with the expected outcome (currently 100%);
+  - **false done rate** — share of runs that COMPLETED against a non-completed expectation (currently 0%);
+  - **cost** — estimated USD from the scripted token-usage events (currently ≈ $0.002 per full suite).
+- **Regression gate** — a baseline is persisted at `~/.orcana/evals/mini-benchmark-baseline.json`; later runs compare and exit 1 when pass@1 drops >0.05, false done rate rises >0.05, or cost rises >10% ("每次 PR 不退化").
+- **`bun run bench:mini`** — `[--filter <id>] [--report] [--update-baseline]`.
+- 6 unit tests covering aggregation and every regression direction.
+
+
 
 ### Fixed (Strong Single v1.0, SS-Next-2B — rollback-aware evidence invalidation)
 - **The rollback hole is closed**: `rollback_transaction` used to revert files without invalidating evidence, so verification of the pre-rollback (committed) code state stayed "fresh" and could satisfy the completion gate for code that no longer existed.

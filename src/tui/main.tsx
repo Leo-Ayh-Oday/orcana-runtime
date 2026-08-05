@@ -172,6 +172,7 @@ function useAgentStream(
     dispatchAction: (id: string) => void
   }>,
   store: TuiStore,
+  exitArmedRef: React.MutableRefObject<boolean>,
 ) {
   const adapterRef = useRef<StreamEventAdapter | null>(null)
   if (adapterRef.current === null) {
@@ -434,9 +435,14 @@ function useAgentStream(
       addSystemMessage,
       isRunning: () => runningRef.current,
       exit: () => {
-        cleanupTerminal()
-        runtime.dispose()
-        process.exit(0)
+        if (exitArmedRef.current) {
+          cleanupTerminal()
+          runtime.dispose()
+          process.exit(0)
+        }
+        exitArmedRef.current = true
+        setTimeout(() => { exitArmedRef.current = false }, 5000)
+        store.dispatch({ type: "ui.event_message", kind: "activity", text: "再输入一次 /exit 确认退出。", minIntervalMs: 0 })
       },
       openModels: controlsRef.current.openModels,
       openEffort: controlsRef.current.openEffort,
@@ -501,7 +507,9 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   // Depthline P1: overlay 互斥状态 + settings 对话框按键由 controller 接管。
   // controls 经 ref 注入 useAgentStream，避免 controller 与 stream hook 的循环依赖。
   const controlsRef = useRef({ openModels: () => {}, openEffort: () => {}, dispatchAction: (id: string) => {} })
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, thinkEffort, setThinkEffort, stopRun } = useAgentStream(runtime, prompt, controlsRef, store)
+  // 退出保护：/exit 双确认 + Ctrl+C 双按（运行任务时第一下只停止）
+  const exitArmedRef = useRef(false)
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, thinkEffort, setThinkEffort, stopRun } = useAgentStream(runtime, prompt, controlsRef, store, exitArmedRef)
   thinkEffortRef.current = thinkEffort
   const overlayController = useOverlayController({
     runtime,
@@ -635,6 +643,25 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   controlsRef.current.openEffort = overlayController.openEffort
 
   useInput((_input, key) => {
+    // Ctrl+C 双按保护（exitOnCtrlC 已关闭；splash 期间也直接退出）：
+    //   idle/startup → 直接退出；working → 第一下停止任务并提示，3s 内再按退出
+    if (key.ctrl && _input.toLowerCase() === "c") {
+      if (exitArmedRef.current) {
+        cleanupTerminal()
+        runtime.dispose()
+        process.exit(0)
+      }
+      if (showStartup || !isWorking) {
+        cleanupTerminal()
+        runtime.dispose()
+        process.exit(0)
+      }
+      exitArmedRef.current = true
+      setTimeout(() => { exitArmedRef.current = false }, 3000)
+      stopRun()
+      store.dispatch({ type: "ui.event_message", kind: "activity", text: "任务已停止。再按一次 Ctrl+C 退出 Orcana。", minIntervalMs: 0 })
+      return
+    }
     if (showStartup) return
     // Depthline P1: settings 对话框按键由 controller 消费（不泄漏到 keymap）
     if (overlayController.overlay.kind === "settings") {
@@ -666,7 +693,8 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       return
     }
     // 未命中 → pass through to composer
-  }, { isActive: !showStartup })
+    // isActive 恒为 true：splash 期间也必须能处理 Ctrl+C（exitOnCtrlC 已关闭），其余按键在 showStartup 时被吞
+  }, { isActive: true })
 
   useEffect(() => {
     if (autoFollow) setScrollOffset(0)
@@ -776,6 +804,8 @@ export async function startInkTUI(prompt?: string) {
     <ErrorBoundary>
       <ChatApp prompt={prompt} runtime={runtime} />
     </ErrorBoundary>,
+    // 关闭 ink 默认 Ctrl+C 直退：由 useInput 接管双按保护（运行任务时第一下仅停止）
+    { exitOnCtrlC: false },
   )
   try {
     return await waitUntilExit()

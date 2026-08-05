@@ -110,5 +110,8 @@ export function createNodePolicyContextFromRunScope(
     input: opts.input,
     toolCallId: opts.toolCallId,
     name: opts.name,
+    // RT-5: node writes are bounded to the run scope's project root.
+    projectRoot: scope.projectRoot,
+    writableRoots: [scope.projectRoot],
   }
 }

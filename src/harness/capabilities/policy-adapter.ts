@@ -23,6 +23,10 @@ export interface NodePolicyContext {
   /** Policy subject name when no tool descriptor is resolved (R1: name-only
    *  evaluation falls back to category inference, fail-closed in strict mode). */
   name?: string
+  /** RT-5: writable-root boundary — node mode passes the run scope's
+   *  projectRoot so write paths are checked against it. */
+  projectRoot?: string
+  writableRoots?: string[]
 }
 
 /** Node mode has no round semantics: the round-scoped Gate 1 caps compare
@@ -58,5 +62,7 @@ export function buildNodePolicyInput(context: NodePolicyContext): ToolPolicyInpu
     webSearchFailReason: "",
     finalText: "",
     modeContract: context.modeContract,
+    projectRoot: context.projectRoot,
+    writableRoots: context.writableRoots ?? (context.projectRoot ? [context.projectRoot] : undefined),
   }
 }

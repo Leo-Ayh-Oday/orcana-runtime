@@ -24,6 +24,8 @@ import { executeHarnessNode } from "../execution/harness-node-executor"
 import type { WorkflowHarnessEnvironment } from "../harness/environment"
 import { enforceNodeAssignment, enforceActualWrites, ownershipDeniedResult, createWorktreeRegistry } from "../execution/workflow-execution-context"
 import type { WorkflowNodeExecutionContext } from "../agents/workspace-context"
+import { WorkflowInterruptError, type WorkflowInterruptError as WIE } from "../interrupts/types"
+import { createResumeToken } from "../interrupts/resume-token"
 
 export interface SchedulerOptions {
   maxParallel?: number
@@ -39,6 +41,17 @@ export interface SchedulerOptions {
    *  kind run through the Unified Node Runtime under this environment's
    *  scope/ledger/capabilities; without it such nodes fail closed. */
   harness?: import("../harness/environment").WorkflowHarnessEnvironment
+  /** MACP-M4: persistent interrupts. When present, human nodes with no
+   *  answer pause the run (persisted record + waiting result + resume
+   *  token) instead of blocking the process; `resumeAnswer` resumes a
+   *  paused run by injecting the validated answer at the interrupted node. */
+  interrupts?: {
+    controller: import("../interrupts/resume-controller").ResumeController
+    specDigest: string
+    resumeAnswer?: { nodeId: string; answer: unknown; interruptId: string }
+    onWaiting?: (record: import("../interrupts/types").WorkflowInterruptRecord, resumeToken: string) => void
+    onResolved?: (interruptId: string) => void
+  }
   onNodeFinished?: (result: import("../types").WorkflowNodeResult) => void
 }
 
@@ -191,8 +204,20 @@ export async function runScheduler(
       }
       const lock = isWrite ? await cc.acquireWrite() : null
       try {
+        // MACP-M4: pass the interrupt runtime into the harness execution so
+        // human nodes can pause (persisted record) or resume (answer).
+        const interruptRuntime = options.interrupts
+          ? {
+              controller: options.interrupts.controller,
+              specId: spec.specId,
+              specDigest: options.interrupts.specDigest,
+              resumeAnswer: options.interrupts.resumeAnswer,
+              onWaiting: options.interrupts.onWaiting,
+              onResolved: options.interrupts.onResolved,
+            }
+          : undefined
         const result = isHarness && harnessRuntime
-          ? await executeHarnessNode(node, harnessRuntime, store, enforcement.projectRoot !== harnessRuntime.scope.projectRoot ? enforcement.projectRoot : undefined)
+          ? await executeHarnessNode(node, harnessRuntime, store, enforcement.projectRoot !== harnessRuntime.scope.projectRoot ? enforcement.projectRoot : undefined, interruptRuntime)
           : await executeNode(node, registry, store)
         // MACP-M3 task 8/9: actual written paths vs declared ownership —
         // only for assigned write nodes (no pool → legacy, unchanged).
@@ -228,15 +253,28 @@ export async function runScheduler(
       }
     })().then(result => {
       running.delete(node.id)
-      finished.add(node.id)
-      queue.onDependencyDone(node.id)
-      options.onNodeFinished?.(result)
+      if (result) {
+        finished.add(node.id)
+        queue.onDependencyDone(node.id)
+        options.onNodeFinished?.(result)
+      }
+    }).catch(error => {
+      running.delete(node.id)
+      if (error instanceof WorkflowInterruptError) {
+        // MACP-M4: the run pauses — no failed result, the waiting outcome
+        // is produced by the main loop.
+        pendingInterrupt.error = pendingInterrupt.error ?? error
+      } else {
+        throw error
+      }
     })
     running.set(node.id, promise)
   }
 
+  const pendingInterrupt: { error: WIE | null } = { error: null }
+
   while (true) {
-    while (running.size < maxParallel && queue.hasReady) {
+    while (running.size < maxParallel && queue.hasReady && !pendingInterrupt.error) {
       const node = queue.next()
       if (!node) break
       if (store.has(node.id)) {
@@ -277,6 +315,8 @@ export async function runScheduler(
       launch(node, enforcement)
     }
     if (finished.size === spec.nodes.length) break
+    // MACP-M4: the run paused — stop launching, drain in-flight nodes, exit.
+    if (pendingInterrupt.error && running.size === 0) break
     if (running.size === 0) {
       const blocked = spec.nodes.filter(n => !finished.has(n.id)).map(n => n.id)
       throw new Error(`workflow: deadlock — no ready node while ${blocked.length} pending (${blocked.join(", ")})`)
@@ -286,6 +326,35 @@ export async function runScheduler(
 
   // MACP-M3 task 13: dispose every worktree this run created.
   worktreeRegistry.dispose()
+
+  // MACP-M4: the run paused at a human node — the process is released with
+  // a persisted record + resume token (PROCESS_BOUND_WAITING: 0).
+  if (pendingInterrupt.error) {
+    const record = pendingInterrupt.error.record
+    const opened = options.interrupts
+      ? {
+          resumeToken: createResumeToken({
+            specDigest: record.specDigest,
+            expiresAt: record.expiresAt ?? Number.MAX_SAFE_INTEGER,
+            interruptId: record.interruptId,
+          }),
+        }
+      : { resumeToken: "" }
+    return {
+      specId: spec.specId,
+      finishedAt: Date.now(),
+      status: "waiting_interrupt",
+      results: store.all(),
+      interrupt: {
+        interruptId: record.interruptId,
+        resumeToken: opened.resumeToken,
+        nodeId: record.nodeId,
+        kind: record.kind,
+        prompt: record.prompt,
+        expiresAt: record.expiresAt,
+      },
+    }
+  }
 
   const results = store.all()
   const base: WorkflowRunResult = {
@@ -307,6 +376,10 @@ export async function runScheduler(
     if (!evidence.some(e => e.passed) || writeFailed) {
       base.status = "blocked_no_evidence"
     }
+  }
+  // MACP-M4: a resumed run that completed resolves the interrupt record.
+  if (options.interrupts?.resumeAnswer) {
+    options.interrupts.onResolved?.(options.interrupts.resumeAnswer.interruptId)
   }
   return base
 }

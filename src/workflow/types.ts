@@ -184,7 +184,17 @@ export interface WorkflowNodeResult {
   evidence?: import("../agent/evidence-ledger").EvidenceEntry[]
 }
 
-export type WorkflowRunResultStatus = "done" | "blocked_no_evidence" | "write_rejected"
+export type WorkflowRunResultStatus = "done" | "blocked_no_evidence" | "write_rejected" | "waiting_interrupt"
+
+/** MACP-M4: a run paused at a human node — persisted, resumable. */
+export interface WorkflowWaitingInterrupt {
+  interruptId: string
+  resumeToken: string
+  nodeId: string
+  kind: string
+  prompt: string
+  expiresAt?: number
+}
 
 export interface WorkflowRunResult {
   specId: string
@@ -193,4 +203,6 @@ export interface WorkflowRunResult {
   results: WorkflowNodeResult[]
   /** G3: verification evidence bound to write nodes (aggregate-evidence). */
   evidence?: Array<{ nodeId: string; writeNodeIds: string[]; passed: boolean; summary?: string }>
+  /** MACP-M4: set when status === "waiting_interrupt". */
+  interrupt?: WorkflowWaitingInterrupt
 }

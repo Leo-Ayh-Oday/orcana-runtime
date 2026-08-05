@@ -2,18 +2,25 @@
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs"
 import { resolve, relative, join } from "node:path"
-import { execSync } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
+import { collectProcessRun } from "../runtime/process-executor"
 import { Result } from "./registry"
 
 const SKIP_DIRS = new Set([".git", ".orcana", "node_modules", "__pycache__", ".pytest_cache", ".venv", "dist", "build", ".next"])
 const SKIP_FILES = new Set(["deepseek-run.out.txt", "deepseek-run.err.txt"])
 
-let _rgAvailable: boolean | null = null
+let _rgAvailable: Promise<boolean> | null = null
 
-function rgAvailable(): boolean {
+function rgAvailable(): Promise<boolean> {
   if (_rgAvailable !== null) return _rgAvailable
-  try { execSync("rg --version", { stdio: "ignore", timeout: 2000 }); _rgAvailable = true } catch { _rgAvailable = false }
+  _rgAvailable = (async () => {
+    try {
+      await collectProcessRun({ command: "rg", args: ["--version"], timeoutMs: 2000 })
+      return true
+    } catch {
+      return false
+    }
+  })()
   return _rgAvailable
 }
 
@@ -49,14 +56,12 @@ function grepNode(pattern: string, extPattern: string, maxResults = 20): Array<{
   return results
 }
 
-function grep(pattern: string, glob = "*.{ts,tsx,js,jsx,py,rs,go}", maxResults = 20): Array<{ file: string; line: string; text: string }> {
-  if (rgAvailable()) {
+async function grep(pattern: string, glob = "*.{ts,tsx,js,jsx,py,rs,go}", maxResults = 20): Promise<Array<{ file: string; line: string; text: string }>> {
+  if (await rgAvailable()) {
     try {
       const results: Array<{ file: string; line: string; text: string }> = []
-      const out = execSync(`rg -n --no-heading -g "${glob}" -e "${pattern}" .`, {
-        encoding: "utf-8", timeout: 10000, maxBuffer: 5 * 1024 * 1024,
-      })
-      for (const line of out.trim().split("\n").slice(0, maxResults)) {
+      const out = await collectProcessRun({ command: "rg", args: ["-n", "--no-heading", "-g", glob, "-e", pattern, "."], timeoutMs: 10000 })
+      for (const line of out.stdout.trim().split("\n").slice(0, maxResults)) {
         if (!line) continue
         const idx1 = line.indexOf(":")
         const idx2 = line.indexOf(":", idx1 + 1)
@@ -77,7 +82,7 @@ async function find_symbol(params: Record<string, unknown>): Promise<ToolResult>
     kind === "class" ? `class\\s+${name}\\b` :
     `(def|class)\\s+${name}\\b|${name}\\s*[:=]`
 
-  const results = grep(pattern, "*.{py,ts,tsx,js,jsx,rs,go}", Number(params.max_results ?? 15))
+  const results = await grep(pattern, "*.{py,ts,tsx,js,jsx,rs,go}", Number(params.max_results ?? 15))
   if (!results.length) return Result.ok(`Symbol '${name}' not found`)
 
   const lines = [`Found ${results.length} match(es) for '${name}':`]
@@ -87,7 +92,7 @@ async function find_symbol(params: Record<string, unknown>): Promise<ToolResult>
 
 async function find_references(params: Record<string, unknown>): Promise<ToolResult> {
   const name = String(params.name ?? "")
-  const results = grep(`\\b${name}\\b`, "*.{py,ts,tsx,js,jsx,rs,go}", Number(params.max_results ?? 20))
+  const results = await grep(`\\b${name}\\b`, "*.{py,ts,tsx,js,jsx,rs,go}", Number(params.max_results ?? 20))
   if (!results.length) return Result.ok(`No references for '${name}'`)
 
   const lines = [`${results.length} reference(s) to '${name}':`]

@@ -5,7 +5,8 @@
  *  the owned files, writes land in the copy). `dispose` cleans up.
  */
 
-import { spawnSync } from "node:child_process"
+import { spawnSyncLegacy } from "../../runtime/legacy-process"
+const spawnSync = spawnSyncLegacy
 import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 

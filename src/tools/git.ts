@@ -1,19 +1,20 @@
 /** Git tools — status, diff, log, blame, show, add, commit. */
 
-import { execFileSync } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
+import { collectProcessRun } from "../runtime/process-executor"
 
 /**
  * Run git with an argv array (never a shell string) so model- or repository-
  * controlled arguments (commit message, ref, path) cannot inject shell commands.
+ * R1: 统一走 ProcessExecutor（Linux → Broker/Backend）。
  */
-function runGit(args: string[], timeout = 30): { code: number; stdout: string; stderr: string } {
+async function runGit(args: string[], timeout = 30): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const out = execFileSync("git", args, { timeout: timeout * 1000, encoding: "utf-8" })
-    return { code: 0, stdout: out, stderr: "" }
-  } catch (e: any) {
-    return { code: e.status ?? -1, stdout: e.stdout ?? "", stderr: e.stderr ?? "git command failed" }
+    const r = await collectProcessRun({ command: "git", args, timeoutMs: timeout * 1000, profile: "dependency" })
+    return { code: r.exitCode ?? -1, stdout: r.stdout, stderr: r.stderr || "git command failed" }
+  } catch (error) {
+    return { code: -1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }
   }
 }
 
@@ -85,7 +86,7 @@ function formatStatusState(state: GitStatusState): string {
 }
 
 async function git_status(): Promise<ToolResult> {
-  const { code, stdout, stderr } = runGit(["status", "--porcelain=v2", "-z", "--branch"])
+  const { code, stdout, stderr } = await runGit(["status", "--porcelain=v2", "-z", "--branch"])
   if (code !== 0) return Result.fail(stderr)
   if (!stdout.trim()) return Result.ok("Clean working tree", { state: { branch: "", staged: [], unstaged: [], untracked: [], conflicts: [], dirty: false } })
   // RT-8: structured state for code consumers (plan §5 RT-8); content stays
@@ -98,12 +99,12 @@ async function git_diff(params: Record<string, unknown>): Promise<ToolResult> {
   const args = ["diff"]
   if (params.staged) args.push("--staged")
   if (params.path) args.push("--", String(params.path))
-  const { code, stdout, stderr } = runGit(args)
+  const { code, stdout, stderr } = await runGit(args)
   if (code !== 0) return Result.fail(stderr)
   if (!stdout.trim()) return Result.ok("No changes")
   // RT-8: structured numstat alongside the textual diff (model text stays
   // capped; code consumers read the stat).
-  const stat = runGit(["diff", ...(params.staged ? ["--staged"] : []), "--numstat", ...(params.path ? ["--", String(params.path)] : [])])
+  const stat = await runGit(["diff", ...(params.staged ? ["--staged"] : []), "--numstat", ...(params.path ? ["--", String(params.path)] : [])])
   const statLines = stat.stdout.trim().split("\n").filter(Boolean).map((line) => {
     const [additions, deletions, ...rest] = line.split("\t")
     return { path: rest.join("\t"), additions: Number(additions) || 0, deletions: Number(deletions) || 0 }
@@ -115,7 +116,7 @@ async function git_log(params: Record<string, unknown>): Promise<ToolResult> {
   const n = Number(params.n ?? 10)
   const args = ["log", `-${n}`, "--oneline", "--decorate"]
   if (params.path) args.push("--", String(params.path))
-  const { code, stdout, stderr } = runGit(args)
+  const { code, stdout, stderr } = await runGit(args)
   if (code !== 0) return Result.fail(stderr)
   return Result.ok(capOutput(stdout, "git log", 6000))
 }
@@ -127,7 +128,7 @@ async function git_blame(params: Record<string, unknown>): Promise<ToolResult> {
     args.push("-L", `${params.line_start},${params.line_end}`)
   }
   args.push("--", path)
-  const { code, stdout, stderr } = runGit(args)
+  const { code, stdout, stderr } = await runGit(args)
   if (code !== 0) return Result.fail(stderr)
   return Result.ok(capOutput(stdout, "git blame", 6000))
 }
@@ -136,7 +137,7 @@ async function git_show(params: Record<string, unknown>): Promise<ToolResult> {
   const ref = String(params.ref ?? "HEAD")
   const args = ["show", ref]
   if (params.path) args.push("--", String(params.path))
-  const { code, stdout, stderr } = runGit(args)
+  const { code, stdout, stderr } = await runGit(args)
   if (code !== 0) return Result.fail(stderr)
   if (!stdout.trim()) return Result.ok("No changes in this commit")
   return Result.ok(capOutput(stdout, "git show", 12000))
@@ -144,14 +145,14 @@ async function git_show(params: Record<string, unknown>): Promise<ToolResult> {
 
 async function git_add(params: Record<string, unknown>): Promise<ToolResult> {
   if (params.all === true) {
-    const { code, stdout, stderr } = runGit(["add", "-A"])
+    const { code, stdout, stderr } = await runGit(["add", "-A"])
     if (code !== 0) return Result.fail(stderr)
     return Result.ok(stdout.trim() ? stdout : "Staged all changes")
   }
 
   const path = String(params.path ?? "")
   if (!path) return Result.fail("Either 'path' or 'all=true' is required")
-  const { code, stdout, stderr } = runGit(["add", "--", path])
+  const { code, stdout, stderr } = await runGit(["add", "--", path])
   if (code !== 0) return Result.fail(stderr)
   return Result.ok(stdout.trim() ? stdout : `Staged: ${path}`)
 }
@@ -162,11 +163,11 @@ async function git_commit(params: Record<string, unknown>): Promise<ToolResult> 
 
   // Optional: stage all tracked files before committing
   if (params.all === true) {
-    const addResult = runGit(["add", "-A"])
+    const addResult = await runGit(["add", "-A"])
     if (addResult.code !== 0) return Result.fail(addResult.stderr)
   }
 
-  const { code, stdout, stderr } = runGit(["commit", "-m", message])
+  const { code, stdout, stderr } = await runGit(["commit", "-m", message])
   if (code !== 0) return Result.fail(stderr)
   return Result.ok(stdout.trim() || "Committed")
 }

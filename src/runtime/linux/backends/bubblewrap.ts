@@ -18,7 +18,8 @@ import type {
   SandboxReceipt,
 } from "../contracts"
 import type { BackendOutcome, ExecutionBackend } from "./backend"
-import { runSupervised } from "../process/supervisor"
+import { streamBackendRun } from "./backend"
+import { runSupervised, streamSupervised, type SupervisorResult } from "../process/supervisor"
 import { buildExplicitEnvironment } from "../environment"
 import { buildReceipt } from "../receipt"
 import { validateCellSpec } from "../policy-compiler"
@@ -158,7 +159,13 @@ export function createBubblewrapBackend(): ExecutionBackend {
 
     compile(spec, caps) {
       const env = buildExplicitEnvironment({
-        policy: { baseProfile: "minimal", allowedHostKeys: [], fixedValues: {}, requestedValues: {}, deniedKeys: [] },
+        policy: {
+          baseProfile: "minimal",
+          allowedHostKeys: spec.environment.allowedHostKeys ?? [],
+          fixedValues: {},
+          requestedValues: spec.environment.variables,
+          deniedKeys: [],
+        },
         runId: spec.identity.runId,
         nodeRunId: spec.identity.nodeRunId,
         pathEntries: ["/usr/local/bin"],
@@ -175,48 +182,34 @@ export function createBubblewrapBackend(): ExecutionBackend {
       return {
         backend: "bubblewrap",
         argv: [bwrapPath, ...argv, spec.command.executable, ...spec.command.args],
-        env: { ...env.env, ...spec.environment.variables },
+        env: env.env,
         cwd: "/workspace",
       }
     },
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
-      const startedAt = Date.now()
-      yield { type: "cell.status", cellId: spec.identity.cellId, state: "running", at: startedAt }
-      const compiled = this.compile(spec, ctx.capabilities)
-      const result = await runSupervised({
-        executable: compiled.argv[0]!,
-        args: compiled.argv.slice(1),
-        cwd: compiled.cwd,
-        env: compiled.env,
-        limits: { stdoutMaxBytes: spec.resources.stdoutMaxBytes, stderrMaxBytes: spec.resources.stderrMaxBytes },
-        wallTimeMs: spec.resources.wallTimeMs,
-        detectDaemon: spec.lifecycle.killOnParentExit,
-      })
-      const finishedAt = Date.now()
-      if (result.stdout) yield { type: "cell.stdout", cellId: spec.identity.cellId, data: result.stdout, at: finishedAt }
-      if (result.stderr) yield { type: "cell.stderr", cellId: spec.identity.cellId, data: result.stderr, at: finishedAt }
-      yield { type: "cell.exit", cellId: spec.identity.cellId, exitCode: result.exitCode, signal: result.signal, at: finishedAt }
-      const receipt = this.buildReceipt(spec, ctx.capabilities, {
-        startedAt,
-        finishedAt,
-        exitCode: result.exitCode,
-        signal: result.signal,
-        timedOut: result.timedOut,
-        cancelled: result.cancelled,
-        oomKilled: false,
-        pidLimitHit: false,
-        outputLimitHit: result.outputLimitHit,
-        tempLimitHit: false,
-        observedWrites: [],
-        observedDeletes: [],
-        unexpectedWrites: [],
-        violations: [],
-        degradationReasons: [],
-        backendVersion: ctx.capabilities.bubblewrap.version,
-        metrics: {},
-      })
-      yield { type: "cell.receipt", cellId: spec.identity.cellId, receipt, at: finishedAt }
+      yield* streamBackendRun("bubblewrap", spec, ctx,
+        () => this.compile(spec, ctx.capabilities),
+        (result) => this.buildReceipt(spec, ctx.capabilities, {
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          exitCode: result.exitCode,
+          signal: result.signal,
+          timedOut: result.timedOut,
+          cancelled: result.cancelled,
+          oomKilled: false,
+          pidLimitHit: false,
+          outputLimitHit: result.outputLimitHit,
+          tempLimitHit: false,
+          observedWrites: [],
+          observedDeletes: [],
+          unexpectedWrites: [],
+          violations: [],
+          degradationReasons: [],
+          backendVersion: ctx.capabilities.bubblewrap.version,
+          metrics: {},
+        }),
+      )
     },
 
     buildReceipt(spec, caps, outcome): SandboxReceipt {

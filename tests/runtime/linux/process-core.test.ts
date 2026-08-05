@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
+import ts from "typescript"
 import { platform } from "node:os"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -281,30 +282,92 @@ describe("LF-2: secrets", () => {
   })
 })
 
-describe("LF-2: static gate — DIRECT_LINUX_PROCESS_BYPASS", () => {
-  test("direct spawn calls exist only inside allowed runtime dirs (baseline 36)", () => {
-    const allowed = new Set(LINUX_RUNTIME_DIRS)
-    const pattern = /(child_process\.(spawn|exec|execFile|spawnSync|execSync)|\bBun\.spawn\b|\bDeno\.Command\b|\bshell\s*:\s*true)/g
-    const srcRoot = join(process.cwd(), "src")
-    const walk = (dir: string): string[] => {
-      const out: string[] = []
+describe("LF-2: static gate — DIRECT_LINUX_PROCESS_BYPASS (AST)", () => {
+  // R1: 旁路必须为 0 —— 允许列表只含统一入口与监督器：
+  //  - src/runtime/linux/**     Linux Process Supervisor（唯一真实后端）
+  //  - process-executor.ts      跨平台统一执行入口（Windows legacy）
+  //  - legacy-process.ts        R1.2 暂存区（sync/长期进程，待迁移，显式标注）
+  //  - tools/process.ts         terminateTree 的 Windows taskkill 辅助
+  const ALLOWLIST = [
+    "src/runtime/linux",
+    "src/runtime/process-executor.ts",
+    "src/runtime/legacy-process.ts",
+    "src/tools/process.ts",
+  ]
+  const PROCESS_NAMES = new Set(["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"])
+
+  interface SpawnSite { file: string; line: number; kind: string }
+
+  function scanDirectProcessCalls(): SpawnSite[] {
+    const sites: SpawnSite[] = []
+    const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name)
-        if (entry.isDirectory()) out.push(...walk(full))
-        else if (entry.name.endsWith(".ts")) out.push(full)
+        if (entry.isDirectory()) walk(full)
+        else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+          const rel = full.slice(process.cwd().length + 1).split("\\").join("/")
+          const source = readFileSync(full, "utf8")
+          const sf = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+          const importedNames = new Set<string>()
+          let childProcessNamespace: string | undefined
+          for (const statement of sf.statements) {
+            if (!ts.isImportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+            const mod = statement.moduleSpecifier.text
+            if (mod === "node:child_process") {
+              const clause = statement.importClause
+              if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+                childProcessNamespace = clause.namedBindings.name.text
+              } else if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+                for (const el of clause.namedBindings.elements) importedNames.add(el.name.text)
+              }
+            }
+          }
+          const fileHits: SpawnSite[] = []
+          const visit = (node: ts.Node): void => {
+            if (ts.isCallExpression(node)) {
+              const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
+              if (ts.isIdentifier(node.expression)) {
+                if (importedNames.has(node.expression.text)) fileHits.push({ file: rel, line: line + 1, kind: node.expression.text })
+              } else if (ts.isPropertyAccessExpression(node.expression)) {
+                const name = node.expression.name.text
+                const obj = node.expression.expression
+                if (childProcessNamespace && ts.isIdentifier(obj) && obj.text === childProcessNamespace && PROCESS_NAMES.has(name)) {
+                  fileHits.push({ file: rel, line: line + 1, kind: `child_process.${name}` })
+                }
+                if (name === "spawn" && ts.isIdentifier(obj) && obj.text === "Bun") {
+                  fileHits.push({ file: rel, line: line + 1, kind: "Bun.spawn" })
+                }
+                if (name === "Command" && ts.isIdentifier(obj) && obj.text === "Deno") {
+                  fileHits.push({ file: rel, line: line + 1, kind: "Deno.Command" })
+                }
+              }
+            }
+            if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === "shell") {
+              const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
+              const valueText = node.initializer.getText(sf)
+              if (valueText === "true") fileHits.push({ file: rel, line: line + 1, kind: "shell:true" })
+            }
+            ts.forEachChild(node, visit)
+          }
+          visit(sf)
+          sites.push(...fileHits)
+        }
       }
-      return out
     }
-    const hits: Array<{ file: string; count: number }> = []
-    for (const file of walk(srcRoot)) {
-      const rel = file.slice(srcRoot.length + 1)
-      if (allowed.has(rel.split("/").slice(0, 3).join("/"))) continue
-      const content = readFileSync(file, "utf8")
-      const count = (content.match(pattern) ?? []).length
-      if (count > 0) hits.push({ file: rel, count })
-    }
-    const total = hits.reduce((a, h) => a + h.count, 0)
-    // 基线：LF-0 记录 36 处 / 7 文件。门禁：不增长（迁移过程中允许保持）。
-    expect(total).toBeLessThanOrEqual(36)
+    walk(join(process.cwd(), "src"))
+    return sites
+  }
+
+  test("direct child_process / Bun.spawn / Deno.Command / shell:true outside allowlist = 0", () => {
+    const sites = scanDirectProcessCalls()
+    const outside = sites.filter(s => !ALLOWLIST.some(a => s.file === a || s.file.startsWith(a + "/")))
+    expect(outside).toEqual([])
+  })
+
+  test("allowlist modules remain the only direct process entries (total audited)", () => {
+    // 允许列表内的调用不得消失 —— 防止"删掉入口"式假绿。
+    const sites = scanDirectProcessCalls()
+    const executorSites = sites.filter(s => s.file.startsWith("src/runtime/process-executor") || s.file.startsWith("src/runtime/legacy-process"))
+    expect(executorSites.length).toBeGreaterThan(0)
   })
 })

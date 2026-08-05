@@ -1,6 +1,7 @@
 /** MCP client — JSON-RPC lifecycle. Ported from orcana/core/mcp_client.py */
 
-import { spawn, ChildProcess } from "node:child_process"
+import { spawnLegacy, ChildProcess } from "../runtime/legacy-process"
+const spawn = spawnLegacy
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 

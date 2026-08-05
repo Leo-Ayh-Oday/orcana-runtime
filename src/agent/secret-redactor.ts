@@ -94,6 +94,8 @@ export interface RedactorOptions {
   extraKeyPatterns?: RegExp[]
   /** Additional content patterns to redact. */
   extraContentPatterns?: RegExp[]
+  /** Key patterns that are explicitly NOT secrets — checked before secret patterns. */
+  allowedKeyPatterns?: RegExp[]
 }
 
 /**
@@ -153,6 +155,9 @@ function redactInternal(value: unknown, depth: number, opts: RedactorOptions): u
 // ── Key checking ──
 
 function isSecretKey(key: string, opts: RedactorOptions): boolean {
+  for (const allowed of opts.allowedKeyPatterns ?? []) {
+    if (allowed.test(key)) return false
+  }
   const patterns = [...SECRET_KEY_PATTERNS, ...(opts.extraKeyPatterns ?? [])]
   for (const p of patterns) {
     if (p.test(key)) return true
@@ -177,10 +182,23 @@ function redactStringContent(value: string, opts: RedactorOptions): string {
  * Stricter than general redaction — redacts anything that might
  * contain secrets in unstructured data.
  */
+/** Token metering fields are numbers/counters, not secrets — never redact them. */
+const ALLOWED_METERING_KEYS = [
+  /^(inputTokens|outputTokens|cacheReadInputTokens|cacheMissInputTokens|cacheCreationInputTokens|cacheHitRate|promptTokens|completionTokens|totalTokens|contextMax)$/,
+]
+
+/**
+ * Redact trace events before writing to JSONL.
+ *
+ * Token metering fields are exempt: they carry no secret material, and
+ * redacting them zeroes every cost/metric observable (§12 live eval gates
+ * depend on them).
+ */
 export function redactForTrace(data: unknown): unknown {
   return redact(data, {
     maxStringLength: 2000,
     maxDepth: 4,
+    allowedKeyPatterns: ALLOWED_METERING_KEYS,
   })
 }
 

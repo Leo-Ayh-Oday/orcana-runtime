@@ -304,7 +304,7 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
   }
 
   // ── 3. MCP bootstrap ──
-  let mcpResult: MCPBridgeResult = { totalServers: 0, connected: 0, failed: [], toolsDiscovered: 0, tools: [] }
+  let mcpResult: MCPBridgeResult = { totalServers: 0, connected: 0, failed: [], toolsDiscovered: 0, toolsFiltered: 0, tools: [] }
   if (enableMCP) {
     mcpResult = await bootstrapMCP({
       onStatus: options.mcpOnStatus ?? (() => {}),

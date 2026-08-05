@@ -2,7 +2,17 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.3] — 2026-08-05
+## [0.7.4] — 2026-08-05
+
+### Fixed (Strong Single v1.0, SS-Next-2B — rollback-aware evidence invalidation)
+- **The rollback hole is closed**: `rollback_transaction` used to revert files without invalidating evidence, so verification of the pre-rollback (committed) code state stayed "fresh" and could satisfy the completion gate for code that no longer existed.
+- **L2** — a managed rollback now advances the runtime write-generation (`recordRuntimeRollback`), so evidence collected before the rollback fails the freshness check.
+- **L3** — the rollback advances the committed-transaction evidence state (`recordRollbackInEvidenceState`, stateId chain in a distinct `rb` namespace that can never collide with a commit), so pre-rollback transaction bindings no longer match.
+- **No deadlock** — unlike an unmanaged write, a rollback does not poison the binding: after rolling back, a fresh re-verification produces new, authoritative, passable evidence again.
+- Wired into the `rollback_transaction` tool and both commit-failure auto-revert paths in `patch-transaction` (full and committed-paths variants).
+- Regression tests in `src/agent/rollback-evidence.test.ts`: L3 mismatch, post-rollback re-verification passes, completion gate rejects pre-rollback evidence end-to-end, files actually revert.
+
+
 
 ### Added (Typed Execution Graph, G6 — Dynamic Workflow Compiler)
 - **Dynamic graphs** (`src/workflow/dynamic/`) — a model may now author a controlled graph as JSON and have it compiled into a `WorkflowSpec`, exactly the shape static templates produce: dynamic graphs and static templates share the scheduler and the G3 single-writer/verification semantics.

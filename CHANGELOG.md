@@ -2,6 +2,14 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.15] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-6)
+- **`apply_patch`** — standard unified-diff application with base-hash freshness, path-escape rejection (writable-root boundary, `../` and absolute escapes blocked before any write), dry-run previews, structured per-file stats, new-file patches, atomic writes (temp → rename).
+- **`apply_patch_transaction`** — multi-file all-or-nothing: every patch validates in memory first (nothing touches disk on failure), then commits; `idempotencyKey` replays report already-applied (crash-safe).
+- **`edit_symbol`** — TypeScript-AST-anchored symbol editing (function/method/class/interface/type alias), `dryRun` previews text + span with `authority: "compiler"`.
+- **`read_file` selectors** — `selector: {kind: lines|symbol|byte_range}` windows + `expectedHash` freshness (mismatch → `STALE_FILE`).
+
 ## [0.5.14] — 2026-08-05
 
 ### Added (Tool Runtime 2.0, RT-5)

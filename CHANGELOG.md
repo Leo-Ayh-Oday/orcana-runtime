@@ -2,7 +2,17 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.6] — 2026-08-05
+## [0.8.7] — 2026-08-05
+
+### Added (MACP-M7 — 角色与输出契约)
+- **Three role output contracts** — Planner (`planText` + proposed assignments/dependencies/approvals), Coder (`changes` + declared `deviations` + `evidenceIds`), Reviewer (`verdict` approved/rejected/needs_repair + comments). Every model output is validated against its role schema BEFORE any downstream use; invalid output becomes a structured `invalid_role_output` failure (never a silent pass-through, never triggers writes).
+- **Bound envelopes** — valid outputs wrap in `RoleOutputEnvelope` bound to runId / nodeRunId / planVersion / workspaceDigest and persist to the ArtifactStore (`plan` / `delivery_report` / `ripple_report` kinds) via the awaitable `persistRoleOutput`.
+- **Authority baseline** (no new execution machinery — the M3 writable/ownership enforcement already carries the write side) — Planner and Reviewer cannot write or merge; Coder cannot approve its own output; silent deviation is rejected (`deviations` must be declared).
+- **Separation** — a Coder can never be its own only Reviewer (SELF_APPROVAL: 0).
+- **Reviewer read surface** — the reviewer context is filtered to plan / final diff / relevant sources / evidence; hidden reasoning (thinking, scratchpad, internal notes) is excluded (tasks 7/8).
+- 13 tests: per-role pass/reject paths, structured failures, silent-deviation rejection, artifact persistence, role derivation, self-approval rejection, authority violations, hidden-reasoning filtering.
+
+
 
 ### Added (MACP-M6 — 类型化计划契约)
 - **CompletionCriterion** — completion conditions are now typed: stable ID, hard/soft weight, deterministic/semantic mode, and one of five structured checks (command / file_exists / file_content / evidence / semantic_review). Natural-language conditions MUST be declared `semantic_review` — they can never be smuggled into grep-style checks (FAKE_DETERMINISTIC_CHECK: 0), and `semantic_review` never auto-passes (human adjudication is the only resolution).

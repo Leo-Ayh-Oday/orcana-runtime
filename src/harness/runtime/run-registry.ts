@@ -13,6 +13,7 @@ import { RunNotFoundError } from "../contracts/errors"
 import type { AgentRun } from "../contracts/run"
 import { createBudgetLedger, mergeRunBudget } from "./budget-ledger"
 import { assembleRunScope } from "./run-scope"
+import { stopServicesForRun } from "../../tools/service"
 
 export interface RegisteredRun {
   run: AgentRun
@@ -92,6 +93,9 @@ export class RunRegistry {
   }
 
   remove(runId: string): void {
+    // RT-11: run-bound service leases (cleanupPolicy "run-end") must die with
+    // their run — otherwise background services leak past the session (TL-014).
+    stopServicesForRun(runId)
     this.runs.delete(runId)
   }
 

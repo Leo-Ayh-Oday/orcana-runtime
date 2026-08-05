@@ -6,7 +6,8 @@
  *      "codegraph": {
  *        "command": "codegraph",
  *        "args": ["serve"],
- *        "env": { "HOME": "/home/user" }
+ *        "env": { "HOME": "/home/user" },
+ *        "trust": { "trust": "restricted", "allowedToolPatterns": ["*_read*"] }
  *      },
  *      "context7": {
  *        "command": "npx",
@@ -21,11 +22,13 @@
  *  - "env": extra environment variables (default {})
  *  - "enabled": whether to auto-start (default true)
  *  - "timeout": connection timeout in ms (default 30000)
+ *  - "trust": MCPTrustPolicy override (see trust-policy.ts; default untrusted)
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
+import type { MCPTrustPolicy } from "./trust-policy"
 
 export interface MCPServerConfig {
   command: string
@@ -33,6 +36,7 @@ export interface MCPServerConfig {
   env?: Record<string, string>
   enabled?: boolean
   timeout?: number
+  trust?: Partial<MCPTrustPolicy>
 }
 
 export interface MCPConfig {
@@ -102,6 +106,21 @@ export function validateServerConfig(server: MCPServerConfig): string | null {
   }
   if (server.timeout && (typeof server.timeout !== "number" || server.timeout < 1000)) {
     return "server.timeout 必须 ≥ 1000ms"
+  }
+  const trust = server.trust
+  if (trust !== undefined) {
+    if (trust.trust !== undefined && !["untrusted", "restricted", "trusted"].includes(trust.trust)) {
+      return "server.trust.trust 必须是 untrusted | restricted | trusted"
+    }
+    if (trust.defaultRiskLevel !== undefined
+      && (typeof trust.defaultRiskLevel !== "number" || trust.defaultRiskLevel < 0 || trust.defaultRiskLevel > 5)) {
+      return "server.trust.defaultRiskLevel 必须是 0–5"
+    }
+    for (const list of [trust.allowedToolPatterns, trust.deniedToolPatterns]) {
+      if (list !== undefined && !Array.isArray(list)) {
+        return "server.trust.allowedToolPatterns/deniedToolPatterns 必须是数组"
+      }
+    }
   }
   return null
 }

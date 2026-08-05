@@ -19,7 +19,8 @@ export interface TuiCommandContext {
   setClarification: (value: null) => void
   addSystemMessage: (content: string) => void
   isRunning: () => boolean
-  exit: () => never
+  /** 退出（main.tsx 注入双按保护：第一次提示确认，第二次真正退出）。 */
+  exit: () => void
   openModels: (provider?: string) => void
   openEffort: () => void
   setThinkEffort: (value: ThinkEffort) => void
@@ -218,9 +219,8 @@ export function dispatchTuiCommand(input: string, context: TuiCommandContext): T
 
   switch (name) {
     case "exit":
+      // main.tsx 注入的 exit 带双按保护：第一次提示"再输入一次 /exit 确认"，第二次才退出
       context.exit()
-      // context.exit() is typed () => never (calls process.exit), but guard against
-      // non-terminal implementations (e.g. in tests where exit throws instead)
       return "handled"
     case "help":
       context.addSystemMessage(formatHelpText())

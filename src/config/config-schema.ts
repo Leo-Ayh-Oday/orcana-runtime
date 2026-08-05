@@ -33,6 +33,12 @@ export interface OrcanaConfig {
   harness?: {
     mode?: "legacy" | "shadow" | "enabled"
   }
+
+  /** Typed Execution Graph（G0）：shadow 投影 — 只记录不改执行。 */
+  workflow?: {
+    /** "off"（默认）：零开销；"shadow"：投影 run-trace 事件为执行图快照。 */
+    mode?: "off" | "shadow"
+  }
 }
 
 // ── 角色 → 模型 路由 ──

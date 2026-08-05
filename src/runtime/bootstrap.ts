@@ -42,6 +42,7 @@ import {
 } from "../memory/compactor"
 import type { CompactionState } from "../memory/compactor"
 import { AgentRunTrace } from "../agent/run-trace"
+import { wrapRunTrace } from "../workflow"
 import { createAgentHarness } from "../harness/runtime/agent-harness"
 import type { AgentHarness } from "../harness/contracts/harness"
 import { getLSPClient } from "../lsp/client"
@@ -501,8 +502,9 @@ export async function createRuntime(options: RuntimeBootstrapOptions = {}): Prom
     }
   }
 
-  // ── 12. RunTrace factory ──
-  const startRunTrace = (prompt: string) => AgentRunTrace.start(projectRoot, prompt)
+  // ── 12. RunTrace factory (G0: shadow projection wrapper) ──
+  const startRunTrace = (prompt: string) =>
+    wrapRunTrace(AgentRunTrace.start(projectRoot, prompt), config.workflow?.mode ?? "off", prompt).trace
 
   // ── 13. Harness facade (H1): single production entry — CLI/TUI drive runs
   // through AgentHarness → LegacyLoopAdapter → agentLoop. Runtime-stable

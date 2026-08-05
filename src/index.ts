@@ -81,20 +81,9 @@ function printHelp() {
 }
 
 async function printDoctor() {
-  const { diagnoseModelConfiguration } = await import("./config/diagnostics")
-  const model = await diagnoseModelConfiguration()
-  const nodeOk = Number(process.versions.node.split(".")[0] ?? 0) >= 20
-  const sessionStore = process.versions.bun
-    ? "SQLite/FTS available"
-    : "JSON fallback; SQLite/FTS unavailable without Bun"
-  console.log([
-    `Orcana ${VERSION_LABEL}`,
-    `Node.js ${process.versions.node} ${nodeOk ? "ok" : "requires >=20"}`,
-    `Bun ${process.versions.bun ?? "not required for npm users"}`,
-    `Session store ${sessionStore}`,
-    `Model ${model.providerId}/${model.modelId}`,
-    `Authentication ${model.auth}`,
-  ].join("\n"))
+  const { doctorCli } = await import("./diagnostics/doctor")
+  const exit = await doctorCli()
+  if (exit !== 0) process.exitCode = exit
 }
 
 async function main() {

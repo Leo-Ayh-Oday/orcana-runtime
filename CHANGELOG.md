@@ -2,7 +2,18 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.5.22] — 2026-08-05
+## [0.5.23] — 2026-08-05
+
+### Added (Typed Execution Graph, G0)
+- **Shadow graph projection** — `src/workflow/`: `WorkflowProjector` maps the existing run-trace event stream (rounds / tool calls / gate decisions / verifications / terminal events) into a typed execution graph snapshot (nodes, containment edges, metrics), written to `.orcana/workflow/<runId>.graph.json` on run completion.
+- **Zero-overhead wiring** — `workflow.mode` config (`off` default / `shadow`); `runtime.startRunTrace` wraps the run trace via `ProjectingRunTrace` (CLI + TUI paths), kernel/loop untouched; `off` returns the trace unchanged.
+- **Safe by design** — tool inputs projected as parameter-key summaries only; snapshots pass through the trace redactor; projection never throws.
+- **G1 foundations** — `stableHash` / `stableSerialize` (recursive key-sorted deterministic hashing) for the future read-only result cache.
+
+### Fixed
+- **Trace token metering** — `redactForTrace` exempts token/cost counter fields (`inputTokens` etc.); the `/token/i` secret-key pattern was redacting every cost metric to `[redacted]`, zeroing all §12 live-eval observability.
+
+
 
 ### Added (Tool Runtime 2.0, RT-13)
 - **Tool Production Eval** — TL-001..020 scenarios (`tests/capabilities/tool_production_eval.test.ts`) exercising real tool handlers, the executor 8-step chain, policy gates, the router, and the service registry: run sandbox isolation, orphan-free cancellation, patch path-escape / stale-baseHash / atomic rollback, verification-gated commits, artifact-kept truncation, git/process injection safety, SSRF redirect re-validation, web cache mode separation, MCP unknown-tool posture, run-end service cleanup, freshness stale rejection, router schema economy, paired trace events, writable-root coverage, oversized-output artifacts.

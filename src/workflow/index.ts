@@ -22,3 +22,10 @@ export { compileMasterPlan, type PlanLike, type PlanLikeNode } from "./compiler/
 export { buildTemplate, TEMPLATES, type Template, type TemplateInput } from "./templates/registry"
 export { normalizeSpec } from "./compiler/graph-normalizer"
 export { projectResultsToPlan, type PlanStatusProjection } from "./projection/plan-projection"
+export {
+  classifyError,
+  fingerprintFailure,
+  ERROR_CATEGORIES,
+  type ErrorCategory,
+} from "./convergence/failure-signature"
+export { RepairLoop, type RepairLoopOptions, type ConvergenceReport, type RepairAttempt, type RepairOutcome } from "./convergence/repair-loop"

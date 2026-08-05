@@ -66,6 +66,17 @@ export function recordRuntimeUnmanagedWrite(): number {
   return context.writeGeneration
 }
 
+/** [SS-Next-2B] A managed rollback reverted the workspace to a prior code
+ *  state. Advance the write-generation so evidence collected before the
+ *  rollback fails the L2 freshness check — without marking the rollback as
+ *  an unmanaged write: rollback is an exact, managed operation, so it must
+ *  not poison the transaction-evidence binding (L3 stays authoritative). */
+export function recordRuntimeRollback(_paths?: string[]): number {
+  const context = getRuntimeFileStateContext()
+  context.writeGeneration++
+  return context.writeGeneration
+}
+
 export function getRuntimeFileStateLedger(): FileStateLedger {
   return getRuntimeFileStateContext().ledger
 }

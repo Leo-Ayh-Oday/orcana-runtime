@@ -35,3 +35,14 @@ export { validateJsonSchema } from "./schema-validator"
 // RT-2: capability mode flag.
 export { CAPABILITY_MODE_DEFAULT, getCapabilityMode, isEnabledMode, isShadowMode } from "./flags"
 export type { CapabilityMode } from "./flags"
+// RT-4: output limiting + first-batch output schemas.
+export { DEFAULT_MAX_OUTPUT_BYTES, limitOutput } from "./output-limiter"
+export type { LimitedOutput, LimitOutputInput } from "./output-limiter"
+export {
+  FIRST_BATCH_OUTPUT_SCHEMAS,
+  GIT_DIFF_OUTPUT_SCHEMA,
+  GIT_STATUS_OUTPUT_SCHEMA,
+  LSP_DIAGNOSTICS_OUTPUT_SCHEMA,
+  TYPECHECK_OUTPUT_SCHEMA,
+  WEB_SEARCH_OUTPUT_SCHEMA,
+} from "./output-schemas"

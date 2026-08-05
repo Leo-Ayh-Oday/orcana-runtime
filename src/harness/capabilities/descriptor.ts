@@ -43,6 +43,8 @@ export interface CapabilityDescriptorPartial {
   producesEvidence?: boolean
   /** RT-2: migration source marker. */
   source?: "legacy" | "native"
+  /** RT-4: output budget in bytes (default DEFAULT_MAX_OUTPUT_BYTES). */
+  maxOutputBytes?: number
 }
 
 /** Build a full descriptor from a partial, applying conservative defaults. */
@@ -61,6 +63,7 @@ export function createCapabilityDescriptor(partial: CapabilityDescriptorPartial)
     cancellable: partial.cancellable ?? true,
     producesEvidence: partial.producesEvidence ?? false,
     source: partial.source,
+    maxOutputBytes: partial.maxOutputBytes,
   }
 }
 

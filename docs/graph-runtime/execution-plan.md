@@ -578,7 +578,79 @@ src/workflow/dynamic/
 - [x] 模型无法绕过 PermissionGate → permission-gate.test.ts（恶意载荷 rejected 无 spec 无批准路径；needs_approval 未 approve 拿不到 spec）
 - [x] 动态 Graph 与静态模板共享 Scheduler → permission-gate.test.ts（编译产物直接 runScheduler，G3 写/验证语义一致）
 
-## 13. 实施记录
+## 12. G7 详细任务单（v0.8.0，T3R Multi-Agent — Graph Runtime 终章）
+
+参考稿 PR-G7（v1.0 Strong Single 收束后启动）：Agent Pool / 每节点独立上下文 / worktree 隔离 / file ownership / 多 Agent 并行分析 / 多 Agent 独立验证 / merge node / 冲突检测 / 预算分配 / Agent cancellation。
+
+前提核查（2026-08-05）：G0–G6 ✅；PatchTransaction Phase 2 实质完成（temp→renameSync 原子替换 + base-hash TOCTOU + 边界双检 + 部分失败 rollbackCommittedTransactionPaths）✅；Replay/Checkpoint 稳定（70 fixtures + H12 12/12 + mini benchmark 回归门；CLI rewind 已接线）✅；"单 agent 瓶颈"数据前提以确定性证据代替（H12 阻塞/失败场景 + G4 收敛轮次开销），live eval 待余额恢复后补做 §12。
+
+### 12.1 设计决策（融合特色架构）
+
+| 参考稿 | 融合决策 |
+|---|---|
+| Agent Pool | `src/workflow/agents/agent-pool.ts`：Agent = { id, ownerFiles, worktree, budget, cancel }；注册/获取/生命周期管理，与 G6 PermissionGate 同构（显式 API，默认关闭） |
+| 每节点独立上下文 | 复用 G5 `context-slice`（节点上下文 = 自身 input + 直接依赖，无关历史不进入）——每 agent 节点天然独立 |
+| worktree 隔离 | `worktree.ts`：git worktree 或目录快照（非 git 项目退化 copy）；写节点在 agent 的 worktree 内执行（真实文件，G3 单写者事务不变） |
+| file ownership | 写节点声明 `owner`（agent id）→ 预检：两个 agent 的 owner 文件集合不相交（`assignOwnership` 校验 + `ownership-violation` 拒绝） |
+| 多 Agent 并行分析 / 独立验证 | 读节点（分析）并行已有（G1）；验证绑定写节点已有（G3 evidence 门）——G7 增加：不同 agent 的写→验证子图并行（写锁仍全局唯一，但每 agent 内部串行链独立推进） |
+| merge node | `merge.ts`：merge 节点 handler（`reduce.merge_agents`）合并多 agent 产物（结构化 diff 列表 → 合并结果 + 冲突报告） |
+| 冲突检测 | `conflict-detect.ts`：两个 agent 写同一文件（按文件指纹交集判定）→ `conflict` 状态 + 结构化冲突报告（谁写了什么、fingerprint） |
+| 预算分配 | per-agent budget（轮次/节点数/写数上限）→ `agent-budget.ts`；超出 → 该 agent 子图 blocked（`budget_exhausted`），不影响其他 agent |
+| Agent cancellation | `cancel.ts`：pool.cancel(agentId) → 该 agent 所有 pending 节点不启动、运行中节点 AbortController 传播（复用 ToolExecutionContext.abortSignal） |
+
+### 12.2 新增文件
+
+```text
+src/workflow/agents/
+├── agent-pool.ts        # AgentPool：注册/查询/所有权分配/生命周期/取消
+├── worktree.ts          # git worktree / 目录快照隔离 + cleanup
+├── ownership.ts         # assignOwnership（不相交校验）+ 查询
+├── conflict-detect.ts   # 写文件交集指纹冲突检测
+├── merge.ts             # reduce.merge_agents 合并 handler + 冲突报告
+├── agent-budget.ts      # per-agent 预算（节点/写/轮次）
+└── index.ts
+```
+
+### 12.3 调度扩展
+
+```text
+SchedulerOptions + pool?: AgentPool
+- 写节点带 owner → 所有权预检（非 owner 文件 → 拒绝）
+- 写锁（G3 单槽）保持全局唯一；agent 内部链与跨 agent 顺序无感知
+- agent 被取消 → 其 pending 节点立即 failed(cancelled)
+- merge 节点 = 写节点（单写者事务内合并产物落盘）
+```
+
+### 12.4 G7 验收映射（参考稿 10 能力）
+
+- [x] Agent Pool → agent-pool.test.ts（注册/查询/所有权分配/生命周期）
+- [x] 每节点独立上下文 → 复用 context-slice.test.ts（G5 已证）+ G7 断言 agent 节点间无串扰
+- [x] worktree 隔离 → worktree.test.ts（worktree 创建/写隔离/清理；非 git 退化目录快照）
+- [x] file ownership → ownership.test.ts（不相交校验 + 冲突拒绝）
+- [x] 多 Agent 并行分析 → scheduler 并行（G1 已证）+ agents 子图并行测试
+- [x] 多 Agent 独立验证 → evidence 门按写节点绑定（G3 已证）+ 跨 agent 验证互不影响
+- [x] merge node → merge.test.ts（多 agent 产物合并 + 冲突报告）
+- [x] 冲突检测 → conflict-detect.test.ts（同文件交集 → 冲突结构化报告）
+- [x] 预算分配 → agent-budget.test.ts（超预算 agent 子图 blocked，其他不受影响）
+- [x] Agent cancellation → agent-pool.test.ts（取消后 pending 不启动 / 运行中 abort 传播）
+
+| 阶段 | 版本 | 落地 | 验证 |
+|---|---|---|---|
+| G7 | v0.8.0 | T3R Multi-Agent（Graph Runtime 终章）：agents/agent-pool（注册/不相交所有权/cancel）、agent-budget（per-agent 节点/写上限）、worktree（git worktree / 目录快照隔离）、conflict-detect（同文件跨 agent 写 → 结构化冲突报告）、merge（reduce.merge_agents 合并 + 冲突上报）、scheduler 接线（池取消 fail-fast + 预算 charge；写锁/evidence 门 G3 语义不变）；kernel 零改动 | 受限门禁 816 pass（新增 17 项 G7 验收） |
+
+**G7 验收映射（§12.4）：**
+- [x] Agent Pool → agent-pool.test.ts（注册/查询/所有权/生命周期/取消）
+- [x] 每节点独立上下文 → G5 context-slice（已证）+ 双 agent 子图并行互不串扰
+- [x] worktree 隔离 → agent-pool.test.ts（快照隔离：写落 worktree 不落项目 + dispose 清理；git 模式走 `git worktree add`）
+- [x] file ownership → agent-pool.test.ts（重叠所有权拒绝 + violations 报告 + canWrite 判定）
+- [x] 多 Agent 并行分析 → scheduler-agents.test.ts（双 agent 子图并行执行）
+- [x] 多 Agent 独立验证 → evidence 门按写节点绑定（G3 已证）+ 跨 agent 结果独立
+- [x] merge node → conflict-merge.test.ts（确定性合并 later-wins + 冲突上报）
+- [x] 冲突检测 → conflict-merge.test.ts（同文件交集 → 指纹冲突报告；失败写不计）
+- [x] 预算分配 → scheduler-agents.test.ts（超预算 agent 子图 blocked，另一 agent 全 done）
+- [x] Agent cancellation → scheduler-agents.test.ts（取消后该 agent 节点 failed(cancelled) 快速失败，另一 agent 完成）
+
+## 14. 实施记录
 
 | 阶段 | 版本 | 落地 | 验证 |
 |---|---|---|---|

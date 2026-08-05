@@ -25,7 +25,16 @@ export interface SchedulerOptions {
    *  a completed write node invalidates the cache. Optional; when absent
    *  the scheduler behaves exactly as before (old-run compatibility). */
   cache?: ResultCache
+  /** G7: agent pool — cancelled agents fail fast, per-agent budgets are
+   *  charged. Optional; absent = single-agent semantics unchanged. */
+  pool?: import("../agents/agent-pool").AgentPool
   onNodeFinished?: (result: import("../types").WorkflowNodeResult) => void
+}
+
+/** G7: node ids like "a1:w:patch" map to pool agent "a1". */
+function agentOfNodeId(nodeId: string): string | null {
+  const match = /^([^:]+):/.exec(nodeId)
+  return match ? match[1]! : null
 }
 
 /** G5: a replayed (cache-hit) node — durationMs 0 + metadata.replayed. */
@@ -95,6 +104,40 @@ export async function runScheduler(
         }
         store.put(rejected)
         return rejected
+      }
+      // G7: pool agents — cancelled agents fail fast, budgets are charged.
+      const agentId = options.pool ? agentOfNodeId(node.id) : null
+      if (agentId) {
+        const agent = options.pool!.get(agentId)
+        if (agent && (options.pool!.isCancelled(agentId) || agent.budget.exhausted())) {
+          const cancelled: import("../types").WorkflowNodeResult = {
+            nodeId: node.id,
+            status: "failed",
+            output: null,
+            error: agent.budget.exhausted()
+              ? `workflow: agent "${agentId}" budget exhausted (${JSON.stringify(agent.budget.stateSnapshot())})`
+              : `workflow: agent "${agentId}" cancelled`,
+            startedAt: Date.now(),
+            finishedAt: Date.now(),
+            durationMs: 0,
+          }
+          store.put(cancelled)
+          return cancelled
+        }
+        const verdict = agent?.budget.chargeNode() ?? "ok"
+        if (verdict !== "ok") {
+          const budgetBlocked: import("../types").WorkflowNodeResult = {
+            nodeId: node.id,
+            status: "failed",
+            output: null,
+            error: `workflow: agent "${agentId}" budget verdict ${verdict}`,
+            startedAt: Date.now(),
+            finishedAt: Date.now(),
+            durationMs: 0,
+          }
+          store.put(budgetBlocked)
+          return budgetBlocked
+        }
       }
       // G5: read-only cache hit → replay, never re-execute.
       if (!isWrite && cache) {

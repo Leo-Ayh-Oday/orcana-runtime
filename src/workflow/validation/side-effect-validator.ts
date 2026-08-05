@@ -13,7 +13,9 @@ export interface SideEffectIssue {
 export function validateSideEffects(
   nodes: Array<{ id: string; handler: string }>,
   readonlyHandlers: Set<string>,
+  mode: "readonly" | "read-write" = "readonly",
 ): SideEffectIssue[] {
+  if (mode === "read-write") return [] // write whitelist is enforced by capability + registry
   const issues: SideEffectIssue[] = []
   for (const node of nodes) {
     if (!readonlyHandlers.has(node.handler)) {

@@ -8,6 +8,7 @@
  */
 
 import type { ContractToolDescriptor } from "../../tools/registry"
+import { WRITE_HANDLERS } from "./transaction-executor"
 
 export type WorkflowHandler = (input: Record<string, unknown>) => Promise<unknown>
 
@@ -15,6 +16,8 @@ export interface HandlerDef {
   id: string
   description: string
   run: WorkflowHandler
+  /** G3: write handlers require the single-writer slot. */
+  isWrite?: boolean
 }
 
 export class HandlerRegistry {
@@ -38,6 +41,28 @@ export class HandlerRegistry {
     })
   }
 
+  /** Register a write tool (read-write specs only, single-writer semantics). */
+  registerWriteTool(handlerId: string, tool: ContractToolDescriptor): void {
+    if (!WRITE_HANDLERS.has(handlerId)) {
+      throw new Error(`workflow: handler "${handlerId}" is not in the write whitelist (G3)`)
+    }
+    if (tool.defn.isReadonly === true) {
+      throw new Error(`workflow: tool "${tool.defn.name}" is read-only — use registerTool`)
+    }
+    this.handlers.set(handlerId, {
+      id: handlerId,
+      description: tool.defn.description ?? tool.defn.name,
+      isWrite: true,
+      run: async input => {
+        const result = await tool.execute(input)
+        if (!result.success) {
+          throw new Error(result.error ?? result.content ?? `tool ${tool.defn.name} failed`)
+        }
+        return { content: result.content, metadata: result.metadata ?? {} }
+      },
+    })
+  }
+
   /** Register a deterministic reducer (pure function of inputs). */
   register(handlerId: string, description: string, run: WorkflowHandler): void {
     this.handlers.set(handlerId, { id: handlerId, description, run })
@@ -49,6 +74,10 @@ export class HandlerRegistry {
 
   get(handlerId: string): HandlerDef | undefined {
     return this.handlers.get(handlerId)
+  }
+
+  isWriteHandler(handlerId: string): boolean {
+    return this.handlers.get(handlerId)?.isWrite === true
   }
 
   list(): string[] {

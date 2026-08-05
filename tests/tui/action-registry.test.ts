@@ -75,10 +75,12 @@ describe("matchAction 精确匹配", () => {
     expect(matchAction("t", key({ ctrl: true }), "Confirm")).toBeNull()
   })
 
-  test("block.selectDown reserved：注册但 disabled", () => {
-    const block = findAction("block.selectDown")
-    expect(block?.enabled).toBe(false)
+  test("block 动作 P4 已启用但 matchable=false（main.tsx 浏览态显式分发，不抢 composer 键）", () => {
+    const block = findAction("block.toggle")
+    expect(block?.enabled).not.toBe(false)
+    expect(block?.matchable).toBe(false)
     expect(matchAction("j", key(), "Scrollback")).toBeNull()
+    expect(matchAction("", key({ return: true }), "Scrollback")).toBeNull()
   })
 })
 
@@ -88,7 +90,7 @@ describe("visibleActionsForContext", () => {
     expect(ids).toContain("runtime.open")
     expect(ids).toContain("run.stop")
     expect(ids).toContain("shortcuts.help")
-    expect(ids).not.toContain("block.toggle")
+    expect(ids).toContain("block.toggle") // P4 已启用（面板可见）
   })
 
   test("Composer 可见动作含 chat.submit（供 Ctrl+? 面板展示）", () => {

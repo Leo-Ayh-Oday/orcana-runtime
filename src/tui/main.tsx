@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react"
 import { render, useInput, useStdout } from "ink"
 import {
   LEGACY_CONVERSATION_HISTORY,
@@ -29,6 +29,9 @@ import type { StreamTraceState } from "./stream-trace"
 import { useOverlayController } from "./app/useOverlayController"
 import { matchAction } from "./presentation/actions"
 import { dispatchAction, type ActionExecutionContext } from "./presentation/dispatcher"
+import { deriveTranscriptBlocks } from "./presentation/derive-blocks"
+import { reduceTranscriptViewState, createInitialTranscriptViewState } from "./presentation/block-view-state"
+import type { ActionId } from "./presentation/actions"
 import type { ModelDialogOption } from "./overlays"
 import { installProfileReporter } from "./render-metrics"
 
@@ -66,6 +69,16 @@ function summarizeQueuedPromptForTranscript(text: string): string {
   if (chars <= 280 && lines <= 3) return preview || normalized
   const label = `[queued while agent is working: +${lines} lines, ${chars} chars]`
   return preview ? `${label}\npreview: ${preview}` : label
+}
+
+/** Depthline P4: 浏览态 block 导航键。 */
+function matchBlockNavKey(input: string, key: { return: boolean; ctrl: boolean; shift: boolean }): ActionId | null {
+  if (key.ctrl || key.shift) return null
+  if (input === "j") return "block.selectDown"
+  if (input === "k") return "block.selectUp"
+  if (key.return) return "block.toggle"
+  if (input === " ") return "block.toggle"
+  return null
 }
 
 function traceRenderedAssistant(
@@ -560,6 +573,35 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     runtimeDialogActive: overlayController.overlay.kind === "settings",
   })
 
+  // Depthline P4: 转录块 + 视图状态（折叠/选中独立于派生结果）
+  const blocks = useMemo(() => deriveTranscriptBlocks(state), [state])
+  const [viewState, dispatchView] = useReducer(reduceTranscriptViewState, undefined, createInitialTranscriptViewState)
+
+  const selectableBlocks = useMemo(() => blocks.filter(b => b.selectable), [blocks])
+  const blockNav = useMemo(() => {
+    const current = viewState.selectedBlockId
+    const idx = selectableBlocks.findIndex(b => b.id === current)
+    return {
+      selectUp: () => {
+        const next = idx > 0 ? selectableBlocks[idx - 1] : (idx === -1 ? selectableBlocks[selectableBlocks.length - 1] : undefined)
+        if (next) dispatchView({ type: "block.select", blockId: next.id })
+      },
+      selectDown: () => {
+        const next = idx >= 0 && idx < selectableBlocks.length - 1 ? selectableBlocks[idx + 1] : (idx === -1 ? selectableBlocks[0] : undefined)
+        if (next) dispatchView({ type: "block.select", blockId: next.id })
+      },
+      toggle: () => {
+        const target = idx >= 0 ? selectableBlocks[idx] : selectableBlocks[0]
+        if (!target) return
+        if (current === null) {
+          dispatchView({ type: "block.select", blockId: target.id })
+        }
+        dispatchView({ type: "block.toggle", blockId: target.id })
+      },
+      clear: () => dispatchView({ type: "block.select", blockId: null }),
+    }
+  }, [selectableBlocks, viewState.selectedBlockId, dispatchView])
+
   // Depthline P3: ActionExecutionContext — 单一执行上下文
   const selectClarificationOption = useCallback(() => {
     const q = clarification?.questions[clarification.index]
@@ -583,7 +625,8 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     updateOverlay: overlayController.updateOverlay,
     closeOverlay: overlayController.closeOverlay,
     stopRun,
-  }), [store, runtime, isWorking, overlayController.overlay, layout.bodyHeight, scrollUp, scrollDown, moveClarificationSelection, selectClarificationOption, cancelClarification, overlayController.updateOverlay, overlayController.closeOverlay, stopRun])
+    blockNav,
+  }), [store, runtime, isWorking, overlayController.overlay, layout.bodyHeight, scrollUp, scrollDown, moveClarificationSelection, selectClarificationOption, cancelClarification, overlayController.updateOverlay, overlayController.closeOverlay, stopRun, blockNav])
 
   controlsRef.current.dispatchAction = (id) => dispatchAction(id as import("./presentation/actions").ActionId, actionContext)
 
@@ -598,6 +641,19 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     if (overlayController.overlay.kind === "shortcuts") {
       if (key.escape) overlayController.closeOverlay()
       return
+    }
+    // Depthline P4: 浏览态（有选中块或已上滚）→ j/k/Enter/Space 走 block 导航
+    const blockNavActive = viewState.selectedBlockId !== null || scrollOffset > 0
+    if (blockNavActive && activeKeyContext === "Scrollback") {
+      const blockKey = matchBlockNavKey(_input, key)
+      if (blockKey) {
+        dispatchAction(blockKey, actionContext)
+        return
+      }
+      if (key.escape && viewState.selectedBlockId !== null) {
+        dispatchView({ type: "block.select", blockId: null })
+        return
+      }
     }
     // Depthline P3: 统一 ActionRegistry 分发（keymap/hints/面板同一数据源）
     const matched = matchAction(_input, key, activeKeyContext)
@@ -659,6 +715,9 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
         scrollDown={scrollDown}
         setInputChrome={setInputChrome}
         overlay={overlayController.overlay}
+        blocks={blocks}
+        view={viewState}
+        onView={dispatchView}
         thinkingEffort={thinkEffort}
         onAnswerQuestion={answerQuestion}
         onCancelQuestion={cancelQuestion}

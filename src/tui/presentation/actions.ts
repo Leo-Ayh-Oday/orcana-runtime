@@ -125,10 +125,10 @@ export const ACTIONS: readonly ActionDefinition[] = [
   { id: "rewind.select", contexts: ["RewindList", "RewindConfirm"], shortcuts: [{ key: "return" }, { key: "y" }], label: "confirm", description: "Confirm rewind" },
   { id: "rewind.cancel", contexts: ["RewindList", "RewindConfirm"], shortcuts: [{ key: "escape" }, { key: "n" }], label: "cancel", description: "Cancel rewind" },
 
-  // ── P4 reserved：block 选择/折叠 ──
-  { id: "block.selectUp", contexts: ["Scrollback"], shortcuts: [{ key: "k" }], label: "select up", description: "Select previous block", enabled: false },
-  { id: "block.selectDown", contexts: ["Scrollback"], shortcuts: [{ key: "j" }], label: "select down", description: "Select next block", enabled: false },
-  { id: "block.toggle", contexts: ["Scrollback"], shortcuts: [{ key: "return" }, { key: " " }], label: "toggle", description: "Toggle block expansion", enabled: false },
+  // ── P4 block 选择/折叠（matchable=false：main.tsx 在浏览态显式分发，不抢 composer 键） ──
+  { id: "block.selectUp", contexts: ["Scrollback"], shortcuts: [{ key: "k" }], label: "select up", description: "Select previous block", matchable: false },
+  { id: "block.selectDown", contexts: ["Scrollback"], shortcuts: [{ key: "j" }], label: "select down", description: "Select next block", matchable: false },
+  { id: "block.toggle", contexts: ["Scrollback"], shortcuts: [{ key: "return" }, { key: " " }], label: "toggle", description: "Toggle block expansion", matchable: false },
 ]
 
 // ── 查询 ──

@@ -30,6 +30,13 @@ export interface ActionExecutionContext {
   updateOverlay: (updater: (s: OverlayState) => OverlayState) => void
   closeOverlay: () => void
   stopRun: () => void
+  /** Depthline P4: block 导航（浏览态 j/k/Enter/Space）。 */
+  blockNav: {
+    selectUp: () => void
+    selectDown: () => void
+    toggle: () => void
+    clear: () => void
+  }
 }
 
 export type ActionHandler = (ctx: ActionExecutionContext) => void
@@ -108,6 +115,11 @@ const handlers: Partial<Record<ActionId, ActionHandler>> = {
     ctx.stopRun()
     ctx.store.dispatch({ type: "ui.event_message", kind: "activity", text: "stopped by user", minIntervalMs: 0 })
   },
+
+  // ── P4 block 导航 ──
+  "block.selectUp": ctx => ctx.blockNav.selectUp(),
+  "block.selectDown": ctx => ctx.blockNav.selectDown(),
+  "block.toggle": ctx => ctx.blockNav.toggle(),
 }
 
 /** 分发动作。未注册（reserved 等）返回 false。 */

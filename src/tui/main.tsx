@@ -28,6 +28,7 @@ import { cleanupTerminal, mouseEvents, resolveMouseModeEnabled } from "./stdin-f
 import { createStreamTrace, traceStartRound, traceDeltaChunk, traceFinalAccumulated, traceEndRound, traceSetStopReason, traceSetStreamError } from "./stream-trace"
 import type { StreamTraceState } from "./stream-trace"
 import { useOverlayController } from "./app/useOverlayController"
+import { matchAction } from "./presentation/actions"
 import type { ModelDialogOption } from "./overlays"
 import { installProfileReporter } from "./render-metrics"
 
@@ -155,6 +156,7 @@ function useAgentStream(
   controlsRef: React.MutableRefObject<{
     openModels: (provider?: string) => void
     openEffort: () => void
+    toggleInspector: () => void
   }>,
   store: TuiStore,
 ) {
@@ -176,6 +178,7 @@ function useAgentStream(
 
   const historyRef = useRef<Array<{ role: ModelHistoryRole; content: string }>>([])
   const runningRef = useRef(false)
+  const cancelCurrentRef = useRef<() => void>(() => {})
   const queuedPromptsRef = useRef<string[]>([])
   const runAgentRef = useRef<(prompt: string) => void>(() => {})
   const [clarification, setClarification] = useState<ClarificationWizardState | null>(null)
@@ -203,6 +206,7 @@ function useAgentStream(
     let assistantText = ""
     let lastFlush = 0
     const finishRun = () => {
+      cancelCurrentRef.current = () => {}
       const nextPrompt = queuedPromptsRef.current.shift()
       store.dispatch({ type: "ui.queue_count", count: queuedPromptsRef.current.length })
       if (nextPrompt) {
@@ -327,10 +331,11 @@ function useAgentStream(
       finishRun()
     })
 
-    return () => {
+    cancelCurrentRef.current = () => {
       cancelled = true
       if (runId) void runtime.harness.cancel(runId, "agent run cancelled")
     }
+    return () => cancelCurrentRef.current()
   }, [runtime, store, adapter, thinkEffort])
 
   const setThinkEffort = useCallback((value: ThinkEffort) => {
@@ -423,6 +428,7 @@ function useAgentStream(
       openModels: controlsRef.current.openModels,
       openEffort: controlsRef.current.openEffort,
       setThinkEffort,
+      toggleInspector: controlsRef.current.toggleInspector,
     })
     if (commandResult === "handled") {
       return
@@ -450,7 +456,7 @@ function useAgentStream(
     return runAgent(prompt)
   }, [prompt, runAgent])
 
-  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, store, thinkEffort, setThinkEffort }
+  return { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, store, thinkEffort, setThinkEffort, stopRun: () => cancelCurrentRef.current() }
 }
 
 export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime }) {
@@ -481,8 +487,8 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
 
   // Depthline P1: overlay 互斥状态 + settings 对话框按键由 controller 接管。
   // controls 经 ref 注入 useAgentStream，避免 controller 与 stream hook 的循环依赖。
-  const controlsRef = useRef({ openModels: () => {}, openEffort: () => {} })
-  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, thinkEffort, setThinkEffort } = useAgentStream(runtime, prompt, controlsRef, store)
+  const controlsRef = useRef({ openModels: () => {}, openEffort: () => {}, toggleInspector: () => {} })
+  const { state, submit, clarification, answerClarification, moveClarificationSelection, cancelClarification, answerQuestion, cancelQuestion, thinkEffort, setThinkEffort, stopRun } = useAgentStream(runtime, prompt, controlsRef, store)
   thinkEffortRef.current = thinkEffort
   const overlayController = useOverlayController({
     runtime,
@@ -495,6 +501,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   controlsRef.current = {
     openModels: overlayController.openModelPicker,
     openEffort: overlayController.openEffort,
+    toggleInspector: () => overlayController.updateOverlay(s => s.kind === "runtime-inspector" ? { kind: "none" } : { kind: "runtime-inspector" }),
   }
   const [scrollOffset, setScrollOffset] = useState(0)
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
@@ -562,6 +569,18 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
     // Depthline P1: settings 对话框按键由 controller 消费（不泄漏到 keymap）
     if (overlayController.overlay.kind === "settings") {
       overlayController.handleSettingsKey(_input, key)
+      return
+    }
+    // Depthline P2: ActionRegistry seam — Ctrl+T 打开/关闭 RuntimeInspector
+    const matched = matchAction(_input, key, activeKeyContext)
+    if (matched?.id === "runtime.open") {
+      overlayController.updateOverlay(s => s.kind === "runtime-inspector" ? { kind: "none" } : { kind: "runtime-inspector" })
+      return
+    }
+    // Depthline P2: 主表面 Esc = 停止当前 run（与 HintBar "Esc stop" 一致）
+    if (key.escape && isWorking && activeKeyContext === "Scrollback") {
+      stopRun()
+      store.dispatch({ type: "ui.event_message", kind: "activity", text: "stopped by user", minIntervalMs: 0 })
       return
     }
     const action = resolveKeyAction(_input, key, {

@@ -1,6 +1,7 @@
 import { ASK_USER_TOOL } from "./ask-user"
+import { APPLY_PATCH_TOOL, APPLY_PATCH_TRANSACTION_TOOL } from "./apply-patch"
 import { CODEGRAPH_TOOLS } from "./codegraph"
-import { FILE_TOOLS } from "./file"
+import { EDIT_SYMBOL_TOOL, FILE_TOOLS } from "./file"
 import { GIT_TOOLS } from "./git"
 import { LSP_DIAGNOSTICS, LSP_TOOLS } from "./lsp"
 import { META_BUILTIN_TOOL_DEFS } from "./meta"
@@ -14,6 +15,9 @@ import { WEB_FETCH_TOOL } from "./webfetch"
 
 const CORE_BUILTIN_TOOL_DEFS: readonly ToolDef[] = Object.freeze([
   ...FILE_TOOLS,
+  EDIT_SYMBOL_TOOL,
+  APPLY_PATCH_TOOL,
+  APPLY_PATCH_TRANSACTION_TOOL,
   SHELL_TOOL,
   START_SERVICE_TOOL,
   ...GIT_TOOLS,

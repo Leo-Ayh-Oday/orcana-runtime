@@ -288,12 +288,18 @@ describe("ToolContract projection", () => {
     }
 
     expect(fingerprints).toEqual([
-      "read_file:8d19854eb1907fc5dcf02102a47a6e2e741d2e9d2c9bb28933ae78f619d6c774",
+      // RT-6: read_file gained selector/expectedHash (new fingerprint);
+      // edit_symbol/apply_patch/apply_patch_transaction added after
+      // rollback_transaction (stable built-in order).
+      "read_file:65b70903f7e789ce60ed71a16e011b357ab25aa23824036bd5959faa42b80267",
       "write_file:2218c0aef6985044266acabe2cc488069185efbb87188db6da5e70bb635d67c9",
       "edit_file:f0331d1876fcfdca52a0c02014cac5eb119a947bca69f0b45b80c7785bf23621",
       "multi_edit:bd01af46e7ffe175654bb58e7646e1f5041cba74a0f888034ff94b7bd322d48d",
       "edit_fim:fc75fcd080561a80e1d5741f4c08a532208362f214d8ff7034b6834e1775d14a",
       "rollback_transaction:bd4ceed1a486ff0148894eca74974868a20731709d009cf8858553a3c9f26495",
+      "edit_symbol:30bb730387157e6b6e582b0f829105da0896e2e53bb3417f04cd41e543c52dc2",
+      "apply_patch:32f957d0c5a55edf5802407d790a899e376c3b65e36aa007e80f20cc80f48c2c",
+      "apply_patch_transaction:33c36dc0ba9db0f502dea29d9fc87c36b8516eebbf869fa8b9da6cd8d8581fb8",
       "shell:5163d7bdacab8e07f9c612a574d9fbf53feb9d417114b2f53ff4b8cb8e669969",
       "start_service:483dc391fdcd57e97a5664b0f6215072fbccc10efe6c9426222792e6f6d45ea5",
       "git_status:a5085bd45df5b65723dff6a2f114372f62bf76ca8f3548e167770235281b72bf",

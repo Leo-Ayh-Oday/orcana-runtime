@@ -1,12 +1,11 @@
-/** InkStartupScreen — Orcana 启动画面（Phase 8 rebrand）。
+/** InkStartupScreen — Orcana 启动画面（Depthline P5 简化）。
  *
- *  Phase 8: 硬编码 palette → theme.* 迁移。"DEEPSEEK" → "ORCANA" 品牌更新。
- *  保留 BigText 字体 + SignalLine 动画 + Capsule 胶囊布局。
+ *  P5: 删除 BigText 大字与 SignalLine 动画（依赖清理 + 单一动画原则）。
+ *  静态品牌行 + Capsule 胶囊布局。
  */
 
-import React, { useEffect, useState } from "react"
+import React from "react"
 import { Box, Text, render } from "ink"
-import BigText from "ink-big-text"
 import { theme } from "../tui/theme/theme"
 
 export interface InkStartupOptions {
@@ -15,19 +14,6 @@ export interface InkStartupOptions {
   thinkingEffort: string
   modelName: string
   durationMs?: number
-}
-
-function SignalLine({ tick }: { tick: number }) {
-  const width = 58
-  const chars = Array.from({ length: width }, (_, i) => {
-    const phase = (i + tick) % 16
-    if (phase === 0) return "="
-    if (phase <= 2 || phase >= 14) return "~"
-    if (phase <= 5 || phase >= 11) return "-"
-    return "."
-  }).join("")
-
-  return <Text color={theme.info}>{chars}</Text>
 }
 
 function Capsule({ label, value, color }: { label: string; value: string; color: string }) {
@@ -42,25 +28,11 @@ function Capsule({ label, value, color }: { label: string; value: string; color:
 }
 
 export function InkStartupScreen({ version, toolsCount, thinkingEffort, modelName }: InkStartupOptions) {
-  const [tick, setTick] = useState(0)
-
-  useEffect(() => {
-    const timer = setInterval(() => setTick(value => value + 1), 110)
-    return () => clearInterval(timer)
-  }, [])
-
   return (
     <Box flexDirection="column" paddingX={2} paddingTop={1}>
       <Box>
-        <Text color={theme.brand}>
-          <BigText text="ORCANA" font="block" space={false} />
-        </Text>
-      </Box>
-
-      <Box marginTop={-1}>
-        <Text color={theme.text} bold>Orcana </Text>
-        <Text color={theme.textFaint}>v{version} / </Text>
-        <Text color={theme.brand}>Hraness runtime</Text>
+        <Text bold color={theme.brand}>Orcana</Text>
+        <Text color={theme.textFaint}>  v{version} · Harness runtime</Text>
       </Box>
 
       <Box marginTop={1} marginBottom={1}>
@@ -69,16 +41,8 @@ export function InkStartupScreen({ version, toolsCount, thinkingEffort, modelNam
 
       <Box flexDirection="row" marginBottom={1}>
         <Capsule label="model" value={modelName} color={theme.brand} />
-        <Capsule label="fim" value="on" color={theme.success} />
         <Capsule label="tools" value={String(toolsCount)} color={theme.warning} />
         <Capsule label="thinking" value={thinkingEffort} color={theme.info} />
-      </Box>
-
-      <SignalLine tick={tick} />
-
-      <Box marginTop={1}>
-        <Text color={theme.brand}>{["calibrating", "indexing", "routing", "readying"][tick % 4]}</Text>
-        <Text color={theme.textFaint}> context, tools, memory</Text>
       </Box>
 
       <Box marginTop={1}>

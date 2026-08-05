@@ -265,25 +265,23 @@ describe("component: eventMarker and eventColor", () => {
   })
 
   // Phase 1: gate/evidence/patch 不再共用 green/blue/yellow
-  test("eventColor uses distinct gate color (not shared with warning or eventTask)", () => {
+  // Depthline P5：gate/evidence/patch 不再拥有独立主色（收敛到 muted，靠标签区分）
+  test("eventColor: gate/evidence/patch 收敛到 muted（P5）", () => {
     const gateColor = eventColor("gate")
-    expect(gateColor).toBe(theme.eventGate)
-    expect(gateColor).not.toBe(theme.eventEvidence)
-    expect(gateColor).not.toBe(theme.eventPatch)
-  })
-
-  test("eventColor uses distinct evidence color", () => {
     const evidenceColor = eventColor("evidence")
+    const patchColor = eventColor("patch")
+    expect(gateColor).toBe(theme.eventGate)
     expect(evidenceColor).toBe(theme.eventEvidence)
-    expect(evidenceColor).not.toBe(theme.eventGate)
-    expect(evidenceColor).not.toBe(theme.eventPatch)
+    expect(patchColor).toBe(theme.eventPatch)
+    expect(gateColor).toBe(evidenceColor)
+    expect(evidenceColor).toBe(patchColor)
+    expect(gateColor).toBe(C.dim) // muted #64748B
   })
 
-  test("eventColor uses distinct patch color", () => {
-    const patchColor = eventColor("patch")
-    expect(patchColor).toBe(theme.eventPatch)
-    expect(patchColor).not.toBe(theme.eventGate)
-    expect(patchColor).not.toBe(theme.eventEvidence)
+  test("eventColor: 错误仍是 danger，活动是 accent（状态色不收敛）", () => {
+    expect(eventColor("error")).toBe(theme.eventError)
+    expect(eventColor("activity")).toBe(theme.eventActivity)
+    expect(theme.eventError).toBe(theme.error)
   })
 })
 

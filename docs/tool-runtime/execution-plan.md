@@ -1,12 +1,40 @@
 # Orcana 生产级 Tool 系统改造执行方案
 
-**文档版本：** Tool Runtime 2.0 / Execution Plan v1.0 → **v1.1（本地现状对齐版，2026-08-04）**
-**适用阶段：** ~~Loop 减重进行中，Harness 2.0 尚未全面接线~~ → **ALK-1.0 完成，Harness 2.0 已全面接线（H0–H12 + Closure R1 + Readiness R2 冻结），Node Runtime stable**
+**文档版本：** Tool Runtime 2.0 / Execution Plan v1.0 → **v1.1（本地现状对齐版，2026-08-04）→ v1.2（RT-1..13 全部完成，2026-08-05）**
+**适用阶段：** ~~Loop 减重进行中，Harness 2.0 尚未全面接线~~ → **ALK-1.0 完成，Harness 2.0 已全面接线（H0–H12 + Closure R1 + Readiness R2 冻结），Node Runtime stable，Tool Runtime 2.0 全部 PR 完成（RT-1..13，v0.5.10–v0.5.22）**
 **执行对象：** 可直接交给 Codex、Claude Code、Orcana 或其他代码 Agent 分 PR 执行
 **代码基线：** 以本地工作区为唯一事实来源（HEAD `fcf5c6e`，v0.5.9）；远程仓库 `2207db20eb284d8b2f695c13951a3078bbff3682` 仅用于历史结构参考
 **核心原则：** 不大爆炸重写；先建立契约，再迁移核心工具；先完成隔离和安全，再增加高级能力。
 
 ---
+
+## 0.6 实施记录（v1.2，2026-08-05，RT-1..13 全部完成）
+
+本计划（v1.1 修订版）的全部 RT 已按序落地。每版五门禁中的 typecheck 存在已知例外：用户并行重构 `src/tui/`（未完成状态），typecheck 的非 tui 错误为 0；受限门禁测试集（`tests/tools/` `tests/capabilities/` `tests/harness-replay/` `tests/tool_contract.test.ts` `tests/tool_policy.test.ts` `tests/tool_risk.test.ts`）全部通过。发布（push/gh release/npm publish）在 TUI 修复前保持积压（v0.5.16–v0.5.22 已 commit，bump 与 CHANGELOG 条目已写入）。
+
+| RT | 版本 | 落地 | 验证 |
+|---|---|---|---|
+| RT-1 | v0.5.10 | 契约补强（26 错误码 / 6 状态结果 / retry / context / schema-validator） | 已发布 |
+| RT-2 | v0.5.11 | 能力模式 flag + shadow 差异事件 | 已发布 |
+| RT-3 | v0.5.12 | kernel projectRoot 显式化 + context 直达 handler + 并发隔离测试 | 已发布 |
+| RT-4 | v0.5.13 | output-limiter（大输出→artifact）+ 首批 output schema | 已发布 |
+| RT-5 | v0.5.14 | policy 模块化（writable-root/network/risk/approval/concurrency） | 已发布 |
+| RT-6 | v0.5.15 | apply_patch / apply_patch_transaction / edit_symbol / read_file selectors | 已发布 |
+| RT-7 | v0.5.16 | run_process / run_shell_script（shell:false 参数化） | 已 commit 未发布 |
+| RT-8 | v0.5.17 | git porcelain=v2 结构化 + numstat + 写工具风险分离 | 已 commit 未发布 |
+| RT-9 | v0.5.18 | repo map（build/query/context-slice，compiler-AST） | 已 commit 未发布 |
+| RT-10 | v0.5.19 | verification 工具链（discover/targeted/classify/verify_claim） | 已 commit 未发布 |
+| RT-11 | v0.5.20 | Web/Service/MCP 硬化（SSRF DNS/IP 逐跳复查、流式字节上限+压缩炸弹防护、缓存 key 按 summarize 模式分离、提示注入标记；ServiceLease runId 绑定 + cleanupPolicy + run 结束自动回收；MCP TrustPolicy：未知工具默认非只读高风险 + 首次审批，annotations 仅作提示，共享 client + 调用超时） | 已 commit 未发布 |
+| RT-12 | v0.5.21 | Capability Router 分层动态披露（Stable Core 5 + Specialist 分组 + meta 常驻，稳定顺序/稳定前缀/token 估算/fallback/预算折叠，bootstrap toolDisclosure 可选接线） | 已 commit 未发布 |
+| RT-13 | v0.5.22 | Tool Production Eval TL-001..020（真实工具/executor/policy/router/service 路径；发现并修复 executor node 模式缺 tool.call.completed 的 trace 不成对缺陷） | 已 commit 未发布 |
+
+计划偏差（与 v1.1 相比，均保持目标语义）：
+
+1. **发布阻塞**：用户并行重构 TUI 导致 `bun run build` 失败（`src/tui/` 引用不存在的模块），npm publish 的 prepack build 无法通过。RT-7..13 全部 commit + 版本 bump + CHANGELOG 已写入，TUI 修复后按序发布。
+2. **inspect_file**：RT-12 Stable Core 计划名 `inspect_file` 尚未创建，用 `read_file`（已支持 selector/expectedHash）替代并注释说明。
+3. **WSL 网络限制**：本机 WSL 镜像网络把 127.0.0.1 路由到 Windows 主机，本地 TCP 集成测试不可行。web-safe 的 `safeHttpGet` 与 service 的 readiness 探测增加**仅测试用**注入点（`connect` hook / `waitForHttp` deps），生产路径保持 fail-closed 默认。
+4. **MCP 输出 schema**：schema-validator 支持 enum/required/properties（不支持 const），TL-013 用 enum 表达。
+5. **executor 修复**：RT-13 期间发现 node 模式 handler 成功路径不 emit `tool.call.completed`（TL-018 trace 成对断言失败），已修复。
 
 ## 0.5 本地现状对齐与计划修订（v1.1，2026-08-04）
 

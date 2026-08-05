@@ -26,6 +26,8 @@ import { enforceNodeAssignment, enforceActualWrites, ownershipDeniedResult, crea
 import type { WorkflowNodeExecutionContext } from "../agents/workspace-context"
 import { WorkflowInterruptError, type WorkflowInterruptError as WIE } from "../interrupts/types"
 import { createResumeToken } from "../interrupts/resume-token"
+import type { ResourceLedger } from "../../runtime/linux/scheduler/resource-ledger"
+import type { ResourceRequest } from "../../runtime/linux/contracts"
 
 export interface SchedulerOptions {
   maxParallel?: number
@@ -53,6 +55,26 @@ export interface SchedulerOptions {
     onResolved?: (interruptId: string) => void
   }
   onNodeFinished?: (result: import("../types").WorkflowNodeResult) => void
+  /** R4: 资源账本 —— 节点启动前原子预留，不足时等待而非先启动
+   *  （acceptance #11：RESOURCE_OVERCOMMIT: 0）。缺省 = 不启用。 */
+  ledger?: ResourceLedger
+  /** R4: 每节点资源估算（缺省按并发上限宽松估算）。 */
+  resourceRequestFor?: (node: import("../types").WorkflowNodeSpec) => ResourceRequest
+}
+
+/** R4: 资源预留等待（原子预留成功才放行）。 */
+async function awaitReservation(
+  ledger: ResourceLedger,
+  request: ResourceRequest,
+  runId: string,
+  cellId: string,
+  agentId?: string,
+): Promise<string> {
+  for (;;) {
+    const result = ledger.reserve(request, runId, cellId, agentId)
+    if (result.ok) return result.reservation.reservationId
+    await new Promise(r => setTimeout(r, 100))
+  }
 }
 
 /** G7: node ids like "a1:w:patch" map to pool agent "a1". */
@@ -203,6 +225,14 @@ export async function runScheduler(
         }
       }
       const lock = isWrite ? await cc.acquireWrite() : null
+      // R4: 资源预留（不足时等待；释放与锁同 finally）。
+      let reservationId: string | null = null
+      if (options.ledger) {
+        const request = options.resourceRequestFor
+          ? options.resourceRequestFor(node)
+          : { cpuQuota: 1, memoryBytes: 256 * 1024 * 1024, pids: 32, ioWeight: 0, networkSlots: 0, tempBytes: 512 * 1024 * 1024 }
+        reservationId = await awaitReservation(options.ledger, request, spec.specId, node.id, agentId ?? undefined)
+      }
       try {
         // MACP-M4: pass the interrupt runtime into the harness execution so
         // human nodes can pause (persisted record) or resume (answer).
@@ -250,6 +280,7 @@ export async function runScheduler(
         return result
       } finally {
         lock?.release()
+        if (reservationId) options.ledger?.release(reservationId)
       }
     })().then(result => {
       running.delete(node.id)

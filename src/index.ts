@@ -87,6 +87,17 @@ async function printDoctor() {
 }
 
 async function main() {
+  // R4: Linux 启动 Janitor —— 清理旧 boot 遗留 run 状态（崩溃恢复闭环）。
+  if (process.platform === "linux") {
+    try {
+      const { RuntimeStateStore, startupJanitor, readBootId } = await import("./runtime/linux/recovery/state-store")
+      const store = new RuntimeStateStore()
+      await startupJanitor({ store, currentBootId: readBootId() })
+    } catch {
+      // best-effort：Janitor 失败不阻断启动。
+    }
+  }
+
   if (arg === "--version" || arg === "-v" || arg === "version") {
     console.log(`orcana ${VERSION_LABEL}`)
     return

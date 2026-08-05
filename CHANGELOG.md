@@ -2,7 +2,16 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.13] — 2026-08-05
+## [0.8.14] — 2026-08-05
+
+### Added (LNXF-7 — 网络代理、Landlock、seccomp 与恢复)
+- **Egress policy** — host+port allowlist with wildcard domains; every redirect is re-checked hop-by-hop (`REDIRECT_POLICY_BYPASS: 0`); a DNS-rebinding guard rejects allowlisted domains resolving to private/loopback addresses; DNS pre-resolution alone is never a control.
+- **Landlock** — ruleset compilation per profile and ABI (filesystem read/write/no-exec sets at ABI ≥ 1, network rules at ABI ≥ 4); graceful degradation with explicit reason when the LSM is unavailable. A combinable hardening layer on top of Bubblewrap/Podman — never a standalone sandbox.
+- **seccomp** — conservative `SCMP_ACT_ERRNO` profiles for inspect/untrusted (ptrace/mount/kexec/bpf denied); node/bun runtimes get socket/epoll surfaces; a compatibility gate rejects ruleset changes that silently remove allowed syscalls (no shared cross-language list).
+- **Recovery** — `RuntimeStateStore` under `~/.orcana/runtime/linux` (capabilities/runs/receipts/cleanup/locks), `BootIdentityStore` (boot.json), and a startup janitor that cleans only runs from a previous boot — never PID-based guessing (`RECOVERY_WRONG_PROCESS_KILL: 0`), with per-run `RecoveryReceipt` and same-boot restart safety.
+- 13 tests; full gate 1035 pass, bench no regression.
+
+
 
 ### Added (LNXF-6 — Rootless Podman 严格后端)
 - **Strict container backend** for untrusted/evolution/dependency profiles — argv compiler produces `--rm`, `--network=none`, `--read-only`, `--pull never`, `--userns=keep-id`, `--memory/--cpus/--pids-limit` from the cell spec, explicit worktree volume (`/workspace:rw,Z`) and cache volumes (ro / rw per request), `io.orcana.run/cell/agent` labels for recovery.

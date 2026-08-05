@@ -1,3 +1,8 @@
+> **⚠️ 本计划已被 Depthline 重构方案取代**（`docs/tui-depthline-plan.md`，2026-08 实施完成）。
+> 本文件描述的是更早期的「深海/暗流/涟漪」视觉增强路线（PR-1..10），其中大量内容
+> （18 色 palette、涟漪相位、全局共享时钟、RightRail 降级等）与 Depthline 的减法方向相悖，
+> 已随 Depthline P1–P5 落地被移除或重构。保留仅作历史参考。
+
 # Orcana TUI 生产级改造方案
 
 > 知识蒸馏自 Claude Code TUI 源码（`E:\备份\claudcodesrc-ponponon`），落地到 Orcana 自有的"深海/暗流/涟漪/证据链"语义体系。

@@ -2,6 +2,38 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.5.20] — 2026-08-05
+
+### Security (Tool Runtime 2.0, RT-11)
+- **`web_fetch` SSRF hardening** — every hop (initial + each redirect) is re-validated: hostname blocklist → DNS resolution → per-IP private/link-local/cloud-metadata rejection (IPv4 RFC1918/CGNAT/link-local/documentation/multicast, IPv6 loopback/ULA/link-local/mapped/documentation/multicast), fail-closed. Requests connect to the validated IP with explicit Host header/TLS servername — no TOCTOU between check and connection.
+- **Streaming byte budget** — bodies stream and decompress on the fly (zip-bomb guard, `content-encoding` gzip/deflate/br), cut at 500KB; binary content-types rejected; per-hop timeout.
+- **Cache-key mode split** — cache key now includes `summarize` and engine, so a summary and its raw content can never share an entry.
+- **Prompt-injection flagging** — fetched content is scanned for injection phrasing (`ignore-previous-instructions`, `role-reassignment`, `system-prompt-override`, …) and flagged in `metadata.promptInjectionDetected`.
+- **Service supervisor split** — `start_service` → `service_start` / `service_status` / `service_logs` / `service_stop` with run-bound `ServiceLease` (runId + `cleanupPolicy`); `cleanupPolicy=run-end` services are stopped automatically when the harness run is removed (no background leaks); logs stream to `~/.orcana/services/<id>.log`. Legacy `start_service` kept as a compatibility forwarder.
+- **MCP trust policy** — per-server `trust: untrusted|restricted|trusted` + `allowedToolPatterns` / `deniedToolPatterns` / `defaultRiskLevel` / `allowOpenWorld` in `~/.orcana/mcp.json`. Unknown tools default to non-readonly high risk with first-execution confirmation; MCP annotations are hints only and can never lower risk; shared bridge client (shutdown now actually stops servers) + per-call timeouts.
+
+## [0.5.19] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-10)
+- **Verification toolchain** — `discover_verification` (package.json scripts/workspace/CI discovery), `run_targeted_verification` (minimal verification set from modified files), `classify_command_failure` (ANSI-aware root-cause classification), `verify_claim` (evidence-bound claim checking against artifact/evidence/workspace-hash state).
+
+## [0.5.18] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-9)
+- **Repo map** — `build_repo_map` / `query_repo_map` / `build_context_slice` (compiler-AST code intelligence with authority/confidence annotation).
+
+## [0.5.17] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-8)
+- **Git 2.0** — `git status --porcelain=v2 -z` structured parsing, `git diff --numstat` + patch artifacts, risk-separated write tools (`git_add`/`git_commit` require confirmation, detached from read-only surface).
+
+## [0.5.16] — 2026-08-05
+
+### Added (Tool Runtime 2.0, RT-7)
+- **`run_process`** — parameterized executable execution (`shell:false`, args as arrays, never command strings): process-group tree-kill on timeout/cancel (no orphans), AbortSignal support, structured `exitCode`/`signal`/`durationMs` results, env merge.
+- **`run_shell_script`** — explicit shell type (bash/sh/zsh/cmd/powershell) invoked via shell executable + args (never `shell:true`), with an auto-generated declarative side-effect plan (write/network/privilege).
+- **`start_service` de-shelled** — detached spawn now parameterized (`shell:false`); `Result.failWithMetadata` added for structured failures.
+
 ## [0.5.15] — 2026-08-05
 
 ### Added (Tool Runtime 2.0, RT-6)

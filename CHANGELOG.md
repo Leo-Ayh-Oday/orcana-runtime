@@ -2,7 +2,21 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.15] — 2026-08-05
+## [0.8.16] — 2026-08-05
+
+### Changed (LPIC — Linux Production Integration Closure，独立审计修复)
+
+Foundation Freeze 正式撤销（REVOKE）；本版完成生产接线闭合 R0–R6：
+
+- **R1 单一进程入口** — ProcessExecutor（Linux → Broker 真执行 / Windows legacy）；run_process、run_shell_script、legacy shell、git、typescript、codegraph、verification、ruff 全部迁移；环境后门关闭（spec 密钥键拒绝 + Backend 只消费 Compiler 输出）；abortSignal 全链路含 spawn 前竞态；真实流式输出；AST 静态门禁旁路 = 0（允许列表仅监督器/统一入口/标注暂存区）。
+- **R2 Broker 执行事务** — 资源预留 → Isolation Lock → Agent Domain → Cell cgroup（创建+attach 真实进程）→ 流式事件 → cgroup 指标/清理验证 → 清理 → 释放；cancelCell/cancelAgent/cancelRun/cleanupRun 真实现。
+- **R3 后端真实性** — seccomp-BPF 文件生成器（x86_64，deny→EPERM）+ 注入 bwrap --seccomp / podman seccomp-opt；bwrap --setenv（沙盒内环境）、完整挂载/tmpfs/cache-rw、loopback lo-up 包装；podman --env/--cap-drop=ALL/no-new-privileges/--tmpfs/--cidfile；host-audit 真 PathGuard（内容指纹 diff → observedWrites/Deletes）。
+- **R4 资源调度** — ResourceLedger 接入 Graph Scheduler（不足时等待而非先启动，RESOURCE_OVERCOMMIT: 0）；CLI 启动 Janitor（boot-id 崩溃恢复）。
+- **R5 Evidence** — SandboxReceipt → sandbox_execution/sandbox_cleanup 证据（清理未验证不产生证据）；硬完成条件 sys.sandbox_execution / sys.sandbox_backend / sys.sandbox_no_degradation / sys.sandbox_cleanup_verified。
+- **R6 真实验收** — CI Lane：真实 Bubblewrap / 真实 Rootless Podman（digest 解析）/ cgroup 委托探测（账号解锁后生效）。
+- 全量 3109 tests / 249 文件；bench 无回归；Linux Sandbox Eval 35 场景保持 34 PASS + 1 SKIP（podman 环境依赖）。
+
+
 
 ### Added (LNXF-8 — 生产评测与 Foundation Freeze)
 - **Linux Sandbox Eval** — 35 production scenarios (LX-001..035) run against the real runtime: capability probing + fail-closed degradation, host-secret/home/credential/socket invisibility, project & symlink escape blocking, network (egress-none, loopback, DNS-rebinding guard, hop-by-hop redirect re-check), resource limits (output/memory/pids/cpu/oom/timeout), cancellation (cell/agent/run, daemon-tree zeroing), concurrency (worktree parallelism, main-workspace single-writer, cache locks, port leases), strict backends (digest-locked images, no silent degradation), recovery janitor (old-boot cleanup, same-boot restart safety), seccomp/Landlock rule surfaces + compatibility gate, receipt completeness + evidence binding, single-agent shadow compatibility. `bun run eval:linux`.

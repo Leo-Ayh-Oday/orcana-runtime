@@ -104,7 +104,12 @@ export async function runScheduler(
   if (hasWriteNode) {
     const evidence = aggregateEvidence(spec, results)
     base.evidence = evidence
-    if (!evidence.some(e => e.passed)) {
+    // A failed write node never completes, even if a verification node
+    // reported passed (G3 completion gate + G4 convergence).
+    const writeFailed = spec.nodes
+      .filter(n => registry.isWriteHandler(n.handler))
+      .some(n => results.find(r => r.nodeId === n.id)?.status === "failed")
+    if (!evidence.some(e => e.passed) || writeFailed) {
       base.status = "blocked_no_evidence"
     }
   }

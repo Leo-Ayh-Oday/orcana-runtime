@@ -1,4 +1,4 @@
-/** Scrollback — 消息视口渲染（Phase 6 性能升级 + PR-1.5 拆双轨）。
+/** Scrollback — 消息视口渲染（Phase 6 性能升级 + PR-1.5 拆双轨 + Depthline P1 去 tick）。
  *
  *  Phase 6 变更:
  *    - FormattedLineCache: 按 msgId+textLen+width 缓存渲染行，流式输出时只重算最后一条消息
@@ -8,15 +8,18 @@
  *  PR-1.5 变更:
  *    - 废除 pending spinner 分支：空 pending message 不再渲染占位行
  *    - 运行态信号（Composing/Reading/Running）由 ThinkingDock 单一职责接管
- *    - 保留 tail 光标动画（流式输出的"正在打字"内容信号）
- *    - stalled 检测从 Scrollback 移除，isStalled() 保留供 ThinkingDock 未来使用 */
+ *
+ *  Depthline P1 变更:
+ *    - 删除 applyPendingAnimation 与 tail 光标动画：Scrollback 不拥有任何 tick，
+ *      只响应 messages / width / height / scrollOffset 变化
+ *    - 流式输出由 store delta 推动，运行态信号由 ThinkingDock/ActivityLine 表达 */
 
 import React, { useEffect, useMemo, useRef } from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import type { TuiMessage } from "../state/types"
 import { renderMessageLines, type RenderedLine } from "./MessageItem"
-import { useClock } from "../clock"
+import { renderMetrics } from "../render-metrics"
 
 export interface ScrollbackScrollState {
   maxOffset: number
@@ -95,6 +98,7 @@ export class FormattedLineCache {
       ? [...rendered, { marker: " " as const, text: "", color: C.dim }]
       : rendered
     this.cache.set(msg.id, { key, lines })
+    renderMetrics.incMessageFormat()
     return lines
   }
 
@@ -181,37 +185,9 @@ export function prepareScrollbackViewport(
   }
 }
 
-// ── 动画 (PR-1.5: 仅保留 tail 光标动画) ──
-
-/** PR-1.5: 叠加 pending 动画到静态行。O(N) 但 N = 视口高度。
- *
- *  原 Phase 5 的 spinner 分支已废除：空 pending message 不再渲染占位行，
- *  运行态信号（Composing/Reading/Running 等）由 ThinkingDock 单一职责接管。
- *  保留 tail 分支：流式输出尾行 "..." 光标动画，是"正在打字"的内容信号，
- *  与 ThinkingDock 的状态标签不同维度。
- *
- *  stalled 检测逻辑移除：applyPendingAnimation 不再需要判断 stalled，
- *  isStalled() 函数保留在 pending-activity.ts 供 ThinkingDock 未来使用。 */
-export function applyPendingAnimation(
-  lines: RenderedLine[],
-  tick: number,
-  reducedMotion: boolean,
-): RenderedLine[] {
-  let hasPending = false
-  for (const line of lines) {
-    if (line.pendingAnim) { hasPending = true; break }
-  }
-  if (!hasPending) return lines
-
-  // reducedMotion: 不追加 tail dots，保持文本静态
-  if (reducedMotion) return lines
-
-  return lines.map(line => {
-    if (line.pendingAnim !== "tail") return line
-    const tail = ["", ".", "..", "..."][tick % 4] ?? ""
-    return { ...line, text: line.text + tail }
-  })
-}
+// ── Depthline P1: 动画层已删除 ──
+// applyPendingAnimation 与 tail 光标动画移除：Scrollback 不拥有 tick，
+// 流式输出由 store delta 推动，运行态信号由 ThinkingDock/ActivityLine 表达。
 
 // ── 主组件 ──
 
@@ -223,7 +199,6 @@ export const Scrollback = React.memo(function Scrollback({
   scrollOffset,
   onScrollState,
 }: ScrollbackProps) {
-  const { tick, reducedMotion } = useClock()
   const cacheRef = useRef<FormattedLineCache>(new FormattedLineCache())
 
   // Live and committed messages share one bounded viewport. The cache still
@@ -232,19 +207,13 @@ export const Scrollback = React.memo(function Scrollback({
     () => prepareScrollbackViewport(cacheRef.current, messages, width, height, scrollOffset, status),
     [messages, width, height, scrollOffset, status],
   )
-  const { visibleLines: visibleStatic, start, maxOffset, normalizedOffset, hiddenAbove, hiddenBelow } = viewport
-
-  // ── Layer 2（轻）: pending 动画叠加 ──
-  // PR-6: committed 行不再有 pendingAnim（pending 已移出数组），applyPendingAnimation 退化为 no-op
-  const visibleLines = useMemo(
-    () => applyPendingAnimation(visibleStatic, tick, reducedMotion),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleStatic, tick, reducedMotion],
-  )
+  const { visibleLines, start, maxOffset, normalizedOffset, hiddenAbove, hiddenBelow } = viewport
 
   useEffect(() => {
     onScrollState?.({ maxOffset, normalizedOffset, hiddenAbove, hiddenBelow })
   }, [hiddenAbove, hiddenBelow, maxOffset, normalizedOffset, onScrollState])
+
+  renderMetrics.incTranscriptRender()
 
   if (messages.length === 0) return null
 

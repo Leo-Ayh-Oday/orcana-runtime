@@ -8,7 +8,6 @@ import React from "react"
 import { Box, Text } from "ink"
 import { theme } from "../theme/theme"
 import { getGlyphTheme } from "../tokens"
-import { useClock } from "../clock"
 import type { TuiRewindListState, TuiRewindConfirmState, TuiRewindProgressState } from "../rewind-stubs"
 import type { RewindMode } from "../../agent/rewind"
 
@@ -125,7 +124,8 @@ export interface RewindProgressProps {
 }
 
 export const RewindProgress = React.memo(function RewindProgress({ state }: RewindProgressProps) {
-  const { tick } = useClock()
+  // Depthline P1: tick 静态化（原 useClock 全局时钟已删除），P5 移除 spinner
+  const tick = 0
   const pct = state.totalFiles > 0 ? Math.round((state.restoredFiles.length / state.totalFiles) * 100) : 0
   const barLen = 28
   const filled = Math.round((pct / 100) * barLen)

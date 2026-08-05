@@ -59,21 +59,14 @@ export interface RenderedLine {
   marker: string
   text: string
   color: string
-  /** PR-1.5: pending 动画类型。undefined = 静态行。
-   *  "tail" — 流式输出尾行动画（附加 "...", "..", ".", "" 到行末）
-   *
-   *  原 "spinner" 分支已废除：空 pending message 不再渲染占位行，
-   *  运行态信号由 ThinkingDock 单一职责接管。 */
-  pendingAnim?: "tail"
   /** Phase 3: 截断类型。由 render 层设置，不影响真实 message.text。
    *  "above" — 头部被截（保留尾部）  "below" — 尾部被截（保留头部）
    *  "middle" — 中间被截（双端保留） "viewport" — 视口裁剪（earlier/newer） */
   trimKind?: "above" | "below" | "middle" | "viewport" | "none"
 }
 
-/** Phase 4: 纯函数 — 不含 tick。
- *  pending 消息返回带 pendingAnim 标记的静态行，
- *  动画由调用方（Scrollback）在视口裁剪后以 O(height) 代价叠加。 */
+/** Phase 4: 纯函数 — 不含 tick，无动画标记。
+ *  Depthline P1: tail 光标动画已删除，Scrollback 不拥有任何 tick。 */
 export function renderMessageLines(
   message: TuiMessage,
   width: number,
@@ -118,19 +111,14 @@ export function renderMessageLines(
     // clipping, so text hidden outside the viewport remains reachable.
     const assistantText = cleanDisplayText(assistantContent)
     const trimKind = "none" as const
-    const formatted: RenderedLine[] = formatDisplayText(assistantText, contentWidth).map((line, index) => ({
+    // Depthline P1: tail 光标动画已删除 — Scrollback 不拥有 tick，
+    // 流式输出由 store delta 推动，运行态信号由 ThinkingDock/ActivityLine 表达。
+    return formatDisplayText(assistantText, contentWidth).map((line, index) => ({
       marker: index === 0 ? marker : " ",
       text: line,
       color,
       trimKind,
     }))
-
-    // Phase 4: 标记最后一行需要尾行动画（仅 pending 时）
-    if (message.pending && formatted.length > 0) {
-      const last = formatted[formatted.length - 1]!
-      last.pendingAnim = "tail"
-    }
-    return formatted
   }
 
   // PR-1.5: 空 pending message 不再渲染占位行。

@@ -32,12 +32,17 @@ import { fitText } from "./MessageItem"
 import { resolveActiveContext } from "../input/types"
 import { ModeContract, ModeBadge } from "./ModeContract"
 import { ConfirmModal } from "./ConfirmModal"
-import { RewindModal, type RewindModalState } from "./RewindModal"
+import { RewindModal } from "./RewindModal"
 import { QuestionPanel } from "./QuestionPanel"
-import type { ConfirmRequest } from "../confirm-stubs"
 import { extractRuntimeCounters, formatRuntimeCounters } from "../format-runtime"
-import { useClock } from "../clock"
 import { ThinkingDock, selectThinkingDock } from "../thinking"
+import { renderMetrics } from "../render-metrics"
+import type { OverlayState, SettingsDialogState, ThinkEffort, ModelDialogOption } from "../overlays"
+
+// Depthline P1: overlay 类型已移至 ../overlays，此处 re-export 保持向后兼容
+export type { ThinkEffort, ModelDialogOption, OverlayState } from "../overlays"
+export type { SettingsDialogState as RuntimeDialogState } from "../overlays"
+export type { SettingsDialogState } from "../overlays"
 
 // ── 常量 ──
 
@@ -56,69 +61,6 @@ export interface ClarificationWizardState {
   extraPrompt?: string
   rawText: string
 }
-
-export type ThinkEffort = "auto" | "high" | "max"
-
-export interface ModelDialogOption {
-  providerId: string
-  providerName: string
-  modelId: string
-  modelName: string
-  configured: boolean
-  current: boolean
-  tier: string
-  thinking: boolean
-  contextWindow: number
-  custom?: boolean
-}
-
-export type RuntimeDialogState =
-  | {
-      type: "models"
-      phase: "list"
-      query: string
-      selected: number
-      options: ModelDialogOption[]
-      providerFilter?: string
-      error?: string
-    }
-  | {
-      type: "models"
-      phase: "key"
-      providerId: string
-      providerName: string
-      modelId: string
-      modelName: string
-      keyValue: string
-      custom?: boolean
-      baseUrl?: string
-      error?: string
-    }
-  | {
-      type: "models"
-      phase: "custom"
-      providerId: string
-      providerName: string
-      modelValue: string
-      error?: string
-    }
-  | {
-      type: "models"
-      phase: "url"
-      providerId: string
-      providerName: string
-      modelId: string
-      modelName: string
-      baseUrlValue: string
-      defaultBaseUrl?: string
-      error?: string
-    }
-  | {
-      type: "effort"
-      selected: number
-      current: ThinkEffort
-      error?: string
-    }
 
 // ── 内部组件 ──
 
@@ -145,7 +87,6 @@ function EmptySurface({ mode, modelName }: { mode: TuiMode; modelName: string })
 }
 
 function ClarificationPanel({ wizard, width }: { wizard: ClarificationWizardState; width: number }) {
-  const { tick } = useClock()
   const question = wizard.questions[wizard.index]
   if (!question) return null
   const flowWidth = Math.max(18, Math.min(width - 4, 72))
@@ -181,7 +122,7 @@ function ClarificationPanel({ wizard, width }: { wizard: ClarificationWizardStat
   )
 }
 
-function RuntimeDialog({ dialog, width }: { dialog: RuntimeDialogState; width: number }) {
+function RuntimeDialog({ dialog, width }: { dialog: SettingsDialogState; width: number }) {
   const boxWidth = Math.max(42, Math.min(width - 4, 92))
   if (dialog.type === "effort") {
     const options: Array<{ value: ThinkEffort; label: string; desc: string }> = [
@@ -340,11 +281,8 @@ export interface AppShellProps {
   scrollUp: (amount?: number) => void
   scrollDown: (amount?: number) => void
   setInputChrome: (chrome: InputChromeState) => void
-  /** Phase 5: Confirm modal state */
-  confirmModal: { request: ConfirmRequest; position: string } | null
-  /** Phase 5: Rewind modal state */
-  rewindModal: RewindModalState | null
-  runtimeDialog: RuntimeDialogState | null
+  /** Depthline P1: 互斥 overlay（confirm / rewind / settings）。 */
+  overlay: OverlayState
   thinkingEffort: ThinkEffort
   /** PR-1: Answer pending question from agent */
   onAnswerQuestion?: (answer: string) => void
@@ -385,6 +323,45 @@ export function computeEffectiveBodyHeight(layout: Pick<AppShellLayout, "bodyHei
   return modalActive ? Math.max(10, layout.bodyHeight - 6) : layout.bodyHeight
 }
 
+/** Depthline P1: 布局单一事实源。
+ *  ChatApp 与 AppShell 都调用本 hook；原 ChatApp 内重复的手算布局已删除。 */
+export interface AppLayoutInput {
+  rows: number
+  cols: number
+  state: TuiState
+  clarification: ClarificationWizardState | null
+  inputChrome: InputChromeState
+  /** 是否有 overlay 打开（影响 ThinkingDock waiting_permission 相位）。 */
+  overlayActive: boolean
+}
+
+export function useAppLayout(input: AppLayoutInput): AppShellLayout {
+  const { rows, cols, state, clarification, inputChrome, overlayActive } = input
+  const task = state.task as TaskProgressState | undefined
+  const rightRail = selectRightRail(state)
+  const isWorking = !state.done && !state.errorLine
+  const hasRuntimeSignal =
+    rightRail.round > 0
+    || rightRail.toolHistory.length > 0
+    || rightRail.rippleFindings.length > 0
+    || rightRail.runtime.gateSummary.total > 0
+    || rightRail.runtime.evidenceSummary.total > 0
+    || rightRail.runtime.patchSummary.total > 0
+    || rightRail.runtime.activeTools > 0
+  const hasContent = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
+  const thinkingDock = selectThinkingDock(state, { confirmActive: overlayActive })
+  return computeAppShellLayout({
+    rows,
+    cols,
+    hasContent,
+    isWorking,
+    clarification,
+    task,
+    inputChrome,
+    thinkingDockRows: thinkingDock.visible ? 1 : 0,
+  })
+}
+
 export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayout {
   const { rows, cols, hasContent, isWorking, clarification, task, inputChrome, thinkingDockRows = 0 } = input
   const question = clarification?.questions[clarification.index]
@@ -413,7 +390,7 @@ export function computeAppShellLayout(input: AppShellLayoutInput): AppShellLayou
 }
 
 export function AppShell(props: AppShellProps) {
-  const { state, runtime, prompt, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, confirmModal, rewindModal, runtimeDialog } = props
+  const { state, runtime, prompt, scrollOffset, scrollState, onScrollState, showStartup, clarification, inputChrome, overlay, thinkingEffort } = props
   const { stdout } = useStdout()
   const rows = Math.max(24, stdout?.rows ?? 32)
   const cols = stdout?.columns ?? 96
@@ -422,22 +399,13 @@ export function AppShell(props: AppShellProps) {
   const task = state.task as TaskProgressState | undefined
   const rightRail = selectRightRail(state)
   const isWorking = !state.done && !state.errorLine
-  const hasRuntimeSignal =
-    rightRail.round > 0
-    || rightRail.toolHistory.length > 0
-    || rightRail.rippleFindings.length > 0
-    || rightRail.runtime.gateSummary.total > 0
-    || rightRail.runtime.evidenceSummary.total > 0
-    || rightRail.runtime.patchSummary.total > 0
-    || rightRail.runtime.activeTools > 0
-  const hasContent = cols >= tuiTokens.layout.breakpointComfortable || hasRuntimeSignal
-  const modalActive = confirmModal !== null || rewindModal !== null || runtimeDialog !== null
+  const modalActive = overlay.kind !== "none"
 
   // PR-1: ThinkingDock 视图模型（PR-1.6: 传入 confirmActive 触发 waiting_permission phase）
-  const thinkingDock = selectThinkingDock(state, { confirmActive: confirmModal !== null })
+  const thinkingDock = selectThinkingDock(state, { confirmActive: overlay.kind === "confirm" })
 
   // Phase 2: 布局计算 — 四档模式 (tiny/narrow/standard/comfortable)
-  const layout = computeAppShellLayout({ rows, cols, hasContent, isWorking, clarification, task, inputChrome, thinkingDockRows: thinkingDock.visible ? 1 : 0 })
+  const layout = useAppLayout({ rows, cols, state, clarification, inputChrome, overlayActive: modalActive })
   const effectiveBodyHeight = computeEffectiveBodyHeight(layout, modalActive)
 
   // Visual Step 2: 统一计数器
@@ -467,12 +435,14 @@ export function AppShell(props: AppShellProps) {
   // PR-5: 新增 commandOpen → CommandShelf context
   const activeKeyContext = resolveActiveContext({
     clarificationActive: !!clarification,
-    confirmActive: confirmModal !== null,
-    rewindListActive: rewindModal?.phase === "list",
-    rewindConfirmActive: rewindModal?.phase === "confirm",
+    confirmActive: overlay.kind === "confirm",
+    rewindListActive: overlay.kind === "rewind" && overlay.state.phase === "list",
+    rewindConfirmActive: overlay.kind === "rewind" && overlay.state.phase === "confirm",
     commandOpen: inputChrome.commandOpen,
-    runtimeDialogActive: runtimeDialog !== null,
+    runtimeDialogActive: overlay.kind === "settings",
   })
+
+  renderMetrics.incAppShellRender()
 
   return (
     <Box flexDirection="column" height={rows} paddingX={1}>
@@ -502,20 +472,20 @@ export function AppShell(props: AppShellProps) {
         blockedReason={classifyRailState(rightRail).blockedReason}
       />
 
-      {/* Phase 5: Modal overlays (between StatusBar and Body) */}
-      {confirmModal && (
+      {/* Depthline P1: Overlay 互斥渲染 */}
+      {overlay.kind === "confirm" && (
         <Box marginBottom={1}>
-          <ConfirmModal request={confirmModal.request} position={confirmModal.position} width={cols - 4} />
+          <ConfirmModal request={overlay.request} position={overlay.position} width={cols - 4} />
         </Box>
       )}
-      {rewindModal && (
+      {overlay.kind === "rewind" && (
         <Box marginBottom={1}>
-          <RewindModal modal={rewindModal} width={cols - 4} />
+          <RewindModal modal={overlay.state} width={cols - 4} />
         </Box>
       )}
-      {runtimeDialog && (
+      {overlay.kind === "settings" && (
         <Box marginBottom={1}>
-          <RuntimeDialog dialog={runtimeDialog} width={cols - 4} />
+          <RuntimeDialog dialog={overlay.dialog} width={cols - 4} />
         </Box>
       )}
 

@@ -11,7 +11,7 @@
  *    const color = interpolateColor(normalColor, theme.error, intensity)
  */
 
-import { useClock, REDUCED_MOTION } from "../clock"
+import { reducedMotion } from "../motion"
 
 /** stalled 状态下，颜色从 normal 渐变到 error 的时间窗口（2s）。 */
 export const STALLED_FADE_DURATION_MS = 2_000
@@ -98,6 +98,10 @@ export function computeStalledIntensity(
 
 /** stalled 渐变红 hook。
  *
+ *  Depthline P1：不再消费全局 tick（clock.ts 已删除）。intensity 在每次
+ *  render 时按 Date.now() 计算；调用方（SonarPulse）用局部 tick 驱动重渲染，
+ *  stalled 期间动画帧本身仍在运行，渐变随帧更新。
+ *
  *  参数：
  *    - lastTokenAt: 最近一次 token 时间戳（0 表示未开始）
  *    - hasActiveTools: 是否有活跃 tool（true 时不判定 stalled）
@@ -109,13 +113,10 @@ export function useStalledAnimation(
   lastTokenAt: number,
   hasActiveTools: boolean,
 ): StalledAnimationState {
-  // 消费共享时钟 tick —— 触发重算 intensity
-  useClock()
-
   return computeStalledIntensity(
     lastTokenAt,
     hasActiveTools,
     Date.now(),
-    REDUCED_MOTION,
+    reducedMotion,
   )
 }

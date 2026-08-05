@@ -1,25 +1,17 @@
-/** Tests for pending animation (Phase 5 + PR-1.5).
+/** Tests for scrollback rendering + stalled detection (Phase 5/6 + Depthline P1).
  *
- *  PR-1.5 变更:
- *    - applyPendingAnimation 简化为只处理 tail 光标动画
- *    - 删除 spinner 分支：空 pending message 不再渲染占位行
- *    - 删除 stalled 在 applyPendingAnimation 中的逻辑（isStalled 函数保留供 ThinkingDock 未来使用）
+ *  Depthline P1 变更:
+ *    - applyPendingAnimation 与 tail 光标动画已删除：Scrollback 不拥有任何 tick，
+ *      只响应 messages / width / height / scrollOffset 变化
  *
  *  Verifies:
- *    1. Static lines pass through unchanged
- *    2. pendingAnim="tail" → tail dots appended to text
- *    3. No pending → identity
- *    4. Per-activity distinct glyphs (Phase 5, activityGlyph 函数)
- *    5. Reduced motion: tail dots empty (Phase 5)
- *    6. Stalled detection: 3s no token/tool → "stalled" (Phase 5, isStalled 函数)
- *    7. classifyPendingActivity 关键词映射 (Phase 5)
- *    8. FormattedLineCache 缓存行为 (Phase 6)
+ *    1. Per-activity distinct glyphs (Phase 5, activityGlyph 函数)
+ *    2. Stalled detection: 3s no token/tool → "stalled" (Phase 5, isStalled 函数)
+ *    3. classifyPendingActivity 关键词映射 (Phase 5)
+ *    4. FormattedLineCache 缓存行为 (Phase 6)
  */
 
 import { describe, expect, test } from "bun:test"
-import { applyPendingAnimation } from "../../src/tui/components/Scrollback"
-import type { RenderedLine } from "../../src/tui/components/MessageItem"
-import { C } from "../../src/tui/theme/theme"
 import {
   classifyPendingActivity,
   activityGlyph,
@@ -28,47 +20,6 @@ import {
   resetStalledDetection,
   isStalled,
 } from "../../src/tui/pending-activity"
-
-function line(overrides: Partial<RenderedLine> = {}): RenderedLine {
-  return { marker: "|", text: "hello", color: C.blue, ...overrides }
-}
-
-describe("applyPendingAnimation (PR-1.5: tail only)", () => {
-  test("static lines pass through unchanged", () => {
-    const lines = [line({ text: "hello" }), line({ text: "world" })]
-    expect(applyPendingAnimation(lines, 0, false)).toEqual(lines)
-  })
-
-  test("empty lines array returns empty", () => {
-    expect(applyPendingAnimation([], 5, false)).toEqual([])
-  })
-
-  test("tail dots appended to text", () => {
-    const lines = [line({ text: "streaming", pendingAnim: "tail" })]
-    expect(applyPendingAnimation(lines, 0, false)[0]!.text).toBe("streaming")
-    expect(applyPendingAnimation(lines, 1, false)[0]!.text).toBe("streaming.")
-    expect(applyPendingAnimation(lines, 2, false)[0]!.text).toBe("streaming..")
-    expect(applyPendingAnimation(lines, 3, false)[0]!.text).toBe("streaming...")
-    expect(applyPendingAnimation(lines, 4, false)[0]!.text).toBe("streaming")
-  })
-
-  test("no pending → identity (same reference)", () => {
-    const lines = [line({ text: "hello" })]
-    expect(applyPendingAnimation(lines, 5, false)).toBe(lines)
-  })
-
-  test("mixed tail and static lines: only tail lines get dots", () => {
-    const lines = [
-      line({ text: "first" }),
-      line({ text: "streaming", pendingAnim: "tail" }),
-      line({ text: "third" }),
-    ]
-    const r = applyPendingAnimation(lines, 3, false)
-    expect(r[0]!.text).toBe("first")
-    expect(r[1]!.text).toBe("streaming...")
-    expect(r[2]!.text).toBe("third")
-  })
-})
 
 // ── Phase 5: per-activity distinct glyphs ──
 // activityGlyph 函数仍保留，供 ThinkingDock 内部使用
@@ -114,17 +65,6 @@ describe("per-activity glyphs (Phase 5)", () => {
     const s0 = activityGlyph("streaming", 0)
     const w0 = activityGlyph("working", 0)
     expect(s0).toBe(w0)
-  })
-})
-
-// ── Phase 5: reduced motion ──
-
-describe("reduced motion (Phase 5)", () => {
-  test("reducedMotion: tail dots always empty", () => {
-    const lines = [line({ text: "streaming", pendingAnim: "tail" })]
-    expect(applyPendingAnimation(lines, 0, true)[0]!.text).toBe("streaming")
-    expect(applyPendingAnimation(lines, 1, true)[0]!.text).toBe("streaming")
-    expect(applyPendingAnimation(lines, 2, true)[0]!.text).toBe("streaming")
   })
 })
 
@@ -264,13 +204,14 @@ describe("FormattedLineCache (Phase 6)", () => {
     expect(second[0]!.text).toBe("world")
   })
 
-  test("getOrCompute cache miss when pending flips to final", () => {
+  test("getOrCompute cache miss when pending flips to final (key differs)", () => {
     const cache = new FormattedLineCache()
     const pending = cache.getOrCompute(makeMsg("m1", "hello", true), 80, "streaming")
     const final = cache.getOrCompute(makeMsg("m1", "hello", false), 80, "done")
     expect(pending).not.toBe(final)
-    expect(pending[0]!.pendingAnim).toBe("tail")
-    expect(final[0]!.pendingAnim).toBeUndefined()
+    // Depthline P1: 内容行不再携带 pendingAnim；缓存键仍区分 pending/final
+    expect(formatLineCacheKey(makeMsg("m1", "hello", true), 80))
+      .not.toBe(formatLineCacheKey(makeMsg("m1", "hello", false), 80))
   })
 
   test("getOrCompute cache miss when width changes", () => {
@@ -383,22 +324,18 @@ describe("PR-1.5: empty pending message renders no placeholder", () => {
     expect(lines).toEqual([])
   })
 
-  test("pending assistant with text still renders content + tail marker", () => {
+  test("pending assistant with text still renders static content (no tail marker)", () => {
     const m = makeMsg("m1", "hello world", true)
     const lines = renderMessageLines(m, 80, "streaming")
     expect(lines.length).toBeGreaterThan(0)
-    const last = lines[lines.length - 1]!
-    expect(last.pendingAnim).toBe("tail")
-    expect(last.text).toBe("hello world")
+    expect(lines[lines.length - 1]!.text).toBe("hello world")
   })
 
-  test("final assistant with text has no tail marker", () => {
+  test("final assistant with text renders same static content", () => {
     const m = makeMsg("m1", "hello world", false)
     const lines = renderMessageLines(m, 80, "done")
     expect(lines.length).toBeGreaterThan(0)
-    for (const l of lines) {
-      expect(l.pendingAnim).toBeUndefined()
-    }
+    expect(lines[lines.length - 1]!.text).toBe("hello world")
   })
 
   test("FormattedLineCache: empty pending message yields empty allLines (no spacer leak)", () => {

@@ -22,7 +22,6 @@ import { theme } from "../theme/theme"
 import type { RightRailData } from "../state/selectors"
 import { RuntimePanel } from "./RuntimePanel"
 import { getGlyphTheme } from "../tokens"
-import { useClock } from "../clock"
 
 // ── PR-8: 三态分类纯函数（导出供测试） ──
 
@@ -97,7 +96,6 @@ export interface RightRailProps extends RightRailData {
 
 export const RightRail = React.memo(function RightRail(props: RightRailProps) {
   const { round, contextTokens, contextMax, cacheHitRate, toolHistory, taskProgress, runtime, rippleFindings } = props
-  const { tick } = useClock()
   const width = props.width ?? 38
   const ctxPct = Math.round(contextMax > 0 ? (contextTokens / contextMax) * 100 : 0)
   const ctxColor = ctxPct > 50 ? theme.error : ctxPct > 30 ? theme.warning : theme.success

@@ -20,7 +20,7 @@ import { Box, Text } from "ink"
 import { theme } from "../theme/theme"
 import { formatDisplayText } from "../format"
 import { useStablePrefix } from "../hooks/use-stable-prefix"
-import { useClock } from "../clock"
+import { reducedMotion } from "../motion"
 import { getGlyphTheme } from "../tokens"
 
 export interface StreamingBlockProps {
@@ -37,7 +37,8 @@ export const StreamingBlock = React.memo(function StreamingBlock({
   width,
   pending,
 }: StreamingBlockProps) {
-  const { tick, reducedMotion } = useClock()
+  // Depthline P1: tick 固定 0（tail 动画静态化），reduced-motion 走 motion.ts
+  const tick = 0
   const { stable, unstable } = useStablePrefix(text)
 
   // stable 部分仅当 stable 字符串或 width 变化时重算

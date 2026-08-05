@@ -164,7 +164,7 @@ describe("component: renderMessageLines", () => {
     expect(lines.length).toBeGreaterThan(0)
   })
 
-  test("pending assistant with text: returns content with tail marker (PR-1.5)", () => {
+  test("pending assistant with text: returns content (Depthline P1: no tail animation)", () => {
     const message: TuiMessage = {
       id: "m1",
       role: "assistant",
@@ -174,10 +174,8 @@ describe("component: renderMessageLines", () => {
     }
     const lines = renderMessageLines(message, 40, "streaming")
     expect(lines.length).toBeGreaterThan(0)
-    // PR-1.5: 有文本的 pending message 保留 tail 光标动画
-    const last = lines[lines.length - 1]!
-    expect(last.pendingAnim).toBe("tail")
-    expect(last.text).toBe("streaming content")
+    // Depthline P1: tail 光标动画已删除（Scrollback 不拥有 tick）
+    expect(lines[lines.length - 1]!.text).toBe("streaming content")
   })
 })
 

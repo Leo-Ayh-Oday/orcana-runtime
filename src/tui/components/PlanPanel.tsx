@@ -8,7 +8,6 @@ import React from "react"
 import { Box, Text } from "ink"
 import { C } from "../theme/theme"
 import { fitText } from "./MessageItem"
-import { useClock } from "../clock"
 
 export type TaskStepStatus = "pending" | "running" | "done" | "failed"
 
@@ -28,13 +27,13 @@ export interface TaskProgressState {
   steps: TaskStep[]
 }
 
-/** 流线动画装饰，用于 planning 阶段和 clarification 面板。 */
+/** 流线装饰，用于 planning 阶段和 clarification 面板。
+ *  Depthline P1: 动画已静态化（tick 固定 0），P5 删除 FlowLine。 */
 export function FlowLine({ width, active }: { width: number; active: boolean }) {
-  const { tick } = useClock()
   const usable = Math.max(18, Math.min(width, 72))
   const line = Array.from({ length: usable }, (_, index) => {
     if (!active) return index % 2 === 0 ? "-" : "."
-    const phase = (index + tick) % 12
+    const phase = index % 12
     if (phase === 0) return "="
     if (phase <= 2 || phase >= 10) return "~"
     if (phase <= 4 || phase >= 8) return "-"
@@ -49,11 +48,10 @@ export interface PlanPanelProps {
 }
 
 export const PlanPanel = React.memo(function PlanPanel({ task, width }: PlanPanelProps) {
-  const { tick } = useClock()
   if (!task || task.total === 0) return null
 
   if (task.phase === "planning") {
-    const pulse = ["thinking", "checking scope", "waiting for plan", "planning gate"][tick % 4]
+    const pulse = "thinking"
     return (
       <Box flexDirection="column" paddingX={1} marginBottom={1}>
         <Text color={C.cyan}>planning / <Text color={C.dim}>{pulse}</Text></Text>

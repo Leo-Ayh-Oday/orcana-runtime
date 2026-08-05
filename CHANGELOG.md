@@ -2,7 +2,19 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.7] — 2026-08-05
+## [0.8.8] — 2026-08-05
+
+### Added (LNXF-1 — Linux 契约、能力探测与 Shadow 模式)
+- **Linux execution foundation contracts** — `LinuxCapabilities` (cgroup v2 + controllers + delegation, 8 namespaces, bubblewrap/podman/Landlock/seccomp/tmpfs/systemd probes with explicit degradation reasons), `ExecutionCellSpec` (immutable/serializable/hashable/replayable; `inheritHost: false` enforced; policyDigest binding), `SandboxReceipt` (identity + 5 policy digests + outcomes + metrics + observed writes + cleanup), MountRule/TmpfsRule/SecretBinding/CacheMountRequest/DomainResourceBudget/ResourceRequest/PortLease/BackendAvailability.
+- **Capability probe** — real system probing (cgroup v2 via mountinfo + controllers + delegation detection; namespaces via /proc/self/ns; bwrap/podman binaries + unprivileged usability; Landlock ABI derivation; seccomp mode; tmpfs/overlayfs; systemd). Stable `capabilitiesDigest` (bootId excluded). No numeric scoring — every degradation carries an explicit reason.
+- **Policy compiler skeleton** — mount-rule validation (path normalization, realpath escape checks, credential-path + host-socket forbidden lists, duplicate-target and parent/child mount conflict detection), full spec validation, `compileCellSpec` with policyDigest. The compiler is the only formal spec entry point.
+- **Backend router** — fail-closed selection: strict profiles (untrusted/evolution/test/dependency/service) refuse when their backend is unavailable (`DEGRADATION_NOT_ALLOWED` / `ISOLATION_REQUIREMENT_UNMET`); Host Audit is only reachable with `minimum=audit` + explicit degradation.
+- **7 sandbox profiles** — inspect/build/test/dependency/service/untrusted/evolution with default backends, isolation minimums, network modes, resource ranges and strictness.
+- **Broker skeleton + shadow mode** — `LinuxExecutionBroker` interface (probe/compileSpec/selectBackendFor/shadow/execute/createAgentDomain/cancel*/cleanupRun); shadow records the would-be spec + backend selection while execution stays on the legacy path (BEHAVIOR_CHANGE: 0).
+- **`orcana doctor` linux-foundation check** — capability summary, digest and degradation reasons.
+- 24 tests; full gate 938 pass, bench no regression.
+
+
 
 ### Added (MACP-M7 — 角色与输出契约)
 - **Three role output contracts** — Planner (`planText` + proposed assignments/dependencies/approvals), Coder (`changes` + declared `deviations` + `evidenceIds`), Reviewer (`verdict` approved/rejected/needs_repair + comments). Every model output is validated against its role schema BEFORE any downstream use; invalid output becomes a structured `invalid_role_output` failure (never a silent pass-through, never triggers writes).

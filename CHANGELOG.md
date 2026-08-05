@@ -2,7 +2,18 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.2] — 2026-08-05
+## [0.7.3] — 2026-08-05
+
+### Added (Typed Execution Graph, G6 — Dynamic Workflow Compiler)
+- **Dynamic graphs** (`src/workflow/dynamic/`) — a model may now author a controlled graph as JSON and have it compiled into a `WorkflowSpec`, exactly the shape static templates produce: dynamic graphs and static templates share the scheduler and the G3 single-writer/verification semantics.
+- **No arbitrary code** — `parseDynamicSpec` is a pure JSON parse (no eval); `schemaVersion`, `mode`, `maxParallel` and the node shape are whitelisted.
+- **Registered types only** — nodes may only use the registered node types (read / write / verify / reduce) with handlers from the matching family (`type_mismatch` otherwise).
+- **Registered handlers only** — the G2 five-validator contract (Schema / DAG / Capability / Budget / Side-effect) is reused as-is; unknown handlers and write-in-readonly are rejected.
+- **Write safety** — write budget (`maxWrites`), write cycles rejected by the DAG validator, and verification completeness: a write node without a verify successor is rejected by default (or auto-appended via `autoAppendVerification`).
+- **PermissionGate** — read-only graphs are approved automatically; any graph with write nodes goes `needs_approval` until `approve()`; parse/validation failures are `rejected` and never produce a spec, so the model cannot bypass the gate.
+- Off by default — the dynamic compiler is an explicit API only; no configuration changes.
+
+
 
 ### Added (Typed Execution Graph, G5 — Context Slice / Cache / Replay)
 - **Result cache** (`results/result-cache.ts`) — read-node results keyed by `stableHash({ handler, input })` (the G0 stableHash primitive is now consumed by the cache). Same input ⇒ cache hit ⇒ replay, never re-execute.

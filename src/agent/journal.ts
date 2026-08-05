@@ -15,7 +15,8 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { execSync } from "node:child_process"
+import { execShellLegacy } from "../runtime/legacy-process"
+const execSync = execShellLegacy
 
 // ── 铁律定义 ──
 

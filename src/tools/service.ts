@@ -12,7 +12,8 @@
  *  The legacy start_service tool is kept as a compatibility forwarder.
  */
 
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawnLegacy, type ChildProcess } from "../runtime/legacy-process"
+const spawn = spawnLegacy
 import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs"
 import { request as httpRequest } from "node:http"
 import { request as httpsRequest } from "node:https"
@@ -210,7 +211,7 @@ export async function startServiceInternal(params: Record<string, unknown>, deps
 
   // RT-7: parameterized spawn (shell:false) — explicit shell executable +
   // args, detached process group, no command-string injection surface.
-  // bun's node:child_process spawn does not accept stream/path stdio entries;
+  // bun's spawn does not accept stream/path stdio entries;
   // pipe stdout/stderr and forward them into the lease log file instead.
   const shellPath = process.platform === "win32" ? "cmd.exe" : "/bin/sh"
   const shellArgs = process.platform === "win32" ? ["/c", command] : ["-c", command]

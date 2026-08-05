@@ -441,7 +441,7 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
         if (tc.name === "read_file") stagedContext.markLoaded(path)
         else if (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "edit_fim") {
           stagedContext.markEdited(path)
-          runPostEditDiagnostics(path, resultObj)
+          await runPostEditDiagnostics(path, resultObj)
         }
       }
       if (thinkingStore && (tc.name === "shell" || tc.name === "edit_fim" || tc.name === "write_file")) {

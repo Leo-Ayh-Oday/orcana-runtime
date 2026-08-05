@@ -121,7 +121,14 @@ export interface ExecutionCellSpec {
     ownerFiles?: string[]
   }
   network: { mode: NetworkMode; allowedHosts?: string[]; allowedPorts?: number[] }
-  environment: { variables: Record<string, string>; inheritHost: false; locale: string; pathEntries: string[] }
+  environment: {
+    variables: Record<string, string>
+    /** 显式批准的宿主环境键（唯一宿主继承通道；拒绝集内的键会被策略拒绝）。 */
+    allowedHostKeys?: string[]
+    inheritHost: false
+    locale: string
+    pathEntries: string[]
+  }
   secrets: SecretBinding[]
   resources: {
     cpuQuotaMicros?: number

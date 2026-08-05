@@ -13,7 +13,8 @@
  *    - Does not touch loop.ts gate logic — diagnostics flow through existing VerificationResult path
  */
 
-import { spawn, ChildProcess } from "node:child_process"
+import { spawnLegacy, ChildProcess } from "../runtime/legacy-process"
+const spawn = spawnLegacy
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { URI } from "./uri"

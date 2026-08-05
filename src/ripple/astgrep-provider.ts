@@ -16,7 +16,8 @@
  * cost when unused — availability is checked once and cached.
  */
 
-import { execSync } from "node:child_process"
+import { execShellLegacy } from "../runtime/legacy-process"
+const execSync = execShellLegacy
 import { resolve, relative } from "node:path"
 import type { RippleCaller } from "./types"
 import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"

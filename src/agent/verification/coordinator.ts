@@ -129,7 +129,7 @@ export async function* runRippleVerificationPhase(
   let postToolRequiredFilesPrompt = ""
 
   if (modifiedFilesThisRound.size > 0 || rippleReportsThisRound.length > 0) {
-    const rippleVerification = runRippleVerification(modifiedFilesThisRound)
+    const rippleVerification = await runRippleVerification(modifiedFilesThisRound)
     const hadTsWriteThisRound = [...modifiedFilesThisRound].some(path => path.endsWith(".ts") || path.endsWith(".tsx"))
     if (rippleVerification.passed) {
       verificationState.rippleObligations = resolveObligations(verificationState.rippleObligations, modifiedFilesThisRound)
@@ -228,7 +228,7 @@ export async function* runBatchTypecheckAndTaskTracker(
   // ── Batch typecheck: run tsc once per round instead of per-file ──
   const tsFilesWritten = [...modifiedFilesThisRound].filter(f => f.endsWith(".ts") || f.endsWith(".tsx"))
   if (tsFilesWritten.length > 0) {
-    const tscResult = runTypeScriptNoEmit(process.cwd())
+    const tscResult = await runTypeScriptNoEmit(process.cwd())
     // L5: the batch tsc result is the authoritative typecheck for the round —
     // ingest it into EvidenceLedger and derive the lastTypecheck compat view
     // from the ledger (single source of truth for completion).

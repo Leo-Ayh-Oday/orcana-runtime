@@ -25,6 +25,9 @@ export interface AgentOptions {
   tools: ToolDescriptor[]
   /** Cancels the whole agent run and is bridged to the currently active provider stream. */
   abortSignal?: AbortSignal
+  /** RT-3: explicit project root — kernel tools/paths resolve against it
+   *  instead of process.cwd() (the harness always passes the run scope root). */
+  projectRoot?: string
   maxRounds?: number
   /** Active model context window; defaults to DeepSeek V4's 1M for legacy callers. */
   contextMaxTokens?: number

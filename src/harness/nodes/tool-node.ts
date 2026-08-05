@@ -20,6 +20,7 @@ import { executeCapability } from "../capabilities/executor"
 import { createToolArtifactTracker } from "../capabilities/tool-adapter"
 import type { NodePolicyContext } from "../capabilities/policy-adapter"
 import type { CapabilityArtifactTracker } from "../capabilities/executor"
+import { contextFromRunScope } from "../capabilities/execution-context"
 import type { ToolDescriptor, ToolResult } from "../../tools/registry"
 import { createNodePolicyContextFromRunScope, snapshotEvidence, diffEvidence } from "./context"
 
@@ -61,6 +62,12 @@ export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeIn
           budget: context.budget,
           policyContext,
           toolCallId: input.toolCallId,
+          // RT-3: node mode hands the handler the explicit run-scoped context.
+          context: contextFromRunScope(context.runScope, {
+            budget: context.budget,
+            signal: context.cancellation.signal,
+            approvalMode: "strict",
+          }),
           artifactTracker: options.artifactTracker
             ?? createToolArtifactTracker({
               store: context.artifacts,

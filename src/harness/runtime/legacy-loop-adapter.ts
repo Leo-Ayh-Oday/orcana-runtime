@@ -117,6 +117,8 @@ export function buildLoopOptions(
     sandbox: run.scope.sandbox,
     // H8: run-scoped artifact store (verification binds artifacts to it).
     artifactStore: run.scope.artifactStore,
+    // RT-3: the kernel resolves paths against the run scope's project root.
+    projectRoot: run.scope.projectRoot,
     // R1: single authoritative evidence ledger — the kernel writes into the
     // run scope's ledger so nodes can diff what THIS run produced.
     evidenceLedger: run.scope.evidenceLedger,

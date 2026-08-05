@@ -64,6 +64,8 @@ export async function buildRunContext(
   const runId = options.runId
   const capabilityRegistry = options.capabilityRegistry
   const maxRounds = resolveMaxRounds(options.maxRounds, process.env.ORCANA_MAX_ROUNDS)
+  // RT-3: explicit run project root — never a hidden process.cwd() dependency.
+  const projectRoot = options.projectRoot ?? process.cwd()
 
   const effectivePrompt = buildEffectivePrompt(prompt, options.conversationHistory)
   const language = detectLanguage(effectivePrompt)
@@ -123,7 +125,7 @@ export async function buildRunContext(
     gateTelemetry.merge(prev)
   }
 
-  const contextKernel = buildContextKernel(process.cwd())
+  const contextKernel = buildContextKernel(projectRoot)
 
   // ── Flash Triage: semantic task classification (replaces 4 keyword classifiers) ──
   const flashTriagePolicy = options.flashTriagePolicy ?? resolveFlashTriagePolicy()
@@ -201,13 +203,13 @@ export async function buildRunContext(
   const permissionGate = new PermissionGate()
   // Load user + project permission configs (gracefully)
   const userCfg = loadUserConfig()
-  const projectCfg = loadProjectConfig(process.cwd())
+  const projectCfg = loadProjectConfig(projectRoot)
   permissionGate.loadRules(userCfg?.rules ?? [], projectCfg?.rules ?? [])
   // Sandbox init — shared Job Object for all shell commands in this agent run.
   // H3: the harness may inject its run-scoped sandbox so a run has a single
   // owner; otherwise created here with the same defaults.
   const sandbox = options.sandbox ?? new SandboxManager({
-    projectRoot: process.cwd(),
+    projectRoot,
     maxRuntimeSec: Number(process.env.ORCANA_SANDBOX_TIMEOUT_SEC) || 30,
     jobMemoryLimitMb: process.env.ORCANA_SANDBOX_MEMORY_MB ? Number(process.env.ORCANA_SANDBOX_MEMORY_MB) : 512,
   })

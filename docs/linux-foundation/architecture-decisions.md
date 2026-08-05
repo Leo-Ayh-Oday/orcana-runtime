@@ -4,7 +4,7 @@
 
 | ADR | 决策 | 状态 | 阶段 |
 |---|---|---|---|
-| ADR-L1 | **Linux 子进程单一入口**：Linux 上所有子进程必须经过 `LinuxExecutionBroker`；Graph/Skill/模型/普通 Tool 禁止直接 `spawn()`/`execFile`/`Bun.spawn`/`shell:true`；静态门禁 `DIRECT_LINUX_PROCESS_BYPASS = 0`（允许目录仅 `src/runtime/linux/backends/` 与 `src/runtime/linux/process/`） | 待定 | LF-2 |
+| ADR-L1 | **Linux 子进程单一入口**：Linux 上所有子进程必须经过 `LinuxExecutionBroker`；Graph/Skill/模型/普通 Tool 禁止直接 `spawn()`/`execFile`/`Bun.spawn`/`shell:true`；静态门禁 `DIRECT_LINUX_PROCESS_BYPASS = 0`（允许目录仅 `src/runtime/linux/backends/` 与 `src/runtime/linux/process/`） | **已定案 (v0.8.8)** | LF-2 |
 | ADR-L2 | **Bubblewrap 为默认快速后端**：用户/mount/PID/IPC/UTS/net namespace + 空 mount ns + 只读系统根 + 空 Home + 独立 tmpfs；参数由 Policy Compiler 编译，模型/工具不得拼接 `bwrap` 参数 | 待定 | LF-3 |
 | ADR-L3 | **Rootless Podman 为严格后端**：digest 锁定镜像、`--read-only`、`--network=none`、显式 volume、资源限制、标签 `io.orcana.*`；禁止 `--privileged`/host network/宿主 socket/浮动 tag | 待定 | LF-6 |
 | ADR-L4 | **Host Audit 仅为降级后端**：现有 SandboxManager 迁移为 HostAuditBackend（环境过滤/超时/进程组/PathGuard/Receipt）；仅 inspect/低风险 build + `minimum=audit` + 显式允许时使用；untrusted/evolution/多 Agent 正式模板禁止 | 待定 | LF-2 |

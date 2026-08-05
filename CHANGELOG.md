@@ -2,7 +2,16 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.7.5] — 2026-08-05
+## [0.7.6] — 2026-08-05
+
+### Fixed (Strong Single v1.0 — command-to-file coverage)
+- **Unmanaged-write deadlock closed**: shell/`run_process` writes used to poison the transaction binding (`currentTransactionEvidenceBinding → undefined`) and force the completion gate to require a binding forever — any run that legitimately used a command after editing could never complete.
+- **Exact paths** — `recordRuntimeObservedWrites` now records the precise file set from the sandbox diff (`getUnmanagedWritePaths`), not just a flag.
+- **Command-to-file coverage** — a PASSING `run_targeted_verification` records the files it verified (`recordVerificationCoverage`); it runs against the current disk state, so covered unmanaged writes are authoritative.
+- **Gate relaxation is provably safe** — `shouldRequireEvidenceBinding` relaxes the binding requirement only when EVERY unmanaged write path is covered; partial coverage and any new unmanaged write after coverage keep the requirement, and L1 (latest-result) / L2 (write-generation) freshness always stay hard. Managed-only runs still require the binding.
+- 7 regression tests covering path recording, partial/full coverage, coverage reset, gate pass without binding, L2 hardness under coverage, and managed-binding integrity.
+
+
 
 ### Added (Strong Single v1.0, PR-8.3 — SWE-style Mini Benchmark)
 - **`evals/mini-benchmark.ts`** — deterministic, offline, no-LLM benchmark: runs the H12 scripted scenario suite (12 cases, hr-core + hr-dual) through the real AgentHarness and aggregates three indicators:

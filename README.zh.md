@@ -281,6 +281,18 @@ Evidence 代表"某个检查在某个状态下发生过"，不自动等价于"�
 
 无法验证、验证失败和验证已过期，应被视为不同状态，而不是统一投影成"通过"。
 
+### Tool Runtime 2.0
+
+工具表面之下的生产级能力层（RT-1..13）：
+
+- **契约** — 26 个标准错误码（`INVALID_INPUT`、`SSRF_BLOCKED`、`MCP_UNTRUSTED_TOOL`、`STALE_FILE` 等）、6 状态 `ToolExecutionResult`（`succeeded` / `domain_failed` / `execution_failed` / `blocked` / `cancelled` / `timed_out`）、重试元数据与共享 JSON Schema 输入/输出校验器。
+- **迁移开关** — `capabilities.mode`（`legacy` / `shadow` / `enabled`）+ shadow 差异事件（`capability.shadow_mismatch`），新契约可在不打扰用户任务的前提下观察。
+- **统一策略链** — 模块化门禁（`writable-root` / `network` / `risk` / `approval` / `concurrency`），单一执行顺序；Shell、文件、Patch、Git 与 MCP 写工具共用同一边界——不存在"Shell 被拦但 Patch 可写"的路径。
+- **工具集** — `apply_patch` / `apply_patch_transaction`（baseHash 新鲜度、路径逃逸拒绝、多文件原子回滚）、`edit_symbol`（编译器 AST 锚定）、`read_file` selector + `expectedHash`、`run_process` / `run_shell_script`（参数化、`shell:false`）、结构化 Git（`--porcelain=v2` + `--numstat`）、repo map 代码智能、验证工具链（`discover_verification` / `run_targeted_verification` / `classify_command_failure` / `verify_claim`）、run 绑定服务监督（`service_start` / `service_status` / `service_logs` / `service_stop`，`cleanupPolicy=run-end` 自动停止）。
+- **安全硬化** — `web_fetch` 在每次重定向跳重新做 DNS/IP 策略校验（私网/回环/云 metadata 一律拒绝，fail-closed），流式读取带字节预算与即时解压（压缩炸弹防护），缓存 key 按 summarize 模式分离，并标记提示注入措辞。MCP 服务器带每服务器信任策略（未知工具默认非只读高风险 + 首次执行审批；annotations 仅作提示）。
+- **Capability Router** — 分层动态披露：常驻稳定核心（`read_file` / `run_process` / `apply_patch` / `git_status` / `verify_claim`）+ 按任务选择的专业组，带 token 估算与按需披露 fallback 集合（简单任务不为 Web/MCP/LSP schema 付费）。
+- **生产评测** — 20 个 Tool 层场景（TL-001..020），覆盖隔离、取消、Patch 安全、验证门禁、Artifact、SSRF、MCP 信任、服务清理、新鲜度、Router 经济性与 Trace 成对性。
+
 ### Provider Layer
 
 Orcana Runtime 不再以某一家模型供应商定义自身。
@@ -316,6 +328,7 @@ Orcana 具备多层上下文管理能力，包括：
 | Completion Gates | 已实现，统一入口收敛中 | 目标是 fail-closed，而不是无法验证时默认通过 |
 | Interrupt / Resume | 已实现显式等待点恢复 | 不是任意调用栈或指令级恢复 |
 | Trace / Snapshot | 已实现 | 继续补足稳定重放和 Durable Execution 语义 |
+| Tool Runtime 2.0 (RT-1..13) | 已实现 | 契约、统一策略链、Patch/进程/Git/repo map/验证工具、SSRF 硬化 Web、MCP 信任策略、Capability Router、TL-001..020 评测 |
 | Linux Sandbox | 部分执行 | 当前不能视为完整安全边界，见下文 |
 | Typed Execution Graph | 未完成 | 当前仍以单主执行节点为核心 |
 | Multi-Agent | 延后 | 单 Agent Runtime 语义稳定后再进入受约束 Subagent 阶段 |

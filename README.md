@@ -281,6 +281,18 @@ The model can propose completion, but the runtime must check as a whole:
 
 Unverifiable, failed and stale verification are different states and should not be flattened into "passed".
 
+### Tool Runtime 2.0
+
+A production-grade capability layer under the tool surface (RT-1..13):
+
+- **Contract** — 26 standard error codes (`INVALID_INPUT`, `SSRF_BLOCKED`, `MCP_UNTRUSTED_TOOL`, `STALE_FILE`, …), a 6-state `ToolExecutionResult` (`succeeded` / `domain_failed` / `execution_failed` / `blocked` / `cancelled` / `timed_out`), retry metadata and a shared JSON-schema validator for input and output.
+- **Migration flag** — `capabilities.mode` (`legacy` / `shadow` / `enabled`) with shadow-mode divergence events (`capability.shadow_mismatch`), so the new contract can observe without disturbing user tasks.
+- **Unified policy chain** — modular gates (`writable-root` / `network` / `risk` / `approval` / `concurrency`) with a single execution order; shell, file, patch, git and MCP writers share one boundary — no "shell blocked but patch can write" paths.
+- **Tool set** — `apply_patch` / `apply_patch_transaction` (base-hash freshness, path-escape rejection, atomic multi-file rollback), `edit_symbol` (compiler-AST anchored), `read_file` selectors + `expectedHash`, `run_process` / `run_shell_script` (parameterized, `shell:false`), structured git (`--porcelain=v2` + `--numstat`), repo-map code intelligence, a verification toolchain (`discover_verification` / `run_targeted_verification` / `classify_command_failure` / `verify_claim`), and a run-bound service supervisor (`service_start` / `service_status` / `service_logs` / `service_stop` with `cleanupPolicy=run-end` auto-stop).
+- **Security hardening** — `web_fetch` re-validates DNS/IP policy on every redirect hop (private/link-local/cloud-metadata rejected fail-closed), streams bodies with a byte budget and on-the-fly decompression (zip-bomb guard), splits cache keys by summarize mode, and flags prompt-injection phrasing. MCP servers carry a per-server trust policy (untrusted tools default to non-readonly high risk with first-execution confirmation; annotations are hints only).
+- **Capability Router** — layered dynamic disclosure: an always-on stable core (`read_file` / `run_process` / `apply_patch` / `git_status` / `verify_claim`) plus task-selected specialist groups, with token estimates and a fallback set for on-demand disclosure (simple tasks never pay for web/MCP/LSP schemas).
+- **Production eval** — 20 Tool-Layer scenarios (TL-001..020) covering isolation, cancellation, patch safety, verification gating, artifacts, SSRF, MCP trust, service cleanup, freshness, router economy and trace pairing.
+
 ### Provider layer
 
 Orcana Runtime is no longer defined by any single model vendor.
@@ -316,6 +328,7 @@ Orcana has multi-layer context management, including:
 | Completion Gates | Implemented, entry convergence in progress | Goal is fail-closed, not pass-by-default when unverifiable |
 | Interrupt / Resume | Explicit wait-point recovery implemented | Not arbitrary call-stack or instruction-level recovery |
 | Trace / Snapshot | Implemented | Stable replay and Durable Execution semantics still being completed |
+| Tool Runtime 2.0 (RT-1..13) | Implemented | Contract, unified policy chain, patch/process/git/repo-map/verification tools, SSRF-hardened web, MCP trust policy, capability router, TL-001..020 eval |
 | Linux Sandbox | Partial execution | Not a complete security boundary — see below |
 | Typed Execution Graph | Not implemented | Still centered on a single main execution node |
 | Multi-Agent | Deferred | Constrained Subagent stage comes after single-agent runtime semantics stabilize |

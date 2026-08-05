@@ -19,6 +19,7 @@ import { selectBackend } from "./backend-router"
 import type { BackendSelection } from "./backend-router"
 import { LinuxExecutionError } from "./errors"
 import { createHostAuditBackend } from "./backends/host-audit"
+import { createBubblewrapBackend } from "./backends/bubblewrap"
 import type { ExecutionBackend } from "./backends/backend"
 
 export interface ShadowExecutionRecord {
@@ -62,6 +63,7 @@ let shared: LinuxExecutionBroker | null = null
 /** 已注册后端实现（仅 backends/ 目录可注册）。 */
 const backendImplementations: Record<string, ExecutionBackend> = {
   "host-audit": createHostAuditBackend(),
+  "bubblewrap": createBubblewrapBackend(),
 }
 
 export function registerBackend(backend: ExecutionBackend): void {

@@ -2,7 +2,13 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.14] — 2026-08-05
+## [0.8.15] — 2026-08-05
+
+### Added (LNXF-8 — 生产评测与 Foundation Freeze)
+- **Linux Sandbox Eval** — 35 production scenarios (LX-001..035) run against the real runtime: capability probing + fail-closed degradation, host-secret/home/credential/socket invisibility, project & symlink escape blocking, network (egress-none, loopback, DNS-rebinding guard, hop-by-hop redirect re-check), resource limits (output/memory/pids/cpu/oom/timeout), cancellation (cell/agent/run, daemon-tree zeroing), concurrency (worktree parallelism, main-workspace single-writer, cache locks, port leases), strict backends (digest-locked images, no silent degradation), recovery janitor (old-boot cleanup, same-boot restart safety), seccomp/Landlock rule surfaces + compatibility gate, receipt completeness + evidence binding, single-agent shadow compatibility. `bun run eval:linux`.
+- **Foundation Freeze** — full gate: 3089 tests / 245 files, typecheck, build, pack dry-run, git diff check, mini-bench no regression.
+
+
 
 ### Added (LNXF-7 — 网络代理、Landlock、seccomp 与恢复)
 - **Egress policy** — host+port allowlist with wildcard domains; every redirect is re-checked hop-by-hop (`REDIRECT_POLICY_BYPASS: 0`); a DNS-rebinding guard rejects allowlisted domains resolving to private/loopback addresses; DNS pre-resolution alone is never a control.

@@ -247,6 +247,50 @@ describe("M4: resume", () => {
     }
   })
 
+  test("resume consumes the token atomically — second resume fails (M10)", async () => {
+    const bundle = buildBundle()
+    try {
+      const first = await runScheduler(spec([humanNode("h:1", "approve?")]), reg(bundle), {
+        harness: bundle.env,
+        interrupts: { controller: bundle.controller, specDigest: bundle.specDigest },
+      })
+      const token = first.interrupt!.resumeToken
+      const attempt = bundle.controller.resume(token, bundle.specDigest, { accepted: true })
+      expect(attempt.ok).toBe(true)
+      // 消费是原子的：waiting → resuming 立即持久化，第二个并发 resume 失败
+      const record = bundle.store.get(attempt.record!.interruptId)
+      expect(record?.status).toBe("resuming")
+      const again = bundle.controller.resume(token, bundle.specDigest, { accepted: true })
+      expect(again.ok).toBe(false)
+      expect(again.reason).toContain("already resuming")
+      // 崩溃后状态明确：resuming 是可恢复/可审计的中间态
+      expect(bundle.store.list("resuming")).toHaveLength(1)
+    } finally {
+      rmSync(bundle.projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test("rejected resume does not consume the token (M10)", async () => {
+    const bundle = buildBundle()
+    try {
+      const first = await runScheduler(spec([humanNode("h:1", "approve?")]), reg(bundle), {
+        harness: bundle.env,
+        interrupts: { controller: bundle.controller, specDigest: bundle.specDigest },
+      })
+      const token = first.interrupt!.resumeToken
+      // 先触发一次校验失败（schema 拒绝）—— 不得消费
+      const bad = bundle.controller.resume(token, bundle.specDigest, { accepted: "nope" })
+      expect(bad.ok).toBe(false)
+      expect(bundle.store.get(bad.record?.interruptId ?? "")).toBeUndefined()
+      expect(bundle.store.list("waiting")).toHaveLength(1)
+      // 合法 resume 仍成功（未被污染）
+      const good = bundle.controller.resume(token, bundle.specDigest, { accepted: true })
+      expect(good.ok).toBe(true)
+    } finally {
+      rmSync(bundle.projectRoot, { recursive: true, force: true })
+    }
+  })
+
   test("workspace changed since interrupt → resume rejected (re-verify)", async () => {
     const bundle = buildBundle()
     try {

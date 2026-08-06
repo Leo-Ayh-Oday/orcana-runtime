@@ -6,6 +6,11 @@
  *  under a single-writer lock (ConcurrencyController), and the completion
  *  gate rejects runs whose write nodes lack passing verification evidence
  *  (status "blocked_no_evidence").
+ *  M6: any failed/blocked node fails/blocks the run (never done).
+ *  M9: runs declaring a merge node physically integrate agent worktree
+ *  changes into the official workspace before dispose.
+ *  M11: checkpoints are bound to the spec + workspace digests — stale
+ *  checkpoints are rejected on restore.
  */
 
 import type { WorkflowRunResult, WorkflowSpec } from "../types"
@@ -23,9 +28,17 @@ import { createWorkflowHarnessRuntime } from "../harness/node-context-factory"
 import { executeHarnessNode } from "../execution/harness-node-executor"
 import type { WorkflowHarnessEnvironment } from "../harness/environment"
 import { enforceNodeAssignment, enforceActualWrites, ownershipDeniedResult, createWorktreeRegistry } from "../execution/workflow-execution-context"
-import type { WorkflowNodeExecutionContext } from "../agents/workspace-context"
+import type { WorkflowNodeExecutionContext, WorktreeRegistry } from "../agents/workspace-context"
 import { WorkflowInterruptError, type WorkflowInterruptError as WIE } from "../interrupts/types"
 import { createResumeToken } from "../interrupts/resume-token"
+import { computeSpecDigest } from "../interrupts/resume-controller"
+import { computeWorkspaceHash } from "../../harness/persistence/workspace-hash"
+import { collectAgentBundle, combineBundles } from "../agents/merge-bundle"
+import { buildIntegrationPlan, planBlocked } from "../agents/integration-plan"
+import { integrateWithVerification } from "../agents/integration-verifier"
+import { extractActualWritePaths } from "../agents/ownership-policy"
+import { existsSync, readFileSync } from "node:fs"
+import { isAbsolute, join, relative, resolve } from "node:path"
 import type { ResourceLedger } from "../../runtime/linux/scheduler/resource-ledger"
 import type { ResourceRequest } from "../../runtime/linux/contracts"
 
@@ -55,6 +68,11 @@ export interface SchedulerOptions {
     onResolved?: (interruptId: string) => void
   }
   onNodeFinished?: (result: import("../types").WorkflowNodeResult) => void
+  /** M9: post-merge whole-workspace verification hook — runs after agent
+   *  worktree changes are written into the official workspace; a failing
+   *  verdict rolls the merge back (default: physical read-back equality of
+   *  the integrated files). */
+  integrationVerify?: (projectRoot: string) => Promise<{ passed: boolean; summary: string }>
   /** R4: 资源账本 —— 节点启动前原子预留，不足时等待而非先启动
    *  （acceptance #11：RESOURCE_OVERCOMMIT: 0）。缺省 = 不启用。 */
   ledger?: ResourceLedger
@@ -99,6 +117,110 @@ function replayResult(result: import("../types").WorkflowNodeResult): import("..
   }
 }
 
+/** M9: physically integrate per-agent worktree changes into the official
+ *  workspace through the single-writer merge transaction — BEFORE the
+ *  run's worktrees are disposed (otherwise successful agent changes vanish
+ *  with the worktree: WORKTREE_CHANGES_INTEGRATED_BEFORE_DISPOSE).
+ *
+ *  Only runs that declare a `reduce.merge_agents` node integrate (the merge
+ *  node is the integration authority); without it worktrees keep their
+ *  isolated lifecycle. Sources are the reported actual write paths of done
+ *  write nodes, read from the agent's worktree. A blocked plan keeps the
+ *  official workspace untouched; a failing post-merge verification rolls
+ *  the merge back and rewrites the merge node result to failed (the run
+ *  then aggregates it as failed — M6). */
+async function integrateMergedWorktrees(
+  mergeNodeId: string,
+  store: ResultStore,
+  worktrees: WorktreeRegistry,
+  options: SchedulerOptions,
+): Promise<{ blocked: string | null }> {
+  const projectRoot = resolve(options.harness?.scope.projectRoot ?? "")
+  if (!projectRoot || worktrees.byAgent.size === 0) return { blocked: null }
+  // The merge node itself must have completed — a failed merge never
+  // integrates partial worktree state.
+  if (store.get(mergeNodeId)?.status !== "done") return { blocked: null }
+
+  const filesByAgent = new Map<string, string[]>()
+  for (const result of store.all()) {
+    if (result.status !== "done") continue
+    const agentId = agentOfNodeId(result.nodeId)
+    if (!agentId) continue
+    const handle = worktrees.byAgent.get(agentId)
+    if (!handle) continue
+    const root = resolve(handle.root)
+    const files = new Set<string>()
+    for (const raw of extractActualWritePaths(result.output)) {
+      const abs = resolve(raw)
+      const rel = relative(root, abs)
+      if (!rel.startsWith("..") && !isAbsolute(rel)) files.add(rel)
+    }
+    if (files.size > 0) filesByAgent.set(agentId, [...files])
+  }
+  if (filesByAgent.size === 0) return { blocked: null }
+
+  const worktreeRoots: Record<string, string> = {}
+  const bundles: ReturnType<typeof collectAgentBundle>[] = []
+  for (const [agentId, files] of filesByAgent) {
+    const handle = worktrees.byAgent.get(agentId)!
+    worktreeRoots[agentId] = handle.root
+    bundles.push(
+      collectAgentBundle({
+        agentId,
+        files,
+        readFile: rel => {
+          const p = join(handle.root, rel)
+          return existsSync(p) ? readFileSync(p, "utf8") : undefined
+        },
+      }),
+    )
+  }
+  const plan = buildIntegrationPlan(combineBundles(bundles))
+  if (planBlocked(plan)) {
+    return { blocked: plan.conflictSet.fileConflicts.map(c => `${c.file} (${c.agents.join(", ")})`).join("; ") }
+  }
+  if (plan.automatic.length === 0) return { blocked: null }
+
+  // Default verification: physical read-back — every integrated file must
+  // exist in the official workspace with content equal to its worktree
+  // source (a genuine check against lost/partial writes).
+  const verify = options.integrationVerify
+    ? () => options.integrationVerify!(projectRoot)
+    : async () => {
+        const mismatches: string[] = []
+        for (const file of plan.automatic) {
+          const src = join(worktreeRoots[plan.sourceByFile[file]!]!, file)
+          const dst = join(projectRoot, file)
+          let same = false
+          try {
+            same = readFileSync(dst, "utf8") === readFileSync(src, "utf8")
+          } catch {
+            same = false
+          }
+          if (!same) mismatches.push(file)
+        }
+        return mismatches.length === 0
+          ? { passed: true, summary: `integrated ${plan.automatic.length} file(s) verified` }
+          : { passed: false, summary: `integrated file mismatch: ${mismatches.join(", ")}` }
+      }
+
+  const result = await integrateWithVerification({ plan, projectRoot, worktreeRoots, verify })
+  if (result.status === "verification_failed") {
+    const now = Date.now()
+    store.put({
+      nodeId: mergeNodeId,
+      status: "failed",
+      output: null,
+      error: `workflow: merge integration failed — ${result.reason ?? "post-merge verification failed"}`,
+      errorKind: "integration_failed",
+      startedAt: now,
+      finishedAt: now,
+      durationMs: 0,
+    })
+  }
+  return { blocked: null }
+}
+
 export async function runScheduler(
   spec: WorkflowSpec,
   registry: HandlerRegistry,
@@ -111,7 +233,13 @@ export async function runScheduler(
   if (cycle) throw new Error(`workflow: cycle detected: ${cycle.join(" → ")}`)
 
   const mode = spec.mode ?? "readonly"
-  const store = new ResultStore(spec.specId, options.checkpointDir)
+  // M11: the checkpoint is bound to the graph digest and (when a harness
+  // workspace exists) the workspace content hash — a stale checkpoint for
+  // a changed graph or workspace is rejected on restore.
+  const specDigest = computeSpecDigest(spec)
+  const workspaceDigest =
+    options.checkpointDir && options.harness ? computeWorkspaceHash(options.harness.scope.projectRoot) : undefined
+  const store = new ResultStore(spec.specId, options.checkpointDir, { specDigest, workspaceDigest })
   const cache = options.cache
   const queue = new ReadyQueue(spec, store)
   const cc = new ConcurrencyController()
@@ -355,7 +483,19 @@ export async function runScheduler(
     await Promise.race([...running.values()])
   }
 
-  // MACP-M3 task 13: dispose every worktree this run created.
+  // M9: when the spec declares a merge node, physically integrate per-agent
+  // worktree changes into the official workspace BEFORE dispose — otherwise
+  // successful agent changes vanish with the worktree. Runs paused at a
+  // human node never integrate (their worktrees are still isolated).
+  const mergeNode = spec.nodes.find(n => n.handler === "reduce.merge_agents")
+  let integrationBlocked: string | null = null
+  if (!pendingInterrupt.error && mergeNode) {
+    const outcome = await integrateMergedWorktrees(mergeNode.id, store, worktreeRegistry, options)
+    integrationBlocked = outcome.blocked
+  }
+
+  // MACP-M3 task 13: dispose every worktree this run created — only after
+  // merge integration has landed the changes.
   worktreeRegistry.dispose()
 
   // MACP-M4: the run paused at a human node — the process is released with
@@ -413,15 +553,27 @@ export async function runScheduler(
     options.interrupts.onResolved?.(options.interrupts.resumeAnswer.interruptId)
   }
   // MACP-M5: unresolved merge conflicts block the run (task 12) — the merge
-  // node reports them structurally instead of letting later agents win.
-  const mergeNode = spec.nodes.find(n => n.handler === "reduce.merge_agents")
+  // node reports them structurally instead of letting later agents win;
+  // M9: physical file conflicts detected during integration block it too
+  // (the official workspace was never touched).
   if (mergeNode) {
     const mergeResult = results.find(r => r.nodeId === mergeNode.id)
     const output = mergeResult?.output as { metadata?: { conflicts?: unknown[]; valueConflicts?: unknown[] } } | null
     const meta = output?.metadata
     if (mergeResult?.status === "done" && ((meta?.conflicts?.length ?? 0) > 0 || (meta?.valueConflicts?.length ?? 0) > 0)) {
       base.status = "blocked_conflict"
+    } else if (integrationBlocked && base.status === "done") {
+      base.status = "blocked_conflict"
     }
+  }
+  // M6: a failed or blocked node never completes the run — aggregate
+  // node-level failure/block into the run status (FAILED_WORKFLOW_NODE_NEVER_DONE).
+  const failedNodes = results.filter(r => r.status === "failed")
+  const blockedNodes = results.filter(r => r.status === "blocked")
+  if (failedNodes.length > 0) {
+    base.status = "failed"
+  } else if (blockedNodes.length > 0) {
+    base.status = "blocked"
   }
   return base
 }

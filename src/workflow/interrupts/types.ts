@@ -9,7 +9,10 @@ export type WorkflowInterruptKind =
   | "plan_amendment"
   | "external_uncertainty"
 
-export type WorkflowInterruptStatus = "waiting" | "resolved" | "cancelled" | "expired"
+/** M10: "resuming" is the atomic post-consume state — a token is consumed
+ *  exactly once (waiting → resuming → resolved); a crash during resume
+ *  leaves a clearly recoverable state. */
+export type WorkflowInterruptStatus = "waiting" | "resuming" | "resolved" | "cancelled" | "expired"
 
 export interface WorkflowInterruptRecord {
   interruptId: string

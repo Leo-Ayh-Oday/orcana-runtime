@@ -14,6 +14,7 @@ import type { AgentOptions } from "../loop-types"
 import type { AgentRunLifecycleState } from "../run/types"
 import { requireRuntimeExecutionContext } from "../../runtime/execution-context"
 import { resolveMaxRounds, selectRecentHistoryWithinBudget } from "../round/helpers"
+import { distillUserConstraints, formatConstraintContext } from "../memory/user-constraints"
 import { buildEffectivePrompt } from "../clarification"
 import { detectLanguage, languageInstruction } from "../language"
 import { createState } from "../router"
@@ -72,6 +73,8 @@ export async function buildRunContext(
   const langInstruction = languageInstruction(language)
 
   const rawMessages: ProviderMessage[] = []
+  // X1 触发点② (RC-02.5)：入口窗口截断时蒸馏被裁 user 消息的用户约束。
+  let evictedConstraintContext = ""
 
   // Load conversation history up to a token budget (~15% of 1M context).
   // This replaces the hardcoded slice(-24) with budget-aware truncation.
@@ -84,9 +87,36 @@ export async function buildRunContext(
       ESTIMATED_CHARS_PER_TOKEN,
       60,
     )
+    if (recent.length < options.conversationHistory.length) {
+      // 有消息被窗口裁掉：蒸馏被裁 user 消息中的硬约束（非阻塞，失败静默降级）。
+      const evicted = options.conversationHistory.slice(0, options.conversationHistory.length - recent.length)
+      const evictedUserTexts = evicted.filter(m => m.role === "user").map(m => m.content).filter(Boolean)
+      if (evictedUserTexts.length >= 3) {
+        try {
+          const distilled = await distillUserConstraints(
+            provider,
+            options.modelRouter?.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash",
+            evictedUserTexts,
+            options.abortSignal,
+          )
+          if (distilled.success && distilled.constraints.length > 0) {
+            evictedConstraintContext = formatConstraintContext(distilled.constraints)
+          }
+        } catch {
+          // 蒸馏失败不阻断主流程（约束丢失但执行继续）
+        }
+      }
+    }
     for (const h of recent) {
       rawMessages.push({ role: h.role, content: h.content })
     }
+  }
+
+  if (evictedConstraintContext) {
+    rawMessages.push({
+      role: "system",
+      content: `<system-reminder>\n以下约束来自已被上下文窗口淘汰的历史轮次（蒸馏保留）：\n${evictedConstraintContext}\n</system-reminder>`,
+    })
   }
 
   rawMessages.push({ role: "user", content: prompt })

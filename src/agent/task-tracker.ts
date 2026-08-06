@@ -5,7 +5,7 @@ import { ingestVerificationResults, type EvidenceLedger } from "./evidence-ledge
 import { getWriteGeneration } from "../file-state"
 
 export type TaskIntent = "readonly" | "narrow_edit" | "long_task"
-export type TaskStepStatus = "pending" | "running" | "done" | "failed"
+export type TaskStepStatus = "pending" | "running" | "done" | "failed" | "cancelled" | "superseded"
 
 export interface TaskStep {
   id: string
@@ -127,8 +127,23 @@ export function markPlanAccepted(tracker: TaskTracker) {
     plan.status = "done"
     plan.evidence = "已生成执行计划"
   }
+  // RC-13 E1: revise 步骤完成后，恢复可执行链——revisePlan 把 pending 标为
+  // cancelled，这里先激活 pending，无 pending 时恢复最早被取消的步骤，杜绝死锁。
+  const revise = tracker.steps.find(step => step.id === "revise")
+  if (revise && revise.status === "running") {
+    revise.status = "done"
+    revise.evidence = "方案已修正"
+  }
   const next = tracker.steps.find(step => step.status === "pending")
-  if (next) next.status = "running"
+  if (next) {
+    next.status = "running"
+    return
+  }
+  const recover = tracker.steps.find(step => step.status === "cancelled")
+  if (recover) {
+    recover.status = "running"
+    recover.evidence = "重新规划后恢复执行"
+  }
 }
 
 /** Revise the plan — called when the agent is stuck and needs to re-plan.
@@ -144,9 +159,10 @@ export function revisePlan(tracker: TaskTracker, reason: string): string {
     running.evidence = reason.slice(0, 120)
   }
 
-  // Mark all pending steps as cancelled (not failed — they never started)
+  // RC-13 E1: 未开始的步骤标 cancelled（被新计划替换，非执行失败）——
+  // markPlanAccepted 可恢复它们，失败步骤（failed）永不复位。
   for (const s of tracker.steps) {
-    if (s.status === "pending") s.status = "failed"
+    if (s.status === "pending") s.status = "cancelled"
   }
 
   // Reset to planning

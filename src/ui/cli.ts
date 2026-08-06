@@ -33,6 +33,7 @@ import {
   saveCompactorState,
 } from "../memory/compactor"
 import type { CompactionState } from "../memory/compactor"
+import { distillUserConstraints } from "../agent/memory/user-constraints"
 import type { UsageStats } from "../agent/loop"
 import { createStreamRenderState, dim, flushStreamRender, green, yellow, red, renderResponse, renderStreamChunk } from "./render"
 import { reprompt, startInput } from "./input"
@@ -92,13 +93,32 @@ function rememberTurn(compactor: CompactionState, turn: { role: "user" | "assist
   replaceCompactorState(compactor, addTurn(compactor, turn))
 }
 
-function maybeCreateM0(compactor: CompactionState, title: string) {
+async function maybeCreateM0(compactor: CompactionState, title: string, provider?: MultiProvider, modelRouter?: ModelRouter) {
   const thresholdTokens = envNumber("ORCANA_M0_THRESHOLD_TOKENS", 50_000)
   if (compactor.anchor || compactor.estimatedTokens < thresholdTokens) return
+  // RC-02.5 X1 触发点③：M0 创建时用 flash 蒸馏硬约束，替代正则 DECISION_RE。
+  let distilledDecisions: string[] = []
+  if (provider) {
+    const userTexts = [...compactor.hotTurns, ...compactor.warmTurns]
+      .filter(t => t.role === "user")
+      .map(t => t.content)
+      .filter(Boolean)
+    if (userTexts.length >= 3) {
+      const result = await distillUserConstraints(
+        provider,
+        modelRouter?.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash",
+        userTexts,
+      )
+      if (result.success) {
+        distilledDecisions = result.constraints.map(c => `[约束] ${c.rule}`)
+      }
+    }
+  }
   replaceCompactorState(compactor, createBaseCheckpoint(compactor, {
     sessionId: "auto-m0",
     thresholdTokens,
     title: title.slice(0, 140),
+    activeDecisions: distilledDecisions,
   }))
 }
 
@@ -399,7 +419,7 @@ async function runLiteTurn(
 
   rememberTurn(compactor, { role: "user", content: prompt })
   if (outputText) rememberTurn(compactor, { role: "assistant", content: outputText })
-  maybeCreateM0(compactor, prompt)
+  await maybeCreateM0(compactor, prompt, provider, router)
   history.push({ role: "user", content: prompt })
   if (outputText) history.push({ role: "assistant", content: outputText })
 }
@@ -446,7 +466,7 @@ async function runTurn(
     renderSpinner()
   }, 80)
 
-  maybeCreateM0(compactor, prompt)
+  void maybeCreateM0(compactor, prompt)
   const stableMemoryContext = buildStableAnchorContext(compactor)
   const dynamicMemoryContext = buildDynamicMemoryContext(compactor)
   const warmHistory = dynamicMemoryContext
@@ -640,7 +660,7 @@ async function runTurn(
 
   rememberTurn(compactor, { role: "user", content: prompt })
   if (lastText) rememberTurn(compactor, { role: "assistant", content: lastText })
-  maybeCreateM0(compactor, prompt)
+  void maybeCreateM0(compactor, prompt)
   history.push({ role: "user", content: prompt })
   if (lastText) history.push({ role: "assistant", content: lastText })
 }

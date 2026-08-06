@@ -52,6 +52,7 @@ import {
   totalMessageChars,
 } from "../context-epoch"
 import { distillUserConstraints, extractUserTexts, formatConstraintContext } from "../memory/user-constraints"
+import { appendUserContext } from "../maintenance/coordinator"
 import { collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
 import {
   createContextRequest,
@@ -825,7 +826,8 @@ export async function* runRound(
   updateState(ctx.state, toolNames, filePaths, Boolean(roundState.providerFailure) || roundState.hadToolError)
   yield patch({ execution: { lastToolNames: [...toolNames] } })
   if (postToolPlanningPrompt) {
-    rawMessages.push({ role: "user", content: postToolPlanningPrompt })
+    // RC-13 E3: 合并进相邻 user 消息，避免连续 user。
+    appendUserContext(rawMessages, postToolPlanningPrompt)
     return { kind: "continue" }
   }
 

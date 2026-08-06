@@ -89,13 +89,36 @@ function loadConfigFile(path: string): ConfigLoadResult {
  *
  * Path and pattern use `/` as separator (normalized before matching).
  */
-export function matchPathPattern(pattern: string, filePath: string): boolean {
-  const normalizedPath = filePath.replace(/\\/g, "/")
-  const normalizedPattern = pattern.replace(/\\/g, "/")
+/**
+ * RC-04b B3: 段级路径规范化——消解 `.`/`..` 段与重复斜杠，不触发文件系统。
+ * `src/../.env` → `/.env`，`./.env` → `/.env`，`/a//b` → `/a/b`。
+ * 符号链接逃逸由 transaction 层 checkForbiddenFile（realpath 检查）兜底。
+ */
+export function normalizePathForPattern(filePath: string): string {
+  const segments = filePath.replace(/\\/g, "/").split("/")
+  const out: string[] = []
+  for (const seg of segments) {
+    if (seg === "" || seg === ".") continue
+    if (seg === "..") {
+      if (out.length > 0) out.pop()
+      continue
+    }
+    out.push(seg)
+  }
+  return "/" + out.join("/")
+}
 
-  // Exclusion
-  if (normalizedPattern.startsWith("!")) {
-    return !matchPathPattern(normalizedPattern.slice(1), normalizedPath)
+export function matchPathPattern(pattern: string, filePath: string): boolean {
+  // Exclusion: `!pattern`（必须在 normalize 前判定，避免前导 `!` 被段消解吞掉）
+  if (pattern.startsWith("!")) {
+    return !matchPathPattern(pattern.slice(1), filePath)
+  }
+  const normalizedPath = normalizePathForPattern(filePath)
+  const normalizedPattern = normalizePathForPattern(pattern)
+
+  // Exclusion（遗留写法：normalize 后以 /! 开头的 pattern）
+  if (normalizedPattern.startsWith("/!")) {
+    return !matchPathPattern(normalizedPattern.slice(2), normalizedPath)
   }
 
   const patternParts = normalizedPattern.split("/")

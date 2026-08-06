@@ -129,6 +129,9 @@ export class PermissionGate {
   /** RC-02 B2: safe mode（配置损坏时激活）—— 高影响操作全部 ask，不得静默放行。 */
   private safeModeReason: string | null = null
 
+  /** RC-04b H11: 分类默认覆盖（categoryOverrides 接线，此前死配置）。 */
+  private categoryOverrides: Partial<Record<ToolCategory, PermissionLevel>> = {}
+
   /** Reset session state (call on new session) */
   reset() {
     this.overrides.clear()
@@ -155,11 +158,12 @@ export class PermissionGate {
   }
 
   /** Load config-sourced rules. Clear then load user → project for correct priority. */
-  loadRules(userRules: PermissionRule[], projectRules: PermissionRule[]) {
+  loadRules(userRules: PermissionRule[], projectRules: PermissionRule[], categoryOverrides?: Partial<Record<ToolCategory, PermissionLevel>>) {
     this.userDenyRules = userRules.filter(r => r.level === "deny")
     this.userAllowRules = userRules.filter(r => r.level === "allow")
     this.projectDenyRules = projectRules.filter(r => r.level === "deny")
     this.projectAllowRules = projectRules.filter(r => r.level === "allow")
+    if (categoryOverrides) this.categoryOverrides = categoryOverrides
   }
 
   /** Unload all config-sourced rules (back to built-in only). */
@@ -263,9 +267,9 @@ export class PermissionGate {
       }
     }
 
-    // 9. Category default
+    // 9. Category default（RC-04b H11: categoryOverrides 优先于内置默认）
     const cat = inferToolCategory(toolName, tool)
-    const defaultPerm = CATEGORY_DEFAULTS[cat]
+    const defaultPerm = this.categoryOverrides[cat] ?? CATEGORY_DEFAULTS[cat]
     if (defaultPerm === "deny") {
       return { allowed: false, level: "deny", reason: `${categoryLabel(cat)}被默认禁止: ${toolName}` }
     }

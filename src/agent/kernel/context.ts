@@ -208,7 +208,10 @@ export async function buildRunContext(
   const projectCfg = loadProjectConfig(projectRoot)
   const userRules = userCfg.status === "valid" ? userCfg.config.rules : []
   const projectRules = projectCfg.status === "valid" ? projectCfg.config.rules : []
-  permissionGate.loadRules(userRules, projectRules)
+  // RC-04b H11: categoryOverrides 接线（user 配置优先，project 覆盖之）
+  const userOverrides = userCfg.status === "valid" ? userCfg.config.categoryOverrides : undefined
+  const projectOverrides = projectCfg.status === "valid" ? projectCfg.config.categoryOverrides : undefined
+  permissionGate.loadRules(userRules, projectRules, { ...projectOverrides, ...userOverrides })
   if (userCfg.status === "invalid" || projectCfg.status === "invalid") {
     const bad = userCfg.status === "invalid" ? "~/.orcana/permissions.json" : "<root>/.orcana/permissions.json"
     const err = userCfg.status === "invalid" ? userCfg.error : (projectCfg.status === "invalid" ? projectCfg.error : "")

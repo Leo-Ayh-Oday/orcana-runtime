@@ -106,6 +106,38 @@ export function buildResumeContext(session: Session): string {
   return lines.join("\n")
 }
 
+/** K6 (RESUME_PRESERVES_CONSTRAINTS): resume 消息角色——system 用于权威重建的约束注入帧。 */
+export type ResumeMessage = { role: "user" | "assistant" | "system"; content: string }
+
+/**
+ * K6 (RESUME_PRESERVES_CONSTRAINTS): 从权威保存状态重建 resume 消息序列。
+ *
+ * 替换旧实现「正则摘要 + 2+4 截取」对早期约束的依赖：当会话含 ≥3 条用户输入且
+ * 注入蒸馏可用时，产出 system 角色约束帧（flash 蒸馏，防淘汰丢失）；蒸馏失败或
+ * 不足时降级为确定性摘要（buildResumeContext），两种路径都保留 2+4 连续性尾部。
+ */
+export async function buildResumeMessages(
+  session: Session,
+  distill?: (userTexts: string[]) => Promise<string | null>,
+): Promise<ResumeMessage[]> {
+  const messages: ResumeMessage[] = []
+  const userTexts = session.messages.filter(m => m.role === "user").map(m => m.content).filter(Boolean)
+  let constraintContext: string | null = null
+  if (distill && userTexts.length >= 3) {
+    constraintContext = await distill(userTexts).catch(() => null)
+  }
+  if (constraintContext) {
+    messages.push({
+      role: "system",
+      content: `<system-reminder>\n以下约束来自历史会话（权威重建，防淘汰丢失）：\n${constraintContext}\n</system-reminder>`,
+    })
+  } else {
+    messages.push({ role: "assistant", content: buildResumeContext(session) })
+  }
+  for (const m of resumeMessages(session)) messages.push(m)
+  return messages
+}
+
 export function resumeMessages(session: Session): Array<{ role: "user" | "assistant"; content: string }> {
   const messages: Array<{ role: "user" | "assistant"; content: string }> = []
   const picks: number[] = []

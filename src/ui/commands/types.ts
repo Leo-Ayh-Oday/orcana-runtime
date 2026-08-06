@@ -14,7 +14,7 @@ export interface ParsedArgs {
 }
 
 export interface CommandContext {
-  history: Array<{ role: "user" | "assistant"; content: string }>
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }>
   stagedCtx: StagedContextManager
   sessions: SessionManager
   thinkingStore: ThinkingStore

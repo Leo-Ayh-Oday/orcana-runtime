@@ -31,7 +31,8 @@ export interface AgentOptions {
   maxRounds?: number
   /** Active model context window; defaults to DeepSeek V4's 1M for legacy callers. */
   contextMaxTokens?: number
-  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>
+  /** K6: 角色含 "system"——resume 权威约束帧（buildResumeMessages 产物）可进入历史。 */
+  conversationHistory?: Array<{ role: "user" | "assistant" | "system"; content: string }>
   stagedContext?: StagedContextManager
   thinkingStore?: ThinkingStore
   knowledgeBase?: KnowledgeBase

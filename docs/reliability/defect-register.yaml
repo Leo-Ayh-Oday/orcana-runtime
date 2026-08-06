@@ -504,15 +504,17 @@
 
 ## 上下文全景（K 系列，RC-18 Context Authority 细化，来源：2026-08 上下文系统全景 55 项）
 
-注：K4 已由 RC-02.5 X2 关闭；K13/K25/K36 为部分修复，缺口保持 open；
-K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
+注：K4 已由 RC-02.5 X2 关闭；K13 为部分修复，缺口保持 open（Batch E 处理）；
+K25/K36 由 RC-18 关闭（K25 @af12939；K36 @a4472d0，compactor anchor 生命周期归 Batch E）；
+K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
 
 - id: K1
   severity: P0
   wave: RC-18
   invariant: USER_HARD_CONSTRAINTS_NEVER_SILENTLY_EVICTED
   files: [src/agent/round/helpers.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: 用户硬约束在进入 Agent 前消失（窗口 break 语义：超长单条直接 break，更早短消息不纳入）
   related: X1(partial)
 
@@ -529,7 +531,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_ARCHIVE_PRESERVES_SOURCE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Epoch archive 不保存被移除原始消息（有元数据记录的删除）
 
 - id: K4
@@ -547,7 +550,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: TOOL_OUTPUT_PERSISTED_BEFORE_COMPRESSION
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: 被压缩的完整 Tool Output 无原始 Artifact（重执行不可复现）
 
 - id: K6
@@ -573,7 +577,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: VERIFIED_INSIGHTS_EVIDENCE_BOUND
   files: [src/agent/maintenance/coordinator.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Thinking Compaction verified 无 Evidence 绑定（上下文真值污染）
 
 - id: K9
@@ -664,7 +669,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_THRESHOLDS_CALIBRATED
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Epoch 阈值基于 chars/3 无真实 token 校准
 
 - id: K20
@@ -672,7 +678,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_ROLLOVER_SCOPE_MATCHES
   files: [src/agent/context-epoch.ts, src/agent/kernel/round.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Epoch 计算全部 Context 却只裁 rawMessages（重复 rollover 风险）
 
 - id: K21
@@ -680,7 +687,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: COMPRESS_IMMEDIATE
   files: [src/agent/kernel/round.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: compress 不立即压缩已有上下文；forceCompress 警告延迟一轮
 
 - id: K22
@@ -688,7 +696,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: ROLLOVER_BLOCK_FALLBACK
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Tool Chain 阻止 Rollover 后无应急恢复路径（可能被迫停止）
 
 - id: K23
@@ -696,7 +705,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_SNAPSHOT_AUDITABLE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Epoch snapshot planStateDigest 非 hash（不可审计恢复）
 
 - id: K24
@@ -714,7 +724,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: TOOL_RESULT_LIFECYCLE_PINNING
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: 成功/失败结果同压缩策略（无 Pin/生命周期分级）
   related: X2(partial)
 
@@ -723,7 +734,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-16
   invariant: HISTORICAL_MICROCOMPACT_ROUNDS_FIXED
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Historical Microcompact 轮次计算倒置（messages.length-keepRecentRounds*2 vs assistantCount，经常不执行）
   RC-02.5 遗漏
 
@@ -732,7 +744,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-16
   invariant: HISTORICAL_MICROCOMPACT_TOOL_MATCH
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Historical Microcompact 通过 tool_use_id 前缀猜类型（provider id 形如 toolu_/call_ 永不匹配）
   RC-02.5 遗漏
 
@@ -741,7 +754,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-16
   invariant: READFILE_COMPACT_SEMANTICS_UNIFORM
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: read_file 前向/历史压缩语义不一致（ORCANA_READFILE_COMPACT_CHARS=0 两路径含义不同）
 
 - id: K29
@@ -797,7 +811,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: STABLE_PREFIX_TRULY_STABLE
   files: [src/agent/kernel/*]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Frozen Stable Prefix 含会变化内容（为缓存牺牲 freshness）
   related: H1
 
@@ -806,7 +821,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: THINKING_UPDATES_REACH_STABLE_PREFIX
   files: [src/agent/maintenance/coordinator.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Thinking Compaction 更新未进 Frozen Stable Prefix/Compactor Anchor
   related: X1③(partial)
 
@@ -972,6 +988,6 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
 
 - 合计: 118（原 63 项 + 上下文全景 K 系列 55 项）
 - 原 63 项: P0 18 / P1 27 / P2 18（A8 B6 C5 D6 E5 F7 G12 H12 X2）
-- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 1（K4 @0874f8c）；open 54
-- 已修总计: 23（原 22 + K4）
+- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 16（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0）；open 39
+- 已修总计: 38（原 22 + K4 + Batch A 9 + Batch B 6）
 - 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）

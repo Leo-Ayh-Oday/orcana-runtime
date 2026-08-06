@@ -71,12 +71,14 @@ v0.8.15 保留（不删除），作为组件/契约层基线；生产接线闭�
 
 | PR | 范围 | 状态 |
 |---|---|---|
-| PR-0 | 生产闭环声明撤销（本文档）；状态统一为 Components IMPLEMENTED / Integration INCOMPLETE / Default Safe Mode SHADOW / Freeze REVOKED / M8 BLOCKED | 并入 PR-1 |
-| PR-1 | 权威 Policy Compiler：递归 canonical JSON（digest 碰撞根因）、Spec 深冻结、CapabilityRequest 单一声明入口、Profile 最低隔离强制（只收紧）、运行时身份生成（不再共享 tool-run）、ExecutionMaterialization（seccomp/secret/cache 不再写回 Spec） | **本 commit** |
-| PR-2 | 真实 ExecutionOutcome → Receipt 只由 Outcome 构造；Receipt 保留/持久化/自摘要；Evidence 绑定 Receipt Digest | 进行中 |
-| PR-3 | Supervisor 取消与输出限制闭环（超限即杀、流式截断、队列上限、AbortController 入 Broker） | 待做 |
-| PR-4 | Bubblewrap 真实后端（宿主/内部 cwd 分离、worktreeRoot 投影、seccomp FD、去 sh -c、tmpfs size、清理验证） | 待做 |
-| PR-5 | cgroup 生命周期重建（scope/委托/subtree_control/三级层级/attach/populated=0/rmdir 协议） | 待做 |
-| PR-6 | 统一身份（ExecutionRuntimeContext、ProcessRequest 全身份字段） | 待做 |
-| PR-7 | Podman OCI seccomp/镜像审批/cidfile 恢复/Secrets 真实挂载/same-boot Janitor 真实清理 | 待做 |
-| PR-8 | LF-8 评测重写（真实攻击场景、失败即红、关键场景禁 SKIP） | 待做 |
+| PR-0 | 生产闭环声明撤销（本文档）；状态统一为 Components IMPLEMENTED / Integration INCOMPLETE / Default Safe Mode SHADOW / Freeze REVOKED / M8 BLOCKED | **完成**（并入 PR-1） |
+| PR-1 | 权威 Policy Compiler：递归 canonical JSON（digest 碰撞根因）、Spec 深冻结、CapabilityRequest 单一声明入口、Profile 最低隔离强制（只收紧）、运行时身份生成（不再共享 tool-run）、ExecutionMaterialization（seccomp/secret/cache 不再写回 Spec） | **完成** (4882ba4) |
+| PR-2 | 真实 ExecutionOutcome → Receipt 只由 Outcome 构造；Receipt 保留/持久化/自摘要；Evidence 绑定 Receipt Digest | **完成** (5ad2d12) |
+| PR-3 | Supervisor 取消与输出限制闭环（超限即杀、流式截断、队列上限、AbortController 入 Broker） | **完成** (7aabf8a) |
+| PR-4 | Bubblewrap 真实后端（宿主/内部 cwd 分离、worktreeRoot 投影、seccomp FD、去 sh -c、tmpfs size、清理验证） | **完成** (cb7a869) |
+| PR-5 | cgroup 生命周期重建（scope/委托/subtree_control/三级层级/attach/populated=0/rmdir 协议） | **完成** (a782028) |
+| PR-6 | 统一身份（ExecutionRuntimeContext、ProcessRequest 全身份字段） | **完成** (5a796a3) |
+| PR-7 | Podman OCI seccomp/镜像审批/cidfile 恢复/Secrets 真实挂载/same-boot Janitor 真实清理 | **完成** (ecac004) |
+| PR-8 | LF-8 评测重写（真实攻击场景、无委托如实 FAIL、--strict 禁 SKIP、Receipt→Evidence→Gate 端到端） | **完成** (0f644c2) |
+
+**修复线状态（2026-08-06）**：PR-1~PR-8 全部落地。本机评测 32 pass / 4 fail（CGROUP_DELEGATION_REQUIRED，无委托机器如实红）/ 1 skip（podman 未装）。真机 lane 需以 `bun run eval:linux --strict` 跑通（bwrap + rootless podman + cgroup 委托）。全量门禁：typecheck/build/pack/diff-check 全绿；仅剩另一窗口 RC-13 的 revisePlan 语义问题。与基础设施修复合流后以 **0.8.17** 发布。

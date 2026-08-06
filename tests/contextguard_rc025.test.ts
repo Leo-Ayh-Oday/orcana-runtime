@@ -39,12 +39,15 @@ describe("X2 microcompact preserves error lines", () => {
     expect(out).toContain("[错误线索]")
   })
 
-  test("error results carry is_error marker", () => {
-    const { results } = microcompactToolResults(
+  test("failed results are pinned, not compacted (K25)", () => {
+    const { results, compacted } = microcompactToolResults(
       [{ type: "tool_result", tool_use_id: "t2", content: "x".repeat(4000), is_error: true }],
       [{ id: "t2", name: "shell", input: { command: "make" } }],
     )
-    expect(String(results[0]!.content)).toContain("[is_error]")
+    expect(compacted).toBe(0)
+    // is_error 结果永不压缩——完整内容保留，无 Microcompact 占位符（失败 Pin）。
+    expect(String(results[0]!.content)).toBe("x".repeat(4000))
+    expect(String(results[0]!.content)).not.toContain("[Microcompact:")
   })
 
   test("extractErrorLines dedupes and caps at 3", () => {

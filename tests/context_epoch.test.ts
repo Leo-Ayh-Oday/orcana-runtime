@@ -17,6 +17,11 @@ import {
   type PlanStateInput,
 } from "../src/agent/context-epoch"
 import type { ProviderMessage } from "../src/provider/types"
+import {
+  composeStablePrefixContent,
+  epochScopeChars,
+  stablePrefixSourceFingerprint,
+} from "../src/agent/kernel/round"
 
 // ── Helpers ──
 
@@ -427,5 +432,142 @@ describe("DEFAULT_EPOCH_THRESHOLDS", () => {
     expect(thresholds.compressChars).toBeLessThan(thresholds.forceCompressChars)
     expect(thresholds.forceCompressChars).toBeLessThan(thresholds.rolloverChars)
     expect(thresholds.rolloverChars).toBeLessThan(128_000 * 3 * 0.6)
+  })
+})
+
+// ── K20: epoch scope alignment (round.ts epochScopeChars) ──
+
+describe("epochScopeChars (K20 scope alignment)", () => {
+  const thresholds: EpochThresholds = { compressChars: 100, forceCompressChars: 200, rolloverChars: 300 }
+
+  it("ignores contextMessages — a huge context no longer inflates the epoch decision", () => {
+    // contextMessages (plan-state / volatile context) are rebuilt each round
+    // and never archived by epochRollover, so they must not push the epoch
+    // over a threshold. A context far above the rollover threshold with a
+    // tiny rawMessages scope must classify as "none".
+    const bigContext = Array.from({ length: 40 }, (_, i) => msg("user", `context block ${i} ` + "x".repeat(100)))
+    const smallRaw = [msg("user", "hi"), msg("assistant", "ok")]
+    expect(classifyEpochAction(epochScopeChars(bigContext, smallRaw), thresholds)).toBe("none")
+  })
+
+  it("counts rawMessages — the actual rollover scope", () => {
+    // rawMessages are what a rollover would archive, so they must drive the
+    // epoch decision. A rawMessages scope above rolloverChars → rollover,
+    // even when the contextMessages side is also large.
+    const bigRaw = Array.from({ length: 10 }, (_, i) =>
+      i % 2 === 0 ? msg("user", "y".repeat(60)) : msg("assistant", "y".repeat(60)),
+    )
+    expect(classifyEpochAction(epochScopeChars([], bigRaw), thresholds)).toBe("rollover")
+    const bigContext = Array.from({ length: 20 }, () => msg("user", "c".repeat(300)))
+    expect(classifyEpochAction(epochScopeChars(bigContext, bigRaw), thresholds)).toBe("rollover")
+  })
+
+  it("returns 0 for empty rawMessages regardless of context size", () => {
+    const bigContext = Array.from({ length: 10 }, () => msg("user", "c".repeat(500)))
+    expect(epochScopeChars(bigContext, [])).toBe(0)
+  })
+})
+
+// ── K35: stable prefix source fingerprint & rebuild ──
+
+describe("stablePrefixSourceFingerprint (K35)", () => {
+  const base = {
+    stableMemoryContext: "## M0 Base Checkpoint\nDecision: keep cache prefix stable",
+    experienceContext: "## Experience\nlearned",
+    contextKernelText: "kernel-text",
+    contextMapContext: "## Context Map\nmap-text",
+    triageSkillPrompts: ["skill-prompt-1"],
+  }
+
+  it("is deterministic across identical sources", () => {
+    expect(stablePrefixSourceFingerprint(base)).toBe(stablePrefixSourceFingerprint({ ...base }))
+    expect(stablePrefixSourceFingerprint(base)).toHaveLength(64) // sha256 hex
+  })
+
+  it("changes when any stable source drifts", () => {
+    const baseHash = stablePrefixSourceFingerprint(base)
+    expect(stablePrefixSourceFingerprint({ ...base, contextKernelText: "kernel-text-v2" })).not.toBe(baseHash)
+    expect(stablePrefixSourceFingerprint({ ...base, contextMapContext: "## Context Map\nmap-text-v2" })).not.toBe(baseHash)
+    expect(stablePrefixSourceFingerprint({ ...base, triageSkillPrompts: ["skill-prompt-1", "skill-prompt-2"] })).not.toBe(baseHash)
+    expect(stablePrefixSourceFingerprint({ ...base, stableMemoryContext: "changed memory" })).not.toBe(baseHash)
+  })
+})
+
+describe("composeStablePrefixContent (K35 rebuild)", () => {
+  it("renders the anchor header and source blocks in priority order", () => {
+    const content = composeStablePrefixContent({
+      stableMemoryContext: "mem",
+      experienceContext: "exp",
+      contextKernelText: "kernel",
+      contextMapContext: "map",
+      triageSkillPrompts: ["skill-a", "skill-b"],
+    })
+    expect(content).toContain("[CACHE_ANCHOR:v3]")
+    expect(content).toContain("## Stable Cold Memory\nmem")
+    expect(content).toContain("exp")
+    expect(content).toContain("## Project Context Kernel\nkernel")
+    expect(content).toContain("map")
+    expect(content).toContain("skill-a")
+    expect(content).toContain("skill-b")
+    const anchorAt = content.indexOf("[CACHE_ANCHOR:v3]")
+    const kernelAt = content.indexOf("## Project Context Kernel")
+    const mapAt = content.indexOf("map")
+    const skillsAt = content.indexOf("skill-a")
+    expect(kernelAt).toBeGreaterThan(anchorAt)
+    expect(kernelAt).toBeLessThan(mapAt)
+    expect(mapAt).toBeLessThan(skillsAt)
+  })
+
+  it("skips empty sources", () => {
+    expect(composeStablePrefixContent({})).toBe("")
+    expect(composeStablePrefixContent({ contextMapContext: "map" })).toContain("[CACHE_ANCHOR:v3]")
+    expect(composeStablePrefixContent({ contextMapContext: "map" })).toContain("map")
+    expect(composeStablePrefixContent({ contextMapContext: "map" })).not.toContain("Stable Cold Memory")
+  })
+
+  it("matches the harness pipeline round-0 stable message byte-for-byte", async () => {
+    const { runContextPipeline } = await import("../src/harness/context/pipeline")
+    const { createDefaultContextProviders } = await import("../src/harness/context/providers")
+    const { stableMessageOf } = await import("../src/harness/context/assemble")
+    const { MODES } = await import("../src/agent/mode-contract")
+    const sources = {
+      stableMemoryContext: "## M0 Base Checkpoint\nDecision: keep cache prefix stable",
+      experienceContext: "## Experience\nlearned",
+      contextKernelText: "kernel-text",
+      contextMapContext: "## Context Map\nmap-text",
+      triageSkillPrompts: ["skill-prompt-1"],
+    }
+    const request = {
+      round: 0,
+      effectivePrompt: "hello",
+      contextMax: 1000,
+      langInstruction: "The user is using English. Reply in English only.",
+      frozenStablePrefixContent: null,
+      stableMemoryContext: sources.stableMemoryContext,
+      experienceContext: sources.experienceContext,
+      contextKernel: { hash: "h1", text: sources.contextKernelText, estimatedTokens: 10, sections: [] },
+      contextMapContext: sources.contextMapContext,
+      triageSkillPrompts: sources.triageSkillPrompts,
+      planState: {
+        masterPlan: null, taskTracker: null, taskPacket: null,
+        rippleObligations: [], userGoal: "hello", decisions: [], round: 0,
+      },
+      researchContextContent: "## Research Evidence Context\nresearch",
+      stagedContext: undefined,
+      thinkingStore: undefined,
+      knowledgeBase: undefined,
+      taskTracker: null,
+      mode: MODES.coder,
+      rawMessages: [{ role: "user", content: "hello" }],
+      epochState: {
+        currentEpochIndex: 0, rolloverCount: 0,
+        thresholds: { forceCompressChars: 0, compressChars: 0, rolloverChars: 0 },
+        epochStartRound: 0, snapshots: [], totalCharsTrimmed: 0,
+      },
+    }
+    const slice = await runContextPipeline({ providers: createDefaultContextProviders(), request: request as never })
+    const frozen = stableMessageOf(slice)
+    expect(frozen).not.toBeNull()
+    expect(composeStablePrefixContent(sources)).toBe(String(frozen!.content))
   })
 })

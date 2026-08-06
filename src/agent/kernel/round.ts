@@ -12,6 +12,7 @@
  *  and the MasterPlan controller — see kernel/types.ts commit boundary.
  */
 
+import { createHash } from "node:crypto"
 import type { ProviderMessage, StreamEvent } from "../../provider/types"
 import { isRuntimeBuiltToolDescriptor, type ToolDescriptor } from "../../tools/registry"
 import { isBuiltinVerificationProducer } from "../../tools/builtins"
@@ -65,7 +66,7 @@ import { createRoundState } from "../run/state"
 import { runProviderRound } from "../provider/round-runner"
 import { createProviderRoundResult, type ProviderRoundResult } from "../provider/round-result"
 import { decideProviderFailureRecovery } from "../provider/failure-policy"
-import { collectRecentTurns, updateStateMachine } from "../round/post-loop"
+import { collectRecentTurns, compactHistoricalToolResults, updateStateMachine } from "../round/post-loop"
 import { currentNode, planProgress } from "../master-plan"
 import { activateMasterPlan, tryNodeTransition } from "./master-plan"
 import { patch, stream, trace, wrapEvents } from "./effects"
@@ -148,12 +149,47 @@ export async function* runRound(
   const contextMessages = contextSliceToMessages(contextSlice)
   const planStateText = contextSlice.byProvider.get("plan-state")?.content ?? ""
   const taskPlanning = planning.taskTracker?.phase === "planning"
-  // ── Frozen stable prefix: computed once on round 0, reused across all rounds ──
+  // ── Frozen stable prefix: computed once on round 0, reused across rounds ──
   // (the pipeline's stable-memory provider passes it through byte-for-byte
   // from round 1 — plan §23 cache stability).
+  // K35: the prefix is only frozen while the sources that produced it stay
+  // unchanged. project-kernel (hash/text), context-map (contextMapContext) and
+  // skills (triageSkillPrompts) can drift mid-run; once frozen the harness
+  // providers return EMPTY for them (frozen passthrough), so the pipeline can
+  // no longer reveal drift. Fingerprint the source content every round and
+  // rebuild the frozen prefix when it changes — otherwise the model would keep
+  // seeing stale cached bytes (cache hit ≠ correct). When sources are stable
+  // this is a pure no-op and the passthrough stays byte-identical.
+  const stableSources: StablePrefixSources = {
+    stableMemoryContext: ctx.options.stableMemoryContext,
+    experienceContext: ctx.experienceContext,
+    contextKernelText: ctx.contextKernel.text,
+    contextMapContext: ctx.contextMap.contextMapContext,
+    triageSkillPrompts: ctx.triageSkillPrompts,
+  }
+  const stablePrefixFingerprint = stablePrefixSourceFingerprint(stableSources)
   const stableMessage = stableMessageOf(contextSlice)
-  if (round === 0 && !ctx.runState.conversation.frozenStablePrefix && stableMessage) {
-    yield patch({ conversation: { frozenStablePrefix: stableMessage } })
+  const frozenStablePrefix = ctx.runState.conversation.frozenStablePrefix
+  if (round === 0 && !frozenStablePrefix && stableMessage) {
+    yield patch({ conversation: { frozenStablePrefix: stableMessage, stablePrefixHash: stablePrefixFingerprint } })
+  } else if (round > 0 && frozenStablePrefix) {
+    const frozenHash = ctx.runState.conversation.stablePrefixHash
+    if (frozenHash && frozenHash !== stablePrefixFingerprint) {
+      // A stable source drifted — rebuild the prefix from current sources and
+      // swap it into this round's contextMessages so the model never sees the
+      // stale cached bytes. Subsequent rounds continue byte-frozen against the
+      // rebuilt message until the next drift.
+      const rebuiltContent = composeStablePrefixContent(stableSources)
+      if (rebuiltContent) {
+        for (const m of contextMessages) {
+          if (typeof m.content === "string" && m.content.includes("[CACHE_ANCHOR:v3]")) {
+            m.content = rebuiltContent
+          }
+        }
+        yield patch({ conversation: { frozenStablePrefix: { role: "user", content: rebuiltContent }, stablePrefixHash: stablePrefixFingerprint } })
+        yield trace("stable_prefix_rebuilt", { round, previousHash: frozenHash, hash: stablePrefixFingerprint })
+      }
+    }
   }
   // ── Context messages: all go BEFORE rawMessages ──
   // Anthropic API requires tool_use→tool_result adjacency. Any user
@@ -162,7 +198,14 @@ export async function* runRound(
   // rawMessages, never follow it. (pipeline output preserves this order)
 
   // ── Epoch check: estimate total chars and classify action ──
-  const epochTotalChars = totalMessageChars(contextMessages) + totalMessageChars(rawMessages)
+  // K20: epoch accounting is scope-aligned with the rollover. epochRollover()
+  // archives ONLY rawMessages (the volatile task-epoch tail); contextMessages
+  // (plan-state / volatile / budget context) are rebuilt fresh every round and
+  // never enter the archive. Counting both would keep the epoch permanently
+  // inflated above threshold and re-trigger rollover on every round. So the
+  // epoch decision is made on rawMessages alone — the exact scope that a
+  // rollover would trim.
+  const epochTotalChars = epochScopeChars(contextMessages, rawMessages)
   const epochAction = classifyEpochAction(epochTotalChars, ctx.epochState.thresholds)
   if (epochAction !== "none") {
     yield stream({ type: "status", data: formatEpochStatus(ctx.epochState, round, epochTotalChars) })
@@ -203,6 +246,43 @@ export async function* runRound(
       })
     }
   }
+
+  // ── K21: epoch compression acts immediately, not one round late ──
+  // The L6 historical microcompact runs only at the END of a round and is
+  // gated on round%10 / forceCompress / rollover. A context that has already
+  // crossed a compress tier would otherwise keep its bloated historical tool
+  // results for the entire NEXT provider request. Compact existing historical
+  // results NOW, before the request is built, so the model sees the reduced
+  // context this round. compactHistoricalToolResults only rewrites the text of
+  // long tool_result blocks in place — message order and role alternation are
+  // untouched.
+  if (epochAction === "compress" || epochAction === "forceCompress" || epochAction === "rollover") {
+    const immediatelyCompacted = compactHistoricalToolResults(rawMessages, 8)
+    if (immediatelyCompacted > 0) {
+      budget.microcompactCount += immediatelyCompacted
+      yield stream({ type: "status", data: `epoch-compress: ${immediatelyCompacted} historical results compacted immediately (${epochAction})` })
+      yield trace("epoch_compress_immediate", { round, action: epochAction, compacted: immediatelyCompacted, total: budget.microcompactCount })
+    }
+  }
+
+  // ── PR 4: Epoch budget warning on force-compress (one-shot) ──
+  // K21: the warning is injected into contextMessages BEFORE the provider
+  // request is built so the model sees it THIS round. (Previously it was
+  // pushed into rawMessages after estimateRoundTokens had already assembled
+  // the request, so it only arrived on the NEXT round — one round late.)
+  if (epochAction === "forceCompress" && !notices.announcedEpochForceCompress) {
+    yield patch({ notices: { announcedEpochForceCompress: true } })
+    const epochWarning = formatEpochBudgetWarning(
+      Math.round((epochTotalChars / ctx.epochState.thresholds.forceCompressChars) * 100),
+      ctx.epochState.thresholds,
+    )
+    // contextMessages precede rawMessages in the provider request, so a user
+    // warning here never breaks tool_use→tool_result adjacency inside
+    // rawMessages. It lives only in this round's freshly built context.
+    contextMessages.push({ role: "user", content: epochWarning })
+    yield stream({ type: "status", data: `epoch-budget: force-compress — ${Math.round(epochTotalChars / 1000)}k chars` })
+  }
+
   if (!notices.announcedKernel) {
     yield patch({ notices: { announcedKernel: true } })
     yield stream({ type: "status", data: `context-kernel: ${ctx.contextKernel.hash} (~${ctx.contextKernel.estimatedTokens} tokens)` })
@@ -269,18 +349,6 @@ export async function* runRound(
   if ((preRoundCtx.contextBudgetMode as string) === "degraded" && !notices.announcedContextDegraded) {
     yield patch({ notices: { announcedContextDegraded: true } })
     yield stream({ type: "status", data: `context-budget: degraded ${preRoundCtx.contextBudgetPercent}%; finish current stage only` })
-  }
-
-  // ── PR 4: Epoch budget warning on force-compress (one-shot) ──
-  if (epochAction === "forceCompress" && !notices.announcedEpochForceCompress) {
-    yield patch({ notices: { announcedEpochForceCompress: true } })
-    const epochWarning = formatEpochBudgetWarning(
-      Math.round((epochTotalChars / ctx.epochState.thresholds.forceCompressChars) * 100),
-      ctx.epochState.thresholds,
-    )
-    // Inject as a user message into rawMessages to warn the model
-    rawMessages.push({ role: "user", content: epochWarning })
-    yield stream({ type: "status", data: `epoch-budget: force-compress — ${Math.round(epochTotalChars / 1000)}k chars` })
   }
 
   // Apply ripple block side effects
@@ -682,6 +750,7 @@ export async function* runRound(
     learnPrompts,
     preRoundCtx,
     runTrace: ctx.runTrace,
+    artifactStore: ctx.artifactStore,
   }
 
   // L6: forward microcompact (before history push)
@@ -900,4 +969,63 @@ export async function* runRound(
 function planProgressOf(ctx: RunPhaseContext): string {
   const plan = ctx.planStore.current
   return plan ? planProgress(plan) : ""
+}
+
+/** K20: the epoch decision scope is aligned with the rollover scope.
+ *
+ *  epochRollover() archives only rawMessages; contextMessages are rebuilt
+ *  fresh every round and never enter the archive. So only rawMessages count
+ *  toward the epoch thresholds. The contextMessages parameter is part of the
+ *  signature to make the exclusion explicit at the call site (and to allow
+ *  tests to prove a large context no longer inflates the epoch decision).
+ */
+export function epochScopeChars(contextMessages: ProviderMessage[], rawMessages: ProviderMessage[]): number {
+  void contextMessages // deliberately excluded — see K20
+  return totalMessageChars(rawMessages)
+}
+
+/** K35: the stable-prefix source inputs whose assembled bytes form the
+ *  round-0 frozen prefix (mirrors harness/context/providers/stable.ts). */
+export interface StablePrefixSources {
+  /** options.stableMemoryContext — the Stable Cold Memory block. */
+  stableMemoryContext?: string
+  /** ctx.experienceContext — composed into the stable-memory block on round 0. */
+  experienceContext?: string
+  /** ctx.contextKernel.text — the Project Context Kernel block (hash may drift). */
+  contextKernelText?: string
+  /** ctx.contextMap.contextMapContext — the Context Map block. */
+  contextMapContext?: string
+  /** ctx.triageSkillPrompts — the skills block. */
+  triageSkillPrompts?: string[]
+}
+
+/** K35: compose the stable-prefix message bytes exactly as the round-0
+ *  pipeline group assembler would (## Stable Prefix Context / [CACHE_ANCHOR:v3]
+ *  header + parts joined by "\n\n" in priority order, empty parts skipped).
+ *  Used to rebuild the frozen prefix when a source drifts. */
+export function composeStablePrefixContent(sources: StablePrefixSources): string {
+  const parts: string[] = []
+  const memory: string[] = []
+  if (sources.stableMemoryContext?.trim()) memory.push(`## Stable Cold Memory\n${sources.stableMemoryContext.trim()}`)
+  if (sources.experienceContext) memory.push(sources.experienceContext)
+  const memoryText = memory.join("\n\n")
+  if (memoryText.trim() !== "") parts.push(memoryText)
+  if (sources.contextKernelText) {
+    const kernelText = `## Project Context Kernel\n${sources.contextKernelText}`
+    if (kernelText.trim() !== "") parts.push(kernelText)
+  }
+  if (sources.contextMapContext?.trim()) parts.push(sources.contextMapContext)
+  const skillsText = (sources.triageSkillPrompts ?? []).join("\n\n")
+  if (skillsText.trim() !== "") parts.push(skillsText)
+  if (parts.length === 0) return ""
+  return ["## Stable Prefix Context\n[CACHE_ANCHOR:v3]", parts.join("\n\n")].join("\n\n")
+}
+
+/** K35: fingerprint of the stable-prefix SOURCE content (not the assembled
+ *  bytes that the frozen passthrough re-emits). Compared across rounds to
+ *  detect drift in project-kernel / context-map / skills while those sources
+ *  are suppressed by the frozen passthrough (the harness providers return
+ *  empty on frozen rounds, so the pipeline alone cannot reveal the drift). */
+export function stablePrefixSourceFingerprint(sources: StablePrefixSources): string {
+  return createHash("sha256").update(composeStablePrefixContent(sources)).digest("hex")
 }

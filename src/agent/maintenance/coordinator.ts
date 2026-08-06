@@ -21,7 +21,8 @@ import type { ThinkingStore } from "../../memory/thinking-store"
 import type { AgentRunState, RoundToolCall } from "../run/types"
 import type { PlanStore } from "../run/plan-store"
 import type { AgentRunTrace } from "../run-trace"
-import { collectThinkingRounds, compactHistoricalToolResults, microcompactToolResults } from "../round/post-loop"
+import { collectThinkingRounds, compactHistoricalToolResults, mcThreshold, microcompactToolResults } from "../round/post-loop"
+import type { ArtifactStore } from "../../harness/contracts/artifact"
 import { compactThinkingChain } from "../../memory/compactor"
 import { streamProviderRoundEvents } from "../provider/round-runner"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../../provider/cost-policy"
@@ -66,6 +67,8 @@ export interface MaintenanceContext {
 
   preRoundCtx: { contextBudgetPercent: number; contextBudgetMode?: string }
   runTrace?: AgentRunTrace
+  /** K5: 压缩前持久化完整 Tool Output 的 Artifact Store（生产路径由 harness 注入）。 */
+  artifactStore?: ArtifactStore
 }
 
 /** RC-13 E3: 追加用户侧上下文——与相邻 user 消息合并，杜绝连续 user 消息
@@ -243,7 +246,34 @@ export async function* runForwardMicrocompact(ctx: MaintenanceContext): AsyncGen
     || ctx.epochAction === "forceCompress"
     || ctx.epochAction === "rollover"
   if (!should) return
-  const mcResult = microcompactToolResults(ctx.resultsContent, ctx.completedToolCalls)
+
+  // ── K5: 压缩前先持久化完整 Tool Output 到 Artifact Store（异步），再以同步
+  // map 钩子交给 microcompactToolResults 写入 placeholder。失败结果（K25 Pin）
+  // 不持久化——完整内容本就保留。best-effort：持久化失败不阻断压缩。
+  let refByToolUseId: Map<string, string> | null = null
+  if (ctx.artifactStore) {
+    refByToolUseId = new Map()
+    const nameById = new Map(ctx.completedToolCalls.map(tc => [tc.id, tc]))
+    for (const r of ctx.resultsContent) {
+      if (r.type !== "tool_result" || typeof r.content !== "string" || r.content.length < 100) continue
+      const tc = nameById.get(String(r.tool_use_id ?? ""))
+      if (!tc) continue
+      if (r.is_error === true) continue // K25: 失败 Pin——不压缩也不持久化
+      const threshold = mcThreshold(tc.name)
+      if (threshold <= 0 || r.content.length <= threshold) continue
+      try {
+        const ref = await ctx.artifactStore.storeContent(r.content)
+        refByToolUseId.set(String(r.tool_use_id ?? ""), ref)
+      } catch { /* best-effort */ }
+    }
+  }
+  const mcResult = microcompactToolResults(
+    ctx.resultsContent,
+    ctx.completedToolCalls,
+    refByToolUseId
+      ? (content, meta) => refByToolUseId!.get(meta.toolUseId) ?? null
+      : undefined,
+  )
   while (ctx.resultsContent.length > 0) ctx.resultsContent.pop()
   for (const r of mcResult.results) ctx.resultsContent.push(r)
   if (mcResult.compacted > 0) {

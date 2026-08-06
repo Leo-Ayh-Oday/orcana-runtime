@@ -202,6 +202,29 @@ describe("R2 broker transaction", () => {
     expect(receipt!.receipt.receiptDigest.length).toBe(16)
   })
 
+  test("PR-3: cancelCell aborts the running cell and the event stream ends", async () => {
+    const broker = createLinuxBroker({ mode: "enabled" })
+    const spec = cellSpec({ command: { executable: "/bin/sh", args: ["-c", "sleep 30"], cwd: "/tmp", stdin: "closed" } })
+    const events: Array<{ type: string; [k: string]: unknown }> = []
+    let cellId = ""
+    const run = (async () => {
+      for await (const e of broker.execute(spec)) {
+        events.push(e as unknown as { type: string; [k: string]: unknown })
+        if (e.type === "cell.status" && !cellId) cellId = e.cellId
+      }
+    })()
+    await new Promise(r => setTimeout(r, 200))
+    expect(broker.activeCells().length).toBe(1)
+    await broker.cancelCell(cellId)
+    await run
+    // PR-3：cancelCell 主动触发 Supervisor abort → 事件流结束、cell 释放
+    expect(events.some(e => e.type === "cell.exit")).toBe(true)
+    const exit = events.find(e => e.type === "cell.exit") as { signal?: string | null } | undefined
+    expect(exit?.signal).toBe("aborted")
+    expect(broker.activeCells().length).toBe(0)
+    // 后台进程归零（cancelCell 后无残留）
+  })
+
   test("PR-2: receipt is persisted to the state store", async () => {
     const { RuntimeStateStore } = await import("../../../src/runtime/linux/recovery/state-store")
     const root = (await import("node:fs")).mkdtempSync((await import("node:os")).tmpdir() + "/pr2-receipt-")

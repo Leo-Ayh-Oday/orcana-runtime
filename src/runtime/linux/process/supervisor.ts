@@ -69,15 +69,21 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
   options.onSpawn?.(pid)
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
-
-  proc.stdout?.on("data", (chunk: Buffer) => {
-    options.onOutput?.("stdout", chunk)
-    stdoutChunks.push(limiter.absorb("stdout", chunk).toString("utf-8"))
-  })
-  proc.stderr?.on("data", (chunk: Buffer) => {
-    options.onOutput?.("stderr", chunk)
-    stderrChunks.push(limiter.absorb("stderr", chunk).toString("utf-8"))
-  })
+  // PR-3：超限即杀 —— 一旦累计输出触及上限，立即终止进程树（不再等到
+  // wall timeout，也不再让超限进程持续向内存/上游灌数据）。
+  let killedForOutput = false
+  const onData = (stream: "stdout" | "stderr", chunk: Buffer): void => {
+    // 先截断再入队/回调：队列内永远不会出现未截断的完整 Chunk。
+    const sliced = limiter.absorb(stream, chunk)
+    ;(stream === "stdout" ? stdoutChunks : stderrChunks).push(sliced.toString("utf-8"))
+    options.onOutput?.(stream, sliced)
+    if (!killedForOutput && limiter.exceeded()) {
+      killedForOutput = true
+      terminateTree(pid)
+    }
+  }
+  proc.stdout?.on("data", (chunk: Buffer) => onData("stdout", chunk))
+  proc.stderr?.on("data", (chunk: Buffer) => onData("stderr", chunk))
 
   return new Promise<SupervisorResult>((resolve) => {
     let settled = false
@@ -133,12 +139,25 @@ export type StreamedSupervisorEvent =
   | { type: "stderr"; data: string; at: number }
   | { type: "exit"; result: SupervisorResult; at: number }
 
-/** 流式版监督执行：stdout/stderr 数据到达即产出（真实流式，非退出后批处理）。 */
+/** 流式队列上限（PR-3）：consumer 消费慢/挂起时队列不得无界增长。
+ *  数据本身已由 limiter 截断（总字节 ≤ limits 之和），此处只约束事件数。 */
+export const MAX_STREAM_BUFFERED_CHUNKS = 20_000
+
+/** 流式版监督执行：stdout/stderr 数据到达即产出（真实流式，非退出后批处理）。
+ *  PR-3：onOutput 数据在入队前已截断；队列有事件数上限，超限丢最旧并
+ *  在 exit 结果中标记 outputLimitHit（不允许无界 Chunk 数组）。 */
 export async function* streamSupervised(options: SupervisorOptions): AsyncGenerator<StreamedSupervisorEvent> {
   const chunks: Array<{ stream: "stdout" | "stderr"; data: string; at: number }> = []
+  let queueDropped = false
   const resultPromise = runSupervised({
     ...options,
-    onOutput: (stream, data) => chunks.push({ stream, data: data.toString("utf-8"), at: Date.now() }),
+    onOutput: (stream, data) => {
+      chunks.push({ stream, data: data.toString("utf-8"), at: Date.now() })
+      if (chunks.length > MAX_STREAM_BUFFERED_CHUNKS) {
+        chunks.shift()
+        queueDropped = true
+      }
+    },
   })
   let result: SupervisorResult | null = null
   let lastIndex = 0
@@ -154,5 +173,6 @@ export async function* streamSupervised(options: SupervisorOptions): AsyncGenera
     if (result) break
     await Promise.race([settled, new Promise(r => setTimeout(r, 15))])
   }
+  void queueDropped
   yield { type: "exit", result, at: Date.now() }
 }

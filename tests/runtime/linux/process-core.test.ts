@@ -9,7 +9,7 @@ import ts from "typescript"
 import { platform } from "node:os"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { runSupervised } from "../../../src/runtime/linux/process/supervisor"
+import { runSupervised, streamSupervised } from "../../../src/runtime/linux/process/supervisor"
 import { countProcessGroup, terminateTree } from "../../../src/runtime/linux/process/termination"
 import { createOutputLimiter, finalizeOutput, TRUNCATION_MARKER } from "../../../src/runtime/linux/process/output-limiter"
 import { buildExplicitEnvironment, hostKeyDenied, environmentLeaksHostSecrets } from "../../../src/runtime/linux/environment"
@@ -389,5 +389,45 @@ describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", 
       events.push(e as unknown as { type: string; [k: string]: unknown })
     }
     expect(events.some(e => e.type === "receipt")).toBe(true)
+  })
+})
+
+describe("PR-3: output limit kills the process (hard limit)", () => {
+  linuxOnly("infinite output is terminated well before wall timeout", async () => {
+    const startedAt = Date.now()
+    const result = await runSupervised({
+      executable: "/bin/sh",
+      args: ["-c", "yes x"],
+      cwd: "/tmp",
+      env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
+      limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
+      wallTimeMs: 60_000,
+    })
+    const elapsed = Date.now() - startedAt
+    // PR-3：超限即杀 —— 进程被终止而非跑满 wall timeout
+    expect(result.outputLimitHit).toBe(true)
+    expect(elapsed).toBeLessThan(10_000)
+    // 截断数据总量 ≤ 上限 + 标记
+    expect(result.stdout.length).toBeLessThanOrEqual(1024 + TRUNCATION_MARKER.length + 64)
+    expect(result.orphanProcesses).toBe(0)
+  })
+
+  linuxOnly("streamSupervised yields only truncated data", async () => {
+    let received = 0
+    let hit = false
+    for await (const event of streamSupervised({
+      executable: "/bin/sh",
+      args: ["-c", "yes x"],
+      cwd: "/tmp",
+      env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
+      limits: { stdoutMaxBytes: 2048, stderrMaxBytes: 2048 },
+      wallTimeMs: 60_000,
+      onOutput: (stream, data) => { if (stream === "stdout") received += data.length },
+    })) {
+      if (event.type === "exit") hit = event.result.outputLimitHit
+    }
+    expect(hit).toBe(true)
+    // 回调收到的数据在入队前已截断（≤ 上限）
+    expect(received).toBeLessThanOrEqual(2048)
   })
 })

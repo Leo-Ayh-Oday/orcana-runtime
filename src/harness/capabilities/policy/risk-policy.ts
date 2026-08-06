@@ -25,6 +25,10 @@ export function highRiskConfirmationGate(
   permissionMode: "full" | "strict",
 ): RiskGateDecision | null {
   if (!tool) return null
+  // Eval/测试环境显式放行：ORCANA_EVAL_MODE=1 时跳过 Risk 4-5 兜底。
+  // 仅限隔离 workspace + 受控任务的 headless 评测（无交互确认通道）；
+  // 默认关闭，生产环境严禁设置。
+  if (process.env.ORCANA_EVAL_MODE === "1") return null
   const risk = getToolRisk(tool.defn.name, input, tool)
   if (!isHighRisk(risk.level)) return null
   // Strict mode never reaches this gate: Gate 2 hard-blocks "ask" there.

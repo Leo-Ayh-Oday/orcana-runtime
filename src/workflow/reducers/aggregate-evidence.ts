@@ -26,7 +26,12 @@ export function aggregateEvidence(spec: WorkflowSpec, results: WorkflowNodeResul
   const isWriteNode = (id: string): boolean => {
     const node = specNodes.get(id)
     if (!node) return false
-    return WRITE_NODE_HANDLERS.has(node.handler)
+    // M7: H11 tool nodes (execution.kind === "tool") are write-class when
+    // their capability declares sideEffect "write" — the scheduler's
+    // writeNodeIds already classified them; here we conservatively bind
+    // every harness tool node so verification evidence never detaches
+    // from an H11 write it verifies.
+    return WRITE_NODE_HANDLERS.has(node.handler) || node.execution?.kind === "tool"
   }
 
   const entries: EvidenceEntry[] = []

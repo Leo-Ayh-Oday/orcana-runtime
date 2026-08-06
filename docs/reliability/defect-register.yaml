@@ -246,8 +246,9 @@
   severity: P0
   wave: RC-11
   invariant: CHECKPOINT_RESUME_USED
-  files: [src/agent/loop-types.ts, src/session/checkpoint.ts]
-  status: open
+  files: [src/agent/loop-types.ts, src/session/checkpoint.ts, src/agent/kernel/context.ts]
+  status: fixed
+  fixedBy: 76f67ec
 - id: D5
   severity: P1
   wave: RC-10
@@ -287,14 +288,16 @@
   severity: P2
   wave: RC-11
   invariant: COLD_MEMORY_SHA_VERIFIED
-  files: [src/session/checkpoint.ts]
-  status: open
+  files: [src/session/checkpoint.ts, src/ui/cli.ts]
+  status: fixed
+  fixedBy: 9abf498
 - id: H9
   severity: P2
   wave: RC-11
   invariant: REWIND_HISTORY_DEPTH_AND_CLEANUP
-  files: [src/agent/rewind.ts, src/session/sqlite-session.ts]
-  status: open
+  files: [src/agent/rewind.ts, src/session/sqlite-session.ts, src/session/checkpoint.ts]
+  status: fixed
+  fixedBy: b7cf90e
 
 ## 内核恢复（Wave 5）
 
@@ -560,8 +563,9 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   severity: P0
   wave: RC-18
   invariant: RESUME_PRESERVES_CONSTRAINTS
-  files: [src/session/checkpoint.ts, src/ui/cli.ts]
-  status: open
+  files: [src/session/summarizer.ts, src/ui/cli.ts, src/session/checkpoint.ts]
+  status: fixed
+  fixedBy: ef940b5
   desc: Session Resume 丢早期约束（2+4 条消息，正则摘要）
   related: X1(partial)
 
@@ -607,7 +611,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: M0_NO_PROTECTION_WINDOW
   files: [src/memory/compactor.ts, src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3cd8fbd
   desc: M0 创建太晚（50k 阈值前存在保护空窗）
   related: X1③(partial)
 

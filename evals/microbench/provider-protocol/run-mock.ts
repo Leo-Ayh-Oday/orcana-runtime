@@ -123,12 +123,12 @@ async function runMockCase(def: MBEMockCase): Promise<MBECaseResult> {
   }
 }
 
-export function buildHeader(suite: string): MBEHdr {
+export function buildHeader(suite: string, reasoningEffort: string): MBEHdr {
   return {
     suite,
     orcanaCommit: currentCommit(),
     modelRequested: MOCK_OPTS.model,
-    reasoningEffort: "max",
+    reasoningEffort,
     seed: 42,
     configurationDigest: "PP-mock-v1",
     startedAt: new Date().toISOString(),
@@ -151,7 +151,7 @@ export async function runMockSuite(): Promise<MBEReport> {
 
   const passed = cases.filter((c) => c.passed).length
   return {
-    header: buildHeader("ORMB-PP"),
+    header: buildHeader("ORMB-PP", "none"), // mock 不涉及 thinking config
     suite: "ORMB-PP",
     cases,
     hardGates,

@@ -147,6 +147,8 @@ describe("LF-2: process supervision (linux)", () => {
     })
     expect(result.timedOut).toBe(true)
     expect(result.exitCode).toBe(null)
+    // F4：超时终止后进程组归零（terminateTree 实测扫描值）
+    expect(result.orphanProcesses).toBe(0)
   })
 
   linuxOnly("abort signal cancels and tree-kills the process group", async () => {
@@ -170,6 +172,8 @@ describe("LF-2: process supervision (linux)", () => {
     expect(result.cancelled).toBe(true)
     // F2（ABORT_IGNORED）：取消后进程组必须真实归零 —— 不只看事件流结束
     expect(countProcessGroup(spawnedPid)).toBe(0)
+    // F4（ORPHAN_PROCESS）：取消路径的残留值必须真实上报（terminateTree 实测，非硬编码 0）
+    expect(result.orphanProcesses).toBe(0)
   })
 
   linuxOnly("abort kills nested grandchildren (subprocess-level cancel)", async () => {
@@ -209,10 +213,13 @@ describe("LF-2: process supervision (linux)", () => {
     expect(result.stdout.length).toBeLessThanOrEqual(1024 + TRUNCATION_MARKER.length)
   })
 
-  linuxOnly("double-fork daemon is detected as orphan", async () => {
+  linuxOnly("background daemon staying in the group is detected as orphan", async () => {
     const result = await runSupervised({
+      // 后台进程逃逸父链但留在进程组（未 setsid）→ close 后组扫描必须数到。
+      // setsid 级逃逸（离组）不在进程组扫描内 —— 由 cgroup 树级 kill 兜底
+      // （host-audit 无 cgroup，非安全边界，ADR-L4）。
       executable: "/bin/sh",
-      args: ["-c", "setsid sh -c 'sleep 0.4' & exit 0"],
+      args: ["-c", "sleep 2 & exit 0"],
       cwd: "/tmp",
       env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
       limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
@@ -220,6 +227,8 @@ describe("LF-2: process supervision (linux)", () => {
       detectDaemon: true,
     })
     expect(result.exitCode).toBe(0)
+    // F4（ORPHAN_PROCESS）：残留必须被实测报告（不能假 0）
+    expect(result.orphanProcesses).toBeGreaterThanOrEqual(1)
   })
 
   linuxOnly("terminateTree kills the whole group", async () => {

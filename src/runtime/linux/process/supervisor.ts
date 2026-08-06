@@ -103,11 +103,15 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
     let timedOut = false
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
+    let drainTimer: ReturnType<typeof setTimeout> | undefined
+    // F4：父进程 exit 时刻实测的组内幸存者数（不等 stdio close）。
+    let orphansAtExit = 0
 
     const finish = (exitCode: number | null, signal: string | null, orphans: number) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      if (drainTimer) clearTimeout(drainTimer)
       options.abortSignal?.removeEventListener("abort", onAbort)
       resolve({
         exitCode,
@@ -124,8 +128,10 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
 
     const onAbort = () => {
       cancelled = true
-      terminateTree(pid)
-      finish(null, "aborted", 0)
+      // F4（ORPHAN_PROCESS）：取消后残留必须真实上报 —— 不硬编码 0。
+      // terminateTree 返回 SIGTERM→SIGKILL 后的实测扫描值，残留如实入 Receipt。
+      const report = terminateTree(pid)
+      finish(null, "aborted", report.processesRemaining)
     }
     options.abortSignal?.addEventListener("abort", onAbort, { once: true })
     if (options.abortSignal?.aborted) onAbort()
@@ -133,16 +139,27 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
     proc.on("error", () => {
       finish(null, "error", 0)
     })
+    proc.on("exit", (code, signal) => {
+      // F4：daemon 检测必须挂在父进程 exit（非 stdio close）—— 后台进程
+      // 持有管道时 close 被推迟到后台进程死亡，届时残留早已消失，close 时
+      // 扫描恒假 0。exit 时刻扫描进程组，得到真实幸存者数。
+      if (options.detectDaemon && pid > 0) orphansAtExit = countProcessGroup(pid)
+      // stdio 排水窗口：exit 后管道数据尾有短窗口到达；daemon 持有管道时
+      // close 永不触发 —— 窗口后照常 finish（防挂到 wallTime 误报 timeout）。
+      drainTimer = setTimeout(() => {
+        finish(code ?? null, signal ?? null, orphansAtExit)
+      }, 150)
+    })
     proc.on("close", (code, signal) => {
-      // daemon 检测：父退出后进程组内的幸存者。
-      const orphans = options.detectDaemon && pid > 0 ? countProcessGroup(pid) : 0
-      finish(code ?? null, signal ?? null, orphans)
+      if (drainTimer) clearTimeout(drainTimer)
+      finish(code ?? null, signal ?? null, orphansAtExit)
     })
 
     timer = setTimeout(() => {
       timedOut = true
-      terminateTree(pid)
-      finish(null, "timeout", 0)
+      // F4：超时终止后的残留同样如实上报（不再硬编码 0）。
+      const report = terminateTree(pid)
+      finish(null, "timeout", report.processesRemaining)
     }, options.wallTimeMs)
   })
 }

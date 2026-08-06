@@ -128,7 +128,7 @@ export function createPodmanBackend(): ExecutionBackend {
       return errors
     },
 
-    compile(spec, caps) {
+    compile(spec, caps, materialization) {
       const image = spec.environment.variables["ORCANA_IMAGE"] ?? ""
       const imageRef = validateImageRef(image)
       if (!imageRef.ok) {
@@ -145,18 +145,21 @@ export function createPodmanBackend(): ExecutionBackend {
         runId: spec.identity.runId,
         nodeRunId: spec.identity.nodeRunId,
         pathEntries: ["/usr/local/bin"],
+        secrets: materialization?.secretEnv,
       })
       const podmanPath = caps.podman.path ?? "podman"
       const cidfile = `/tmp/orcana-${spec.identity.runId}-${spec.identity.cellId}.cid`
+      const cacheSource = (c: { target: string; kind: string; key: string }) =>
+        materialization?.cacheHostPaths?.[c.target] ?? `/cache/${c.kind}/${c.key}`
       return {
         backend: "rootless-podman",
         argv: [podmanPath, ...compilePodmanArgv(spec, caps, {
           image,
-          volumes: spec.cache.map(c => ({ source: `/cache/${c.kind}/${c.key}`, target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" })),
+          volumes: spec.cache.map(c => ({ source: cacheSource(c), target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" })),
           labels: { "io.orcana.run": spec.identity.runId, "io.orcana.cell": spec.identity.cellId },
           env: env.env,
           cidfile,
-          seccompProfile: spec.environment.variables["ORCANA_SECCOMP_FILE"] ?? undefined,
+          seccompProfile: materialization?.seccompFile,
         })],
         env: env.env,
         cwd: "/workspace",

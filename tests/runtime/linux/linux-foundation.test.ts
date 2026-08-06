@@ -7,8 +7,8 @@
 import { describe, expect, test } from "bun:test"
 import { platform } from "node:os"
 import { probeLinuxCapabilities, capabilitiesDigest } from "../../../src/runtime/linux/capability-probe"
-import { validateCellSpec, compileCellSpec, validateMountSet, validateMountRule } from "../../../src/runtime/linux/policy-compiler"
-import { buildReceipt, cellSpecDigest, computePolicyDigest, receiptComplete } from "../../../src/runtime/linux/receipt"
+import { validateCellSpec, compileCellSpec, compileCapabilityRequest, validateMountSet, validateMountRule, deepFreeze } from "../../../src/runtime/linux/policy-compiler"
+import { buildReceipt, cellSpecDigest, computePolicyDigest, canonicalJson, receiptComplete } from "../../../src/runtime/linux/receipt"
 import { applyProfileDefaults, profileDefaults, isStrictProfile } from "../../../src/runtime/linux/profiles"
 import { selectBackend, backendAvailability } from "../../../src/runtime/linux/backend-router"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
@@ -289,5 +289,113 @@ describe("LF-1: shadow mode", () => {
     expect(domain.agentId).toBe("a1")
     expect(domain.status).toBe("active")
     expect(domain.cacheNamespace).toContain("agent-a1")
+  })
+})
+
+// ── PR-1 (0.8.15.1)：canonical JSON / 权威 Policy Compiler ──
+
+describe("PR-1: canonical JSON digests distinguish nested policies (P0-1)", () => {
+  test("different nested network modes produce different canonical JSON", () => {
+    const a = { network: { mode: "none" } }
+    const b = { network: { mode: "full-approved" } }
+    expect(canonicalJson(a)).not.toBe(canonicalJson(b))
+    expect(canonicalJson(a)).toBe('{"network":{"mode":"none"}}')
+  })
+
+  test("nested isolation levels are not collapsed", () => {
+    const c = { isolation: { minimum: "container" }, filesystem: { emptyHome: true } }
+    const d = { isolation: { minimum: "audit" }, filesystem: { emptyHome: true } }
+    expect(canonicalJson(c)).not.toBe(canonicalJson(d))
+  })
+
+  test("arrays and nested objects hash deterministically (replayable)", () => {
+    const spec = baseSpec()
+    const roundTrip = JSON.parse(JSON.stringify(spec)) as ExecutionCellSpec
+    expect(cellSpecDigest(roundTrip)).toBe(cellSpecDigest(spec))
+    // 键序无关：打乱键序的对象 digest 相同。
+    const shuffled = JSON.parse(canonicalJson(spec)) as ExecutionCellSpec
+    expect(cellSpecDigest(shuffled)).toBe(cellSpecDigest(spec))
+  })
+})
+
+describe("PR-1: CapabilityRequest compilation (P0-1/P0-2)", () => {
+  test("runtime generates unique identity per request (no shared tool-run)", () => {
+    const a = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" })
+    const b = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" })
+    expect(a.ok && b.ok).toBe(true)
+    if (a.ok && b.ok) {
+      expect(a.spec.identity.runId).not.toBe("tool-run")
+      expect(a.spec.identity.nodeRunId).not.toBe("tool:n")
+      expect(a.spec.identity.cellId).not.toBe(b.spec.identity.cellId)
+      expect(a.spec.identity.runId).not.toBe(b.spec.identity.runId)
+      expect(a.spec.identity.cellId.startsWith("cell-")).toBe(true)
+    }
+  })
+
+  test("compiled spec is deeply frozen (immutable after compile)", () => {
+    const result = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(Object.isFrozen(result.spec)).toBe(true)
+      expect(Object.isFrozen(result.spec.isolation)).toBe(true)
+      expect(Object.isFrozen(result.spec.environment.variables)).toBe(true)
+      // 修改冻结对象在严格模式下抛 TypeError
+      expect(() => {
+        "use strict"
+        ;(result.spec.environment.variables as Record<string, string>)["ORCANA_X"] = "1"
+      }).toThrow()
+    }
+  })
+
+  test("profile minimum isolation is enforced: untrusted cannot request audit", () => {
+    const weak = baseSpec({ profile: "untrusted", isolation: { minimum: "audit", preferredBackend: "podman", allowDegradation: false } })
+    const result = validateCellSpec(weak)
+    expect(result.ok).toBe(false)
+    expect(result.errors.some(e => e.includes("ISOLATION_AUDIT_NOT_ALLOWED_BY_PROFILE") || e.includes("ISOLATION_MINIMUM_BELOW_PROFILE"))).toBe(true)
+  })
+
+  test("strict profile cannot be degraded (DEGRADATION_NOT_ALLOWED_BY_PROFILE)", () => {
+    const strict = baseSpec({ profile: "evolution", isolation: { minimum: "container", preferredBackend: "podman", allowDegradation: true } })
+    const result = validateCellSpec(strict)
+    expect(result.ok).toBe(false)
+    expect(result.errors.some(e => e.includes("DEGRADATION_NOT_ALLOWED_BY_PROFILE"))).toBe(true)
+  })
+
+  test("network cannot be broader than profile default", () => {
+    const broad = baseSpec({ network: { mode: "full-approved" } })
+    const result = validateCellSpec(broad)
+    expect(result.ok).toBe(false)
+    expect(result.errors.some(e => e.includes("NETWORK_BROADER_THAN_PROFILE"))).toBe(true)
+  })
+
+  test("resources are clamped to profile ceiling (tighten-only)", () => {
+    const result = compileCapabilityRequest({
+      command: { executable: "/bin/true", args: [] },
+      profile: "untrusted",
+      memoryMaxBytes: 8 * 1024 * 1024 * 1024, // 8GB > untrusted ceiling 1GB
+      pidsMax: 4096,                          // > untrusted ceiling 64
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.spec.resources.memoryMaxBytes).toBe(1024 * 1024 * 1024)
+      expect(result.spec.resources.pidsMax).toBe(64)
+      expect(result.spec.policyDigest).toBe(computePolicyDigest(result.spec))
+    }
+  })
+
+  test("audit minimum allowed only for non-strict profile with explicit degradation", () => {
+    const ok = baseSpec({ profile: "build", isolation: { minimum: "audit", preferredBackend: "host-audit", allowDegradation: true } })
+    expect(validateCellSpec(ok).ok).toBe(true)
+    const noFlag = baseSpec({ profile: "build", isolation: { minimum: "audit", preferredBackend: "host-audit", allowDegradation: false } })
+    const r2 = validateCellSpec(noFlag)
+    expect(r2.ok).toBe(false)
+    expect(r2.errors.some(e => e.includes("ISOLATION_AUDIT_REQUIRES_DEGRADATION"))).toBe(true)
+  })
+
+  test("deepFreeze utility freezes nested structures", () => {
+    const obj = deepFreeze({ a: { b: [1, 2] }, c: "x" })
+    expect(Object.isFrozen(obj)).toBe(true)
+    expect(Object.isFrozen(obj.a)).toBe(true)
+    expect(Object.isFrozen(obj.a.b)).toBe(true)
   })
 })

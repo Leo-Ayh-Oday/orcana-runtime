@@ -17,6 +17,7 @@ import type {
   MountRule,
   SandboxReceipt,
 } from "../contracts"
+import type { ExecutionMaterialization } from "../contracts"
 import type { BackendOutcome, ExecutionBackend } from "./backend"
 import { streamBackendRun } from "./backend"
 import { runSupervised, streamSupervised, type SupervisorResult } from "../process/supervisor"
@@ -176,7 +177,7 @@ export function createBubblewrapBackend(): ExecutionBackend {
       return errors
     },
 
-    compile(spec, caps) {
+    compile(spec, caps, materialization) {
       const env = buildExplicitEnvironment({
         policy: {
           baseProfile: "minimal",
@@ -188,11 +189,15 @@ export function createBubblewrapBackend(): ExecutionBackend {
         runId: spec.identity.runId,
         nodeRunId: spec.identity.nodeRunId,
         pathEntries: ["/usr/local/bin"],
+        secrets: materialization?.secretEnv,
       })
       const tmpfs = [
         ...defaultTmpfs(),
         ...spec.filesystem.tmpfsMounts.map(t => ({ target: t.target, sizeBytes: t.sizeBytes })),
       ]
+      // 缓存宿主路径由 Runtime 物化（CacheManager 权威，模型不可指定）。
+      const cacheSource = (c: { target: string; kind: string; key: string }) =>
+        materialization?.cacheHostPaths?.[c.target] ?? `/cache/${c.kind}/${c.key}`
       const argv = compileBwrapArgv(spec, caps, {
         worktreeRoot: spec.filesystem.worktreeRoot,
         extraReadonly: spec.filesystem.readonlyMounts,
@@ -200,10 +205,10 @@ export function createBubblewrapBackend(): ExecutionBackend {
         tmpfs,
         hiddenPaths: spec.filesystem.hiddenPaths,
         loopbackOnly: spec.network.mode === "loopback",
-        cacheMounts: spec.cache.filter(c => c.mode === "ro").map(c => ({ target: c.target, source: `/cache/${c.kind}/${c.key}` })),
-        cacheMountsRw: spec.cache.filter(c => c.mode === "rw-locked").map(c => ({ target: c.target, source: `/cache/${c.kind}/${c.key}` })),
+        cacheMounts: spec.cache.filter(c => c.mode === "ro").map(c => ({ target: c.target, source: cacheSource(c) })),
+        cacheMountsRw: spec.cache.filter(c => c.mode === "rw-locked").map(c => ({ target: c.target, source: cacheSource(c) })),
         setenv: env.env,
-        seccompFile: spec.environment.variables["ORCANA_SECCOMP_FILE"] ?? undefined,
+        seccompFile: materialization?.seccompFile,
       })
       // 编译不依赖 binary 存在（执行时由 run 层校验）；PATH 解析兜底。
       const bwrapPath = caps.bubblewrap.path ?? "bwrap"

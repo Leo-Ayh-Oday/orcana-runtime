@@ -12,9 +12,26 @@
 
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
 import { existsSync, realpathSync } from "node:fs"
-import type { ExecutionCellSpec, MountRule } from "./contracts"
+import { randomUUID } from "node:crypto"
+import type { CapabilityRequest, ExecutionCellSpec, ExecutionProfile, IsolationMinimum, MountRule, NetworkMode } from "./contracts"
 import { LinuxExecutionError } from "./errors"
 import { hostKeyDenied } from "./environment"
+import { applyProfileDefaults, profileDefaults, PROFILE_DEFAULTS } from "./profiles"
+
+/** 隔离等级序：audit < namespace < container（数字越大越严格）。 */
+const ISOLATION_LEVEL: Record<IsolationMinimum, number> = { audit: 0, namespace: 1, container: 2 }
+
+/** 网络等级序：none < loopback < proxy-allowlist < full-approved（数字越大越开放）。 */
+const NETWORK_LEVEL: Record<NetworkMode, number> = { none: 0, loopback: 1, "proxy-allowlist": 2, "full-approved": 3 }
+
+/** 递归深度冻结（P0-1：编译产物不可变；Backend/Broker 禁止修改 Spec）。 */
+export function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    deepFreeze((value as Record<string, unknown>)[key])
+  }
+  return Object.freeze(value)
+}
 
 /** 系统根目录集合 —— 默认只读白名单（plan §10.2）。 */
 export const SYSTEM_READONLY_PATHS = [
@@ -132,7 +149,13 @@ export interface ValidateSpecResult {
   errors: string[]
 }
 
-/** 全量 spec 校验（LF-1：身份/命令/挂载/网络/环境基本完整性）。 */
+/** 全量 spec 校验（LF-1：身份/命令/挂载/网络/环境基本完整性）。
+ *  P0-2 修复：Profile 是最终权威 —— 调用者只能收紧，不能放宽：
+ *  - isolation.minimum 不得低于 Profile 最低隔离；
+ *  - allowDegradation 不得把严格 Profile 放宽为 true；
+ *  - network 不得比 Profile 默认更开放；
+ *  - 命令 cwd 必须是绝对路径且存在性由后端编译期校验。
+ */
 export function validateCellSpec(spec: ExecutionCellSpec): ValidateSpecResult {
   const errors: string[] = []
   if (spec.schemaVersion !== "1.0") errors.push("schemaVersion must be 1.0")
@@ -154,6 +177,27 @@ export function validateCellSpec(spec: ExecutionCellSpec): ValidateSpecResult {
   if (spec.network.mode === "proxy-allowlist" && !spec.network.allowedHosts?.length) {
     errors.push("network proxy-allowlist requires allowedHosts")
   }
+  // P0-2：Profile 强制映射（编译器权威，调用者只能收紧）。
+  // - 严格 Profile：minimum 不得低于 Profile 最低隔离；降级必须保持 false；
+  //   network 不得比 Profile 默认更开放（不可达 host-audit）。
+  // - 非严格 Profile（inspect/build）：minimum=audit 仅在 allowDegradation=true
+  //   时允许（显式降级通道）；network 同样只允许收紧。
+  const pdefaults = profileDefaults(spec.profile)
+  if (spec.isolation.minimum === "audit") {
+    if (!pdefaults.allowDegradation) {
+      errors.push(`ISOLATION_AUDIT_NOT_ALLOWED_BY_PROFILE: profile "${spec.profile}" requires minimum "${pdefaults.minimum}" or above`)
+    } else if (!spec.isolation.allowDegradation) {
+      errors.push("ISOLATION_AUDIT_REQUIRES_DEGRADATION: minimum=audit requires allowDegradation=true")
+    }
+  } else if (ISOLATION_LEVEL[spec.isolation.minimum] < ISOLATION_LEVEL[pdefaults.minimum]) {
+    errors.push(`ISOLATION_MINIMUM_BELOW_PROFILE: profile "${spec.profile}" requires isolation minimum "${pdefaults.minimum}", got "${spec.isolation.minimum}"`)
+  }
+  if (spec.isolation.allowDegradation && !pdefaults.allowDegradation) {
+    errors.push(`DEGRADATION_NOT_ALLOWED_BY_PROFILE: profile "${spec.profile}" forbids degradation`)
+  }
+  if (NETWORK_LEVEL[spec.network.mode] > NETWORK_LEVEL[pdefaults.network]) {
+    errors.push(`NETWORK_BROADER_THAN_PROFILE: profile "${spec.profile}" allows network "${pdefaults.network}", got "${spec.network.mode}"`)
+  }
   if (spec.network.mode === "full-approved" && !spec.isolation.allowDegradation && spec.profile !== "service") {
     // full-approved 只允许显式批准（编译期不做，运行时 Broker 校验）
   }
@@ -167,12 +211,105 @@ export function validateCellSpec(spec: ExecutionCellSpec): ValidateSpecResult {
 
 import { computePolicyDigest as computePolicyDigestLocal } from "./receipt"
 
-/** 编译器入口：给定声明需求 → 完整 spec。LF-1 仅校验 + 填充 digest。 */
+/** 资源只收紧：请求值超过 Profile 上限 → 钳制到上限（绝不放宽）。 */
+export function clampResources(spec: ExecutionCellSpec): ExecutionCellSpec {
+  const p = PROFILE_DEFAULTS[spec.profile]
+  return {
+    ...spec,
+    resources: {
+      ...spec.resources,
+      memoryMaxBytes: Math.min(spec.resources.memoryMaxBytes, p.memoryMaxBytes),
+      memoryHighBytes: spec.resources.memoryHighBytes === undefined
+        ? undefined
+        : Math.min(spec.resources.memoryHighBytes, p.memoryHighBytes),
+      pidsMax: Math.min(spec.resources.pidsMax, p.pidsMax),
+    },
+  }
+}
+
+/** 编译器入口：给定声明需求 → 完整 spec。LF-1 仅校验 + 填充 digest。
+ *  P0-1/P0-2 修复：资源钳制、Profile 最低隔离强制、policyDigest 由编译器
+ *  权威计算、产物深度冻结（Backend/Broker 不得再修改）。
+ */
 export function compileCellSpec(
   spec: ExecutionCellSpec,
 ): { ok: true; spec: ExecutionCellSpec } | { ok: false; errors: string[] } {
-  const validation = validateCellSpec(spec)
+  const clamped = clampResources(spec)
+  const validation = validateCellSpec(clamped)
   if (!validation.ok) return { ok: false, errors: validation.errors }
-  const withDigest: ExecutionCellSpec = { ...spec, policyDigest: computePolicyDigestLocal(spec) }
-  return { ok: true, spec: withDigest }
+  const withDigest: ExecutionCellSpec = { ...clamped, policyDigest: computePolicyDigestLocal(clamped) }
+  return { ok: true, spec: deepFreeze(withDigest) }
+}
+
+export interface CompileRequestContext {
+  runId?: string
+  nodeRunId?: string
+  agentId?: string
+  assignmentId?: string
+  attempt?: number
+}
+
+/** Capability Request → 冻结 Spec（P0-1/P0-2：身份由 Runtime 生成、Profile
+ *  是隔离权威、override 只能收紧）。工具/模型绝不直接提交 ExecutionCellSpec。 */
+export function compileCapabilityRequest(
+  request: CapabilityRequest,
+  ctx: CompileRequestContext = {},
+): { ok: true; spec: ExecutionCellSpec } | { ok: false; errors: string[] } {
+  const attempt = request.attempt ?? ctx.attempt ?? 1
+  const runId = request.runId ?? ctx.runId ?? `run-${randomUUID().slice(0, 8)}`
+  const nodeRunId = request.nodeRunId ?? ctx.nodeRunId ?? `${runId}:n${attempt}`
+  const cellId = `cell-${randomUUID().slice(0, 8)}`
+  const identity = { cellId, runId, nodeRunId, attempt, agentId: request.agentId ?? ctx.agentId, assignmentId: request.assignmentId ?? ctx.assignmentId }
+
+  const overrides: Partial<ExecutionCellSpec> = {
+    isolation: {
+      minimum: PROFILE_DEFAULTS[request.profile].minimum,
+      preferredBackend: "auto",
+      allowDegradation: PROFILE_DEFAULTS[request.profile].allowDegradation,
+    },
+    filesystem: {
+      readonlyMounts: request.readonlyMounts ?? [],
+      writableMounts: request.writableMounts ?? [],
+      tmpfsMounts: [],
+      hiddenPaths: [],
+      emptyHome: PROFILE_DEFAULTS[request.profile].emptyHome,
+      worktreeRoot: request.worktreeRoot,
+      ownerFiles: request.ownerFiles,
+    },
+    network: {
+      mode: request.network?.mode ?? PROFILE_DEFAULTS[request.profile].network,
+      ...(request.network?.allowedHosts ? { allowedHosts: request.network.allowedHosts } : {}),
+      ...(request.network?.allowedPorts ? { allowedPorts: request.network.allowedPorts } : {}),
+    },
+    environment: {
+      variables: request.env ?? {},
+      allowedHostKeys: request.allowedHostKeys ?? [],
+      inheritHost: false,
+      locale: "C.UTF-8",
+      pathEntries: ["/usr/local/bin"],
+    },
+    secrets: [],
+    cache: request.cache ?? [],
+    resources: {
+      memoryMaxBytes: request.memoryMaxBytes ?? PROFILE_DEFAULTS[request.profile].memoryMaxBytes,
+      memoryHighBytes: PROFILE_DEFAULTS[request.profile].memoryHighBytes,
+      pidsMax: request.pidsMax ?? PROFILE_DEFAULTS[request.profile].pidsMax,
+      wallTimeMs: request.timeoutMs ?? 120_000,
+      stdoutMaxBytes: request.stdoutMaxBytes ?? 4 * 1024 * 1024,
+      stderrMaxBytes: request.stderrMaxBytes ?? 4 * 1024 * 1024,
+      tmpfsMaxBytes: 1024 * 1024 * 1024,
+    },
+    lifecycle: { killOnParentExit: true, cleanupOnExit: true, retainOnFailure: false, serviceMode: request.profile === "service" },
+    policyDigest: "",
+  }
+
+  const command = {
+    executable: request.command.executable,
+    args: request.command.args,
+    cwd: request.command.cwd ?? "/workspace",
+    stdin: request.command.stdin ?? "closed",
+  }
+
+  const spec = applyProfileDefaults(identity, command, request.profile, overrides)
+  return compileCellSpec(spec)
 }

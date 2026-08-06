@@ -45,7 +45,9 @@ export const STAGED_CONTEXT_PROVIDER: ContextProvider = {
   async provide(request: ContextRequest) {
     const staged = request.stagedContext
     if (!staged || (request.round === 0 && staged.loadedFiles.size === 0)) return part("staged-context", 10, "", { authority: "tool" })
-    const content = staged.buildContext().toPromptText()
+    // K38: pass the effective prompt so staged files are relevance-ranked
+    // against the current task (no prompt → mechanical order, unchanged).
+    const content = staged.buildContext(request.effectivePrompt).toPromptText()
     return part("staged-context", 10, content, {
       // K7: loaded file contents are tool facts — tool authority.
       authority: "tool",

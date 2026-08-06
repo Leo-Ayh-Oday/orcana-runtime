@@ -75,6 +75,91 @@ export function scanProject(root: string, maxDepth = 3): string {
   return lines.slice(0, 80).join("\n")
 }
 
+// ── K37: file cache freshness ──
+
+/** FNV-1a digest — mirror of the harness `contentDigest`
+ *  (src/harness/context/request.ts, K54): same algorithm and seed, so
+ *  digests produced here compare byte-for-byte with harness freshness
+ *  contracts. Kept local (not imported from harness) to avoid a
+ *  src/context → src/harness dependency edge. */
+export function fileContentDigest(content: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < content.length; i++) {
+    h ^= content.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, "0")
+}
+
+/** Cached file content with K37 freshness metadata.
+ *  `mtimeMs` is the mtime at read time; an entry without it (legacy cache
+ *  structure — a plain string) is treated as needing refresh. */
+export interface FileCacheEntry {
+  content: string
+  mtimeMs?: number
+  /** FNV-1a digest of `content` (K40-aligned with harness K54 contracts). */
+  digest?: string
+}
+
+// ── K38: relevance ranking ──
+
+/** English function words — never meaningful task terms. */
+const STOPWORDS = new Set([
+  "the","and","that","this","with","for","from","your","you","not","are","was",
+  "were","will","have","has","been","into","does","do","is","in","on","of","to",
+  "it","we","our","they","their","or","but","be","as","at","by","can","could",
+  "should","would","about","how","what","why","when","where","which","who",
+  "all","any","please","me","my","too","very","just","only","then","than",
+])
+
+/** Cheap term extraction (no embedding, no new deps): latin identifiers +
+ *  CJK bigrams from the task text. Deterministic. */
+function extractPromptTerms(prompt: string): string[] {
+  const terms = new Set<string>()
+  for (const t of (prompt.toLowerCase().match(/[a-z][a-z0-9_.\-]*/g) ?? [])) {
+    if (t.length >= 3 && !STOPWORDS.has(t)) terms.add(t)
+  }
+  for (const run of (prompt.match(/[一-鿿]+/g) ?? [])) {
+    if (run.length >= 2) {
+      for (let i = 0; i + 2 <= run.length && terms.size < 48; i++) terms.add(run.slice(i, i + 2))
+    }
+  }
+  return [...terms].slice(0, 48)
+}
+
+/** Relevance penalty for one file vs the current task text: 0 = perfect
+ *  match, 99 = no overlap. Content keyword hits (70%) + filename/title hits
+ *  (30%). Empty prompt → 0 (no behavior change). */
+function relevancePenalty(content: string, path: string, prompt: string): number {
+  if (!prompt.trim()) return 0
+  const terms = extractPromptTerms(prompt)
+  if (!terms.length) return 0
+  const lower = content.toLowerCase()
+  const nameLower = path.toLowerCase()
+  let contentHits = 0
+  let nameHits = 0
+  for (const t of terms) {
+    if (lower.includes(t)) contentHits++
+    if (nameLower.includes(t)) nameHits++
+  }
+  const contentRatio = contentHits / terms.length
+  const nameRatio = nameHits / terms.length
+  return Math.round(99 * (1 - (0.7 * contentRatio + 0.3 * nameRatio)))
+}
+
+/** Sort key: mechanical baseline (priorityScore) stays dominant (×100, so a
+ *  band never overturns on relevance); relevance breaks ties inside the same
+ *  band. Lower = better; stable sort keeps insertion order for equal keys. */
+function rankKey(file: readonly [path: string, content: string], prompt: string): number {
+  return priorityScore(file[0]) * 100 + relevancePenalty(file[1], file[0], prompt)
+}
+
+/** Normalize a cache value into content (K37: legacy plain-string entries
+ *  have no meta and are re-read on refresh; here just unwrap). */
+function cacheContent(value: string | FileCacheEntry): string {
+  return typeof value === "string" ? value : value.content
+}
+
 // ── Staged context manager ──
 
 export interface ContextLayer {
@@ -111,14 +196,58 @@ export function createHybridContext(): HybridContext {
 
 export class StagedContextManager {
   projectRoot: string
-  loadedFiles: Map<string, string> = new Map()
+  /** Path → cached content (K37). Values may be legacy plain strings (no
+   *  freshness meta — treated as needing refresh) or FileCacheEntry. */
+  loadedFiles: Map<string, string | FileCacheEntry> = new Map()
   roundSummaries: string[] = []
   isFirstRound = true
   maxActive = 12
 
   constructor(projectRoot: string) { this.projectRoot = resolve(projectRoot) }
 
-  buildContext(): HybridContext {
+  /** Injectable file reader — tests spy on this to assert cache reuse
+   *  (K37: unchanged files must not be re-read). */
+  readFileContent(fullPath: string): string {
+    return readFileSync(fullPath, "utf-8")
+  }
+
+  /** K37: re-validate every cached file against its mtime and re-read any
+   *  entry that drifted on disk (or is a legacy entry without meta). Files
+   *  that vanished keep their last known content; failed reads keep the old
+   *  entry — never drop cached data silently.
+   *
+   *  Detection is stat-only (cheap); the stored FNV-1a digest (K40-aligned
+   *  with harness K54 contracts) is available for any consumer that wants
+   *  content-level verification. Known caveat: on some filesystems (observed
+   *  on WSL2 ext4) two writes to the same file landing in one journal
+   *  transaction may not bump mtime — real-world edits are spaced out and
+   *  update mtime normally, so this is a stat/display staleness edge, not
+   *  the write path (markEdited always re-reads). */
+  refreshLoadedFiles(): { refreshed: string[]; reused: string[] } {
+    const refreshed: string[] = []
+    const reused: string[] = []
+    for (const [path, cached] of [...this.loadedFiles]) {
+      const full = join(this.projectRoot, path)
+      let mtime: number | null = null
+      try { mtime = existsSync(full) ? statSync(full).mtimeMs : null } catch { mtime = null }
+      if (mtime === null) continue // file gone — keep last known content
+      if (typeof cached !== "string" && cached.mtimeMs === mtime) {
+        reused.push(path)
+        continue
+      }
+      try {
+        const content = this.readFileContent(full)
+        this.loadedFiles.set(path, { content, mtimeMs: mtime, digest: fileContentDigest(content) })
+        refreshed.push(path)
+      } catch {
+        reused.push(path) // read failed — keep the old entry rather than drop it
+      }
+    }
+    return { refreshed, reused }
+  }
+
+  buildContext(prompt = ""): HybridContext {
+    this.refreshLoadedFiles()
     const ctx = createHybridContext()
 
     const coldLines = [scanProject(this.projectRoot)]
@@ -128,7 +257,9 @@ export class StagedContextManager {
     ctx.cold.push({ name: "cold", content: coldLines.join("\n"), source: "project-index", tokenEstimate: 800 })
 
     if (this.loadedFiles.size > 0) {
-      const sorted = [...this.loadedFiles.entries()].sort((a, b) => priorityScore(a[0]) - priorityScore(b[0]))
+      const sorted = [...this.loadedFiles.entries()]
+        .map(([path, v]): [string, string] => [path, cacheContent(v)])
+        .sort((a, b) => rankKey(a, prompt) - rankKey(b, prompt))
       for (const [path, content] of sorted.slice(0, this.maxActive)) {
         const truncated = clipProviderContext(content, 4000)
         ctx.warm.push({ name: "warm", content: truncated, source: path, tokenEstimate: Math.ceil(truncated.length / 3) })
@@ -139,16 +270,24 @@ export class StagedContextManager {
 
   markLoaded(path: string) {
     const full = join(this.projectRoot, path)
-    if (existsSync(full) && !this.loadedFiles.has(path)) {
-      try { this.loadedFiles.set(path, readFileSync(full, "utf-8")) } catch { /* */ }
-    }
+    if (!existsSync(full)) return
+    const cached = this.loadedFiles.get(path)
+    let mtime: number | null = null
+    try { mtime = statSync(full).mtimeMs } catch { return }
+    if (cached !== undefined && typeof cached !== "string" && cached.mtimeMs === mtime) return
+    try {
+      const content = this.readFileContent(full)
+      this.loadedFiles.set(path, { content, mtimeMs: mtime, digest: fileContentDigest(content) })
+    } catch { /* keep existing */ }
   }
 
   markEdited(path: string) {
     const full = join(this.projectRoot, path)
-    if (existsSync(full)) {
-      try { this.loadedFiles.set(path, readFileSync(full, "utf-8")) } catch { /* */ }
-    }
+    if (!existsSync(full)) return
+    try {
+      const content = this.readFileContent(full)
+      this.loadedFiles.set(path, { content, mtimeMs: statSync(full).mtimeMs, digest: fileContentDigest(content) })
+    } catch { /* */ }
   }
 
   addSummary(s: string) { this.roundSummaries.push(s) }
@@ -161,6 +300,14 @@ export class StagedContextManager {
    * (L1/stable) so the prefix cache hits. Volatile context (L2) contains only
    * the task-specific instructions, tool whitelist, and task description.
    *
+   * K40: the stable part carries ONLY immutable sources (the project
+   * skeleton). Mutable file content (loadedFiles) must not ride the stable
+   * prefix — a cached fork of it would keep serving stale bytes (cache hit
+   * ≠ correct). Loaded files move to the volatile part, where the harness
+   * staged-context provider already attaches a {kind:"file", digest}
+   * freshness contract (K54) for drift detection, and get re-validated
+   * against disk mtime on every fork.
+   *
    * Inspired by Claude Code coordinatorMode.ts Worker context pattern.
    */
   forkStableContext(subTask: {
@@ -170,29 +317,31 @@ export class StagedContextManager {
     /** Additional context specific to this subtask */
     extraContext?: string
   }): { stableContext: string; volatileContext: string; cachePointIndex: number } {
-    // L1 stable: project structure + loaded files (the "prefix" for cache)
+    // L1 stable: immutable project structure only (the "prefix" for cache)
     const stableCtx = createHybridContext()
     const coldLines = [scanProject(this.projectRoot)]
     stableCtx.cold.push({ name: "cold", content: coldLines.join("\n"), source: "project-index", tokenEstimate: 800 })
-
-    if (this.loadedFiles.size > 0) {
-      const sorted = [...this.loadedFiles.entries()]
-        .sort((a, b) => priorityScore(a[0]) - priorityScore(b[0]))
-      for (const [path, content] of sorted.slice(0, this.maxActive)) {
-        const truncated = clipProviderContext(content, 2000)
-        stableCtx.warm.push({ name: "warm", content: truncated, source: path, tokenEstimate: Math.ceil(truncated.length / 3) })
-      }
-    }
-
     const stableText = stableCtx.toPromptText()
 
-    // L2 volatile: task-specific only
+    // L2 volatile: task-specific + mutable loaded files (K40: files live
+    // here, not in the stable prefix), relevance-ranked against the task.
     const volatileParts = [
       "## Sub-task",
       subTask.description,
     ]
     if (subTask.allowedTools?.length) {
       volatileParts.push("", "## Available tools", subTask.allowedTools.sort().join(", "))
+    }
+    if (this.loadedFiles.size > 0) {
+      this.refreshLoadedFiles()
+      const sorted = [...this.loadedFiles.entries()]
+        .map(([path, v]): [string, string] => [path, cacheContent(v)])
+        .sort((a, b) => rankKey(a, subTask.description) - rankKey(b, subTask.description))
+      const fileParts: string[] = []
+      for (const [path, content] of sorted.slice(0, this.maxActive)) {
+        fileParts.push(`### ${path}\n${clipProviderContext(content, 2000)}`)
+      }
+      volatileParts.push("", "## Loaded files", fileParts.join("\n"))
     }
     if (subTask.extraContext) {
       volatileParts.push("", subTask.extraContext)

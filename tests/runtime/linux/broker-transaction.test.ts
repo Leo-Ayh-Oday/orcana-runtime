@@ -33,11 +33,12 @@ function mockCgroupFs(): CgroupFs {
       }
     },
     rm(p) {
-      for (const k of [...state.keys()]) if (k.startsWith(p)) state.delete(k)
-      for (const d of [...dirs]) if (d.startsWith(p)) dirs.delete(d)
+      // PR-5 语义：非递归 rmdir（子目录由协议自底向上删除）。
+      for (const k of [...state.keys()]) if (k.startsWith(p + "/")) state.delete(k)
+      dirs.delete(p)
     },
     readdir(p) {
-      return [...dirs].filter(d => d.startsWith(p + "/")).map(d => d.slice(p.length + 1).split("/")[0] ?? "")
+      return [...new Set([...dirs].filter(d => d.startsWith(p + "/")).map(d => d.slice(p.length + 1).split("/")[0] ?? ""))]
     },
   }
 }

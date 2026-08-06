@@ -52,6 +52,18 @@ export function enforceNodeAssignment(
   const assignment = resolveAssignment(node, pool)
   const projectRoot = runtime.scope.projectRoot
 
+  // M1: an EXPLICIT assignment naming an unregistered agent must fail
+  // closed — resolving it to "no participant" would let the write degrade
+  // to the shared workspace (pool escape). Only the implicit id-prefix miss
+  // keeps legacy behavior (G7: "r:1" is not an agent declaration).
+  if (node.assignment && pool && !assignment) {
+    return {
+      assignment: null,
+      projectRoot,
+      deniedReason: `agent "${node.assignment}" is not registered in the pool (UNREGISTERED_ASSIGNMENT)`,
+    }
+  }
+
   // No pool / not a participant → legacy behavior (SINGLE_AGENT_REGRESSION).
   if (!assignment) {
     return { assignment: null, projectRoot }

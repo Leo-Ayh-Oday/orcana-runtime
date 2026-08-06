@@ -22,11 +22,13 @@ export class FimEditor {
   private apiKey: string
   private baseUrl: string
   private model: string
+  private timeoutMs: number
 
-  constructor(apiKey?: string, baseUrl?: string, model = "deepseek-v4-pro") {
+  constructor(apiKey?: string, baseUrl?: string, model = "deepseek-v4-pro", timeoutMs = 60_000) {
     this.apiKey = apiKey ?? process.env.DEEPSEEK_API_KEY ?? ""
     this.baseUrl = baseUrl ?? process.env.DEEPSEEK_BETA_BASE_URL ?? "https://api.deepseek.com/beta"
     this.model = model
+    this.timeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000
   }
 
   async edit(edit: FimEdit, maxTokens = 2048): Promise<FimResult> {
@@ -49,6 +51,7 @@ export class FimEditor {
           max_tokens: maxTokens,
           temperature: 0.3,
         }),
+        signal: AbortSignal.timeout(this.timeoutMs),
       })
       if (!resp.ok) {
         const body = await resp.text().catch(() => "")
@@ -58,6 +61,9 @@ export class FimEditor {
       const newText = data.choices[0]?.text ?? ""
       return { success: true, newText, error: "", fullNewFile: edit.prefix + newText + edit.suffix }
     } catch (e) {
+      if (e instanceof Error && e.name === "TimeoutError") {
+        return { success: false, newText: "", error: `FIM request timed out after ${this.timeoutMs}ms`, fullNewFile: "" }
+      }
       return { success: false, newText: "", error: e instanceof Error ? e.message : String(e), fullNewFile: "" }
     }
   }

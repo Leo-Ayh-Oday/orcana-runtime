@@ -1,0 +1,417 @@
+# Orcana Reliability Defect Register（RC-00）
+
+基线：main @ c1706da（v0.8.16-10-gc1706da），全量测试 3109/249。
+缺陷来源：2026-08-06 四路并行审计（内核/运行时/工具与provider/会话CLI权限）+ 上下文压缩专项。
+映射波次：RC-01…RC-18，发布线：v0.8.17 合流（Linux 底座 + 本计划）。
+
+字段：id / severity(P0|P1|P2) / wave / invariant / files / status(open|fixed) / fixedBy / verifiedAtCommit
+
+## 验证与完成语义（Wave 1）
+
+- id: A1
+  severity: P0
+  wave: RC-01
+  invariant: VERIFICATION_NONZERO_EXIT_CANNOT_PASS
+  files: [src/tools/typescript.ts]
+  status: open
+- id: A2
+  severity: P0
+  wave: RC-01
+  invariant: UNAVAILABLE_VERIFICATION_ACCEPTED=0
+  files: [src/agent/verification/coordinator.ts, src/agent/tool-execution/batch-executor.ts]
+  status: open
+- id: A3
+  severity: P0
+  wave: RC-02
+  invariant: FUTURE_TENSE_SKIPS_VERIFICATION=0
+  files: [src/agent/completion-orchestrator.ts]
+  status: open
+- id: A4
+  severity: P0
+  wave: RC-02
+  invariant: BUDGET_EXHAUSTED_COMPLETED=0
+  files: [src/agent/gates/sync-completion-chain.ts]
+  status: open
+- id: A5
+  severity: P0
+  wave: RC-02
+  invariant: STATE_MACHINE_MATCHES_TERMINAL_STATE
+  files: [src/agent/kernel/round.ts]
+  status: open
+- id: A6
+  severity: P0
+  wave: RC-02
+  invariant: JUDGE_TIMEOUT_COMPLETED=0
+  files: [src/agent/flash-judge.ts]
+  status: open
+- id: A7
+  severity: P2
+  wave: RC-17
+  invariant: NO_MOJIBAKE_IN_MODEL_CONTEXT
+  files: [src/agent/task-tracker.ts]
+  status: open
+- id: A8
+  severity: P1
+  wave: RC-03
+  invariant: LSP_DIAGNOSTICS_FRESH_BEFORE_VERDICT
+  files: [src/agent/round/post-loop.ts]
+  status: open
+
+## 权限与安全默认值（Wave 2）
+
+- id: B1
+  severity: P0
+  wave: RC-04a
+  invariant: PERMISSION_ALIAS_BYPASS=0
+  files: [src/agent/permission.ts]
+  status: open
+- id: B2
+  severity: P0
+  wave: RC-04a
+  invariant: INVALID_CONFIG_ALLOW_ALL=0
+  files: [src/agent/permission-config.ts]
+  status: open
+- id: B3
+  severity: P1
+  wave: RC-04b
+  invariant: PATH_NORMALIZED_BEFORE_MATCH
+  files: [src/agent/permission-config.ts]
+  status: open
+- id: B4
+  severity: P1
+  wave: RC-05
+  invariant: RIPPLE_GATE_INDEPENDENT_OF_CACHE
+  files: [src/agent/kernel/context.ts, src/agent/gates/pre-round.ts]
+  status: open
+- id: B5
+  severity: P1
+  wave: RC-05
+  invariant: UNKNOWN_MCP_CAPABILITY_NOT_CONCURRENT_SAFE
+  files: [src/tools/mcp.ts]
+  status: open
+- id: B6
+  severity: P0
+  wave: RC-06
+  invariant: SECCOMP_DENY_BY_DEFAULT
+  files: [src/runtime/linux/seccomp-bpf.ts]
+  status: open
+
+## 执行底座（Wave 3）
+
+- id: C1
+  severity: P0
+  wave: RC-07
+  invariant: PROFILE_IS_SOLE_AUTHORITY
+  files: [src/runtime/process-executor.ts, src/runtime/linux/profiles.ts]
+  status: open
+- id: C2
+  severity: P0
+  wave: RC-07
+  invariant: CPU_QUOTA_MICROS_UNIT_CONSISTENT
+  files: [src/runtime/linux/broker.ts, src/runtime/linux/scheduler/resource-ledger.ts]
+  status: open
+- id: C3
+  severity: P1
+  wave: RC-07
+  invariant: ISOLATION_LOCK_WAITS_NOT_THROWS
+  files: [src/runtime/linux/broker.ts, src/runtime/linux/workspace/isolation-lock.ts]
+  status: open
+- id: C4
+  severity: P1
+  wave: RC-07
+  invariant: BWRAP_NEVER_CHDIR_UNBOUND_WORKSPACE
+  files: [src/runtime/linux/backends/bubblewrap.ts]
+  status: open
+- id: C5
+  severity: P1
+  wave: RC-08
+  invariant: SECRET_TEMP_RESIDUE=0
+  files: [src/runtime/linux/secrets.ts, src/runtime/linux/backends/podman.ts, src/runtime/linux/broker.ts]
+  status: open
+- id: H2
+  severity: P2
+  wave: RC-07
+  invariant: CELL_ID_UNIQUE
+  files: [src/runtime/process-executor.ts]
+  status: open
+
+## 生命周期与清理（Wave 3）
+
+- id: F1
+  severity: P0
+  wave: RC-09
+  invariant: JANITOR_CLEANS_ALL_RUN_RESIDUE
+  files: [src/index.ts, src/runtime/linux/broker.ts, src/runtime/linux/recovery/state-store.ts]
+  status: open
+- id: F2
+  severity: P0
+  wave: RC-09
+  invariant: ABORT_IGNORED=0
+  files: [src/tools/process.ts]
+  status: open
+- id: F3
+  severity: P1
+  wave: RC-08
+  invariant: CGROUP_ATTACH_FAILURE_DEGRADED_NOT_SILENT
+  files: [src/runtime/linux/broker.ts]
+  status: open
+- id: F4
+  severity: P1
+  wave: RC-08
+  invariant: RECEIPT_CLEANUP_MEASURED
+  files: [src/runtime/linux/backends/*.ts]
+  status: open
+- id: F5
+  severity: P1
+  wave: RC-09
+  invariant: TERMINATE_TREE_NON_BLOCKING
+  files: [src/runtime/linux/process/termination.ts]
+  status: open
+- id: F6
+  severity: P1
+  wave: RC-09
+  invariant: RUN_JSON_CELLS_WRITES_CELL_ID
+  files: [src/runtime/linux/broker.ts]
+  status: open
+- id: F7
+  severity: P0
+  wave: RC-08
+  invariant: WRONG_PROCESS_KILL=0
+  files: [src/runtime/linux/process/supervisor.ts]
+  status: open
+
+## 持久化与恢复（Wave 4）
+
+- id: D1
+  severity: P0
+  wave: RC-10
+  invariant: SESSION_MESSAGE_DUPLICATION=0
+  files: [src/ui/cli.ts, src/session/sqlite-session.ts]
+  status: open
+- id: D2
+  severity: P0
+  wave: RC-10
+  invariant: SINGLE_SHOT_MODE_PERSISTS
+  files: [src/ui/cli.ts]
+  status: open
+- id: D3
+  severity: P0
+  wave: RC-11
+  invariant: CHECKPOINT_USES_REAL_SESSION_ID
+  files: [src/agent/maintenance/coordinator.ts]
+  status: open
+- id: D4
+  severity: P0
+  wave: RC-11
+  invariant: CHECKPOINT_RESUME_USED
+  files: [src/agent/loop-types.ts, src/session/checkpoint.ts]
+  status: open
+- id: D5
+  severity: P1
+  wave: RC-10
+  invariant: EXIT_PATH_FLUSHES_SESSION
+  files: [src/ui/input.ts]
+  status: open
+- id: D6
+  severity: P1
+  wave: RC-10
+  invariant: COMMAND_CTX_READS_CURRENT_SESSION_ID
+  files: [src/ui/commands/definitions.ts, src/ui/cli.ts]
+  status: open
+- id: H5
+  severity: P2
+  wave: RC-10
+  invariant: MESSAGE_TIMESTAMP_PRESERVED
+  files: [src/ui/cli.ts]
+  status: open
+- id: H6
+  severity: P2
+  wave: RC-12
+  invariant: COLD_ARCHIVE_ATOMIC
+  files: [src/memory/compactor.ts]
+  status: open
+- id: H7
+  severity: P2
+  wave: RC-12
+  invariant: SQLITE_DELETE_CLEANS_WAL_SHM
+  files: [src/session/sqlite-session.ts, src/session/index.ts]
+  status: open
+- id: H8
+  severity: P2
+  wave: RC-11
+  invariant: COLD_MEMORY_SHA_VERIFIED
+  files: [src/session/checkpoint.ts]
+  status: open
+- id: H9
+  severity: P2
+  wave: RC-11
+  invariant: REWIND_HISTORY_DEPTH_AND_CLEANUP
+  files: [src/agent/rewind.ts, src/session/sqlite-session.ts]
+  status: open
+
+## 内核恢复（Wave 5）
+
+- id: E1
+  severity: P0
+  wave: RC-13
+  invariant: REVISE_PLAN_NEVER_DEADLOCKS
+  files: [src/agent/task-tracker.ts]
+  status: open
+- id: E2
+  severity: P1
+  wave: RC-13
+  invariant: NODE_SWITCH_FLUSHES_TEXT
+  files: [src/agent/kernel/round.ts, src/agent/kernel/master-plan.ts]
+  status: open
+- id: E3
+  severity: P1
+  wave: RC-13
+  invariant: NO_ADJACENT_USER_MESSAGES
+  files: [src/agent/kernel/round.ts, src/agent/maintenance/coordinator.ts]
+  status: open
+- id: E4
+  severity: P1
+  wave: RC-13
+  invariant: MAINTENANCE_ERRORS_OBSERVABLE
+  files: [src/agent/kernel/round.ts, src/agent/maintenance/coordinator.ts]
+  status: open
+- id: E5
+  severity: P2
+  wave: RC-13
+  invariant: DEAD_BRANCHES_REMOVED
+  files: [src/agent/gates/overflow.ts, src/agent/round/post-loop.ts]
+  status: open
+
+## 工具与 Provider（Wave 6）
+
+- id: G1
+  severity: P0
+  wave: RC-16
+  invariant: PATCH_FALSE_SUCCESS=0
+  files: [src/tools/apply-patch.ts]
+  status: open
+- id: G2
+  severity: P0
+  wave: RC-15
+  invariant: MCP_REQUEST_CORRELATION
+  files: [src/tools/mcp.ts]
+  status: open
+- id: G3
+  severity: P0
+  wave: RC-14
+  invariant: DUPLICATE_PROVIDER_SIDE_EFFECT=0
+  files: [src/provider/openai.ts, src/provider/retry.ts]
+  status: open
+- id: G4
+  severity: P1
+  wave: RC-16
+  invariant: DURATION_MEASURED_FROM_START
+  files: [src/tools/shell.ts]
+  status: open
+- id: G5
+  severity: P1
+  wave: RC-16
+  invariant: PROJECT_STRUCTURE_SKIPS_DEPS
+  files: [src/tools/codegraph.ts]
+  status: open
+- id: G6
+  severity: P1
+  wave: RC-14
+  invariant: THINKING_BLOCKS_SENT_ONCE
+  files: [src/provider/deepseek.ts, src/provider/anthropic.ts]
+  status: open
+- id: G7
+  severity: P1
+  wave: RC-16
+  invariant: SERVICE_LOG_TAIL_READ
+  files: [src/tools/service.ts]
+  status: open
+- id: G8
+  severity: P1
+  wave: RC-16
+  invariant: EDIT_SYMBOL_IN_TRANSACTION
+  files: [src/tools/file.ts]
+  status: open
+- id: G9
+  severity: P1
+  wave: RC-14
+  invariant: FIM_HAS_TIMEOUT
+  files: [src/provider/fim.ts]
+  status: open
+- id: G10
+  severity: P2
+  wave: RC-16
+  invariant: TOKEN_ESTIMATE_MEANINGFUL
+  files: [src/tools/repo-map.ts]
+  status: open
+- id: G11
+  severity: P1
+  wave: RC-14
+  invariant: RETRY_AFTER_CAPPED
+  files: [src/provider/retry.ts]
+  status: open
+- id: G12
+  severity: P2
+  wave: RC-16
+  invariant: TIMEOUT_PARSE_GUARDED
+  files: [src/tools/shell.ts, src/tools/process.ts, src/tools/service.ts]
+  status: open
+
+## 卫生与长期（Wave 7）
+
+- id: H1
+  severity: P1
+  wave: RC-17
+  invariant: STABLE_TOKENS_TRULY_STABLE
+  files: [src/context/cache-anatomy.ts]
+  status: open
+- id: H3
+  severity: P2
+  wave: RC-17
+  invariant: SYMBOL_REGEX_ESCAPED
+  files: [src/tools/codegraph.ts]
+  status: open
+- id: H4
+  severity: P1
+  wave: RC-17
+  invariant: DEAD_CODE_DISPOSITION_PER_SYMBOL
+  files: [全库]
+  status: open
+- id: H10
+  severity: P2
+  wave: RC-17
+  invariant: TRIAGE_HIGH_RISK_PRESERVED
+  files: [src/agent/flash-triage.ts]
+  status: open
+- id: H11
+  severity: P2
+  wave: RC-17
+  invariant: CONFIG_OVERRIDES_WIRED_OR_REMOVED
+  files: [src/agent/permission-config.ts]
+  status: open
+- id: H12
+  severity: P2
+  wave: RC-17
+  invariant: CHARS_TRIMMED_ACCURATE
+  files: [src/agent/context-epoch.ts]
+  status: open
+
+## 上下文压缩专项（ContextGuard）
+
+- id: X1
+  severity: P1
+  wave: RC-02.5
+  invariant: USER_CONSTRAINTS_SURVIVE_EVICTION
+  files: [src/agent/memory/user-constraints.ts(新), src/agent/kernel/round.ts]
+  status: open
+- id: X2
+  severity: P1
+  wave: RC-02.5
+  invariant: MICROCOMPACT_PRESERVES_ERROR_LINES
+  files: [src/agent/round/post-loop.ts]
+  status: open
+
+## 汇总
+
+- 合计: 76（P0: 23 / P1: 33 / P2: 20）
+- 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）

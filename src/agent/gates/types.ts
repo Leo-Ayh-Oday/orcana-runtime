@@ -19,6 +19,8 @@ export interface GateResult {
   reason?: string
   /** Human-readable block message injected into the conversation when blocked. */
   message?: string
+  /** RC-02: 预算耗尽而非真实失败——调用方必须按 incomplete 处理，不得继续注入消息。 */
+  incomplete?: boolean
 }
 
 // ── Gate contract ──

@@ -300,6 +300,37 @@ export class SessionStore {
     }
   }
 
+  /** Replace all messages atomically — snapshot semantics so repeated saves
+   *  of the same session can never duplicate rows (D1 SESSION_MESSAGE_DUPLICATION=0). */
+  replaceMessages(messages: SessionMessage[]): void {
+    if (!this.db) {
+      if (this.fallback) {
+        this.fallback.messages = [...messages]
+        this.persistFallback()
+      }
+      return
+    }
+    const insert = this.db.prepare(
+      "INSERT INTO messages (role, content, timestamp, metadata) VALUES (?, ?, ?, ?)",
+    )
+    const ftsInsert = this.db.prepare(
+      "INSERT INTO messages_fts(content, rowid, role) VALUES (?, last_insert_rowid(), ?)",
+    )
+    this.db.run("BEGIN")
+    try {
+      this.db.run("DELETE FROM messages")
+      this.db.run("DELETE FROM messages_fts")
+      for (const msg of messages) {
+        insert.run(msg.role, msg.content, msg.timestamp, JSON.stringify(msg.metadata))
+        ftsInsert.run(msg.content, msg.role)
+      }
+      this.db.run("COMMIT")
+    } catch (e) {
+      this.db.run("ROLLBACK")
+      throw e
+    }
+  }
+
   /** Get all messages ordered by timestamp. */
   getMessages(limit?: number, offset?: number): SessionMessage[] {
     if (!this.db) {

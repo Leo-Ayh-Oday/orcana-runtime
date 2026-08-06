@@ -6,8 +6,11 @@ import type { ToolDescriptor } from "../../tools/registry"
 
 // ── Token estimation ──
 
+/** Cap on provider-visible tool schemas — must match between disclosure and budget. */
+export const TOOL_SCHEMA_CAP = 128
+
 function toolSchemaChars(tools: ToolDescriptor[]): number {
-  const schemas = tools.map(tool => tool.toAnthropicSchema()).slice(0, 128)
+  const schemas = tools.map(tool => tool.toAnthropicSchema()).slice(0, TOOL_SCHEMA_CAP)
   return schemas.length ? JSON.stringify(schemas).length : 0
 }
 
@@ -94,7 +97,7 @@ export interface RoundRequestBuildOutput {
 export function buildRoundProviderRequest(input: RoundRequestBuildInput): RoundRequestBuildOutput {
   const providerToolSchemas = input.tools
     .map(tool => tool.toAnthropicSchema())
-    .slice(0, 128)
+    .slice(0, TOOL_SCHEMA_CAP)
   const cacheAnatomy = buildCacheAnatomy({
     system: input.system,
     tools: providerToolSchemas,

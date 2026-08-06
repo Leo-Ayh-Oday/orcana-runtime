@@ -79,4 +79,13 @@ describe("Round request builder", () => {
 
     expect(withTools.roundInputTokens).toBeGreaterThan(withoutTools.roundInputTokens)
   })
+
+  test("tool schema budget estimate applies the same 128 cap as disclosure", () => {
+    const system = "system prompt"
+    const messages: Array<{ role: "user"; content: string }> = [{ role: "user", content: "hello" }]
+    const estimate128 = estimateRoundTokens(system, [], messages, null, makeTools(128))
+    const estimate300 = estimateRoundTokens(system, [], messages, null, makeTools(300))
+
+    expect(estimate300.roundInputTokens).toBe(estimate128.roundInputTokens)
+  })
 })

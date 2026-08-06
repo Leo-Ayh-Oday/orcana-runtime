@@ -213,7 +213,6 @@ export function runKnowledgeDistillation(ctx: MaintenanceContext): void {
     })
   }
 }
-}
 
 // ── Memory reconcile (periodic prune + FTS5 rebuild) ──
 

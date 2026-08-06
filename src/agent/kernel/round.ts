@@ -536,6 +536,12 @@ export async function* runRound(
       case "done": {
         // Try master plan node transition before final delivery
         if (orchResult.tryNodeTransition && planStore.current && tryNodeTransition(ctx)) {
+          // RC-13 E2: 节点切换前 flush 缓冲文本——bufferReadonlyText 模式下的
+          // 最终答复不得在切换中丢失。
+          if (bufferReadonlyText && !roundState.bufferedTextEmitted) {
+            yield stream({ type: "text", data: finalText })
+            roundState.bufferedTextEmitted = true
+          }
           yield stream({ type: "status", data: `master-plan: ${planProgressOf(ctx)} → next node activated` })
           yield trace("gate_decision", { gate: "master_plan", decision: "next_node", progress: planProgressOf(ctx) })
           return { kind: "continue" }

@@ -274,8 +274,8 @@ export function updateStateMachine(sm: StateMachine, input: StateMachineInput) {
       sm.transition(AgentState.SEARCH, "searching")
       return
     }
-  } catch {
-    // Transition validation failed — state machine caught an illegal transition.
-    // The ad-hoc flags still drive behavior; SM is a monitoring layer.
+  } catch (e) {
+    // RC-13 E5: 非法迁移不再静默——至少可观测（SM 是监控投影，不影响行为）。
+    console.warn(`[state-machine] illegal transition (${current}): ${e instanceof Error ? e.message : String(e)}`)
   }
 }

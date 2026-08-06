@@ -34,6 +34,10 @@ export interface CompactOutput {
   discarded: string[]
   verified: string[]
   open: string[]
+  /** K8 (RC-18): 可选证据锚——compact output 源自哪个验证证据状态
+   *  （transaction 绑定 digest + evidence ledger 摘要）。verified 结论
+   *  据此可溯源，防止「被验证的结论」来自已被推翻/篡改的中间态。 */
+  evidence?: string
 }
 
 function overlap(a: Set<string>, b: Set<string>): number {
@@ -129,10 +133,14 @@ export class ThinkingStore {
     compactOutput: CompactOutput
     roundRange: string
     filePattern: string
+    /** K8: 可选证据锚，写入存储文本 `Evidence:` 行（向后兼容——不传也 OK）。 */
+    evidence?: string
   }): ThinkingRecord {
+    const evidence = input.evidence ?? input.compactOutput.evidence
     const text = [
       "## Compressed Thinking Insights",
       `Rounds: ${input.roundRange}`,
+      ...(evidence ? [`Evidence: ${evidence}`] : []),
       "",
       "### Verified",
       ...input.compactOutput.verified.map(v => `- ${v}`),
@@ -215,6 +223,11 @@ export class ThinkingStore {
       const entries = newOutput.open.map(o => `- [?] ${o} <!-- ${now} -->`)
       sections.push("## 待解决\n" + entries.join("\n"))
       allNewEntries.push(...entries)
+    }
+    // K8: 证据锚随合并结果并进冷记忆——verified/insight 条目由此可溯源到
+    // 采集时的验证证据状态（commit/ledger digest）。
+    if (newOutput.evidence) {
+      sections.unshift(`Evidence: ${newOutput.evidence}`)
     }
     const newText = sections.join("\n\n")
     const newPhrases = extractPhrases(newText)

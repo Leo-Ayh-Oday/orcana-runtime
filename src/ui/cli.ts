@@ -21,7 +21,7 @@ import { SessionManager, SessionCorruptedError, searchAllSessions, type Session 
 import { lastCheckpoint, verifyCheckpoint } from "../session/checkpoint"
 import type { SessionCheckpoint } from "../session/checkpoint"
 import { saveRewindPoint } from "../agent/rewind"
-import { buildResumeContext, resumeMessages } from "../session/summarizer"
+import { buildResumeMessages, buildResumeContext, resumeMessages } from "../session/summarizer"
 import { ThinkingStore } from "../memory/thinking-store"
 import { KnowledgeBase } from "../memory/knowledge"
 import {
@@ -33,7 +33,7 @@ import {
   saveCompactorState,
 } from "../memory/compactor"
 import type { CompactionState } from "../memory/compactor"
-import { distillUserConstraints } from "../agent/memory/user-constraints"
+import { distillUserConstraints, formatConstraintContext } from "../agent/memory/user-constraints"
 import type { UsageStats } from "../agent/loop"
 import { createStreamRenderState, dim, flushStreamRender, green, yellow, red, renderResponse, renderStreamChunk } from "./render"
 import { reprompt, startInput } from "./input"
@@ -143,9 +143,23 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
 
   let sessionId = resumeId || runtime.sessionId
   let thinkEffort: "auto" | "high" | "max" = "auto"
-  const history: Array<{ role: "user" | "assistant"; content: string }> = []
+  // K6: 角色含 "system"——权威约束帧（buildResumeMessages 产物）进入历史。
+  const history: Array<{ role: "user" | "assistant" | "system"; content: string }> = []
 
   let resumeFromCheckpoint: SessionCheckpoint | null = null
+
+  // K6 (RESUME_PRESERVES_CONSTRAINTS): resume 时以权威状态重建约束——flash 蒸馏
+  // （≥3 条用户输入且 provider 可用），失败/不足降级确定性摘要，两者都保留 2+4 尾部。
+  const distillResumeConstraints = async (userTexts: string[]): Promise<string | null> => {
+    if (shouldSkipProviderPurpose("thinking_compaction")) return null
+    const result = await distillUserConstraints(
+      multiProvider,
+      modelRouter.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash",
+      userTexts,
+    ).catch(() => null)
+    if (!result || !result.success || result.constraints.length === 0) return null
+    return formatConstraintContext(result.constraints)
+  }
 
   if (resumeId) {
     try {
@@ -153,6 +167,8 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       if (restored) {
         const stagedFiles = (restored.metadata?.stagedFiles as string[]) ?? []
         for (const f of stagedFiles) { try { stagedCtx.markLoaded(f) } catch { } }
+        // K6: 统一重建（checkpoint-valid 分支此前历史为空——旧实现只在无效分支补摘要）
+        for (const m of await buildResumeMessages(restored, distillResumeConstraints)) history.push(m)
         // ── Checkpoint recovery: if checkpoint exists, verify and load ──
         const cp = lastCheckpoint(resumeId)
         if (cp) {
@@ -167,12 +183,8 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
             console.log(yellow(
               `检查点文件已变更 (${integrity.filesMismatched.length} 个不匹配)，从对话历史恢复`
             ))
-            history.push({ role: "assistant", content: buildResumeContext(restored) })
           }
-        } else {
-          history.push({ role: "assistant", content: buildResumeContext(restored) })
         }
-        for (const m of resumeMessages(restored)) history.push(m)
         sessionId = resumeId
       } else {
         console.log(yellow(`会话 ${resumeId} 不存在，创建新会话`))
@@ -348,7 +360,7 @@ function showStats(sessionId: string, msgCount: number, fileCount: number) {
 
 function persistSession(
   sessions: SessionManager,
-  history: Array<{ role: "user" | "assistant"; content: string }>,
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }>,
   stagedCtx: StagedContextManager,
   compactor: CompactionState,
   sessionId: string,
@@ -367,7 +379,7 @@ function persistSession(
   const tsByKey = new Map<string, number>()
   for (const m of s.messages) tsByKey.set(`${m.role}\u0000${m.content}`, m.timestamp)
   s.messages = history.map(h => ({
-    role: h.role as "user" | "assistant",
+    role: h.role as "user" | "assistant" | "system",
     content: h.content,
     timestamp: tsByKey.get(`${h.role}\u0000${h.content}`) ?? Date.now(),
     metadata: {},
@@ -391,7 +403,7 @@ async function runLiteTurn(
   provider: MultiProvider,
   router: ModelRouter,
   prompt: string,
-  history: Array<{ role: "user" | "assistant"; content: string }>,
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }>,
   compactor: CompactionState,
 ) {
   const started = Date.now()
@@ -458,7 +470,7 @@ async function runTurn(
   harness: AgentHarness,
   prompt: string,
   compactor: CompactionState,
-  history: Array<{ role: "user" | "assistant"; content: string }>,
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }>,
   thinkEffort: "auto" | "high" | "max",
   sessionId: string,
   resumeFromCheckpoint: SessionCheckpoint | null,

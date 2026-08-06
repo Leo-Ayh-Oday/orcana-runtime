@@ -33,7 +33,7 @@ function respond(id, result) {
 async function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> {
   return Promise.race([
     promise,
-    new Promise(resolve => setTimeout(() => resolve("timeout" as const), ms)),
+    new Promise<"timeout">(resolve => setTimeout(() => resolve("timeout"), ms)),
   ])
 }
 

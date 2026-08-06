@@ -35,7 +35,7 @@ describe("shell duration from start (RC-16 G4)", () => {
   })
 
   test("shellStream durationMs covers execution time", async () => {
-    let done: { data: { metadata?: { verification?: { durationMs: number } } } } | undefined
+    let done: { data: { success?: boolean; metadata?: { verification?: { durationMs: number } } } } | undefined
     for await (const event of shellStream({ command: "tsc --noEmit", timeout: 10, confirm: true })) {
       if (event.type === "done") done = event
     }

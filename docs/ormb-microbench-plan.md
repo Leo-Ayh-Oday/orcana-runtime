@@ -888,12 +888,22 @@ evals/microbench/
 5 个多轮任务切换
 ```
 
+**✅ 已完成（2026-08-06，commits a734c14 / 3e1893e，gates 全绿）**
+- SR 50 用例：语义 Exact Set 82.0%（A/B 同期），run3 语义 F1 86.1% vs 关键词 65.1%；No-Skill 7/7；失败率 ≤2/50
+- TR 40 用例：Mode Macro F1 89.7-92.4%（三组 A/B 波动，差异无统计意义）；needsWeb P=100% R=25%；Risk High Miss 0；Under ≤3/Over 0
+- MTR 5 用例 ×3 轮：真实/理想全过；breaker 无继承污染
+- 生产缺陷修复：① 空响应诚实失败（null → 关键词 fallback，防伪成功污染）② triage 可见技能集与 registry 动态同源（ui-ux/motion 可达）③ SKILL_TRIGGER_MAP 同源化 ④ max_tokens 2048→4096（thinking 吃满致死窗口，曾杀死 high 风险用例）⑤ MODE_MISMATCH / NEEDS_WEB_MISMATCH 新 gates
+- Thinking A/B（disabled/auto/enabled1024 三组全量）定稿：**不传 thinking 参数（模型自决）**；enabled1024 明确排除（Exact 最低 79.2%、P95 延迟 20.5s、max_tokens 杀死高风险用例）。详见 observations.md 结论 12
+- 已知边界分歧（不调优）：TR-38 权限系统三组全判非 full_complex；TR-25/28 讨论/规划边界；SR-17/42 GT 双 required 偏严
+
 ### P3：Context
 
 ```text
 4 个接近 compress threshold
 4 个接近 rollover threshold
 ```
+
+**（待开始）**
 
 只要出现：
 

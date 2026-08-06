@@ -13,9 +13,7 @@
 import { spawn } from "node:child_process"
 import type { LinuxExecutionBroker } from "./linux/broker"
 import { createLinuxBroker } from "./linux/broker"
-import { selectBackend } from "./linux/backend-router"
-import type { ExecutionProfile, NetworkMode } from "./linux/contracts"
-import type { ExecutionCellSpec } from "./linux/contracts"
+import type { CapabilityRequest, ExecutionProfile, NetworkMode } from "./linux/contracts"
 
 export type ProcessEvent =
   | { type: "status"; state: string; at: number }
@@ -50,7 +48,8 @@ export interface ProcessOutcome {
 }
 
 /** 审计级（Host Audit）允许从宿主复制的安全变量 —— 仅限低风险键。
- *  密钥类键（后缀 _API_KEY / _TOKEN / AWS_* / GITHUB_TOKEN 等）在任何层级都拒绝。 */
+ *  密钥类键（后缀 _API_KEY / _TOKEN / AWS_* / GITHUB_TOKEN 等）在任何层级都拒绝。
+ *  PATH/HOME 属于安全变量（HOST_ENV_SECRET_LEAK 语义排除），宿主工具链依赖。 */
 export const AUDIT_HOST_ALLOW_KEYS = [
   "ORCANA_*", "USER", "LOGNAME", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL",
   "LC_CTYPE", "TERM", "CI", "BUN_*", "NPM_CONFIG_*", "YARN_*", "PNPM_*",
@@ -60,31 +59,21 @@ export const AUDIT_HOST_ALLOW_KEYS = [
 const DEFAULT_STDOUT_MAX = 4 * 1024 * 1024
 const DEFAULT_STDERR_MAX = 4 * 1024 * 1024
 
-function cellSpecFromRequest(request: ProcessRequest, allowedHostKeys: string[]): ExecutionCellSpec {
-  const timeoutMs = request.timeoutMs ?? 120_000
+function capabilityRequestFromRequest(request: ProcessRequest): CapabilityRequest {
   return {
-    schemaVersion: "1.0",
-    identity: { cellId: `tool-${Date.now().toString(36)}`, runId: "tool-run", nodeRunId: "tool:n", attempt: 1 },
-    command: { executable: request.command, args: request.args, cwd: request.cwd ?? process.cwd(), stdin: "closed" },
-    profile: request.profile ?? "build",
-    // 工具执行语义：首选 Bubblewrap（有则真沙盒），无则降级 Host Audit。
-    // 显式指定 preferredBackend 避免 profile 默认（如 dependency→podman）误锁。
-    isolation: { minimum: "audit", preferredBackend: "bubblewrap", allowDegradation: true },
-    filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true },
-    network: { mode: request.network ?? "none" },
-    environment: { variables: request.env ?? {}, allowedHostKeys, inheritHost: false, locale: "C.UTF-8", pathEntries: ["/usr/local/bin"] },
-    secrets: [],
-    resources: {
-      memoryMaxBytes: 512 * 1024 * 1024,
-      pidsMax: 512,
-      wallTimeMs: timeoutMs,
-      stdoutMaxBytes: request.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX,
-      stderrMaxBytes: request.stderrMaxBytes ?? DEFAULT_STDERR_MAX,
-      tmpfsMaxBytes: 1024 * 1024 * 1024,
+    command: {
+      executable: request.command,
+      args: request.args,
+      cwd: request.cwd ?? process.cwd(),
+      stdin: "closed",
     },
-    cache: [],
-    lifecycle: { killOnParentExit: true, cleanupOnExit: true, retainOnFailure: false, serviceMode: false },
-    policyDigest: "",
+    profile: request.profile ?? "build",
+    network: request.network ? { mode: request.network } : undefined,
+    env: request.env,
+    allowedHostKeys: AUDIT_HOST_ALLOW_KEYS,
+    timeoutMs: request.timeoutMs ?? 120_000,
+    stdoutMaxBytes: request.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX,
+    stderrMaxBytes: request.stderrMaxBytes ?? DEFAULT_STDERR_MAX,
   }
 }
 
@@ -189,19 +178,12 @@ export async function* executeProcess(request: ProcessRequest): AsyncGenerator<P
     return
   }
 
-  // 审计级默认：允许安全宿主键；命名空间级后端（bwrap/podman）不继承宿主环境。
-  const spec = cellSpecFromRequest(request, AUDIT_HOST_ALLOW_KEYS)
-  let backendId: string
-  try {
-    backendId = selectBackend(spec, broker().probe()).backend
-  } catch {
-    backendId = "host-audit"
-  }
-  const effectiveSpec = backendId === "host-audit"
-    ? spec
-    : cellSpecFromRequest(request, [])
+  // P0-2/P0-1 修复：工具只声明 Capability Request；Profile/隔离/身份由
+  // Policy Compiler 权威决定（唯一 runId/cellId，不再共享 "tool-run"）。
+  const request0 = capabilityRequestFromRequest(request)
+  const spec = broker().compileRequest(request0)
 
-  yield* fromBrokerEvents(broker().execute(effectiveSpec, request.abortSignal ? { abortSignal: request.abortSignal } : undefined))
+  yield* fromBrokerEvents(broker().execute(spec, request.abortSignal ? { abortSignal: request.abortSignal } : undefined))
 }
 
 /** Broker 的 ExecutionCellEvent → 平台无关 ProcessEvent。 */

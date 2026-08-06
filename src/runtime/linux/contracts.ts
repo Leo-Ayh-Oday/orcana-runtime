@@ -52,6 +52,53 @@ export interface LinuxCapabilities {
   degradationReasons: string[]
 }
 
+// ── Capability request（工具/模型声明层，§7.3） ──
+
+/** 工具/模型声明"需要什么"（Capability Request）——绝不提交完整 Spec。
+ *
+ *  身份字段由 Runtime 生成（编译器是唯一权威）；工具只能声明命令、Profile
+ *  与显式需求。override 语义：只能收紧（更高隔离、更小资源），不能放宽。
+ */
+export interface CapabilityRequest {
+  command: { executable: string; args: string[]; cwd?: string; stdin?: "closed" | "pipe" }
+  profile: ExecutionProfile
+  /** 网络需求：只能比 Profile 默认更严格（none ⊂ loopback ⊂ proxy-allowlist ⊂ full-approved）。 */
+  network?: { mode: NetworkMode; allowedHosts?: string[]; allowedPorts?: number[] }
+  /** 显式声明的环境变量（受拒绝规则约束，进入 requestedValues）。 */
+  env?: Record<string, string>
+  /** 显式批准的宿主环境键（唯一宿主继承通道；拒绝集内的键会被策略拒绝）。 */
+  allowedHostKeys?: string[]
+  timeoutMs?: number
+  stdoutMaxBytes?: number
+  stderrMaxBytes?: number
+  memoryMaxBytes?: number
+  pidsMax?: number
+  worktreeRoot?: string
+  ownerFiles?: string[]
+  writableMounts?: MountRule[]
+  readonlyMounts?: MountRule[]
+  cache?: CacheMountRequest[]
+  /** Runtime 上下文（由上层执行层注入，工具不可见）。 */
+  runId?: string
+  nodeRunId?: string
+  agentId?: string
+  assignmentId?: string
+  attempt?: number
+}
+
+/** 运行期物化材料 —— 不属于策略 Spec，编译完成后由 Runtime 生成并随
+ *  上下文传入后端；禁止反向写回 ExecutionCellSpec（P0-1 修复）。 */
+export interface ExecutionMaterialization {
+  /** 运行期生成的 seccomp 文件路径（bwrap: BPF；podman: OCI JSON）。 */
+  seccompFile?: string
+  /** Secret 环境注入（bindSecrets 输出，delivery=environment）。 */
+  secretEnv?: Record<string, string>
+  /** Secret sealed 文件映射（target → 宿主文件）。 */
+  secretFiles?: Record<string, string>
+  /** 缓存宿主路径映射（target → 宿主源目录；Runtime 决定，模型不可指定）。 */
+  cacheHostPaths?: Record<string, string>
+}
+
 // ── ExecutionCellSpec (§7.2) ──
 
 export type ExecutionProfile = "inspect" | "build" | "test" | "dependency" | "service" | "untrusted" | "evolution"

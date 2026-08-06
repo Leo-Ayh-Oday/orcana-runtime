@@ -12,15 +12,17 @@
 import { randomUUID } from "node:crypto"
 import type {
   AgentExecutionDomain,
+  CapabilityRequest,
   ExecutionCell,
   ExecutionCellEvent,
   ExecutionCellSpec,
+  ExecutionMaterialization,
   LinuxCapabilities,
   SandboxReceipt,
 } from "./contracts"
 import type { DomainResourceBudget } from "./contracts"
 import { probeLinuxCapabilities, requireLinuxPlatform } from "./capability-probe"
-import { compileCellSpec } from "./policy-compiler"
+import { compileCapabilityRequest, compileCellSpec } from "./policy-compiler"
 import { selectBackend } from "./backend-router"
 import type { BackendSelection } from "./backend-router"
 import { LinuxExecutionError } from "./errors"
@@ -40,6 +42,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { writeSeccompBpfFile } from "./seccomp-bpf"
 import { compileSeccompProfile } from "./landlock-seccomp"
+import { bindSecrets } from "./secrets"
+import { CacheManager } from "./workspace/cache-port"
 
 export interface ShadowExecutionRecord {
   cellId: string
@@ -63,6 +67,10 @@ export interface LinuxBrokerOptions {
   ledger?: ResourceLedger
   /** R2: 状态持久化（默认 ~/.orcana/runtime/linux）。 */
   stateStore?: RuntimeStateStore
+  /** 缓存宿主根（CacheManager 权威路径；默认 stateStore root/cache）。 */
+  cacheRoot?: string
+  /** Secret 值来源（Runtime 持有，模型不可见；未提供时环境注入为空）。 */
+  secretValues?: Record<string, string>
 }
 
 export interface ExecuteOptions {
@@ -76,12 +84,16 @@ export interface LinuxExecutionBroker {
   probe(options?: { refresh?: boolean }): LinuxCapabilities
   /** 编译并校验一个执行 spec（Policy Compiler 唯一入口）。 */
   compileSpec(spec: ExecutionCellSpec): ExecutionCellSpec
+  /** Capability Request → 冻结 Spec（身份由 Runtime 生成；P0-1/P0-2）。 */
+  compileRequest(request: CapabilityRequest): ExecutionCellSpec
   /** 选择后端（不执行）。 */
   selectBackendFor(spec: ExecutionCellSpec): BackendSelection
   /** Shadow：记录拟用 spec/后端，不执行。 */
   shadow(spec: ExecutionCellSpec): ShadowExecutionRecord
   /** 执行（R2: 完整事务）。 */
   execute(spec: ExecutionCellSpec, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
+  /** 执行 Capability Request（编译 → 执行）。 */
+  executeRequest(request: CapabilityRequest, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
   createAgentDomain(input: { runId: string; agentId: string; worktreeRoot: string; ownerFiles: string[]; resourceBudget: DomainResourceBudget; role?: string }): AgentExecutionDomain
   cancelCell(cellId: string): Promise<void>
   cancelAgent(agentId: string): Promise<void>
@@ -131,6 +143,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   const ledger = options.ledger ?? new ResourceLedger()
   const stateStore = options.stateStore ?? new RuntimeStateStore()
   const domainManager = new AgentDomainManager({ ledger })
+  const cacheManager = new CacheManager(options.cacheRoot ?? join(stateStore.capabilitiesPath(), "..", "cache"))
 
   // cgroup：仅在有真实委托时启用（无委托 → cgroupPath 为空，严格任务已在
   // selectBackend 层拒绝；P0-4 修复前绝不假装资源限制生效）。
@@ -144,6 +157,38 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `spec invalid: ${compiled.errors.join("; ")}`)
     }
     return compiled.spec
+  }
+
+  /** 运行期物化：seccomp 文件、secret 注入、缓存宿主路径。
+   *  P0-1 修复：绝不写回 compiled spec —— 策略 Spec 在编译后冻结。 */
+  const materializeExecution = (spec: ExecutionCellSpec, backendId: string): ExecutionMaterialization => {
+    const materialization: ExecutionMaterialization = {}
+    if ((backendId === "bubblewrap" || backendId === "rootless-podman")
+      && (spec.profile === "inspect" || spec.profile === "untrusted")) {
+      try {
+        const target = spec.profile === "untrusted" ? "untrusted" : "inspect"
+        const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.bpf`)
+        writeSeccompBpfFile(compileSeccompProfile(target), filePath)
+        materialization.seccompFile = filePath
+      } catch {
+        // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
+      }
+    }
+    if (spec.secrets.length > 0) {
+      const bound = bindSecrets({ bindings: spec.secrets, values: options.secretValues ?? {} })
+      if (!bound.ok) {
+        throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
+      }
+      materialization.secretEnv = bound.envInjections
+      bound.cleanup() // 本次执行结束后立即清理临时文件（环境注入类无文件）
+    }
+    for (const cache of spec.cache) {
+      materialization.cacheHostPaths = {
+        ...materialization.cacheHostPaths,
+        [cache.target]: cacheManager.hostPath(cache),
+      }
+    }
+    return materialization
   }
 
   const readCellMetrics = (cgroupCellPath: string): SandboxReceipt["metrics"] => {
@@ -166,6 +211,16 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       return probeLinuxCapabilities(opts)
     },
     compileSpec: compileOrThrow,
+    compileRequest(request) {
+      const compiled = compileCapabilityRequest(request)
+      if (!compiled.ok) {
+        throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `request invalid: ${compiled.errors.join("; ")}`)
+      }
+      return compiled.spec
+    },
+    async *executeRequest(request, executeOptions) {
+      yield* this.execute(this.compileRequest(request), executeOptions)
+    },
     selectBackendFor(spec) {
       return selectBackend(spec, caps)
     },
@@ -200,7 +255,23 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         this.shadow(spec)
         return
       }
-      const compiled = compileOrThrow(spec)
+      let compiled = compileOrThrow(spec)
+      // P0-2：隔离后端不可用时的显式降级通道 —— 只有非严格 Profile
+      // （allowDegradation=true）允许经编译器重编译到 minimum=audit；
+      // 严格 Profile 在 selectBackend 直接抛 DEGRADATION_NOT_ALLOWED。
+      try {
+        selectBackend(compiled, caps)
+      } catch (error) {
+        if (!compiled.isolation.allowDegradation) throw error
+        const downgraded = compileCellSpec({
+          ...compiled,
+          policyDigest: "", // 重编译：digest 由编译器重新计算
+          isolation: { ...compiled.isolation, minimum: "audit" },
+        })
+        if (!downgraded.ok) throw error
+        compiled = downgraded.spec
+        selectBackend(compiled, caps)
+      }
       const selection = selectBackend(compiled, caps)
       const backend = backendOf(selection.backend)
       if (!backend) {
@@ -211,18 +282,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `backend ${backend.id} rejects spec: ${violations.join("; ")}`)
       }
 
-      // R3: 保守 seccomp 面（inspect/untrusted + 隔离后端）→ 真实 BPF 文件注入。
-      if ((selection.backend === "bubblewrap" || selection.backend === "rootless-podman")
-        && (compiled.profile === "inspect" || compiled.profile === "untrusted")) {
-        try {
-          const target = compiled.profile === "untrusted" ? "untrusted" : "inspect"
-          const filePath = join(tmpdir(), `orcana-seccomp-${compiled.identity.cellId}.bpf`)
-          writeSeccompBpfFile(compileSeccompProfile(target), filePath)
-          compiled.environment.variables = { ...compiled.environment.variables, ORCANA_SECCOMP_FILE: filePath }
-        } catch {
-          // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
-        }
-      }
+      // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
+      const materialization = materializeExecution(compiled, selection.backend)
 
       const cellId = compiled.identity.cellId
       const runId = compiled.identity.runId
@@ -280,6 +341,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             capabilities: caps,
             abortSignal: executeOptions?.abortSignal,
             cgroupPath: cgroupCellPath,
+            materialization,
             attachCell: pid => {
               if (cgroup && cgroupCellPath) {
                 try {

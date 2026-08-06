@@ -145,4 +145,44 @@ describe("R2 broker transaction", () => {
     expect(receipt!.receipt.cleanup.processesRemaining).toBeGreaterThanOrEqual(0)
     expect(typeof receipt!.receipt.metrics.cpuUsageUsec === "number" || receipt!.receipt.metrics.cpuUsageUsec === undefined).toBe(true)
   })
+
+  test("PR-1: materialization reaches backend via ctx; compiled spec stays frozen", async () => {
+    const fs = mockCgroupFs()
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    const broker = createLinuxBroker({ mode: "enabled", cgroup })
+    const compiled = broker.compileSpec(cellSpec())
+    // 编译产物深度冻结
+    expect(Object.isFrozen(compiled)).toBe(true)
+    expect(Object.isFrozen(compiled.environment.variables)).toBe(true)
+    // 用包装后端捕获 ctx.materialization（缓存路径物化必须到达后端）。
+    const { registerBackend } = await import("../../../src/runtime/linux/broker")
+    const { createHostAuditBackend: makeAudit } = await import("../../../src/runtime/linux/backends/host-audit")
+    let captured: { seccompFile?: string; cacheHostPaths?: Record<string, string> } | undefined
+    const base = makeAudit()
+    registerBackend({
+      ...base,
+      id: "host-audit",
+      async *run(spec, ctx) {
+        captured = { ...(ctx.materialization ?? {}), cacheHostPaths: ctx.materialization?.cacheHostPaths }
+        yield* base.run(spec, ctx)
+      },
+    })
+    const withCache = cellSpec({ cache: [{ cacheId: "c1", kind: "npm", key: "k1", mode: "ro", target: "/cache/npm" }] })
+    for await (const _ of broker.execute(withCache)) { /* drain */ }
+    expect(captured).toBeDefined()
+    expect(captured!.cacheHostPaths?.["/cache/npm"]).toContain("cache")
+  })
+
+  test("PR-1: executeRequest compiles a CapabilityRequest and runs it", async () => {
+    const broker = createLinuxBroker({ mode: "enabled" })
+    const events: Array<{ type: string; [k: string]: unknown }> = []
+    for await (const e of broker.executeRequest({
+      command: { executable: "/bin/true", args: [] },
+      profile: "build",
+    })) events.push(e as unknown as { type: string; [k: string]: unknown })
+    expect(events.some(e => e.type === "cell.exit")).toBe(true)
+    expect(events.some(e => e.type === "cell.receipt")).toBe(true)
+    // 身份由 Runtime 生成，非共享占位符
+    expect((events[0] as { cellId?: string }).cellId?.startsWith("cell-")).toBe(true)
+  })
 })

@@ -11,7 +11,7 @@ import { collectProcessRun } from "../runtime/process-executor"
  */
 async function runGit(args: string[], timeout = 30): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const r = await collectProcessRun({ command: "git", args, timeoutMs: timeout * 1000, profile: "dependency" })
+    const r = await collectProcessRun({ command: "git", args, timeoutMs: timeout * 1000, profile: "build" })
     return { code: r.exitCode ?? -1, stdout: r.stdout, stderr: r.stderr || "git command failed" }
   } catch (error) {
     return { code: -1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }

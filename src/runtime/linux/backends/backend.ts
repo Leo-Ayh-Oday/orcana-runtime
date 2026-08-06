@@ -12,6 +12,7 @@ import type {
   LinuxCapabilities,
 } from "../contracts"
 import type { SandboxReceipt } from "../contracts"
+import type { ExecutionMaterialization } from "../contracts"
 import { streamSupervised, type SupervisorResult } from "../process/supervisor"
 
 export interface BackendRunContext {
@@ -28,6 +29,8 @@ export interface BackendRunContext {
   readCellMetrics?: () => SandboxReceipt["metrics"] | undefined
   /** 清理验证：真实执行后报告（默认不假设安全值）。 */
   cleanupVerify?: () => Partial<SandboxReceipt["cleanup"]>
+  /** 运行期物化材料（seccomp/secret/cache 宿主路径）——不属于 Policy Spec。 */
+  materialization?: ExecutionMaterialization
 }
 
 export interface ExecutionBackend {
@@ -38,8 +41,8 @@ export interface ExecutionBackend {
   /** [] = 可执行；非空 = 拒绝原因（错误码前缀）。 */
   validateSpec(spec: ExecutionCellSpec): string[]
 
-  /** 编译后端专属启动参数（Policy Compiler 唯一来源）。 */
-  compile(spec: ExecutionCellSpec, caps: LinuxCapabilities): CompiledExecution
+  /** 编译后端专属启动参数（Policy Compiler 唯一来源 + 运行期物化材料）。 */
+  compile(spec: ExecutionCellSpec, caps: LinuxCapabilities, materialization?: ExecutionMaterialization): CompiledExecution
 
   run(spec: ExecutionCellSpec, ctx: BackendRunContext): AsyncIterable<ExecutionCellEvent>
 

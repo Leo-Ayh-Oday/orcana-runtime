@@ -24,7 +24,7 @@ export interface CompletionGateInput {
   changedFiles: string[]
   taskHadWrite: boolean
   toolErrors: number
-  lastTypecheck?: { passed: boolean; issues: number; output?: string }
+  lastTypecheck?: { passed: boolean; issues: number; output?: string; status?: string }
   /** PR 6: optional evidence ledger for structured evidence check. */
   evidenceLedger?: EvidenceLedger
   /** Runtime write-generation used to reject evidence collected for older code. */

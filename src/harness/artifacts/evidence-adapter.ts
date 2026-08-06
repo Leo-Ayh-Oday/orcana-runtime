@@ -94,6 +94,8 @@ export interface IngestTypecheckWithArtifactInput {
   ledger: EvidenceLedger
   runId: string
   passed: boolean
+  /** RC-01: 六态验证状态。 */
+  status?: string
   issues: number
   output: string
   command?: string
@@ -127,6 +129,7 @@ export async function ingestTypecheckWithArtifact(
     command: input.command,
     output: input.output,
     passed: input.passed,
+    status: input.status,
     issues: input.issues,
     timestamp: Date.now(),
     generation: input.generation,

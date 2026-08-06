@@ -91,7 +91,7 @@ export interface CompletionContext {
   taskHadWrite: boolean
   taskToolErrors: number
   taskModifiedFiles: number
-  lastTypecheck: { passed: boolean; issues: number; output?: string } | undefined
+  lastTypecheck: { passed: boolean; issues: number; output?: string; status?: string } | undefined
   lastRippleReports: RippleReport[]
   lastVerificationResults: VerificationResult[]
   planApproved: boolean

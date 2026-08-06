@@ -227,10 +227,10 @@ export function createBubblewrapBackend(): ExecutionBackend {
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
       yield* streamBackendRun("bubblewrap", spec, ctx,
-        () => this.compile(spec, ctx.capabilities),
-        (result) => this.buildReceipt(spec, ctx.capabilities, {
-          startedAt: Date.now(),
-          finishedAt: Date.now(),
+        () => this.compile(spec, ctx.capabilities, ctx.materialization),
+        (result, evidence) => this.buildReceipt(spec, ctx.capabilities, {
+          startedAt: evidence.startedAt,
+          finishedAt: evidence.finishedAt,
           exitCode: result.exitCode,
           signal: result.signal,
           timedOut: result.timedOut,
@@ -245,7 +245,8 @@ export function createBubblewrapBackend(): ExecutionBackend {
           violations: [],
           degradationReasons: [],
           backendVersion: ctx.capabilities.bubblewrap.version,
-          metrics: {},
+          metrics: evidence.metrics,
+          cleanup: evidence.cleanup,
         }),
       )
     },
@@ -272,7 +273,14 @@ export function createBubblewrapBackend(): ExecutionBackend {
         unexpectedWrites: outcome.unexpectedWrites,
         violations: outcome.violations,
         degradationReasons: outcome.degradationReasons,
-        cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: spec.lifecycle.retainOnFailure },
+        // PR-2：无默认成功值 —— 进程残留/移除来自实测；mountsReleased 是
+        // bwrap 进程退出即销毁 mount 命名空间的内核事实。
+        cleanup: {
+          processesRemaining: outcome.cleanup?.processesRemaining ?? -1,
+          mountsReleased: true,
+          cgroupRemoved: outcome.cleanup?.cgroupRemoved ?? false,
+          worktreeRetained: spec.lifecycle.retainOnFailure,
+        },
       })
     },
   }

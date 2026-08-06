@@ -223,6 +223,7 @@ describe("LF-1: receipt schema", () => {
       unexpectedWrites: [],
       violations: [],
       degradationReasons: [],
+      cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false },
     })
     expect(receipt.schemaVersion).toBe("1.0")
     expect(receipt.cellId).toBe("c1")
@@ -244,7 +245,7 @@ describe("LF-1: receipt schema", () => {
       startedAt: 0, finishedAt: 0, exitCode: null, signal: null,
       timedOut: false, cancelled: false, oomKilled: false, pidLimitHit: false,
       outputLimitHit: false, tempLimitHit: false,
-      cleanup: { processesRemaining: 2 },
+      cleanup: { processesRemaining: 2, mountsReleased: false, cgroupRemoved: false },
     })
     expect(receiptComplete(receipt)).toBe(false)
   })

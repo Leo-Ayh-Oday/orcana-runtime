@@ -371,3 +371,23 @@ describe("LF-2: static gate — DIRECT_LINUX_PROCESS_BYPASS (AST)", () => {
     expect(executorSites.length).toBeGreaterThan(0)
   })
 })
+
+describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", () => {
+  linuxOnly("collectProcessRun carries a real receipt with self digest", async () => {
+    const { collectProcessRun, executeProcess } = await import("../../../src/runtime/process-executor")
+    const outcome = await collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 10_000 })
+    expect(outcome.receipt).toBeDefined()
+    expect(outcome.receipt!.backend).toBe("host-audit")
+    expect(outcome.receipt!.receiptDigest.length).toBe(16)
+    // durationMs 来自真实执行（不是 0 推定值）
+    expect(outcome.receipt!.durationMs).toBeGreaterThanOrEqual(0)
+    expect(outcome.receipt!.finishedAt).toBeGreaterThan(outcome.receipt!.startedAt)
+
+    // executeProcess 流式事件同样透传 receipt（不丢弃）
+    const events: Array<{ type: string; [k: string]: unknown }> = []
+    for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
+      events.push(e as unknown as { type: string; [k: string]: unknown })
+    }
+    expect(events.some(e => e.type === "receipt")).toBe(true)
+  })
+})

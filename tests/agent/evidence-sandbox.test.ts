@@ -7,6 +7,7 @@ import type { SandboxReceipt } from "../../src/runtime/linux/contracts"
 function receipt(overrides: Partial<SandboxReceipt> = {}): SandboxReceipt {
   return {
     schemaVersion: "1.0",
+    receiptDigest: "f".repeat(16),
     cellId: "c1",
     runId: "r1",
     nodeRunId: "r1:n",
@@ -51,7 +52,7 @@ describe("R5 evidence binding", () => {
     expect(hasEvidence(ledger, "sandbox_cleanup")).toBe(true)
     const exec = getEvidence(ledger, "sandbox_execution")[0]!
     expect(exec.backend).toBe("host-audit")
-    expect(exec.receiptDigest).toBe("b".repeat(16))
+    expect(exec.receiptDigest).toBe("f".repeat(16))
     expect(exec.networkMode).toBe("none")
     expect(exec.degraded).toBe(false)
   })

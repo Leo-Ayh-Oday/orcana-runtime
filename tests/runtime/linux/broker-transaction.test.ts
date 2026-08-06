@@ -185,4 +185,40 @@ describe("R2 broker transaction", () => {
     // 身份由 Runtime 生成，非共享占位符
     expect((events[0] as { cellId?: string }).cellId?.startsWith("cell-")).toBe(true)
   })
+
+  test("PR-2: receipt reflects real execution (duration > 0, measured cleanup)", async () => {
+    const broker = createLinuxBroker({ mode: "enabled" })
+    const spec = cellSpec({ command: { executable: "/bin/sh", args: ["-c", "sleep 0.2"], cwd: "/tmp", stdin: "closed" } })
+    const events: Array<{ type: string; [k: string]: unknown }> = []
+    for await (const e of broker.execute(spec)) events.push(e as unknown as { type: string; [k: string]: unknown })
+    const receipt = events.find(e => e.type === "cell.receipt") as { receipt: { durationMs: number; startedAt: number; finishedAt: number; cleanup: { processesRemaining: number; cgroupRemoved: boolean }; receiptDigest: string } } | undefined
+    expect(receipt).toBeDefined()
+    // PR-2：真实执行时长（不再是被 Date.now() 双调用压成 ~0 的推定值）
+    expect(receipt!.receipt.durationMs).toBeGreaterThan(100)
+    expect(receipt!.receipt.finishedAt).toBeGreaterThan(receipt!.receipt.startedAt)
+    // 清理实测：host-audit 下进程组扫描（sleep 已退出 → 0）
+    expect(receipt!.receipt.cleanup.processesRemaining).toBe(0)
+    // 自摘要存在且与摘要字段匹配
+    expect(receipt!.receipt.receiptDigest.length).toBe(16)
+  })
+
+  test("PR-2: receipt is persisted to the state store", async () => {
+    const { RuntimeStateStore } = await import("../../../src/runtime/linux/recovery/state-store")
+    const root = (await import("node:fs")).mkdtempSync((await import("node:os")).tmpdir() + "/pr2-receipt-")
+    try {
+      const store = new RuntimeStateStore({ root })
+      const broker = createLinuxBroker({ mode: "enabled", stateStore: store })
+      const spec = cellSpec()
+      for await (const _ of broker.execute(spec)) { /* drain */ }
+      const runDir = store.runDir("r1")
+      const receiptsDir = `${runDir}/receipts`
+      const files = (await import("node:fs")).readdirSync(receiptsDir)
+      expect(files.length).toBeGreaterThan(0)
+      const persisted = JSON.parse((await import("node:fs")).readFileSync(`${receiptsDir}/${files[0]}`, "utf8"))
+      expect(persisted.receiptDigest.length).toBe(16)
+      expect(persisted.backend).toBe("host-audit")
+    } finally {
+      (await import("node:fs")).rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

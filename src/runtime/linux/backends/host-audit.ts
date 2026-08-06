@@ -73,11 +73,11 @@ export function createHostAuditBackend(): ExecutionBackend {
       const before = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
       yield* streamBackendRun("host-audit", spec, ctx,
         () => this.compile(spec, ctx.capabilities),
-        (result) => {
+        (result, evidence) => {
           const diff = before && worktreeRoot ? pathGuardDiff(before, snapshotWorkspace(worktreeRoot)) : undefined
           return this.buildReceipt(spec, ctx.capabilities, {
-            startedAt: Date.now(),
-            finishedAt: Date.now(),
+            startedAt: evidence.startedAt,
+            finishedAt: evidence.finishedAt,
             exitCode: result.exitCode,
             signal: result.signal,
             timedOut: result.timedOut,
@@ -91,7 +91,8 @@ export function createHostAuditBackend(): ExecutionBackend {
             unexpectedWrites: [],
             violations: [],
             degradationReasons: [HOST_AUDIT_DEGRADATION],
-            metrics: {},
+            metrics: evidence.metrics,
+            cleanup: evidence.cleanup,
           })
         },
       )
@@ -119,7 +120,14 @@ export function createHostAuditBackend(): ExecutionBackend {
         unexpectedWrites: outcome.unexpectedWrites,
         violations: outcome.violations,
         degradationReasons: [HOST_AUDIT_DEGRADATION, ...outcome.degradationReasons],
-        cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: spec.lifecycle.retainOnFailure },
+        // PR-2：进程残留来自真实测量（countProcessGroup）；host-audit 无挂载/
+        // 无 cgroup —— 不创建即无需移除（事实值），进程组实测为 0 才算干净。
+        cleanup: {
+          processesRemaining: outcome.cleanup?.processesRemaining ?? -1,
+          mountsReleased: true,
+          cgroupRemoved: true,
+          worktreeRetained: spec.lifecycle.retainOnFailure,
+        },
       })
     },
   }

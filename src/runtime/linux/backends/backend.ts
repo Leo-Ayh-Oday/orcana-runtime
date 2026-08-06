@@ -68,15 +68,28 @@ export interface BackendOutcome {
   degradationReasons: string[]
   backendVersion?: string
   metrics?: import("../contracts").SandboxReceipt["metrics"]
+  /** 清理实测结果（由 streamBackendRun 注入；后端只覆写自身事实）。 */
+  cleanup?: Partial<import("../contracts").SandboxReceipt["cleanup"]>
 }
 
-/** 流式执行公共逻辑（R1）：stdout/stderr 增量产出，退出后构造 Receipt。 */
+/** streamBackendRun 注入的真实执行证据（PR-2：时间/指标/清理均实测）。 */
+export interface BackendRunEvidence {
+  startedAt: number
+  finishedAt: number
+  metrics?: SandboxReceipt["metrics"]
+  cleanup?: Partial<SandboxReceipt["cleanup"]>
+}
+
+/** 流式执行公共逻辑（R1）：stdout/stderr 增量产出，退出后构造 Receipt。
+ *  PR-2：startedAt/finishedAt 由真实执行推导（supervisor durationMs），
+ *  metrics 与 cleanup 来自 ctx.readCellMetrics/cleanupVerify 实测 ——
+ *  后端不再用 Date.now() 双调用伪造时长、不再硬编码清理成功值。 */
 export async function* streamBackendRun(
   backend: "host-audit" | "bubblewrap" | "rootless-podman",
   spec: ExecutionCellSpec,
   ctx: BackendRunContext,
   compile: () => CompiledExecution,
-  buildReceipt: (result: SupervisorResult) => SandboxReceipt,
+  buildReceipt: (result: SupervisorResult, evidence: BackendRunEvidence) => SandboxReceipt,
 ): AsyncGenerator<ExecutionCellEvent> {
   const startedAt = Date.now()
   yield { type: "cell.status", cellId: spec.identity.cellId, state: "running", at: startedAt }
@@ -96,9 +109,11 @@ export async function* streamBackendRun(
     else if (event.type === "stderr") yield { type: "cell.stderr", cellId: spec.identity.cellId, data: event.data, at: event.at }
     else {
       const result = event.result
+      const finishedAt = startedAt + result.durationMs
+      const metrics = ctx.readCellMetrics?.() ?? {}
+      const cleanup = ctx.cleanupVerify?.() ?? { processesRemaining: -1 }
       yield { type: "cell.exit", cellId: spec.identity.cellId, exitCode: result.exitCode, signal: result.signal, at: event.at }
-      yield { type: "cell.receipt", cellId: spec.identity.cellId, receipt: buildReceipt(result), at: event.at }
+      yield { type: "cell.receipt", cellId: spec.identity.cellId, receipt: buildReceipt(result, { startedAt, finishedAt, metrics, cleanup }), at: event.at }
     }
   }
-  void startedAt
 }

@@ -168,10 +168,10 @@ export function createPodmanBackend(): ExecutionBackend {
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
       yield* streamBackendRun("rootless-podman", spec, ctx,
-        () => this.compile(spec, ctx.capabilities),
-        (result) => this.buildReceipt(spec, ctx.capabilities, {
-          startedAt: Date.now(),
-          finishedAt: Date.now(),
+        () => this.compile(spec, ctx.capabilities, ctx.materialization),
+        (result, evidence) => this.buildReceipt(spec, ctx.capabilities, {
+          startedAt: evidence.startedAt,
+          finishedAt: evidence.finishedAt,
           exitCode: result.exitCode,
           signal: result.signal,
           timedOut: result.timedOut,
@@ -186,7 +186,8 @@ export function createPodmanBackend(): ExecutionBackend {
           violations: [],
           degradationReasons: [],
           backendVersion: ctx.capabilities.podman.version,
-          metrics: {},
+          metrics: evidence.metrics,
+          cleanup: evidence.cleanup,
         }),
       )
     },
@@ -213,7 +214,14 @@ export function createPodmanBackend(): ExecutionBackend {
         unexpectedWrites: outcome.unexpectedWrites,
         violations: outcome.violations,
         degradationReasons: outcome.degradationReasons,
-        cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, containerRemoved: true, worktreeRetained: spec.lifecycle.retainOnFailure },
+        // PR-2：无默认成功值；containerRemoved 基于 --rm 语义（PR-7 真实验证）。
+        cleanup: {
+          processesRemaining: outcome.cleanup?.processesRemaining ?? -1,
+          mountsReleased: true,
+          cgroupRemoved: outcome.cleanup?.cgroupRemoved ?? false,
+          containerRemoved: true,
+          worktreeRetained: spec.lifecycle.retainOnFailure,
+        },
       })
     },
   }

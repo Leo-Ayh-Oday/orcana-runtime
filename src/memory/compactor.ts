@@ -5,7 +5,7 @@
  * storage. This is not a lossy source of truth; it is a prompt-sized resume aid.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -248,7 +248,15 @@ export function saveColdArchive(state: CompactionState, sessionId = "session"): 
     totalTurns: state.totalTurns,
     estimatedTokens: state.estimatedTokens,
   }
-  writeFileSync(path, JSON.stringify(payload) + "\n", "utf-8")
+  const temp = `${path}.tmp`
+  writeFileSync(temp, JSON.stringify(payload) + "\n", "utf-8")
+  const fd = openSync(temp, "r")
+  try {
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  renameSync(temp, path)
   return { id, path, tokens: state.estimatedTokens, createdAt: payload.createdAt }
 }
 

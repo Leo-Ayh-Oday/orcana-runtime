@@ -77,6 +77,11 @@ function formatProcessResult(r: RunProcessResult, command: string): string {
   return `Command succeeded (exit 0) in ${r.durationMs}ms`
 }
 
+function parseTimeoutMs(value: unknown): number | undefined {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
 // ── run_process ──
 
 const RUN_PROCESS_SCHEMA = {
@@ -103,7 +108,7 @@ export const RUN_PROCESS_TOOL: ToolDef = {
     const args = Array.isArray(params["args"]) ? (params["args"] as unknown[]).map(String) : []
     const cwd = typeof params["cwd"] === "string" ? params["cwd"] : undefined
     const env = params["env"] as Record<string, string> | undefined
-    const timeoutMs = typeof params["timeoutMs"] === "number" ? params["timeoutMs"] : undefined
+    const timeoutMs = parseTimeoutMs(params["timeoutMs"])
     if (!executable) return Result.fail("run_process requires executable")
 
     const result = await runProcess({ command: executable, args, cwd, env, timeoutMs })
@@ -184,7 +189,7 @@ export const RUN_SHELL_SCRIPT_TOOL: ToolDef = {
       command: shell.path,
       args: shell.args(script),
       cwd: typeof params["cwd"] === "string" ? params["cwd"] : undefined,
-      timeoutMs: typeof params["timeoutMs"] === "number" ? params["timeoutMs"] : undefined,
+      timeoutMs: parseTimeoutMs(params["timeoutMs"]),
     })
     const content = [
       formatProcessResult(result, script.slice(0, 60)),

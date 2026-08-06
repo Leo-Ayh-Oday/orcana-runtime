@@ -28,9 +28,24 @@ const RET_KILL = 0x00000000
 
 /** x86_64 syscall 号（deny 面用，与内核 uapi 一致）。 */
 const X86_64_SYSCALLS: Record<string, number> = {
+  // deny 列表
   ptrace: 101, mount: 165, umount2: 166, reboot: 169, pivot_root: 155,
   setns: 308, unshare: 272, kexec_load: 246, bpf: 321, perf_event_open: 298,
   userfaultfd: 323,
+  // RC-06 B6: 白名单面（BASE_SYSCALLS + net/epoll/timerfd 运行时面）。
+  read: 0, write: 1, open: 2, close: 3, stat: 4, fstat: 5, lstat: 6,
+  lseek: 8, mmap: 9, mprotect: 10, munmap: 11, brk: 12, rt_sigaction: 13,
+  rt_sigprocmask: 14, rt_sigreturn: 15, ioctl: 16, pread64: 17, pwrite64: 18,
+  readv: 19, writev: 20, access: 21, pipe: 22, dup: 32, dup2: 33,
+  sendfile: 40, socket: 41, connect: 42, shutdown: 48, bind: 49, listen: 50,
+  getsockname: 51, getpeername: 52, socketpair: 53, setsockopt: 54,
+  getsockopt: 55, clone: 56, execve: 59, exit: 60, wait4: 61, fcntl: 72,
+  getdents64: 217, openat: 257, newfstatat: 262, readlinkat: 267,
+  readlink: 89, getpid: 39, gettid: 186, getuid: 102, getgid: 104,
+  geteuid: 107, getegid: 108, arch_prctl: 158, clock_gettime: 228,
+  getrandom: 318, futex: 202, pipe2: 293, exit_group: 231,
+  epoll_create1: 291, epoll_ctl: 233, epoll_wait: 232, eventfd2: 290,
+  timerfd_create: 283, timerfd_settime: 286, accept4: 288, dup3: 292,
 }
 
 interface BpfInsn { code: number; jt: number; jf: number; k: number }
@@ -63,7 +78,7 @@ export function compileSeccompBpf(profile: SeccompProfile): Uint8Array {
   insns.push(archCheck)
   insns.push(insn(BPF_RET | BPF_K, 0, 0, RET_KILL))
 
-  // 2. deny 列表：load nr → jeq → ret errno。
+  // 2. deny 列表：load nr → jeq → ret errno（显式拒绝优先于白名单）。
   for (const name of profile.denySyscalls) {
     const nr = X86_64_SYSCALLS[name]
     if (nr === undefined) continue
@@ -74,8 +89,24 @@ export function compileSeccompBpf(profile: SeccompProfile): Uint8Array {
     jeq.jf = 1
   }
 
-  // 3. 默认允许。
-  insns.push(insn(BPF_RET | BPF_K, 0, 0, RET_ALLOW))
+  // 3. RC-06 B6: 尊重 profile.defaultAction——
+  //    SCMP_ACT_ERRNO = deny-by-default：仅 allowSyscalls 白名单放行，其余 EPERM；
+  //    否则向后兼容 deny-list 模式（默认 ALLOW）。
+  if (profile.defaultAction === "SCMP_ACT_ERRNO") {
+    for (const name of profile.allowSyscalls) {
+      const nr = X86_64_SYSCALLS[name]
+      if (nr === undefined) continue
+      insns.push(insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0))
+      const jeq = insn(BPF_JMP | BPF_JEQ | BPF_K, 0, 0, nr)
+      insns.push(jeq)
+      insns.push(insn(BPF_RET | BPF_K, 0, 0, RET_ALLOW))
+      jeq.jf = 1
+    }
+    insns.push(insn(BPF_RET | BPF_K, 0, 0, RET_ERRNO_EPERM))
+  } else {
+    // 默认允许（兼容：未声明 ERRNO 的调用方）。
+    insns.push(insn(BPF_RET | BPF_K, 0, 0, RET_ALLOW))
+  }
   return encode(insns)
 }
 

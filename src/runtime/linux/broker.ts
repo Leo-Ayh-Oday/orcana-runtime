@@ -10,6 +10,8 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import type {
   AgentExecutionDomain,
   CapabilityRequest,
@@ -41,6 +43,7 @@ import { RuntimeStateStore } from "./recovery/state-store"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { writeSeccompBpfFile } from "./seccomp-bpf"
+import { writeOciSeccompFile } from "./seccomp-oci"
 import { compileSeccompProfile } from "./landlock-seccomp"
 import { bindSecrets } from "./secrets"
 import { CacheManager } from "./workspace/cache-port"
@@ -73,6 +76,8 @@ export interface LinuxBrokerOptions {
   cacheRoot?: string
   /** Secret 值来源（Runtime 持有，模型不可见；未提供时环境注入为空）。 */
   secretValues?: Record<string, string>
+  /** PR-7: 已批准镜像策略（digest 全串或 registry 前缀；命中才允许 podman 执行）。 */
+  approvedImages?: string[]
 }
 
 /** PR-6：统一 ExecutionRuntimeContext —— Graph 调度 / ProcessExecutor /
@@ -152,7 +157,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   const caps = requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
-  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController }>()
+  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string }>()
 
   const ledger = options.ledger ?? new ResourceLedger()
   const stateStore = options.stateStore ?? new RuntimeStateStore()
@@ -174,16 +179,24 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   }
 
   /** 运行期物化：seccomp 文件、secret 注入、缓存宿主路径。
-   *  P0-1 修复：绝不写回 compiled spec —— 策略 Spec 在编译后冻结。 */
+   *  P0-1 修复：绝不写回 compiled spec —— 策略 Spec 在编译后冻结。
+   *  PR-7：seccomp 按后端协议生成（bwrap=raw BPF；podman=OCI JSON）；
+   *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。 */
   const materializeExecution = (spec: ExecutionCellSpec, backendId: string): ExecutionMaterialization => {
     const materialization: ExecutionMaterialization = {}
     if ((backendId === "bubblewrap" || backendId === "rootless-podman")
       && (spec.profile === "inspect" || spec.profile === "untrusted")) {
       try {
         const target = spec.profile === "untrusted" ? "untrusted" : "inspect"
-        const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.bpf`)
-        writeSeccompBpfFile(compileSeccompProfile(target), filePath)
-        materialization.seccompFile = filePath
+        if (backendId === "bubblewrap") {
+          const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.bpf`)
+          writeSeccompBpfFile(compileSeccompProfile(target), filePath)
+          materialization.seccompFile = filePath
+        } else {
+          const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.json`)
+          writeOciSeccompFile(compileSeccompProfile(target), filePath)
+          materialization.seccompFile = filePath
+        }
       } catch {
         // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
       }
@@ -194,7 +207,17 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
       }
       materialization.secretEnv = bound.envInjections
-      bound.cleanup() // 本次执行结束后立即清理临时文件（环境注入类无文件）
+      // PR-7：sealed-file 交付 → 宿主文件真实挂载进沙盒/容器。
+      const secretFiles: Record<string, string> = {}
+      for (const item of bound.bound) {
+        if (item.deliveryTarget) {
+          const target = item.binding.target ?? `/run/secrets/${item.binding.id}`
+          secretFiles[target] = item.deliveryTarget
+        }
+      }
+      materialization.secretFiles = secretFiles
+      // 环境注入类无宿主文件；sealed-file 在挂载路径下由后端读取后清理。
+      if (Object.keys(secretFiles).length === 0) bound.cleanup()
     }
     for (const cache of spec.cache) {
       materialization.cacheHostPaths = {
@@ -203,6 +226,56 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       }
     }
     return materialization
+  }
+
+  /** PR-7: approved image policy —— 命中已批准列表才允许 podman 执行。 */
+  const approvedImage = (image: string): boolean => {
+    const policy = options.approvedImages ?? []
+    if (policy.length === 0) return false
+    return policy.some(entry => image === entry || image.startsWith(entry))
+  }
+
+  /** PR-7: podman 容器按 label/cidfile 停止（后端特异清理）。 */
+  const podmanCleanup = (runId: string, cellId: string, cidfile: string | undefined): void => {
+    const podmanPath = caps.podman.path ?? "podman"
+    // 1. cidfile：直接停止残留容器（--rm 未生效的异常路径）。
+    if (cidfile) {
+      try {
+        const cid = readFileSyncSafe(cidfile)
+        if (cid.trim()) {
+          spawnSync(podmanPath, ["rm", "-f", cid.trim()], { stdio: "ignore", timeout: 10_000 })
+        }
+      } catch {
+        // cidfile 不存在 = 容器从未启动
+      }
+    }
+    // 2. label 兜底：按 run/cell 标签清理。
+    try {
+      const listed = spawnSync(podmanPath, ["ps", "-a", "-q", "--filter", `label=io.orcana.run=${runId}`, "--filter", `label=io.orcana.cell=${cellId}`], { encoding: "utf8", timeout: 10_000 })
+      if (listed.status === 0 && listed.stdout.trim()) {
+        spawnSync(podmanPath, ["rm", "-f", ...listed.stdout.trim().split(/\s+/)], { stdio: "ignore", timeout: 15_000 })
+      }
+    } catch {
+      // podman 不可用
+    }
+  }
+
+  function readFileSyncSafe(path: string): string {
+    return readFileSync(path, "utf8")
+  }
+
+  // PR-7：进程启动时钟 tick（/proc/<pid>/stat 第 22 字段）——PID 复用安全
+  // 的 owner 身份（同 boot 崩溃恢复判定依据）。
+  function readProcStartTicks(): number {
+    try {
+      const stat = readFileSync(`/proc/${process.pid}/stat`, "utf8")
+      const closeParen = stat.lastIndexOf(")")
+      if (closeParen < 0) return 0
+      const fields = stat.slice(closeParen + 1).trim().split(/\s+/)
+      return Number(fields[19] ?? 0)
+    } catch {
+      return 0
+    }
   }
 
   const readCellMetrics = (cgroupCellPath: string): SandboxReceipt["metrics"] => {
@@ -270,6 +343,14 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         return
       }
       let compiled = compileOrThrow(spec)
+      // PR-7: podman 镜像策略校验先于一切后端选择/可用性 —— 声明了容器镜像
+      // 就必须命中已批准列表（digest 锁定 + 审批表；无 podman 机器同样 fail-closed）。
+      {
+        const image = compiled.environment.variables["ORCANA_IMAGE"] ?? ""
+        if (image && !approvedImage(image)) {
+          throw new LinuxExecutionError("IMAGE_NOT_APPROVED", `image "${image}" is not in the approved image policy`)
+        }
+      }
       // P0-2：隔离后端不可用时的显式降级通道 —— 只有非严格 Profile
       // （allowDegradation=true）允许经编译器重编译到 minimum=audit；
       // 严格 Profile 在 selectBackend 直接抛 DEGRADATION_NOT_ALLOWED。
@@ -302,6 +383,10 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       const cellId = compiled.identity.cellId
       const runId = compiled.identity.runId
       const agentId = compiled.identity.agentId ?? executeOptions?.domain?.agentId
+      // PR-7: podman cidfile 进入停止/恢复逻辑。
+      const podmanCidfile = selection.backend === "rootless-podman"
+        ? `/tmp/orcana-${runId}-${cellId}.cid`
+        : undefined
 
       // ── 事务：资源预留 → 锁 → Domain → cgroup → 执行 → 清理 → 释放 ──
       const requested = resourceRequestOf(compiled)
@@ -366,8 +451,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             executeOptions.abortSignal.addEventListener("abort", () => controller.abort(), { once: true })
           }
         }
-        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller })
-        stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId) })
+        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile })
+        stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId), backend: selection.backend, ownerPid: process.pid, ownerProcStartTicks: readProcStartTicks() })
 
         // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
         let spawnedPid = 0
@@ -470,6 +555,10 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       if (cgroup && record.cgroupCellPath) {
         cgroup.kill(record.cgroupCellPath)
       }
+      // PR-7：podman 后端特异清理 —— cidfile + label 停止残留容器。
+      if (record.podmanCidfile) {
+        podmanCleanup(record.runId, cellId, record.podmanCidfile)
+      }
     },
     async cancelAgent(agentId) {
       domainManager.cancelAgent(agentId)
@@ -505,6 +594,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           removed += 1
         }
       }
+      // PR-7：podman label 级兜底清理（run 级残留容器）。
+      podmanCleanup(runId, "", undefined)
       domainManager.closeRun(runId)
       removed += ledger.releaseRun(runId)
       if (cgroup) {

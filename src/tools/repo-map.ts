@@ -122,8 +122,9 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-function tokenEstimate(text: string): number {
-  return Math.ceil(text.length / 3)
+function tokenEstimate(text: string | number): number {
+  const chars = typeof text === "number" ? text : text.length
+  return Math.ceil(chars / 3)
 }
 
 export function buildRepoMap(params: { projectRoot: string; entryFile?: string; includeTests?: boolean; maxFiles?: number }): RepoMap {
@@ -159,7 +160,7 @@ export function buildRepoMap(params: { projectRoot: string; entryFile?: string; 
     rankedSymbols: ranked.slice(0, 100),
     dependencyEdges: edges.slice(0, 200),
     relatedTests,
-    tokenEstimate: tokenEstimate(String(total)),
+    tokenEstimate: tokenEstimate(total),
     provenance: "compiler",
     scannedFiles: files.length,
   }

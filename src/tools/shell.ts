@@ -98,6 +98,7 @@ async function shell(
   let timedOut = false
   let aborted = false
   let exitCode: number | null = null
+  const startedAt = Date.now()
   for await (const event of executeProcess({
     command: shellExecutable(),
     args: shellArgs(command),
@@ -122,7 +123,6 @@ async function shell(
     }
   }
 
-  const startedAt = Date.now()
   const sandboxReport = observeWorkspaceWrites(sandbox)
   if (aborted) {
     return Result.fail(`Command aborted${sandboxReport}`)
@@ -210,6 +210,7 @@ export async function* shellStream(
   let aborted = false
   let spawnError = ""
   let exitCode: number | null = null
+  const startedAt = Date.now()
   for await (const event of executeProcess({
     command: shellExecutable(),
     args: shellArgs(command),
@@ -235,7 +236,6 @@ export async function* shellStream(
         break
     }
   }
-  const startedAt = Date.now()
 
   if (aborted) {
     const sandboxReport = observeWorkspaceWrites(sandbox)

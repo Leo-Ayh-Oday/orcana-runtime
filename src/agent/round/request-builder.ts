@@ -6,14 +6,22 @@ import type { ToolDescriptor } from "../../tools/registry"
 
 // ── Token estimation ──
 
+function toolSchemaChars(tools: ToolDescriptor[]): number {
+  const schemas = tools.map(tool => tool.toAnthropicSchema()).slice(0, 128)
+  return schemas.length ? JSON.stringify(schemas).length : 0
+}
+
 export function estimateRoundTokens(
   system: string,
   contextMessages: ProviderMessage[],
   rawMessages: ProviderMessage[],
   budgetContext: ProviderMessage | null,
+  tools: ToolDescriptor[] = [],
 ): { roundInputTokens: number; providerMessages: ProviderMessage[] } {
+  const schemas = toolSchemaChars(tools)
   let roundInputTokens = Math.round(
     (system.length +
+      schemas +
       contextMessages.reduce((s, m) => s + msgCharLen(m), 0) +
       rawMessages.reduce((s, m) => s + msgCharLen(m), 0)) / 3
   )
@@ -25,7 +33,7 @@ export function estimateRoundTokens(
     contextMessages.push(budgetContext)
     providerMessages.push(budgetContext)
     roundInputTokens = Math.round(
-      (system.length + providerMessages.reduce((s, m) => s + msgCharLen(m), 0)) / 3
+      (system.length + schemas + providerMessages.reduce((s, m) => s + msgCharLen(m), 0)) / 3
     )
   }
   return { roundInputTokens, providerMessages }

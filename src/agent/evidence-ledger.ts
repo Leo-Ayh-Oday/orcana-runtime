@@ -31,6 +31,8 @@ export interface EvidenceEntry {
   output: string
   /** Whether the verification passed. Only passed evidence counts toward canClaimDone. */
   passed: boolean
+  /** RC-01: 六态验证状态（passed/failed/unavailable/error/timed_out/cancelled）。 */
+  status?: string
   /** Number of typecheck issues in the output (typecheck kind only). */
   issues?: number
   /** Unix timestamp (ms) when this evidence was collected. */
@@ -267,6 +269,8 @@ export function ingestVerificationResults(ledger: EvidenceLedger, results: Verif
 /** Add a typecheck evidence entry (e.g. from the round's batch tsc run). */
 export function ingestTypecheck(ledger: EvidenceLedger, opts: {
   passed: boolean
+  /** RC-01: 六态验证状态（unavailable/error/timed_out/cancelled 均非通过）。 */
+  status?: string
   issues: number
   output: string
   command?: string
@@ -278,6 +282,7 @@ export function ingestTypecheck(ledger: EvidenceLedger, opts: {
     command: opts.command,
     output: opts.output,
     passed: opts.passed,
+    status: opts.status,
     issues: opts.issues,
     timestamp: Date.now(),
     generation: opts.generation,

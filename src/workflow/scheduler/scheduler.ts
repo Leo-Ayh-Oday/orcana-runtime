@@ -229,6 +229,16 @@ export async function runScheduler(
   const maxParallel = options.maxParallel ?? spec.maxParallel ?? 4
   if (maxParallel < 1) throw new Error("workflow: maxParallel must be >= 1")
 
+  // M8: duplicate node ids fail before any execution — id-keyed topology
+  // maps (indegree / byId) would silently overwrite.
+  {
+    const seen = new Set<string>()
+    for (const node of spec.nodes) {
+      if (seen.has(node.id)) throw new Error(`workflow: duplicate node id "${node.id}"`)
+      seen.add(node.id)
+    }
+  }
+
   const cycle = detectCycle(spec)
   if (cycle) throw new Error(`workflow: cycle detected: ${cycle.join(" → ")}`)
 

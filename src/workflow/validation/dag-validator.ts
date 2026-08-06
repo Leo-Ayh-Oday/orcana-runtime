@@ -9,7 +9,7 @@ import { detectCycle } from "../results/edge-store"
 import type { WorkflowSpec } from "../types"
 
 export interface DAGIssue {
-  code: "unknown_dependency" | "cycle" | "empty_spec"
+  code: "unknown_dependency" | "cycle" | "empty_spec" | "duplicate_node_id"
   message: string
 }
 
@@ -18,6 +18,15 @@ export function validateDAG(spec: WorkflowSpec): DAGIssue[] {
   if (spec.nodes.length === 0) {
     issues.push({ code: "empty_spec", message: "workflow: spec has no nodes" })
     return issues
+  }
+  // M8: duplicate node ids must fail validation before anything runs — the
+  // id-keyed topology maps would silently overwrite (last-writer-wins).
+  const seen = new Set<string>()
+  for (const node of spec.nodes) {
+    if (seen.has(node.id)) {
+      issues.push({ code: "duplicate_node_id", message: `workflow: duplicate node id "${node.id}"` })
+    }
+    seen.add(node.id)
   }
   const ids = new Set(spec.nodes.map(n => n.id))
   let hasUnknown = false

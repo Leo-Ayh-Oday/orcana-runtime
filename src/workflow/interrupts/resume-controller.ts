@@ -6,8 +6,9 @@
  *  interrupt has not expired (task 11); the response passes the recorded
  *  response schema; the workspace hash still matches (task 10 — a changed
  *  workspace must trigger re-verification, which fails the resume until a
- *  fresh run). Consuming a token resolves the record — a token can never
- *  be replayed (DOUBLE_RESUME: 0).
+ *  fresh run). The token is consumed atomically (waiting → resuming) at
+ *  acceptance and resolved when the resumed run completes — a token can
+ *  never be replayed (DOUBLE_RESUME: 0).
  */
 import type { InterruptStore } from "./interrupt-store"
 import { parseResumeToken, createResumeToken, newInterruptId } from "./resume-token"
@@ -118,7 +119,21 @@ export class ResumeController {
         return { ok: false, reason: `response schema rejected: ${errors.join("; ")}` }
       }
     }
-    return { ok: true, record, answer }
+    // M10: the final gate is the atomic consume — waiting → resuming. A
+    // concurrent resume that already consumed the token loses the race and
+    // fails here (DOUBLE_RESUME: 0); the record transitions immediately, so
+    // a crash mid-resume leaves a clearly recoverable "resuming" state.
+    const consumed = this.store.consume(record.interruptId)
+    if (!consumed) {
+      const latest = this.store.get(record.interruptId)
+      return {
+        ok: false,
+        reason: latest
+          ? `interrupt already ${latest.status} (resume not repeatable)`
+          : `no interrupt record for ${record.interruptId}`,
+      }
+    }
+    return { ok: true, record: consumed, answer }
   }
 
   /** Mark the interrupt resolved once the resumed run completes. */

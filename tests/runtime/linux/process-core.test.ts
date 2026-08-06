@@ -149,8 +149,9 @@ describe("LF-2: process supervision (linux)", () => {
     expect(result.exitCode).toBe(null)
   })
 
-  linuxOnly("abort signal cancels and tree-kills", async () => {
+  linuxOnly("abort signal cancels and tree-kills the process group", async () => {
     const controller = new AbortController()
+    let spawnedPid = 0
     const promise = runSupervised({
       executable: "/bin/sh",
       args: ["-c", "sleep 30"],
@@ -159,10 +160,40 @@ describe("LF-2: process supervision (linux)", () => {
       limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
       wallTimeMs: 30_000,
       abortSignal: controller.signal,
+      onSpawn: pid => { spawnedPid = pid },
     })
-    setTimeout(() => controller.abort(), 300)
+    await new Promise(r => setTimeout(r, 300))
+    expect(spawnedPid).toBeGreaterThan(0)
+    expect(countProcessGroup(spawnedPid)).toBeGreaterThanOrEqual(1)
+    controller.abort()
     const result = await promise
     expect(result.cancelled).toBe(true)
+    // F2（ABORT_IGNORED）：取消后进程组必须真实归零 —— 不只看事件流结束
+    expect(countProcessGroup(spawnedPid)).toBe(0)
+  })
+
+  linuxOnly("abort kills nested grandchildren (subprocess-level cancel)", async () => {
+    const controller = new AbortController()
+    let spawnedPid = 0
+    const promise = runSupervised({
+      executable: "/bin/sh",
+      args: ["-c", `sh -c "sleep 30 & sleep 30 & wait" & wait`],
+      cwd: "/tmp",
+      env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
+      limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
+      wallTimeMs: 30_000,
+      abortSignal: controller.signal,
+      onSpawn: pid => { spawnedPid = pid },
+    })
+    await new Promise(r => setTimeout(r, 300))
+    expect(spawnedPid).toBeGreaterThan(0)
+    // 进程树就绪：外层 sh + 内层 sh + 2 个 sleep（同组，未 setsid）
+    expect(countProcessGroup(spawnedPid)).toBeGreaterThanOrEqual(3)
+    controller.abort()
+    const result = await promise
+    expect(result.cancelled).toBe(true)
+    // 嵌套子进程也必须随组清除 —— 无 ABORT_IGNORED 场景
+    expect(countProcessGroup(spawnedPid)).toBe(0)
   })
 
   linuxOnly("output limit is hit on large output", async () => {

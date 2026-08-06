@@ -33,18 +33,18 @@ function spec(overrides: Partial<ExecutionCellSpec> = {}): ExecutionCellSpec {
 }
 
 describe("R3 seccomp-BPF", () => {
-  test("deny syscalls are encoded as ERRNO, default ALLOW (x86_64)", () => {
+  test("inspect profile is deny-by-default: whitelist allow, tail ret EPERM (x86_64)", () => {
     if (arch() !== "x64") return
-    const bpf = compileSeccompBpf(compileSeccompProfile("inspect"))
-    // 头部: arch load + jeq + kill + 每个 deny 的 (load/jeq/ret) + 尾部 allow ret。
-    const denyCount = compileSeccompProfile("inspect").denySyscalls.length
-    const expectedInsns = 3 + denyCount * 3 + 1
+    const profile = compileSeccompProfile("inspect")
+    const bpf = compileSeccompBpf(profile)
+    // 头部: arch load + jeq + kill + deny 列表 3 指令/条 + 白名单 3 指令/条 + 尾部 ret。
+    const expectedInsns = 3 + profile.denySyscalls.length * 3 + profile.allowSyscalls.length * 3 + 1
     expect(bpf.length).toBe(expectedInsns * 8)
     const view = new DataView(bpf.buffer)
-    // 尾部指令 = RET ALLOW
+    // 尾部指令 = RET ERRNO(EPERM)——deny-by-default，不再是 RET ALLOW。
     const last = (expectedInsns - 1) * 8
     expect(view.getUint16(last, true) & 0x07).toBe(0x06) // BPF_RET
-    expect(view.getUint32(last + 4, true)).toBe(0x7fff0000)
+    expect(view.getUint32(last + 4, true)).toBe(0x00050001) // SECCOMP_RET_ERRNO | EPERM
   })
 
   test("deny list contains ptrace/mount/bpf (conservative)", () => {

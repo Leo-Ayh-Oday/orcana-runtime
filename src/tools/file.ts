@@ -1,8 +1,8 @@
 /** File tools — read, write, edit. */
 
 import { readFile } from "node:fs/promises"
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { existsSync, readFileSync } from "node:fs"
+import { isAbsolute, join, relative, resolve } from "node:path"
 import * as ts from "typescript"
 import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result } from "./registry"
@@ -599,53 +599,85 @@ const EDIT_SYMBOL_SCHEMA = {
   required: ["path", "symbol"],
 } as const
 
-function edit_symbol(params: Record<string, unknown>): ToolResult {
+async function edit_symbol(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const path = String(params["path"] ?? "")
   const symbol = String(params["symbol"] ?? "")
   const newText = typeof params["newText"] === "string" ? params["newText"] : undefined
   const dryRun = params["dryRun"] === true
 
-  const p = resolve(path)
-  if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
-  const content = readFileSync(p, "utf-8")
-  const span = findSymbolSpan(content, symbol)
-  if (!span) return Result.fail(`Symbol not found: ${symbol} in ${path}`)
+  try {
+    const p = resolve(path)
+    const snapshot = approvedContent(context, p)
+    if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
+    if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
+    const content = snapshot.found ? snapshot.content! : readFileSync(p, "utf-8")
+    const freshnessBlock = revalidateApprovedSnapshot(context, p, content)
+    if (freshnessBlock) return freshnessBlock
+    const span = findSymbolSpan(content, symbol)
+    if (!span) return Result.fail(`Symbol not found: ${symbol} in ${path}`)
 
-  const lines = content.split("\n")
-  const current = lines.slice(span.start, span.end).join("\n")
+    const lines = content.split("\n")
+    const current = lines.slice(span.start, span.end).join("\n")
 
-  if (dryRun) {
-    return Result.ok(current, {
+    if (dryRun) {
+      return Result.ok(current, {
+        path,
+        symbol,
+        symbolKind: "ast",
+        authority: "compiler",
+        startLine: span.start,
+        endLine: span.end,
+        dryRun: true,
+      })
+    }
+    if (newText === undefined) {
+      return Result.fail(`edit_symbol requires newText (or dryRun=true to preview): ${symbol}`)
+    }
+
+    const before = lines.slice(0, span.start).join("\n")
+    const after = lines.slice(span.end).join("\n")
+    const replacement = before + (before ? "\n" : "") + newText + (after ? "\n" : "") + after
+    const baseHash = approvedBaseHash(context, p, () => computeBaseHash(content))
+    const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+
+    const ripple = previewEdit({ targetFile: p, oldContent: content, newContent: replacement, mode: "edit_file" })
+    const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
+    if (effectiveDecision !== "allow") {
+      return Result.blocked(formatRippleBlock(ripple))
+    }
+
+    const mpt = await applyAndCommit(
+      {
+        tool: "edit_symbol",
+        files: [{
+          relativePath: relPath,
+          oldContent: content,
+          newContent: replacement,
+          expectedBaseHash: baseHash,
+        }],
+      },
+      async (_mpt: ManagedPatchTransaction) => true,
+    )
+
+    getRippleProgram().invalidateFile(p)
+    const fileState = recordRuntimeFileWrite({ path: p, content: replacement })
+    return Result.ok(`edited symbol ${symbol} (lines ${span.start + 1}-${span.end})`, {
       path,
       symbol,
       symbolKind: "ast",
       authority: "compiler",
       startLine: span.start,
       endLine: span.end,
-      dryRun: true,
+      dryRun: false,
+      transactionId: mpt.patch.fileTransaction.id,
+      patchTransactionId: mpt.txId,
+      rippleReport: ripple,
+      checkpoint: checkpointMetadata(path, content, baseHash),
+      fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
+  } catch (e) {
+    return fileToolFailure(e)
   }
-  if (newText === undefined) {
-    return Result.fail(`edit_symbol requires newText (or dryRun=true to preview): ${symbol}`)
-  }
-
-  const before = lines.slice(0, span.start).join("\n")
-  const after = lines.slice(span.end).join("\n")
-  const replacement = before + (before ? "\n" : "") + newText + (after ? "\n" : "") + after
-  const temp = join(dirname(p), `.tmp-${process.pid}-${Date.now()}`)
-  writeFileSync(temp, replacement, "utf-8")
-  renameSync(temp, p)
-  recordRuntimeFileWrite({ path: p, content: replacement })
-
-  return Result.ok(`edited symbol ${symbol} (lines ${span.start + 1}-${span.end})`, {
-    path,
-    symbol,
-    symbolKind: "ast",
-    authority: "compiler",
-    startLine: span.start,
-    endLine: span.end,
-    dryRun: false,
-  })
 }
 
 export const EDIT_SYMBOL_TOOL: ToolDef = {
@@ -654,8 +686,14 @@ export const EDIT_SYMBOL_TOOL: ToolDef = {
   isReadonly: false,
   category: "file",
   requiresConfirmation: true,
+  managesFreshnessApproval: true,
+  contract: {
+    pathPolicy: "workspace_only",
+    stateRequirement: "fresh_full_baseline",
+    stateUpdates: ["file_state", "checkpoint"],
+  },
   inputSchema: EDIT_SYMBOL_SCHEMA as unknown as Record<string, unknown>,
-  execute: edit_symbol,
+  execute: (params, _onProgress, context) => edit_symbol(params, context),
 }
 
 export const WRITE_FILE: ToolDef = {

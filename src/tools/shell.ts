@@ -138,7 +138,7 @@ async function shell(
       success: false,
       error: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}`,
       content: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}${sandboxReport}`,
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.max(0, Date.now() - startedAt),
     })
   }
   let output = stdoutChunks.join("").trim() || "(empty output)"
@@ -152,7 +152,7 @@ async function shell(
       error: `Command exited with code ${code}`,
       content: output.slice(0, 8000),
       exitCode: code,
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.max(0, Date.now() - startedAt),
     })
   }
   return shellResult({
@@ -160,7 +160,7 @@ async function shell(
     success: true,
     content: output.slice(0, 8000),
     exitCode: code,
-    durationMs: Date.now() - startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt),
   })
 }
 
@@ -255,7 +255,7 @@ export async function* shellStream(
       success: false,
       error: `Command timed out after ${timeoutSec}s`,
       content: `Command timed out after ${timeoutSec}s${sandboxReport}`,
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.max(0, Date.now() - startedAt),
     }) }
     return
   }
@@ -281,7 +281,7 @@ export async function* shellStream(
       error: `Command exited with code ${code}`,
       content: display,
       exitCode: code,
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.max(0, Date.now() - startedAt),
       truncated: truncated ? output.length : undefined,
     }) }
     return
@@ -291,7 +291,7 @@ export async function* shellStream(
     success: true,
     content: display,
     exitCode: code,
-    durationMs: Date.now() - startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt),
     truncated: truncated ? output.length : undefined,
   }) }
 }

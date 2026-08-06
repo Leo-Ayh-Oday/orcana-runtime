@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
+import { testAuthorityFallback } from "../../../src/runtime/linux/broker"
 import { ResourceLedger } from "../../../src/runtime/linux/scheduler/resource-ledger"
 import { CgroupManager, type CgroupFs } from "../../../src/runtime/linux/cgroup/manager"
 import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
@@ -177,13 +178,14 @@ describe("R2 broker transaction", () => {
   test("PR-1: executeRequest compiles a CapabilityRequest and runs it", async () => {
     const broker = createLinuxBroker({ mode: "enabled" })
     const events: Array<{ type: string; [k: string]: unknown }> = []
+    const authority = testAuthorityFallback(process.cwd())
     for await (const e of broker.executeRequest({
       command: { executable: "/bin/true", args: [] },
       profile: "build",
-    })) events.push(e as unknown as { type: string; [k: string]: unknown })
+    }, { authority })) events.push(e as unknown as { type: string; [k: string]: unknown })
     expect(events.some(e => e.type === "cell.exit")).toBe(true)
     expect(events.some(e => e.type === "cell.receipt")).toBe(true)
-    // 身份由 Runtime 生成，非共享占位符
+    // 身份来自 Authority，非共享占位符
     expect((events[0] as { cellId?: string }).cellId?.startsWith("cell-")).toBe(true)
   })
 

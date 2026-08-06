@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { createPlanStore, type PlanStore } from "../agent/run/plan-store"
 import type { AgentRunToolRegistry } from "../agent/run/tool-registry"
+import type { TrustedExecutionAuthority } from "./linux/contracts"
 
 export interface RuntimeContextKey<T> {
   readonly id: symbol
@@ -139,4 +140,31 @@ export function getExecutionIdentity(): ExecutionIdentity {
 /** 设置当前运行时执行身份（agentLoop 进入前；工具执行注入用）。 */
 export function setExecutionIdentity(identity: ExecutionIdentity): void {
   setRuntimeContextValue(EXECUTION_IDENTITY, identity)
+}
+
+// ── R2 PR-9：Trusted Execution Authority（INV-A 唯一身份来源） ──
+
+const EXECUTION_AUTHORITY = createRuntimeContextKey<TrustedExecutionAuthority | undefined>(
+  "execution-authority",
+  () => undefined,
+)
+
+/** 注入可信执行权威（Agent Run Scope 进入前设置；子 Agent 生成新 Authority）。
+ *  传 undefined 清除当前权威（作用域退出）。 */
+export function setExecutionAuthority(authority: TrustedExecutionAuthority | undefined): void {
+  setRuntimeContextValue(EXECUTION_AUTHORITY, authority)
+}
+
+/** 当前可信执行权威（未设置时 undefined）。 */
+export function getExecutionAuthority(): TrustedExecutionAuthority | undefined {
+  return getRuntimeContextValue(EXECUTION_AUTHORITY)
+}
+
+/** 要求存在可信执行权威（Linux enabled 执行路径必须存在；缺失即 fail-closed）。 */
+export function requireExecutionAuthority(): TrustedExecutionAuthority {
+  const authority = getRuntimeContextValue(EXECUTION_AUTHORITY)
+  if (!authority) {
+    throw new Error("No trusted execution authority: Linux execution requires an AgentRunScope with registered workspace")
+  }
+  return authority
 }

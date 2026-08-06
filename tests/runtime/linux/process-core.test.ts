@@ -375,7 +375,15 @@ describe("LF-2: static gate — DIRECT_LINUX_PROCESS_BYPASS (AST)", () => {
 describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", () => {
   linuxOnly("collectProcessRun carries a real receipt with self digest", async () => {
     const { collectProcessRun, executeProcess } = await import("../../../src/runtime/process-executor")
-    const outcome = await collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 10_000 })
+    const { setExecutionAuthority, runWithRuntimeExecutionContext, createRuntimeExecutionContext } = await import("../../../src/runtime/execution-context")
+    const run = () => runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
+      setExecutionAuthority({
+        identity: { runId: `run-rc-${process.pid}`, nodeRunId: `run-rc-${process.pid}:n1`, attempt: 1 },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+      })
+      return collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 10_000 })
+    })
+    const outcome = await run()
     expect(outcome.receipt).toBeDefined()
     expect(outcome.receipt!.backend).toBe("host-audit")
     expect(outcome.receipt!.receiptDigest.length).toBe(16)
@@ -385,9 +393,15 @@ describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", 
 
     // executeProcess 流式事件同样透传 receipt（不丢弃）
     const events: Array<{ type: string; [k: string]: unknown }> = []
-    for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
-      events.push(e as unknown as { type: string; [k: string]: unknown })
-    }
+    await runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
+      setExecutionAuthority({
+        identity: { runId: `run-rc2-${process.pid}`, nodeRunId: `run-rc2-${process.pid}:n1`, attempt: 1 },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+      })
+      for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
+        events.push(e as unknown as { type: string; [k: string]: unknown })
+      }
+    })
     expect(events.some(e => e.type === "receipt")).toBe(true)
   })
 })
@@ -432,14 +446,21 @@ describe("PR-3: output limit kills the process (hard limit)", () => {
   })
 })
 
-describe("PR-6: execution identity flows into ProcessRequest", () => {
-  linuxOnly("request identity reaches the compiled spec (no shared tool-run)", async () => {
+describe("R2 PR-9: execution identity only from authority", () => {
+  linuxOnly("authority identity reaches the compiled spec (no request identity fields)", async () => {
     const { executeProcess } = await import("../../../src/runtime/process-executor")
+    const { setExecutionAuthority, runWithRuntimeExecutionContext, createRuntimeExecutionContext } = await import("../../../src/runtime/execution-context")
     const events: Array<{ type: string; [k: string]: unknown }> = []
-    for await (const e of executeProcess({
-      command: "/bin/true", args: [], timeoutMs: 10_000,
-      runId: "run-test-42", nodeRunId: "run-test-42:n3", agentId: "agent-x", attempt: 3,
-    })) events.push(e as unknown as { type: string; [k: string]: unknown })
+    const run = () => runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
+      setExecutionAuthority({
+        identity: { runId: "run-test-42", nodeRunId: "run-test-42:n3", attempt: 3, agentId: "agent-x" },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+      })
+      for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
+        events.push(e as unknown as { type: string; [k: string]: unknown })
+      }
+    })
+    await run()
     const receipt = events.find(e => e.type === "receipt") as { receipt: { runId: string; nodeRunId: string; agentId?: string; attempt: number } } | undefined
     expect(receipt).toBeDefined()
     expect(receipt!.receipt.runId).toBe("run-test-42")
@@ -448,22 +469,40 @@ describe("PR-6: execution identity flows into ProcessRequest", () => {
     expect(receipt!.receipt.attempt).toBe(3)
   })
 
-  linuxOnly("runtime identity context is injected when request omits it", async () => {
+  linuxOnly("no authority fails closed (enabled broker)", async () => {
     const { executeProcess } = await import("../../../src/runtime/process-executor")
-    const { setExecutionIdentity } = await import("../../../src/runtime/execution-context")
-    setExecutionIdentity({ runId: "ctx-run-1", nodeRunId: "ctx-run-1:n1", agentId: "ctx-agent", sessionId: "s1" })
+    const { setExecutionAuthority } = await import("../../../src/runtime/execution-context")
+    // 清理可能残留的 legacy 上下文权威（测试隔离）。
+    setExecutionAuthority(undefined)
+    let caught: unknown
     try {
       const events: Array<{ type: string; [k: string]: unknown }> = []
       for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
         events.push(e as unknown as { type: string; [k: string]: unknown })
       }
-      const receipt = events.find(e => e.type === "receipt") as { receipt: { runId: string; agentId?: string } } | undefined
-      expect(receipt).toBeDefined()
-      expect(receipt!.receipt.runId).toBe("ctx-run-1")
-      expect(receipt!.receipt.agentId).toBe("ctx-agent")
-    } finally {
-      setExecutionIdentity({})
+    } catch (error) {
+      caught = error
     }
+    expect(String(caught)).toMatch(/trusted execution authority/i)
+  })
+
+  linuxOnly("authority context identity is injected from runtime scope", async () => {
+    const { executeProcess } = await import("../../../src/runtime/process-executor")
+    const { setExecutionAuthority, runWithRuntimeExecutionContext, createRuntimeExecutionContext } = await import("../../../src/runtime/execution-context")
+    const events: Array<{ type: string; [k: string]: unknown }> = []
+    await runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
+      setExecutionAuthority({
+        identity: { runId: "ctx-run-1", nodeRunId: "ctx-run-1:n1", attempt: 1, agentId: "ctx-agent" },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+      })
+      for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
+        events.push(e as unknown as { type: string; [k: string]: unknown })
+      }
+    })
+    const receipt = events.find(e => e.type === "receipt") as { receipt: { runId: string; agentId?: string } } | undefined
+    expect(receipt).toBeDefined()
+    expect(receipt!.receipt.runId).toBe("ctx-run-1")
+    expect(receipt!.receipt.agentId).toBe("ctx-agent")
   })
 
   linuxOnly("broker runtimeContext shares a single ledger across consumers", async () => {

@@ -10,7 +10,7 @@ interface ServerState {
   tools: Array<Record<string, unknown>>
   resources: Array<Record<string, unknown>>
   buffer: string
-  pendingResolve: ((value: Record<string, unknown>) => void) | null
+  pending: Map<number, (value: Record<string, unknown>) => void>
   connected: boolean
 }
 
@@ -25,7 +25,7 @@ export class MCPClientV2 {
           stdio: ["pipe", "pipe", "pipe"],
           env: env ? { ...process.env, ...env } : process.env,
         })
-        const state: ServerState = { proc, tools: [], resources: [], buffer: "", pendingResolve: null, connected: false }
+        const state: ServerState = { proc, tools: [], resources: [], buffer: "", pending: new Map(), connected: false }
         this.servers.set(name, state)
 
         proc.stdout?.on("data", (chunk: Buffer) => {
@@ -35,11 +35,13 @@ export class MCPClientV2 {
 
         proc.on("error", () => {
           state.connected = false
+          this.rejectAllPending(state, "MCP server failed")
           resolve(false)
         })
 
         proc.on("exit", () => {
           state.connected = false
+          this.rejectAllPending(state, "MCP server exited")
         })
 
         this._send(name, "initialize", {
@@ -62,6 +64,11 @@ export class MCPClientV2 {
     return this.servers.get(name)?.connected ?? false
   }
 
+  private rejectAllPending(state: ServerState, reason: string) {
+    for (const resolve of state.pending.values()) resolve({ error: reason })
+    state.pending.clear()
+  }
+
   private _tryParseResponse(state: ServerState) {
     const headerMatch = state.buffer.match(/^Content-Length: (\d+)\r?\n\r?\n/)
     if (!headerMatch) return
@@ -72,10 +79,12 @@ export class MCPClientV2 {
     const body = state.buffer.slice(headerEnd, headerEnd + length)
     state.buffer = state.buffer.slice(headerEnd + length)
     try {
-      const data = JSON.parse(body)
-      if (state.pendingResolve) {
-        state.pendingResolve(data)
-        state.pendingResolve = null
+      const data = JSON.parse(body) as Record<string, unknown>
+      const id = typeof data.id === "number" ? data.id : -1
+      const resolve = state.pending.get(id)
+      if (resolve) {
+        state.pending.delete(id)
+        resolve(data)
       }
     } catch { /* */ }
     this._tryParseResponse(state)
@@ -86,9 +95,10 @@ export class MCPClientV2 {
       const srv = this.servers.get(name)
       if (!srv) { resolve({ error: `MCP server '${name}' not connected` }); return }
 
-      const req = JSON.stringify({ jsonrpc: "2.0", id: ++this.reqId, method, params })
+      const id = ++this.reqId
+      const req = JSON.stringify({ jsonrpc: "2.0", id, method, params })
       const header = `Content-Length: ${Buffer.byteLength(req)}\r\n\r\n`
-      srv.pendingResolve = resolve
+      srv.pending.set(id, resolve)
       srv.proc.stdin?.write(header + req)
     })
   }
@@ -157,7 +167,11 @@ export class MCPClientV2 {
 
   shutdown(name: string) {
     const srv = this.servers.get(name)
-    if (srv) { srv.proc.kill(); this.servers.delete(name) }
+    if (srv) {
+      this.rejectAllPending(srv, "MCP server shut down")
+      srv.proc.kill()
+      this.servers.delete(name)
+    }
   }
 
   shutdownAll() { for (const name of this.servers.keys()) this.shutdown(name) }

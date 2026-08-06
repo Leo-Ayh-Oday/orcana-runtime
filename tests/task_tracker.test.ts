@@ -249,4 +249,30 @@ describe("TaskTracker", () => {
       expect(missing.some(item => item.includes("后端质量不足"))).toBe(false)
     })
   })
+
+  test("Chinese browser prompts are recognized as needing smoke verification", () => {
+    const tracker = createTaskTracker("帮我做一个浏览器插件，要冒烟验证", "long_task")
+    expect(tracker?.requiredVerificationKinds).toContain("smoke")
+  })
+
+  test("model-facing evidence strings are clean UTF-8 Chinese, not mojibake", () => {
+    const tracker = createTaskTracker("做一个全栈项目", "long_task")!
+    updateTaskTrackerAfterTools({
+      tracker,
+      changedFiles: [],
+      toolNames: ["shell"],
+      typecheckPassed: true,
+      verificationPassed: true,
+      verificationResults: [
+        { kind: "test", command: "bun test", passed: true, issues: 0, durationMs: 1, summary: "ok" },
+        { kind: "build", command: "bunx vite build", passed: true, issues: 0, durationMs: 1, summary: "ok" },
+      ],
+    })
+
+    const verificationStep = tracker.steps.find(step => step.id === "verification")
+    expect(verificationStep?.evidence).toBe("验证命令通过: typecheck, test, build")
+
+    const fresh = createTaskTracker("做一个全栈项目", "long_task")!
+    expect(missingTaskRequirements(fresh).some(item => item.includes("缺少验证证据: typecheck"))).toBe(true)
+  })
 })

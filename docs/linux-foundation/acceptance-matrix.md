@@ -82,3 +82,47 @@ v0.8.15 保留（不删除），作为组件/契约层基线；生产接线闭�
 | PR-8 | LF-8 评测重写（真实攻击场景、无委托如实 FAIL、--strict 禁 SKIP、Receipt→Evidence→Gate 端到端） | **完成** (0f644c2) |
 
 **修复线状态（2026-08-06）**：PR-1~PR-8 全部落地。本机评测 32 pass / 4 fail（CGROUP_DELEGATION_REQUIRED，无委托机器如实红）/ 1 skip（podman 未装）。真机 lane 需以 `bun run eval:linux --strict` 跑通（bwrap + rootless podman + cgroup 委托）。全量门禁：typecheck/build/pack/diff-check 全绿；仅剩另一窗口 RC-13 的 revisePlan 语义问题。与基础设施修复合流后以 **0.8.17** 发布。
+
+## LNXF Production Closure R2（独立审核后确立，2026-08-06，审核基线 3bbf442 / v0.8.26.1）
+
+2026-08-06 独立审核（基于远端 3bbf442）确认：PR-1~8 的组件修复有效，但**生产闭环声明必须撤销**——
+
+```text
+LNXF PR-1~8:
+  component fixes: completed
+  production closure: revoked
+  R2 closure: required
+  freeze: blocked
+```
+
+审核判定：
+
+```text
+LNXF_COMPONENT_IMPLEMENTATION:      PARTIAL_PASS
+LNXF_PRODUCTION_INTEGRATION:        FAIL
+LNXF_AUTHORITY_CLOSURE:             FAIL
+LNXF_FAILURE_ATOMICITY:             FAIL
+LNXF_EVIDENCE_DURABILITY:           FAIL
+LNXF_MULTI_AGENT_ISOLATION:         FAIL
+LINUX_FOUNDATION_FREEZE:            REVOKED
+M8 / SERVICE CELL / FLEET:          BLOCKED
+```
+
+新增 P0 缺陷（详见 docs/reliability/defect-register.yaml，LNXF-R2-P0-01~08）：
+
+| 编号 | 缺陷 | 核心证据 |
+|---|---|---|
+| LNXF-R2-P0-01 | Untrusted Workspace Authority | process-executor.ts:96 `worktreeRoot ?? cwd`，cwd 自动提升为 RW 挂载权威；policy-compiler 不校验 worktreeRoot 位置 |
+| LNXF-R2-P0-02 | PID Zero / Runtime Self-Attach | supervisor.ts:75 `pid: proc.pid ?? 0` → cgroup.procs 写入 0 → 移动/杀死 Runtime 自身 |
+| LNXF-R2-P0-03 | Broker Compensation Leak | broker.ts:393 reserve 在 try 外；lock/cgroup 失败时 cellRuns 未登记 → reservation/lock 永久泄漏 |
+| LNXF-R2-P0-04 | Receipt Double Truth | 事件流 receipt(digest A) ≠ finally 持久化 receipt(digest B)；持久化失败被吞 |
+| LNXF-R2-P0-05 | Domain Budget Not Authoritative | broker.ts:164 `new AgentDomainManager({ledger})` 未注入 cgroup；聚合预算全部空转 |
+| LNXF-R2-P0-06 | Podman Host CWD Invalid | podman.ts:185 `cwd: "/workspace"`（容器内路径当宿主 cwd，必然 ENOENT）；containerRemoved 推定 |
+| LNXF-R2-P0-07 | Strict Isolation Fail-Open | seccomp 物化 `catch{}` 吞异常不阻断；attach 失败仅记 degradation 不终止载荷 |
+| LNXF-R2-P0-08 | Physical Workspace Lock Bypass | 锁键 `worktree:<agentId>` 非 canonical path；两 Agent 同物理目录不冲突；LX-037 无 agentId 假绿 |
+
+修复线：**LNXF Production Closure R2**（详见 docs/linux-foundation/lnxf-r2-closure-plan.md），PR-9~PR-15 顺序推进。
+
+**禁止项（R2 完成前）**：宣布 Linux Foundation 稳定 / enabled+enforced 执行不可信代码 / 携带真实 Secret / 多 Agent 并发写 / Service Cell / Agent Fleet / 长期进程托管 / 依据当前 Receipt 自动发布或完成任务。
+
+**恢复 Freeze 条件**（全部满足才可宣布）：PR-9~15 合流 + 全部 P0 回归测试 + 远端 CI 通过 + 真 bwrap/podman/cgroup 委托 Lane 通过 + strict eval 0 FAIL/0 SKIP + 独立复审无新 P0 + emitted/persisted/evidence Receipt 完全一致 + 任意故障注入后资源归零。

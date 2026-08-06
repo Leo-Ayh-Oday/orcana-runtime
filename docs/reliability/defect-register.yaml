@@ -6,6 +6,80 @@
 
 字段：id / severity(P0|P1|P2) / wave / invariant / files / status(open|fixed) / fixedBy / verifiedAtCommit
 
+## LNXF R2 生产封口（Wave R2，来源：LNXF Production Closure R2 独立审核 @3bbf442）
+
+- id: LNXF-R2-P0-01
+  severity: P0
+  wave: R2
+  invariant: UNTRUSTED_WORKSPACE_AUTHORITY=0
+  files: [src/runtime/process-executor.ts, src/runtime/linux/policy-compiler.ts, src/runtime/linux/contracts.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
+- id: LNXF-R2-P0-02
+  severity: P0
+  wave: R2
+  invariant: PID_ZERO_RUNTIME_SELF_ATTACH=0
+  files: [src/runtime/linux/process/supervisor.ts, src/runtime/linux/cgroup/manager.ts, src/runtime/linux/broker.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
+- id: LNXF-R2-P0-03
+  severity: P0
+  wave: R2
+  invariant: BROKER_COMPENSATION_LEAK=0
+  files: [src/runtime/linux/broker.ts, src/runtime/linux/scheduler/resource-ledger.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
+- id: LNXF-R2-P0-04
+  severity: P0
+  wave: R2
+  invariant: RECEIPT_DOUBLE_TRUTH=0
+  files: [src/runtime/linux/broker.ts, src/runtime/linux/receipt.ts, src/runtime/linux/recovery/state-store.ts, src/agent/evidence-ledger.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
+- id: LNXF-R2-P0-05
+  severity: P0
+  wave: R2
+  invariant: DOMAIN_BUDGET_NOT_AUTHORITATIVE=0
+  files: [src/runtime/linux/broker.ts, src/runtime/linux/workspace/agent-domain.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
+- id: LNXF-R2-P0-06
+  severity: P0
+  wave: R2
+  invariant: PODMAN_HOST_CWD_INVALID=0
+  files: [src/runtime/linux/backends/podman.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
+- id: LNXF-R2-P0-07
+  severity: P0
+  wave: R2
+  invariant: STRICT_ISOLATION_FAIL_OPEN=0
+  files: [src/runtime/linux/broker.ts, src/runtime/linux/backends/bubblewrap.ts, src/runtime/linux/seccomp-oci.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
+- id: LNXF-R2-P0-08
+  severity: P0
+  wave: R2
+  invariant: PHYSICAL_WORKSPACE_LOCK_BYPASS=0
+  files: [src/runtime/linux/workspace/isolation-lock.ts, src/runtime/linux/broker.ts, evals/linux-sandbox-eval.ts]
+  status: open
+  fixedBy: ""
+  verifiedAtCommit: ""
+
 ## 验证与完成语义（Wave 1）
 
 - id: A1

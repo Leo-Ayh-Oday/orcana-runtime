@@ -39,3 +39,18 @@
 | RC-13 | dd820c9 | 31 相关测试全绿 | REVISE_PLAN_NEVER_DEADLOCKS=0 |
 
 TBD 项随对应 RC（RC-07~12, RC-14~17）落地后回填。
+
+## LNXF R2 生产封口门（Wave R2，基线 3bbf442 / v0.8.26.1）
+
+PR-1~8 生产闭环声明已撤销（component fixes: completed；production closure: **revoked**；R2 closure: required；freeze: blocked）。以下门在 R2（PR-9~15）完成前全部为 TBD，不得宣布 Freeze：
+
+| Gate | 含义 | 覆盖 defect | 当前值 | 目标 |
+|---|---|---|---|---|
+| UNTRUSTED_WORKSPACE_AUTHORITY | 模型可控宿主路径/身份 | LNXF-R2-P0-01 | TBD | 0 |
+| PID_ZERO_RUNTIME_SELF_ATTACH | PID 0 写入 cgroup.procs | LNXF-R2-P0-02 | TBD | 0 |
+| BROKER_COMPENSATION_LEAK | 失败后 reservation/lock 泄漏 | LNXF-R2-P0-03 | TBD | 0 |
+| RECEIPT_DOUBLE_TRUTH | emitted ≠ persisted digest | LNXF-R2-P0-04 | TBD | 0 |
+| DOMAIN_BUDGET_NOT_AUTHORITATIVE | 聚合预算空转 | LNXF-R2-P0-05 | TBD | 0 |
+| PODMAN_HOST_CWD_INVALID | 宿主 cwd 用容器内路径 | LNXF-R2-P0-06 | TBD | 0 |
+| STRICT_ISOLATION_FAIL_OPEN | 严格路径静默降级 | LNXF-R2-P0-07 | TBD | 0 |
+| PHYSICAL_WORKSPACE_LOCK_BYPASS | 同物理目录并发写 | LNXF-R2-P0-08 | TBD | 0 |

@@ -2,6 +2,14 @@
 
 All notable changes to Orcana Runtime.
 
+## [0.8.26.1] — in progress (LNXF R2 closure)
+
+### Status revoked (R2-0)
+
+- **LNXF PR-1~8 生产闭环声明撤销**（component fixes: completed；production closure: revoked；R2 closure: required；freeze: blocked）。独立审核 @3bbf442 确认 8 项新 P0（LNXF-R2-P0-01~08）：Untrusted Workspace Authority / PID Zero Self-Attach / Broker Compensation Leak / Receipt Double Truth / Domain Budget Not Authoritative / Podman Host CWD Invalid / Strict Isolation Fail-Open / Physical Workspace Lock Bypass。
+- 修复线建立：`docs/linux-foundation/lnxf-r2-closure-plan.md`（PR-9~PR-15，每 PR 独立分支）。
+- Freeze 保持 REVOKED，M8 / Service Cell / Fleet 保持 BLOCKED。
+
 ## [0.8.17] — in progress (reliability-freeze)
 
 ### Added (RC-00 基线)

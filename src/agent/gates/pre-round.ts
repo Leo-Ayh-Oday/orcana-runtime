@@ -77,11 +77,8 @@ export class RippleToolFilterGate implements Gate<PreRoundContext> {
   readonly name = "policy:ripple_tool_filter"
 
   evaluate(ctx: PreRoundContext): GateResult {
-    if (ctx.cacheStableTools) {
-      ctx.rippleBlockActive = false
-      return { pass: true }
-    }
-
+    // RC-05 B4: ripple 阻断是正确性 Gate，与 cacheStableTools（性能选项）完全独立。
+    // cache 开启时 ripple block 会让工具集变化（cache miss）——正确性优先，接受该代价。
     const decision = strongestRippleDecision(ctx.rippleReports, ctx.pendingRippleObligations)
     if (decision === "block") {
       ctx.tools = ctx.tools.filter(t => t.defn.isReadonly)

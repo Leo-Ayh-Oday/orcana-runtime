@@ -131,11 +131,15 @@ export class MCPClientV2 {
       const tools = await this.discoverTools(serverName)
       for (const t of tools) {
         const toolName = t.name as string ?? "unknown"
+        // RC-05 B5: 未知能力默认不安全——isReadonly/isConcurrencySafe 默认 false。
+        // MCP 服务端 manifest 声明 readonly/concurrency-safe 能力时才提升。
+        const declaredReadonly = Boolean((t as Record<string, unknown>).readonly === true)
+        const declaredConcurrencySafe = Boolean((t as Record<string, unknown>).concurrencySafe === true)
         defs.push({
           name: `mcp_${toolName}`,
           description: `[MCP:${serverName}] ${(t.description as string) ?? ""}`.slice(0, 300),
-          isReadonly: true,
-          isConcurrencySafe: true,
+          isReadonly: declaredReadonly,
+          isConcurrencySafe: declaredConcurrencySafe,
           contract: { provenance: "mcp" },
           inputSchema: (t.inputSchema ?? t.input_schema ?? { type: "object", properties: {} }) as Record<string, unknown>,
           execute: async (params: Record<string, unknown>): Promise<ToolResult> => {

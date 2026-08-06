@@ -77,12 +77,21 @@ export interface ReceiptInput {
   unexpectedWrites?: string[]
   violations?: SandboxReceipt["violations"]
   degradationReasons?: string[]
-  cleanup?: Partial<SandboxReceipt["cleanup"]>
+  /** 清理结果 —— 必须来自真实测量（PR-2：无默认成功值；
+   *  未测量时 processesRemaining=-1 / cgroupRemoved=false，绝不假装 0/true）。 */
+  cleanup: Partial<SandboxReceipt["cleanup"]>
+}
+
+/** Receipt 自摘要：对去除 receiptDigest 字段的完整 Receipt 计算 sha256。
+ *  Evidence 绑定此摘要（而非 cellSpecDigest）——绑定退出结果、清理状态、
+ *  指标与违规信息（PR-2）。 */
+export function computeReceiptDigest(receipt: Omit<SandboxReceipt, "receiptDigest">): string {
+  return digestOf(receipt)
 }
 
 export function buildReceipt(input: ReceiptInput): SandboxReceipt {
   const { spec, capabilities } = input
-  return {
+  const receipt: Omit<SandboxReceipt, "receiptDigest"> = {
     schemaVersion: "1.0",
     cellId: spec.identity.cellId,
     runId: spec.identity.runId,
@@ -116,14 +125,17 @@ export function buildReceipt(input: ReceiptInput): SandboxReceipt {
     secretBindingIds: spec.secrets.map(s => s.id),
     violations: input.violations ?? [],
     degradationReasons: input.degradationReasons ?? [],
+    // PR-2：只保留输入中的真实值；缺失 → -1/false（未验证 ≠ 干净）。
     cleanup: {
-      processesRemaining: 0,
-      mountsReleased: true,
-      cgroupRemoved: true,
+      processesRemaining: input.cleanup.processesRemaining ?? -1,
+      mountsReleased: input.cleanup.mountsReleased ?? false,
+      cgroupRemoved: input.cleanup.cgroupRemoved ?? false,
+      containerRemoved: input.cleanup.containerRemoved ?? false,
       worktreeRetained: spec.lifecycle.retainOnFailure,
       ...input.cleanup,
     },
   }
+  return { ...receipt, receiptDigest: computeReceiptDigest(receipt) }
 }
 
 /** Receipt completeness gate: a receipt without backend + digests is not

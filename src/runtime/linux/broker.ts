@@ -44,6 +44,8 @@ import { writeSeccompBpfFile } from "./seccomp-bpf"
 import { compileSeccompProfile } from "./landlock-seccomp"
 import { bindSecrets } from "./secrets"
 import { CacheManager } from "./workspace/cache-port"
+import { countProcessGroup } from "./process/termination"
+import { computeReceiptDigest } from "./receipt"
 
 export interface ShadowExecutionRecord {
   cellId: string
@@ -296,6 +298,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${reservation.reason}`, { available: reservation.available })
       }
       const lockKeys: string[] = []
+      // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
+      let cellReceipt: SandboxReceipt | undefined
       try {
         // Isolation Lock：worktree 独占（无 worktree 时 main-workspace 独占）。
         const lockTarget = compiled.filesystem.worktreeRoot
@@ -336,13 +340,16 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath })
         stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId) })
 
+        // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
+        let spawnedPid = 0
         try {
-          yield* backend.run(compiled, {
+          for await (const event of backend.run(compiled, {
             capabilities: caps,
             abortSignal: executeOptions?.abortSignal,
             cgroupPath: cgroupCellPath,
             materialization,
             attachCell: pid => {
+              spawnedPid = pid
               if (cgroup && cgroupCellPath) {
                 try {
                   cgroup.attach(pid, cgroupCellPath)
@@ -353,15 +360,25 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             },
             readCellMetrics: () => readCellMetrics(cgroupCellPath),
             cleanupVerify: () => {
-              const processesRemaining = cgroup && cgroupCellPath ? cgroup.pidsCurrent(cgroupCellPath) : -1
+              // PR-2：进程残留必须真实测量 —— cgroup 委托时读 pids.current；
+              // 否则进程组扫描（countProcessGroup）；无法测量时 -1（未验证）。
+              let processesRemaining = -1
+              if (cgroup && cgroupCellPath) {
+                processesRemaining = cgroup.pidsCurrent(cgroupCellPath)
+              } else if (spawnedPid > 0) {
+                processesRemaining = countProcessGroup(spawnedPid)
+              }
               return {
                 processesRemaining,
-                cgroupRemoved: false, // 由 cleanupRun 完成后置 true
+                cgroupRemoved: false, // 由 broker finally 实际移除后置真值
                 mountsReleased: false,
                 worktreeRetained: compiled.lifecycle.retainOnFailure,
               }
             },
-          })
+          })) {
+            if (event.type === "cell.receipt") cellReceipt = event.receipt
+            yield event
+          }
         } catch (error) {
           cell.state = "failed"
           throw error
@@ -371,6 +388,37 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         // 清理与释放（异常路径同 finally 事务）。
         const record = cellRuns.get(cellId)
         if (record) {
+          // Cell cgroup 真实移除（PR-2 先做 best-effort；PR-5 重建完整协议）。
+          let cgroupRemoved = false
+          if (cgroup && record.cgroupCellPath) {
+            try {
+              cgroupRemoved = cgroup.removeCell(record.cgroupCellPath)
+            } catch {
+              cgroupRemoved = false
+            }
+          }
+          if (cellReceipt) {
+            // 最终 Receipt：合并真实清理结果，重算自摘要后持久化。
+            const finalReceipt: SandboxReceipt = {
+              ...cellReceipt,
+              cleanup: {
+                ...cellReceipt.cleanup,
+                cgroupRemoved: cgroupRemoved || cellReceipt.cleanup.cgroupRemoved,
+                processesRemaining: cgroupRemoved ? 0 : cellReceipt.cleanup.processesRemaining,
+              },
+            }
+            const final: SandboxReceipt = {
+              ...finalReceipt,
+              receiptDigest: computeReceiptDigest(finalReceipt),
+            }
+            const cellRef = cells.get(cellId)
+            if (cellRef) cellRef.receipt = final
+            try {
+              stateStore.appendReceipt(runId, final)
+            } catch {
+              // 持久化失败不阻断执行（Receipt 仍在事件流中）
+            }
+          }
           for (const key of record.lockKeys) locks.release(key, cellId)
           ledger.release(record.reservationId)
           cellRuns.delete(cellId)

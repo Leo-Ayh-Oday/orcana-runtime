@@ -13,13 +13,14 @@
 import { spawn } from "node:child_process"
 import type { LinuxExecutionBroker } from "./linux/broker"
 import { createLinuxBroker } from "./linux/broker"
-import type { CapabilityRequest, ExecutionProfile, NetworkMode } from "./linux/contracts"
+import type { CapabilityRequest, ExecutionProfile, NetworkMode, SandboxReceipt } from "./linux/contracts"
 
 export type ProcessEvent =
   | { type: "status"; state: string; at: number }
   | { type: "stdout"; data: string; at: number }
   | { type: "stderr"; data: string; at: number }
   | { type: "exit"; exitCode: number | null; signal: string | null; at: number }
+  | { type: "receipt"; receipt: SandboxReceipt; at: number }
 
 export interface ProcessRequest {
   command: string
@@ -45,6 +46,8 @@ export interface ProcessOutcome {
   durationMs: number
   timedOut: boolean
   aborted: boolean
+  /** PR-2：真实 SandboxReceipt（不再被丢弃）。 */
+  receipt?: SandboxReceipt
 }
 
 /** 审计级（Host Audit）允许从宿主复制的安全变量 —— 仅限低风险键。
@@ -186,7 +189,9 @@ export async function* executeProcess(request: ProcessRequest): AsyncGenerator<P
   yield* fromBrokerEvents(broker().execute(spec, request.abortSignal ? { abortSignal: request.abortSignal } : undefined))
 }
 
-/** Broker 的 ExecutionCellEvent → 平台无关 ProcessEvent。 */
+/** Broker 的 ExecutionCellEvent → 平台无关 ProcessEvent。
+ *  PR-2：cell.receipt 不再被 default 分支丢弃 —— 每次执行的真实 Receipt
+ *  必须到达调用方。 */
 export async function* fromBrokerEvents(events: AsyncIterable<{
   type: string
   cellId?: string
@@ -194,6 +199,7 @@ export async function* fromBrokerEvents(events: AsyncIterable<{
   data?: string
   exitCode?: number | null
   signal?: string | null
+  receipt?: SandboxReceipt
   at: number
 }>): AsyncGenerator<ProcessEvent> {
   for await (const event of events) {
@@ -210,6 +216,9 @@ export async function* fromBrokerEvents(events: AsyncIterable<{
       case "cell.exit":
         yield { type: "exit", exitCode: event.exitCode ?? null, signal: event.signal ?? null, at: event.at }
         break
+      case "cell.receipt":
+        if (event.receipt) yield { type: "receipt", receipt: event.receipt, at: event.at }
+        break
       default:
         break
     }
@@ -223,12 +232,14 @@ export async function collectProcessRun(request: ProcessRequest): Promise<Proces
   let signal: string | null = null
   let timedOut = false
   let aborted = false
+  let receipt: SandboxReceipt | undefined
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
   for await (const event of executeProcess(request)) {
     switch (event.type) {
       case "stdout": stdoutChunks.push(event.data); break
       case "stderr": stderrChunks.push(event.data); break
+      case "receipt": receipt = event.receipt; break
       case "exit":
         exitCode = event.exitCode
         signal = event.signal
@@ -245,5 +256,6 @@ export async function collectProcessRun(request: ProcessRequest): Promise<Proces
     durationMs: Date.now() - startedAt,
     timedOut,
     aborted,
+    receipt,
   }
 }

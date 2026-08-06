@@ -480,11 +480,13 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       spec: spec(), capabilities: caps, backend: "bubblewrap",
       startedAt: 1, finishedAt: 2, exitCode: 0, signal: null,
       timedOut: false, cancelled: false, oomKilled: false, pidLimitHit: false, outputLimitHit: false, tempLimitHit: false,
+      cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false },
     })
     const bound = {
       nodeRunId: receipt.nodeRunId, cellId: receipt.cellId, backend: receipt.backend,
       profile: receipt.profile, cellSpecDigest: receipt.cellSpecDigest,
       resourcePolicyDigest: receipt.resourcePolicyDigest, networkPolicyDigest: receipt.networkPolicyDigest,
+      receiptDigest: receipt.receiptDigest,
     }
     return receiptComplete(receipt) && Object.values(bound).every(v => v !== undefined && v !== "")
       ? { pass: true }

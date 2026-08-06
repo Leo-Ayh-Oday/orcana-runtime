@@ -25,6 +25,7 @@ import { finalizeRun } from "./kernel/finalize"
 import { drainPhase } from "./kernel/effects"
 import type { LoopDecision } from "./kernel/types"
 import { setRuntimeContextBudgetMode } from "./runtime-context"
+import { setExecutionIdentity } from "../runtime/execution-context"
 import { resetRippleProgram, setCascadeFiles } from "../ripple/engine"
 import { clearActivePatchContext, clearTransactionRegistry } from "./patch-transaction"
 import { setShellSandbox } from "../tools/shell"
@@ -39,6 +40,12 @@ export async function* agentLoop(
     tools: options.tools,
     planStore: options.planStore,
     id: options.sessionId ? `agent-run:${options.sessionId}` : undefined,
+  })
+  // PR-6：执行身份注入 —— 本轮工具执行（shell/git 等）携带真实 runId，
+  // 不再以匿名 tool-run 身份运行（唯一身份进 Receipt/Evidence）。
+  setExecutionIdentity({
+    runId: options.sessionId,
+    sessionId: options.sessionId,
   })
   const runOptions: AgentOptions = {
     ...options,

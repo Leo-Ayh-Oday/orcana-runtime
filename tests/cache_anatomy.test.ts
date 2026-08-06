@@ -68,4 +68,28 @@ describe("cache anatomy", () => {
     expect(conversation!.tokens).toBeGreaterThan(0)
     expect(conversation!.stable).toBe(false)
   })
+
+  test("memory sections are measured from actual memory messages, not hardcoded zero", () => {
+    const anatomy = buildCacheAnatomy({
+      system: "system",
+      tools: [],
+      messages: [
+        { role: "user", content: "## M0 Base Checkpoint\nUse this as stable task memory." },
+        { role: "assistant", content: "## Recent Delta Memories\n- delta title: summary" },
+        { role: "assistant", content: "## Earlier Conversation Digest\ncompressed continuity" },
+        { role: "assistant", content: "## Older Context Signals\n- Topics: t1 | t2" },
+        { role: "user", content: "current prompt" },
+      ],
+    })
+
+    const anchor = anatomy.sections.find(section => section.kind === "memoryAnchor")
+    const deltas = anatomy.sections.find(section => section.kind === "memoryDeltas")
+    const retrieval = anatomy.sections.find(section => section.kind === "memoryRetrieval")
+    expect(anchor!.tokens).toBeGreaterThan(0)
+    expect(anchor!.stable).toBe(true)
+    expect(deltas!.tokens).toBeGreaterThan(0)
+    expect(deltas!.stable).toBe(false)
+    expect(retrieval!.tokens).toBeGreaterThan(0)
+    expect(retrieval!.stable).toBe(false)
+  })
 })

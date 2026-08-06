@@ -73,6 +73,15 @@ export function providerRetryDelayMs(info: ProviderErrorInfo, attempt: number): 
   return Math.min(30_000, base * 2 ** attempt)
 }
 
+export function canRetryProviderAttempt(
+  info: ProviderErrorInfo,
+  attempt: number,
+  maxRetries: number,
+  unsafeToRetry: boolean,
+): boolean {
+  return info.retryable && !unsafeToRetry && attempt < maxRetries
+}
+
 export function formatProviderRetryStatus(info: ProviderErrorInfo, delayMs: number, attempt: number, maxRetries: number): string {
   const label = info.status ? `${info.kind} ${info.status}` : info.kind
   const seconds = Math.ceil(delayMs / 1000)

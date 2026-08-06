@@ -17,7 +17,7 @@ import {
 import { ModelRouter } from "../provider/router"
 import type { ToolDescriptor } from "../tools/registry"
 import { StagedContextManager } from "../context/staged"
-import { SessionManager, SessionCorruptedError, searchAllSessions } from "../session"
+import { SessionManager, SessionCorruptedError, searchAllSessions, type Session } from "../session"
 import { lastCheckpoint, verifyCheckpoint } from "../session/checkpoint"
 import type { SessionCheckpoint } from "../session/checkpoint"
 import { saveRewindPoint } from "../agent/rewind"
@@ -206,6 +206,15 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       if (shouldUseChatLite(cliPrompt) && !shouldSkipProviderPurpose("chat_lite")) await runLiteTurn(multiProvider, modelRouter, cliPrompt, history, compactor)
       else await runTurn(runtime.harness, cliPrompt, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint, runtime.startRunTrace)
     } finally {
+      // D2 SINGLE_SHOT_MODE_PERSISTS: single-shot mode saves the session too.
+      if (history.length) {
+        try {
+          const savedId = persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId)
+          console.log(dim(`会话已保存: ${savedId}（/sessions 或 /resume 可恢复）\n`))
+        } catch (e) {
+          console.log(red(`会话保存失败: ${e instanceof Error ? e.message : String(e)}\n`))
+        }
+      }
       runtime.dispose()
     }
     return
@@ -241,7 +250,9 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
     thinkingStore,
     knowledgeBase,
     compactor,
-    sessionId,
+    // D6: dynamic read — command handlers must see the CURRENT session ID
+    // (the closure variable moves as persistSession assigns new ids).
+    get sessionId() { return sessionId },
     undoStack,
     thinkEffort,
     hooks,
@@ -287,7 +298,6 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       const handled = commandRegistry.execute(input, { ...cmdCtx, reprompt: () => reprompt(rl) })
       if (handled) { reprompt(rl); return }
     }
-
     // PR-4.3: Auto-save rewind point on each user prompt
     currentRound++
     try {
@@ -310,6 +320,15 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       setSessionId(persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId))
     }
     reprompt(rl)
+  }, () => {
+    // D5 EXIT_PATH_FLUSHES_SESSION: flush unsaved trailing turns on exit
+    if (history.length > 0) {
+      try {
+        setSessionId(persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId))
+      } catch (e) {
+        process.stderr.write(`会话保存失败: ${e instanceof Error ? e.message : String(e)}\n`)
+      }
+    }
   })
 
   if (resumeId) {
@@ -337,11 +356,22 @@ function persistSession(
   /** Optional: update active SessionStore when session ID changes (first save). */
   onNewId?: (oldId: string, newId: string) => void,
 ): string {
-  const s = isNew
+  let existing: Session | null = null
+  if (!isNew) {
+    try { existing = sessions.load(sessionId) } catch { existing = null }
+  }
+  const s: Session = isNew || !existing
     ? sessions.create({ topic: history[0]?.content?.slice(0, 50), messageCount: history.length })
-    : (() => { try { return sessions.load(sessionId) } catch { return null } })()
-      ?? sessions.create({ topic: history[0]?.content?.slice(0, 50), messageCount: history.length })
-  s.messages = history.map(h => ({ role: h.role as "user" | "assistant", content: h.content, timestamp: Date.now(), metadata: {} }))
+    : existing
+  // H5: preserve original timestamps for already-persisted messages
+  const tsByKey = new Map<string, number>()
+  for (const m of s.messages) tsByKey.set(`${m.role}\u0000${m.content}`, m.timestamp)
+  s.messages = history.map(h => ({
+    role: h.role as "user" | "assistant",
+    content: h.content,
+    timestamp: tsByKey.get(`${h.role}\u0000${h.content}`) ?? Date.now(),
+    metadata: {},
+  }))
   s.metadata = { ...s.metadata, messageCount: history.length, stagedFiles: [...stagedCtx.loadedFiles.keys()] }
   sessions.save(s)
   saveCompactorState(compactor, s.id)

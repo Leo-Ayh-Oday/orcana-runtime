@@ -42,7 +42,9 @@ export class SessionManager {
     }
   }
 
-  /** Persist a session to SQLite. */
+  /** Persist a session to SQLite. Snapshot semantics: the stored messages
+   *  always equal `session.messages` — repeated saves can never duplicate
+   *  rows (D1 SESSION_MESSAGE_DUPLICATION=0). */
   save(session: Session): void {
     const jsonPath = join(this.storeDir, `${session.id}.json`)
     const store = new SessionStore(session.id, this.storeDir)
@@ -55,10 +57,8 @@ export class SessionManager {
       store.setMeta("created_at", String(session.createdAt))
     }
 
-    // Write all messages
-    if (session.messages.length > 0) {
-      store.addMessages(session.messages)
-    }
+    // Snapshot write: replace, never append (idempotent across saves)
+    store.replaceMessages(session.messages)
 
     store.close()
 
@@ -122,14 +122,18 @@ export class SessionManager {
 
   /** Atomic replace: overwrite existing session data. */
   replace(session: Session): void {
-    const dbPath = join(this.storeDir, `${session.id}.db`)
-
-    // Delete old SQLite if it exists
-    if (existsSync(dbPath)) {
-      try { unlinkSync(dbPath) } catch { /* may not exist */ }
-    }
-
+    this.deleteSession(session.id)
     this.save(session)
+  }
+
+  /** Delete a session entirely — cleans the db plus WAL-mode sidecars and any
+   *  legacy JSON artifacts (H7 SQLITE_DELETE_CLEANS_WAL_SHM). */
+  deleteSession(sessionId: string): void {
+    for (const file of [`${sessionId}.db`, `${sessionId}.db-wal`, `${sessionId}.db-shm`,
+      `${sessionId}.json`, `${sessionId}.json.bak`, `${sessionId}.json.tmp`]) {
+      const p = join(this.storeDir, file)
+      try { if (existsSync(p)) unlinkSync(p) } catch { /* best effort */ }
+    }
   }
 
   /** List all sessions with summary info. */

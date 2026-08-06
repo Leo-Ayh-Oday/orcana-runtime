@@ -176,9 +176,25 @@ export function extractErrorLines(content: string, maxLines = 3): string[] {
   return picked
 }
 
+/** K5 persist 钩子签名：压缩前持久化完整内容并返回 contentRef。
+ *  同步契约——调用方（主窗口接线）将 async ArtifactStore.storeContent 桥接为同步 ref；
+ *  返回 null 表示持久化失败（照旧压缩、不加引用）。 */
+export type PersistToolResultFn = (content: string, meta: { toolName: string; toolUseId: string }) => string | null
+
+/**
+ * Microcompact tool results before they enter history (forward pass).
+ *
+ * Lifecycle pinning (K25): a failed result (`is_error: true`) is never
+ * compacted — it stays pinned in full so the failure can be replayed/analyzed.
+ * Successes above their per-tool threshold are trimmed to head + error lines,
+ * and (K5) the full output may be persisted first via the optional `persist`
+ * hook so the truncation stays reproducible. When `persist` is omitted the
+ * behaviour is byte-for-byte the pre-K5 baseline (2-arg callers unaffected).
+ */
 export function microcompactToolResults(
   results: Array<Record<string, unknown>>,
   completedCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>,
+  persist?: PersistToolResultFn,
 ): { compacted: number; results: Array<Record<string, unknown>> } {
   let compacted = 0
   const nameById = new Map(completedCalls.map(tc => [tc.id, tc]))
@@ -189,19 +205,24 @@ export function microcompactToolResults(
     }
     const tc = nameById.get(String(r.tool_use_id ?? ""))
     if (!tc) { out.push(r); continue }
+    // K25: 失败 Pin——is_error 的 tool_result 永不压缩，保留完整内容供重放/分析。
+    if (r.is_error === true) { out.push(r); continue }
     const threshold = mcThreshold(tc.name)
     if (threshold <= 0 || r.content.length <= threshold) { out.push(r); continue }
     const pathOrCmd = tc.name === "read_file" ? String(tc.input.path ?? "")
       : tc.name === "shell" ? String(tc.input.command ?? "").slice(0, 80)
       : tc.name === "web_fetch" ? String(tc.input.url ?? "")
       : ""
+    const fullContent = r.content
+    // K5: 压缩前持久化完整内容（若提供 persist 钩子），成功后 placeholder 加 [Artifact: ref]。
+    const contentRef = persist
+      ? persist(fullContent, { toolName: tc.name, toolUseId: String(r.tool_use_id ?? "") })
+      : null
+    const artifactNote = contentRef ? ` [Artifact: ${contentRef}]` : ""
     // X2 (RC-02.5): head 300 + 错误特征行（≤3 行），避免大输出中错误线索被截掉。
-    const prefix = r.content.slice(0, 300)
-    const errorLines = extractErrorLines(r.content)
-    const exitInfo = typeof r.is_error === "boolean" && r.is_error
-      ? " [is_error]"
-      : ""
-    const placeholder = `[Microcompact: ${tc.name} ${pathOrCmd} — ${r.content.length} chars trimmed${exitInfo}. Re-execute ${tc.name}(${JSON.stringify(pathOrCmd)}) to retrieve full content.]`
+    const prefix = fullContent.slice(0, 300)
+    const errorLines = extractErrorLines(fullContent)
+    const placeholder = `[Microcompact: ${tc.name} ${pathOrCmd} — ${fullContent.length} chars trimmed${artifactNote}. Re-execute ${tc.name}(${JSON.stringify(pathOrCmd)}) to retrieve full content.]`
     const errorBlock = errorLines.length
       ? "\n\n[错误线索]\n" + errorLines.map(l => `> ${l}`).join("\n")
       : ""
@@ -212,28 +233,63 @@ export function microcompactToolResults(
   return { compacted, results: out }
 }
 
+/**
+ * Compact historical tool results (retrospective pass).
+ *
+ * K26: the compaction cut is computed from the *actual assistant round count*
+ * (`totalAssistants - keepRecentRounds`), not `messages.length - keepRecentRounds*2`
+ * — user/tool_result blocks vastly outnumber assistant messages, so the old
+ * formula almost always kept everything and never compacted.
+ * K27: tool type is resolved from the adjacent assistant `tool_use` block
+ * (`tool_use_id` → name) instead of guessing from the id prefix
+ * (`toolu_…`/`call_…` never matched the old regex).
+ * K28: per-tool thresholds come from `mcThreshold(name)`; `threshold <= 0`
+ * means "this tool never compacts" — uniform with the forward path.
+ * K25: failed results (`is_error: true`) are pinned and never compacted.
+ * X2 (RC-02.5): trimmed output keeps head 300 + error feature lines.
+ */
 export function compactHistoricalToolResults(messages: ProviderMessage[], keepRecentRounds: number): number {
+  // K27: 先扫描所有 assistant 消息的 tool_use 块，建立 tool_use_id → 真实工具名。
+  //（assistant 的 tool_use 与其后 user 的 tool_result 在 rawMessages 中相邻。）
+  const toolNameById = new Map<string, string>()
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue
+    for (const block of msg.content) {
+      if (!isRecord(block) || block.type !== "tool_use") continue
+      const id = String(block.id ?? "")
+      const name = String(block.name ?? "")
+      if (id && name) toolNameById.set(id, name)
+    }
+  }
+
+  // K26: 以实际 assistant 轮次为准——只压缩最早的那些轮次，保留最近 keepRecentRounds 轮不动。
+  const totalAssistants = messages.filter(m => m.role === "assistant").length
+  const compactBeforeRound = totalAssistants - keepRecentRounds
+  if (compactBeforeRound <= 0) return 0
+
   let compacted = 0
-  let assistantCount = 0
-  const compactAfterAssistant = messages.length - keepRecentRounds * 2
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]!
-    if (msg.role === "assistant") assistantCount++
-    if (assistantCount <= compactAfterAssistant) continue
+  let currentAssistantIndex = -1
+  for (const msg of messages) {
+    if (msg.role === "assistant") { currentAssistantIndex++; continue }
     if (msg.role !== "user" || !Array.isArray(msg.content)) continue
+    // tool_result 归属于其前一个 assistant 轮次；最近 keepRecentRounds 轮不压缩。
+    if (currentAssistantIndex < 0 || currentAssistantIndex >= compactBeforeRound) continue
     for (const block of msg.content) {
       if (!isRecord(block) || block.type !== "tool_result" || typeof block.content !== "string" || block.content.includes("[Microcompact:")) continue
+      // K25: 失败 Pin——is_error 的 tool_result 永不压缩，保留完整内容。
+      if (block.is_error === true) continue
       if (block.content.length < 400) continue
-      const tid = String(block.tool_use_id ?? "")
-      // Only compact read_file/shell/web_fetch whose full output is embedded
-      if (!/^(read_file|shell|web_fetch)/.test(tid.split("_")[0] ?? "")) continue
-      if (block.content.length < MC_READFILE_CHARS && block.content.length < MC_SHELL_CHARS) continue
+      const toolName = toolNameById.get(String(block.tool_use_id ?? ""))
+      if (!toolName) continue
+      // K28: 逐工具阈值；threshold <= 0 一律视为该工具永不压缩（与前向路径一致）。
+      const threshold = mcThreshold(toolName)
+      if (threshold <= 0 || block.content.length <= threshold) continue
       // X2 (RC-02.5): historical 压缩同样保留错误特征行。
       const errorLines = extractErrorLines(block.content)
       const errorBlock = errorLines.length
         ? "\n\n[错误线索]\n" + errorLines.map(l => `> ${l}`).join("\n")
         : ""
-      block.content = block.content.slice(0, 300) + errorBlock + `\n\n[Microcompact: historical ${tid.slice(0, 8)}… — content trimmed. Re-execute the original tool call to retrieve.]`
+      block.content = block.content.slice(0, 300) + errorBlock + `\n\n[Microcompact: historical ${String(block.tool_use_id ?? "").slice(0, 8)}… — content trimmed. Re-execute the original tool call to retrieve.]`
       compacted++
     }
   }

@@ -103,6 +103,7 @@ export async function* streamBackendRun(
     wallTimeMs: spec.resources.wallTimeMs,
     detectDaemon: spec.lifecycle.killOnParentExit,
     abortSignal: ctx.abortSignal,
+    seccompFdPath: compiled.seccompFdPath,
     onSpawn: pid => ctx.attachCell?.(pid),
   })) {
     if (event.type === "stdout") yield { type: "cell.stdout", cellId: spec.identity.cellId, data: event.data, at: event.at }

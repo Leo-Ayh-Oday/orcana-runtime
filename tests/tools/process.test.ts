@@ -14,7 +14,7 @@ import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contract
 const IS_WIN = process.platform === "win32"
 
 /** Linux execution is fail-closed without a trusted authority (R2 PR-9). */
-async function withAuthority<T>(fn: () => Promise<T>): Promise<T> {
+async function withAuthority<T>(fn: () => T | Promise<T>): Promise<T> {
   return runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
     const authority: TrustedExecutionAuthority = {
       identity: { runId: "rt7-test", nodeRunId: "rt7-test-0", attempt: 1 },

@@ -286,7 +286,7 @@ export class FlashTriage {
         planSteps: [],
         requiredVerification: lower.includes("test") ? ["typecheck", "test"] : ["typecheck"],
         reasoning: responseText.slice(0, 200),
-        riskLevel: lower.includes("high") || lower.includes("高") ? "medium" : "low",
+        riskLevel: validateRisk(responseText),
       }
     } catch {
       this.lastError = this.lastError || "exception"

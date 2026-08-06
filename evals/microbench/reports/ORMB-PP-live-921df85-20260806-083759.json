@@ -1,0 +1,2714 @@
+{
+  "header": {
+    "suite": "ORMB-PP",
+    "orcanaCommit": "921df85",
+    "modelRequested": "deepseek-v4-flash",
+    "reasoningEffort": "max",
+    "seed": 42,
+    "configurationDigest": "PP-mock-v1",
+    "startedAt": "2026-08-06T00:37:59.287Z"
+  },
+  "suite": "ORMB-PP-live",
+  "cases": [
+    {
+      "caseId": "PP-LV01",
+      "title": "单工具轮 → 最终答案",
+      "tags": [
+        "live",
+        "normal"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "至少 1 次 tool call",
+          "passed": true,
+          "detail": "1 次"
+        },
+        {
+          "label": "tool call id 无重复",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "使用了 read_file",
+          "passed": true,
+          "detail": "工具集=1 种"
+        },
+        {
+          "label": "全程无 provider error",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "actualModel 上报",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "usage 上报",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 8,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 8,
+            "outputTokens": 83,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 13.9,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 4
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_00_V1LqWnmRwPPN4xS4OnfI8755",
+            "name": "read_file",
+            "input": {
+              "path": "config.json"
+            }
+          },
+          "seq": 5
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "I need to read the config.json file to find the port number. Let me use the search_files tool to find it, or directly read it. Let me try reading config.json directly.",
+              "signature": ""
+            }
+          ],
+          "seq": 6
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 114,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 101
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 102
+        },
+        {
+          "type": "text",
+          "data": "[r2] config",
+          "seq": 103
+        },
+        {
+          "type": "text",
+          "data": "[r2] .json",
+          "seq": 104
+        },
+        {
+          "type": "text",
+          "data": "[r2]  ",
+          "seq": 105
+        },
+        {
+          "type": "text",
+          "data": "[r2] 文件",
+          "seq": 106
+        },
+        {
+          "type": "text",
+          "data": "[r2] 中的",
+          "seq": 107
+        },
+        {
+          "type": "text",
+          "data": "[r2] 端口",
+          "seq": 108
+        },
+        {
+          "type": "text",
+          "data": "[r2] 号",
+          "seq": 109
+        },
+        {
+          "type": "text",
+          "data": "[r2] 是",
+          "seq": 110
+        },
+        {
+          "type": "text",
+          "data": "[r2]  **",
+          "seq": 111
+        },
+        {
+          "type": "text",
+          "data": "[r2] 812",
+          "seq": 112
+        },
+        {
+          "type": "text",
+          "data": "[r2] 3",
+          "seq": 113
+        },
+        {
+          "type": "text",
+          "data": "[r2] **",
+          "seq": 114
+        },
+        {
+          "type": "text",
+          "data": "[r2] 。",
+          "seq": 115
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 114,
+            "outputTokens": 24,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 4.5,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 116
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 117
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "The config.json file contains port 8123.",
+              "signature": ""
+            }
+          ],
+          "seq": 118
+        },
+        {
+          "type": "done",
+          "data": "config.json 文件中的端口号是 **8123**。",
+          "seq": 119
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 4310,
+      "usage": {
+        "inputTokens": 114,
+        "outputTokens": 24,
+        "cacheReadInputTokens": 512,
+        "cacheCreationInputTokens": 0,
+        "cacheMissInputTokens": 0,
+        "source": "provider",
+        "cacheHitRate": 100,
+        "outputShare": 4.5,
+        "missShare": 0,
+        "claudeStyleCacheShape": false,
+        "requestedModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "actualModel": "deepseek-v4-flash"
+      },
+      "modelRequested": "deepseek-v4-flash",
+      "modelActual": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-LV02",
+      "title": "thinking + 多轮 Tool Loop（2-3 次）",
+      "tags": [
+        "live",
+        "thinking",
+        "multi-round"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "≥2 次 tool call",
+          "passed": true,
+          "detail": "3 次"
+        },
+        {
+          "label": "tool call id 无重复",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "多工具路由",
+          "passed": true,
+          "detail": "search_files,compute,read_file"
+        },
+        {
+          "label": "全程无 provider error",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "≥2 轮",
+          "passed": true,
+          "detail": "3 轮"
+        },
+        {
+          "label": "产 thinking_blocks",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 30,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "[r1] 我先",
+          "seq": 3
+        },
+        {
+          "type": "text",
+          "data": "[r1] 并行",
+          "seq": 4
+        },
+        {
+          "type": "text",
+          "data": "[r1] 执行",
+          "seq": 5
+        },
+        {
+          "type": "text",
+          "data": "[r1] 搜索",
+          "seq": 6
+        },
+        {
+          "type": "text",
+          "data": "[r1] 和",
+          "seq": 7
+        },
+        {
+          "type": "text",
+          "data": "[r1] 计算",
+          "seq": 8
+        },
+        {
+          "type": "text",
+          "data": "[r1] 。",
+          "seq": 9
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 30,
+            "outputTokens": 245,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 32.4,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 10
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 11
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_00_P1nHb9GNpiUgesNoPc289537",
+            "name": "search_files",
+            "input": {
+              "query": "main"
+            }
+          },
+          "seq": 12
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_01_wX0GajtePaDrS6cj30Do1766",
+            "name": "compute",
+            "input": {
+              "a": 20,
+              "b": 22,
+              "op": "加"
+            }
+          },
+          "seq": 13
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "The user wants me to:\n1. Search src directory for files related to \"main\"\n2. Read src/main.ts\n3. Calculate 20 + 22\n4. Give a final summary based on real results\n\nLet me start with the search and the compute since they're independent. Actually, the read depends on search results confirming the file exists, but the user explicitly says to read src/main.ts. Let me first search, then read. Actually, I can do the search and compute in parallel since they're independent. Then read the file after confirming it exists.\n\nLet me do search_files for \"main\" and compute 20+22 in parallel.",
+              "signature": ""
+            }
+          ],
+          "seq": 14
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 315,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 101
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 102
+        },
+        {
+          "type": "text",
+          "data": "[r2] 搜索",
+          "seq": 103
+        },
+        {
+          "type": "text",
+          "data": "[r2] 命",
+          "seq": 104
+        },
+        {
+          "type": "text",
+          "data": "[r2] 中了",
+          "seq": 105
+        },
+        {
+          "type": "text",
+          "data": "[r2]  `",
+          "seq": 106
+        },
+        {
+          "type": "text",
+          "data": "[r2] src",
+          "seq": 107
+        },
+        {
+          "type": "text",
+          "data": "[r2] /main",
+          "seq": 108
+        },
+        {
+          "type": "text",
+          "data": "[r2] .ts",
+          "seq": 109
+        },
+        {
+          "type": "text",
+          "data": "[r2] `",
+          "seq": 110
+        },
+        {
+          "type": "text",
+          "data": "[r2]  ",
+          "seq": 111
+        },
+        {
+          "type": "text",
+          "data": "[r2] 和",
+          "seq": 112
+        },
+        {
+          "type": "text",
+          "data": "[r2]  `",
+          "seq": 113
+        },
+        {
+          "type": "text",
+          "data": "[r2] config",
+          "seq": 114
+        },
+        {
+          "type": "text",
+          "data": "[r2] .json",
+          "seq": 115
+        },
+        {
+          "type": "text",
+          "data": "[r2] `",
+          "seq": 116
+        },
+        {
+          "type": "text",
+          "data": "[r2] ，",
+          "seq": 117
+        },
+        {
+          "type": "text",
+          "data": "[r2] 计算",
+          "seq": 118
+        },
+        {
+          "type": "text",
+          "data": "[r2] 结果是",
+          "seq": 119
+        },
+        {
+          "type": "text",
+          "data": "[r2]  ",
+          "seq": 120
+        },
+        {
+          "type": "text",
+          "data": "[r2] 42",
+          "seq": 121
+        },
+        {
+          "type": "text",
+          "data": "[r2] 。",
+          "seq": 122
+        },
+        {
+          "type": "text",
+          "data": "[r2] 现在",
+          "seq": 123
+        },
+        {
+          "type": "text",
+          "data": "[r2] 读取",
+          "seq": 124
+        },
+        {
+          "type": "text",
+          "data": "[r2]  `",
+          "seq": 125
+        },
+        {
+          "type": "text",
+          "data": "[r2] src",
+          "seq": 126
+        },
+        {
+          "type": "text",
+          "data": "[r2] /main",
+          "seq": 127
+        },
+        {
+          "type": "text",
+          "data": "[r2] .ts",
+          "seq": 128
+        },
+        {
+          "type": "text",
+          "data": "[r2] `",
+          "seq": 129
+        },
+        {
+          "type": "text",
+          "data": "[r2] ：",
+          "seq": 130
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 315,
+            "outputTokens": 93,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 15.4,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 131
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 132
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_00_O61fEguORTqdZgIu3mVW0062",
+            "name": "read_file",
+            "input": {
+              "path": "src/main.ts"
+            }
+          },
+          "seq": 133
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "Search found src/main.ts and config.json. Compute gives 42. Now read src/main.ts.",
+              "signature": ""
+            }
+          ],
+          "seq": 134
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 143,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 768,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 201
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 202
+        },
+        {
+          "type": "text",
+          "data": "[r3] 已完成",
+          "seq": 203
+        },
+        {
+          "type": "text",
+          "data": "[r3] 全部",
+          "seq": 204
+        },
+        {
+          "type": "text",
+          "data": "[r3] 三步",
+          "seq": 205
+        },
+        {
+          "type": "text",
+          "data": "[r3] 操作",
+          "seq": 206
+        },
+        {
+          "type": "text",
+          "data": "[r3] ，",
+          "seq": 207
+        },
+        {
+          "type": "text",
+          "data": "[r3] 以下是",
+          "seq": 208
+        },
+        {
+          "type": "text",
+          "data": "[r3] 基于",
+          "seq": 209
+        },
+        {
+          "type": "text",
+          "data": "[r3] 每一步",
+          "seq": 210
+        },
+        {
+          "type": "text",
+          "data": "[r3] 真实",
+          "seq": 211
+        },
+        {
+          "type": "text",
+          "data": "[r3] 结果的",
+          "seq": 212
+        },
+        {
+          "type": "text",
+          "data": "[r3] 总结",
+          "seq": 213
+        },
+        {
+          "type": "text",
+          "data": "[r3] ：\n\n",
+          "seq": 214
+        },
+        {
+          "type": "text",
+          "data": "[r3] 1",
+          "seq": 215
+        },
+        {
+          "type": "text",
+          "data": "[r3] .",
+          "seq": 216
+        },
+        {
+          "type": "text",
+          "data": "[r3]  **",
+          "seq": 217
+        },
+        {
+          "type": "text",
+          "data": "[r3] 搜索",
+          "seq": 218
+        },
+        {
+          "type": "text",
+          "data": "[r3]  src",
+          "seq": 219
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 220
+        },
+        {
+          "type": "text",
+          "data": "[r3] 目录",
+          "seq": 221
+        },
+        {
+          "type": "text",
+          "data": "[r3] 下",
+          "seq": 222
+        },
+        {
+          "type": "text",
+          "data": "[r3] 与",
+          "seq": 223
+        },
+        {
+          "type": "text",
+          "data": "[r3]  main",
+          "seq": 224
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 225
+        },
+        {
+          "type": "text",
+          "data": "[r3] 相关的",
+          "seq": 226
+        },
+        {
+          "type": "text",
+          "data": "[r3] 文件",
+          "seq": 227
+        },
+        {
+          "type": "text",
+          "data": "[r3] **",
+          "seq": 228
+        },
+        {
+          "type": "text",
+          "data": "[r3] ：",
+          "seq": 229
+        },
+        {
+          "type": "text",
+          "data": "[r3] 搜索",
+          "seq": 230
+        },
+        {
+          "type": "text",
+          "data": "[r3] 关键词",
+          "seq": 231
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 232
+        },
+        {
+          "type": "text",
+          "data": "[r3] main",
+          "seq": 233
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 234
+        },
+        {
+          "type": "text",
+          "data": "[r3] ，",
+          "seq": 235
+        },
+        {
+          "type": "text",
+          "data": "[r3] 命",
+          "seq": 236
+        },
+        {
+          "type": "text",
+          "data": "[r3] 中了",
+          "seq": 237
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 238
+        },
+        {
+          "type": "text",
+          "data": "[r3] src",
+          "seq": 239
+        },
+        {
+          "type": "text",
+          "data": "[r3] /main",
+          "seq": 240
+        },
+        {
+          "type": "text",
+          "data": "[r3] .ts",
+          "seq": 241
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 242
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 243
+        },
+        {
+          "type": "text",
+          "data": "[r3] 和",
+          "seq": 244
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 245
+        },
+        {
+          "type": "text",
+          "data": "[r3] config",
+          "seq": 246
+        },
+        {
+          "type": "text",
+          "data": "[r3] .json",
+          "seq": 247
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 248
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 249
+        },
+        {
+          "type": "text",
+          "data": "[r3] 两个",
+          "seq": 250
+        },
+        {
+          "type": "text",
+          "data": "[r3] 文件",
+          "seq": 251
+        },
+        {
+          "type": "text",
+          "data": "[r3] （",
+          "seq": 252
+        },
+        {
+          "type": "text",
+          "data": "[r3] 搜索",
+          "seq": 253
+        },
+        {
+          "type": "text",
+          "data": "[r3] 工具",
+          "seq": 254
+        },
+        {
+          "type": "text",
+          "data": "[r3] 会",
+          "seq": 255
+        },
+        {
+          "type": "text",
+          "data": "[r3] 跨",
+          "seq": 256
+        },
+        {
+          "type": "text",
+          "data": "[r3] 目录",
+          "seq": 257
+        },
+        {
+          "type": "text",
+          "data": "[r3] 匹配",
+          "seq": 258
+        },
+        {
+          "type": "text",
+          "data": "[r3] 关键词",
+          "seq": 259
+        },
+        {
+          "type": "text",
+          "data": "[r3] ，",
+          "seq": 260
+        },
+        {
+          "type": "text",
+          "data": "[r3] 因此",
+          "seq": 261
+        },
+        {
+          "type": "text",
+          "data": "[r3] 包含",
+          "seq": 262
+        },
+        {
+          "type": "text",
+          "data": "[r3]  config",
+          "seq": 263
+        },
+        {
+          "type": "text",
+          "data": "[r3] .json",
+          "seq": 264
+        },
+        {
+          "type": "text",
+          "data": "[r3] ）。\n\n",
+          "seq": 265
+        },
+        {
+          "type": "text",
+          "data": "[r3] 2",
+          "seq": 266
+        },
+        {
+          "type": "text",
+          "data": "[r3] .",
+          "seq": 267
+        },
+        {
+          "type": "text",
+          "data": "[r3]  **",
+          "seq": 268
+        },
+        {
+          "type": "text",
+          "data": "[r3] 读取",
+          "seq": 269
+        },
+        {
+          "type": "text",
+          "data": "[r3]  src",
+          "seq": 270
+        },
+        {
+          "type": "text",
+          "data": "[r3] /main",
+          "seq": 271
+        },
+        {
+          "type": "text",
+          "data": "[r3] .ts",
+          "seq": 272
+        },
+        {
+          "type": "text",
+          "data": "[r3] **",
+          "seq": 273
+        },
+        {
+          "type": "text",
+          "data": "[r3] ：",
+          "seq": 274
+        },
+        {
+          "type": "text",
+          "data": "[r3] 文件",
+          "seq": 275
+        },
+        {
+          "type": "text",
+          "data": "[r3] 内容",
+          "seq": 276
+        },
+        {
+          "type": "text",
+          "data": "[r3] 为",
+          "seq": 277
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 278
+        },
+        {
+          "type": "text",
+          "data": "[r3] export",
+          "seq": 279
+        },
+        {
+          "type": "text",
+          "data": "[r3]  const",
+          "seq": 280
+        },
+        {
+          "type": "text",
+          "data": "[r3]  answer",
+          "seq": 281
+        },
+        {
+          "type": "text",
+          "data": "[r3]  =",
+          "seq": 282
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 283
+        },
+        {
+          "type": "text",
+          "data": "[r3] 42",
+          "seq": 284
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 285
+        },
+        {
+          "type": "text",
+          "data": "[r3] ，",
+          "seq": 286
+        },
+        {
+          "type": "text",
+          "data": "[r3] 即",
+          "seq": 287
+        },
+        {
+          "type": "text",
+          "data": "[r3] 导",
+          "seq": 288
+        },
+        {
+          "type": "text",
+          "data": "[r3] 出一个",
+          "seq": 289
+        },
+        {
+          "type": "text",
+          "data": "[r3] 值为",
+          "seq": 290
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 291
+        },
+        {
+          "type": "text",
+          "data": "[r3] 42",
+          "seq": 292
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 293
+        },
+        {
+          "type": "text",
+          "data": "[r3] 的",
+          "seq": 294
+        },
+        {
+          "type": "text",
+          "data": "[r3] 常量",
+          "seq": 295
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 296
+        },
+        {
+          "type": "text",
+          "data": "[r3] answer",
+          "seq": 297
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 298
+        },
+        {
+          "type": "text",
+          "data": "[r3] 。\n\n",
+          "seq": 299
+        },
+        {
+          "type": "text",
+          "data": "[r3] 3",
+          "seq": 300
+        },
+        {
+          "type": "text",
+          "data": "[r3] .",
+          "seq": 301
+        },
+        {
+          "type": "text",
+          "data": "[r3]  **",
+          "seq": 302
+        },
+        {
+          "type": "text",
+          "data": "[r3] 计算",
+          "seq": 303
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 304
+        },
+        {
+          "type": "text",
+          "data": "[r3] 20",
+          "seq": 305
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 306
+        },
+        {
+          "type": "text",
+          "data": "[r3] 加",
+          "seq": 307
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 308
+        },
+        {
+          "type": "text",
+          "data": "[r3] 22",
+          "seq": 309
+        },
+        {
+          "type": "text",
+          "data": "[r3] **",
+          "seq": 310
+        },
+        {
+          "type": "text",
+          "data": "[r3] ：",
+          "seq": 311
+        },
+        {
+          "type": "text",
+          "data": "[r3] 工具",
+          "seq": 312
+        },
+        {
+          "type": "text",
+          "data": "[r3] 返回",
+          "seq": 313
+        },
+        {
+          "type": "text",
+          "data": "[r3] 结果为",
+          "seq": 314
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 315
+        },
+        {
+          "type": "text",
+          "data": "[r3] 20",
+          "seq": 316
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 317
+        },
+        {
+          "type": "text",
+          "data": "[r3] 加",
+          "seq": 318
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 319
+        },
+        {
+          "type": "text",
+          "data": "[r3] 22",
+          "seq": 320
+        },
+        {
+          "type": "text",
+          "data": "[r3]  =",
+          "seq": 321
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 322
+        },
+        {
+          "type": "text",
+          "data": "[r3] 42",
+          "seq": 323
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 324
+        },
+        {
+          "type": "text",
+          "data": "[r3] 。\n\n",
+          "seq": 325
+        },
+        {
+          "type": "text",
+          "data": "[r3] **",
+          "seq": 326
+        },
+        {
+          "type": "text",
+          "data": "[r3] 最终",
+          "seq": 327
+        },
+        {
+          "type": "text",
+          "data": "[r3] 总结",
+          "seq": 328
+        },
+        {
+          "type": "text",
+          "data": "[r3] **",
+          "seq": 329
+        },
+        {
+          "type": "text",
+          "data": "[r3] ：",
+          "seq": 330
+        },
+        {
+          "type": "text",
+          "data": "[r3] 搜索",
+          "seq": 331
+        },
+        {
+          "type": "text",
+          "data": "[r3] 确认",
+          "seq": 332
+        },
+        {
+          "type": "text",
+          "data": "[r3] 了",
+          "seq": 333
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 334
+        },
+        {
+          "type": "text",
+          "data": "[r3] src",
+          "seq": 335
+        },
+        {
+          "type": "text",
+          "data": "[r3] /main",
+          "seq": 336
+        },
+        {
+          "type": "text",
+          "data": "[r3] .ts",
+          "seq": 337
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 338
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 339
+        },
+        {
+          "type": "text",
+          "data": "[r3] 存在",
+          "seq": 340
+        },
+        {
+          "type": "text",
+          "data": "[r3] ，",
+          "seq": 341
+        },
+        {
+          "type": "text",
+          "data": "[r3] 读取",
+          "seq": 342
+        },
+        {
+          "type": "text",
+          "data": "[r3] 后",
+          "seq": 343
+        },
+        {
+          "type": "text",
+          "data": "[r3] 其",
+          "seq": 344
+        },
+        {
+          "type": "text",
+          "data": "[r3] 内容",
+          "seq": 345
+        },
+        {
+          "type": "text",
+          "data": "[r3] 导",
+          "seq": 346
+        },
+        {
+          "type": "text",
+          "data": "[r3] 出的",
+          "seq": 347
+        },
+        {
+          "type": "text",
+          "data": "[r3] 常量",
+          "seq": 348
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 349
+        },
+        {
+          "type": "text",
+          "data": "[r3] answer",
+          "seq": 350
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 351
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 352
+        },
+        {
+          "type": "text",
+          "data": "[r3] 恰好",
+          "seq": 353
+        },
+        {
+          "type": "text",
+          "data": "[r3] 等于",
+          "seq": 354
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 355
+        },
+        {
+          "type": "text",
+          "data": "[r3] 42",
+          "seq": 356
+        },
+        {
+          "type": "text",
+          "data": "[r3] ；",
+          "seq": 357
+        },
+        {
+          "type": "text",
+          "data": "[r3] 而",
+          "seq": 358
+        },
+        {
+          "type": "text",
+          "data": "[r3] 计算",
+          "seq": 359
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 360
+        },
+        {
+          "type": "text",
+          "data": "[r3] 20",
+          "seq": 361
+        },
+        {
+          "type": "text",
+          "data": "[r3]  +",
+          "seq": 362
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 363
+        },
+        {
+          "type": "text",
+          "data": "[r3] 22",
+          "seq": 364
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 365
+        },
+        {
+          "type": "text",
+          "data": "[r3] 的结果",
+          "seq": 366
+        },
+        {
+          "type": "text",
+          "data": "[r3] 也是",
+          "seq": 367
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 368
+        },
+        {
+          "type": "text",
+          "data": "[r3] 42",
+          "seq": 369
+        },
+        {
+          "type": "text",
+          "data": "[r3] 。",
+          "seq": 370
+        },
+        {
+          "type": "text",
+          "data": "[r3] 两者",
+          "seq": 371
+        },
+        {
+          "type": "text",
+          "data": "[r3] 数值",
+          "seq": 372
+        },
+        {
+          "type": "text",
+          "data": "[r3] 一致",
+          "seq": 373
+        },
+        {
+          "type": "text",
+          "data": "[r3] ，",
+          "seq": 374
+        },
+        {
+          "type": "text",
+          "data": "[r3] 即",
+          "seq": 375
+        },
+        {
+          "type": "text",
+          "data": "[r3] 文件",
+          "seq": 376
+        },
+        {
+          "type": "text",
+          "data": "[r3] 中的",
+          "seq": 377
+        },
+        {
+          "type": "text",
+          "data": "[r3] 常量",
+          "seq": 378
+        },
+        {
+          "type": "text",
+          "data": "[r3] 值",
+          "seq": 379
+        },
+        {
+          "type": "text",
+          "data": "[r3] 正好",
+          "seq": 380
+        },
+        {
+          "type": "text",
+          "data": "[r3] 对应",
+          "seq": 381
+        },
+        {
+          "type": "text",
+          "data": "[r3] 算术",
+          "seq": 382
+        },
+        {
+          "type": "text",
+          "data": "[r3] 运算",
+          "seq": 383
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 384
+        },
+        {
+          "type": "text",
+          "data": "[r3] 20",
+          "seq": 385
+        },
+        {
+          "type": "text",
+          "data": "[r3]  +",
+          "seq": 386
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 387
+        },
+        {
+          "type": "text",
+          "data": "[r3] 22",
+          "seq": 388
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 389
+        },
+        {
+          "type": "text",
+          "data": "[r3] 的结果",
+          "seq": 390
+        },
+        {
+          "type": "text",
+          "data": "[r3] 。",
+          "seq": 391
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 143,
+            "outputTokens": 245,
+            "cacheReadInputTokens": 768,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 24.2,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 392
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 393
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "All done. Let me give the final summary based on real results:\n1. Search: found src/main.ts and config.json\n2. Read src/main.ts: content is \"export const answer = 42\"\n3. Compute: 20 + 22 = 42",
+              "signature": ""
+            }
+          ],
+          "seq": 394
+        },
+        {
+          "type": "done",
+          "data": "已完成全部三步操作，以下是基于每一步真实结果的总结：\n\n1. **搜索 src 目录下与 main 相关的文件**：搜索关键词 `main`，命中了 `src/main.ts` 和 `config.json` 两个文件（搜索工具会跨目录匹配关键词，因此包含 config.json）。\n\n2. **读取 src/main.ts**：文件内容为 `export const answer = 42`，即导出一个值为 42 的常量 `answer`。\n\n3. **计算 20 加 22**：工具返回结果为 `20 加 22 = 42`。\n\n**最终总结**：搜索确认了 `src/main.ts` 存在，读取后其内容导出的常量 `answer` 恰好等于 42；而计算 20 + 22 的结果也是 42。两者数值一致，即文件中的常量值正好对应算术运算 20 + 22 的结果。",
+          "seq": 395
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 9141,
+      "usage": {
+        "inputTokens": 143,
+        "outputTokens": 245,
+        "cacheReadInputTokens": 768,
+        "cacheCreationInputTokens": 0,
+        "cacheMissInputTokens": 0,
+        "source": "provider",
+        "cacheHitRate": 100,
+        "outputShare": 24.2,
+        "missShare": 0,
+        "claudeStyleCacheShape": false,
+        "requestedModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "actualModel": "deepseek-v4-flash"
+      },
+      "modelRequested": "deepseek-v4-flash",
+      "modelActual": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-LV03",
+      "title": "只读分析任务不产生副作用",
+      "tags": [
+        "live",
+        "readonly"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "有工具调用",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无写入副作用",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "id 无重复",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无 error",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 12,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 12,
+            "outputTokens": 78,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 13.2,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 4
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_00_uBio6TndQi2ffqh8j24u6515",
+            "name": "search_files",
+            "input": {
+              "query": "config"
+            }
+          },
+          "seq": 5
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "The user wants me to search for config-related files, read config.json, and tell them the value of the debug field. Let me start by searching for config files.",
+              "signature": ""
+            }
+          ],
+          "seq": 6
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 117,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 101
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 102
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 117,
+            "outputTokens": 54,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 9.5,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 103
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 104
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_00_sIK6oI9X6ikxjzhwLFor3506",
+            "name": "read_file",
+            "input": {
+              "path": "config.json"
+            }
+          },
+          "seq": 105
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "Found config.json. Let me read it.",
+              "signature": ""
+            }
+          ],
+          "seq": 106
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 66,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 640,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 201
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 202
+        },
+        {
+          "type": "text",
+          "data": "[r3] 搜索",
+          "seq": 203
+        },
+        {
+          "type": "text",
+          "data": "[r3] 到了",
+          "seq": 204
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 205
+        },
+        {
+          "type": "text",
+          "data": "[r3] config",
+          "seq": 206
+        },
+        {
+          "type": "text",
+          "data": "[r3] .json",
+          "seq": 207
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 208
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 209
+        },
+        {
+          "type": "text",
+          "data": "[r3] 并",
+          "seq": 210
+        },
+        {
+          "type": "text",
+          "data": "[r3] 读取",
+          "seq": 211
+        },
+        {
+          "type": "text",
+          "data": "[r3] 了",
+          "seq": 212
+        },
+        {
+          "type": "text",
+          "data": "[r3] 其",
+          "seq": 213
+        },
+        {
+          "type": "text",
+          "data": "[r3] 内容",
+          "seq": 214
+        },
+        {
+          "type": "text",
+          "data": "[r3] ：\n\n",
+          "seq": 215
+        },
+        {
+          "type": "text",
+          "data": "[r3] ```",
+          "seq": 216
+        },
+        {
+          "type": "text",
+          "data": "[r3] json",
+          "seq": 217
+        },
+        {
+          "type": "text",
+          "data": "[r3] \n",
+          "seq": 218
+        },
+        {
+          "type": "text",
+          "data": "[r3] {\"",
+          "seq": 219
+        },
+        {
+          "type": "text",
+          "data": "[r3] port",
+          "seq": 220
+        },
+        {
+          "type": "text",
+          "data": "[r3] \":",
+          "seq": 221
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 222
+        },
+        {
+          "type": "text",
+          "data": "[r3] 812",
+          "seq": 223
+        },
+        {
+          "type": "text",
+          "data": "[r3] 3",
+          "seq": 224
+        },
+        {
+          "type": "text",
+          "data": "[r3] ,",
+          "seq": 225
+        },
+        {
+          "type": "text",
+          "data": "[r3]  \"",
+          "seq": 226
+        },
+        {
+          "type": "text",
+          "data": "[r3] debug",
+          "seq": 227
+        },
+        {
+          "type": "text",
+          "data": "[r3] \":",
+          "seq": 228
+        },
+        {
+          "type": "text",
+          "data": "[r3]  false",
+          "seq": 229
+        },
+        {
+          "type": "text",
+          "data": "[r3] }\n",
+          "seq": 230
+        },
+        {
+          "type": "text",
+          "data": "[r3] ```\n\n",
+          "seq": 231
+        },
+        {
+          "type": "text",
+          "data": "[r3] **",
+          "seq": 232
+        },
+        {
+          "type": "text",
+          "data": "[r3] debug",
+          "seq": 233
+        },
+        {
+          "type": "text",
+          "data": "[r3]  ",
+          "seq": 234
+        },
+        {
+          "type": "text",
+          "data": "[r3] 字段",
+          "seq": 235
+        },
+        {
+          "type": "text",
+          "data": "[r3] 的",
+          "seq": 236
+        },
+        {
+          "type": "text",
+          "data": "[r3] 值为",
+          "seq": 237
+        },
+        {
+          "type": "text",
+          "data": "[r3]  `",
+          "seq": 238
+        },
+        {
+          "type": "text",
+          "data": "[r3] false",
+          "seq": 239
+        },
+        {
+          "type": "text",
+          "data": "[r3] `",
+          "seq": 240
+        },
+        {
+          "type": "text",
+          "data": "[r3] 。",
+          "seq": 241
+        },
+        {
+          "type": "text",
+          "data": "[r3] **",
+          "seq": 242
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 66,
+            "outputTokens": 64,
+            "cacheReadInputTokens": 640,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 9.1,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 243
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 244
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "The config.json contains {\"port\": 8123, \"debug\": false}. The debug field value is false.",
+              "signature": ""
+            }
+          ],
+          "seq": 245
+        },
+        {
+          "type": "done",
+          "data": "搜索到了 `config.json` 并读取了其内容：\n\n```json\n{\"port\": 8123, \"debug\": false}\n```\n\n**debug 字段的值为 `false`。**",
+          "seq": 246
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 6046,
+      "usage": {
+        "inputTokens": 66,
+        "outputTokens": 64,
+        "cacheReadInputTokens": 640,
+        "cacheCreationInputTokens": 0,
+        "cacheMissInputTokens": 0,
+        "source": "provider",
+        "cacheHitRate": 100,
+        "outputShare": 9.1,
+        "missShare": 0,
+        "claudeStyleCacheShape": false,
+        "requestedModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "actualModel": "deepseek-v4-flash"
+      },
+      "modelRequested": "deepseek-v4-flash",
+      "modelActual": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-LV04",
+      "title": "轮间 abort → 无残留流",
+      "tags": [
+        "live",
+        "abort"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "已 abort",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "abort 后未继续跑完",
+          "passed": true,
+          "detail": "3 轮"
+        },
+        {
+          "label": "无残留错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 19,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "[r1] 我先",
+          "seq": 3
+        },
+        {
+          "type": "text",
+          "data": "[r1] 读取",
+          "seq": 4
+        },
+        {
+          "type": "text",
+          "data": "[r1]  config",
+          "seq": 5
+        },
+        {
+          "type": "text",
+          "data": "[r1] .json",
+          "seq": 6
+        },
+        {
+          "type": "text",
+          "data": "[r1]  ",
+          "seq": 7
+        },
+        {
+          "type": "text",
+          "data": "[r1] 文件",
+          "seq": 8
+        },
+        {
+          "type": "text",
+          "data": "[r1] 。",
+          "seq": 9
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 19,
+            "outputTokens": 109,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 17.6,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 10
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 11
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_00_rs1GvGPSLMu88cwLfG1Y4924",
+            "name": "read_file",
+            "input": {
+              "path": "config.json"
+            }
+          },
+          "seq": 12
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "The user wants me to read config.json first, then call compute to complete 5 addition operations, each based on the previous result.\n\nLet me start by reading config.json. I also need to see what's in the config to know the initial values. Let me read the file first.",
+              "signature": ""
+            }
+          ],
+          "seq": 13
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 145,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 101
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 102
+        },
+        {
+          "type": "text",
+          "data": "[r2] config",
+          "seq": 103
+        },
+        {
+          "type": "text",
+          "data": "[r2] .json",
+          "seq": 104
+        },
+        {
+          "type": "text",
+          "data": "[r2]  ",
+          "seq": 105
+        },
+        {
+          "type": "text",
+          "data": "[r2] 已",
+          "seq": 106
+        },
+        {
+          "type": "text",
+          "data": "[r2] 读取",
+          "seq": 107
+        },
+        {
+          "type": "text",
+          "data": "[r2] ，",
+          "seq": 108
+        },
+        {
+          "type": "text",
+          "data": "[r2] 内容",
+          "seq": 109
+        },
+        {
+          "type": "text",
+          "data": "[r2] 为",
+          "seq": 110
+        },
+        {
+          "type": "text",
+          "data": "[r2]  `",
+          "seq": 111
+        },
+        {
+          "type": "text",
+          "data": "[r2] {\"",
+          "seq": 112
+        },
+        {
+          "type": "text",
+          "data": "[r2] port",
+          "seq": 113
+        },
+        {
+          "type": "text",
+          "data": "[r2] \":",
+          "seq": 114
+        },
+        {
+          "type": "text",
+          "data": "[r2]  ",
+          "seq": 115
+        },
+        {
+          "type": "text",
+          "data": "[r2] 812",
+          "seq": 116
+        },
+        {
+          "type": "text",
+          "data": "[r2] 3",
+          "seq": 117
+        },
+        {
+          "type": "text",
+          "data": "[r2] ,",
+          "seq": 118
+        },
+        {
+          "type": "text",
+          "data": "[r2]  \"",
+          "seq": 119
+        },
+        {
+          "type": "text",
+          "data": "[r2] debug",
+          "seq": 120
+        },
+        {
+          "type": "text",
+          "data": "[r2] \":",
+          "seq": 121
+        },
+        {
+          "type": "text",
+          "data": "[r2]  false",
+          "seq": 122
+        },
+        {
+          "type": "text",
+          "data": "[r2] }`",
+          "seq": 123
+        },
+        {
+          "type": "text",
+          "data": "[r2] 。",
+          "seq": 124
+        },
+        {
+          "type": "text",
+          "data": "[r2] 接下来",
+          "seq": 125
+        },
+        {
+          "type": "text",
+          "data": "[r2] 我",
+          "seq": 126
+        },
+        {
+          "type": "text",
+          "data": "[r2] 搜索",
+          "seq": 127
+        },
+        {
+          "type": "text",
+          "data": "[r2] 一下",
+          "seq": 128
+        },
+        {
+          "type": "text",
+          "data": "[r2] 仓库",
+          "seq": 129
+        },
+        {
+          "type": "text",
+          "data": "[r2] 中",
+          "seq": 130
+        },
+        {
+          "type": "text",
+          "data": "[r2] 是否有",
+          "seq": 131
+        },
+        {
+          "type": "text",
+          "data": "[r2] 关于",
+          "seq": 132
+        },
+        {
+          "type": "text",
+          "data": "[r2] 计算",
+          "seq": 133
+        },
+        {
+          "type": "text",
+          "data": "[r2] 初始",
+          "seq": 134
+        },
+        {
+          "type": "text",
+          "data": "[r2] 值",
+          "seq": 135
+        },
+        {
+          "type": "text",
+          "data": "[r2] 或",
+          "seq": 136
+        },
+        {
+          "type": "text",
+          "data": "[r2] 步",
+          "seq": 137
+        },
+        {
+          "type": "text",
+          "data": "[r2] 长的",
+          "seq": 138
+        },
+        {
+          "type": "text",
+          "data": "[r2] 线索",
+          "seq": 139
+        },
+        {
+          "type": "text",
+          "data": "[r2] 。",
+          "seq": 140
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 145,
+            "outputTokens": 338,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 39.8,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 141
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 142
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_00_ZINMTJ4PHA1s9LTt97Hx1186",
+            "name": "search_files",
+            "input": {
+              "query": "compute"
+            }
+          },
+          "seq": 143
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "call_01_8V0EQYF3qbxaFyUGnkcx5018",
+            "name": "search_files",
+            "input": {
+              "query": "8123"
+            }
+          },
+          "seq": 144
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "The config.json contains {\"port\": 8123, \"debug\": false}. Hmm, this doesn't directly give numbers for computation. The user wants 5 addition operations, each based on the previous result. But there's no explicit starting value or addend given.\n\nWait, maybe I should look for other files or clues. Let me search the repository for relevant files. Actually the instruction says \"请先读取 config.json，然后继续调用 compute 完成 5 次加法运算，每次基于前次结果。\" So read config, then do 5 addition operations based on previous results.\n\nThe config gives port 8123 and debug false. Perhaps the numbers to use are from config: 8123 and... maybe 8123? Or maybe the first compute uses 8123 + 8123? Hmm.\n\nLet me search the repo for more context to find what values to use.\n\nActually, the task seems to be about computing based on previous results. Maybe starting from the port number 8123, each time add something. But what's the addend?\n\nLet me search files for hints.",
+              "signature": ""
+            }
+          ],
+          "seq": 145
+        },
+        {
+          "type": "status",
+          "data": "provider-stream: aborted by local budget guard",
+          "seq": 201
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 7240,
+      "usage": {
+        "inputTokens": 145,
+        "outputTokens": 338,
+        "cacheReadInputTokens": 512,
+        "cacheCreationInputTokens": 0,
+        "cacheMissInputTokens": 0,
+        "source": "provider",
+        "cacheHitRate": 100,
+        "outputShare": 39.8,
+        "missShare": 0,
+        "claudeStyleCacheShape": false,
+        "requestedModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "actualModel": "deepseek-v4-flash"
+      },
+      "modelRequested": "deepseek-v4-flash",
+      "modelActual": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-LV05",
+      "title": "max_tokens 截断 → 不崩溃",
+      "tags": [
+        "live",
+        "edge"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "完成至少 1 轮",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "截断被识别为 max_tokens",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "未崩溃（runner 正常返回）",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 13,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 0,
+            "missShare": 0,
+            "claudeStyleCacheShape": true,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 13,
+            "outputTokens": 80,
+            "cacheReadInputTokens": 512,
+            "cacheCreationInputTokens": 0,
+            "cacheMissInputTokens": 0,
+            "source": "provider",
+            "cacheHitRate": 100,
+            "outputShare": 13.5,
+            "missShare": 0,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: max_tokens",
+          "seq": 4
+        },
+        {
+          "type": "error",
+          "data": "provider stop_reason=max_tokens: response hit the output token limit before completion",
+          "seq": 5
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 2356,
+      "usage": {
+        "inputTokens": 13,
+        "outputTokens": 80,
+        "cacheReadInputTokens": 512,
+        "cacheCreationInputTokens": 0,
+        "cacheMissInputTokens": 0,
+        "source": "provider",
+        "cacheHitRate": 100,
+        "outputShare": 13.5,
+        "missShare": 0,
+        "claudeStyleCacheShape": false,
+        "requestedModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "actualModel": "deepseek-v4-flash"
+      },
+      "modelRequested": "deepseek-v4-flash",
+      "modelActual": "deepseek-v4-flash"
+    }
+  ],
+  "hardGates": {
+    "DUPLICATE_TOOL_CALL": 0,
+    "TOOL_RESULT_MISMATCH": 0,
+    "RETRY_AFTER_SIDE_EFFECT": 0,
+    "LOST_TOOL_CALL": 0,
+    "MISSING_STOP_REASON_ACCEPTED": 0,
+    "SILENT_MODEL_SWITCH": 0,
+    "TOKEN_TELEMETRY_MISSING": 0,
+    "ABORT_IGNORED": 0
+  },
+  "summary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "passRate": 100
+  },
+  "generatedAt": "2026-08-06T00:37:59.287Z"
+}

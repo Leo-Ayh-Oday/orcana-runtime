@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { agentLoop } from "../src/agent/loop"
+import { isColdMemorySHARecorded, verifyCheckpoint } from "../src/session/checkpoint"
 import type { SessionCheckpoint } from "../src/session/checkpoint"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
 import { buildTools, Result } from "../src/tools/registry"
@@ -176,6 +177,44 @@ describe("RC-11 D4 CHECKPOINT_RESUME_USED", () => {
     }))
     expect(provider.requests.length).toBeGreaterThan(0)
     expect(events.filter(e => e.type === "text").some(e => e.data === "resumed answer.")).toBe(true)
+  })
+
+  test("H8: 16-hex 冷内存声明不匹配 → 校验失败且 coldMemoryMatch=false", () => {
+    const cp = makeCheckpoint({ coldMemorySHA: "aaaaaaaaaaaaaaaa", fileSHAs: {} })
+    const integrity = verifyCheckpoint(cp, "bbbbbbbbbbbbbbbb")
+    expect(integrity.valid).toBe(false)
+    expect(integrity.filesMatch).toBe(true)
+    expect(integrity.coldMemoryMatch).toBe(false)
+  })
+
+  test("H8: 16-hex 冷内存声明匹配 → 校验通过", () => {
+    const cp = makeCheckpoint({ coldMemorySHA: "aaaaaaaaaaaaaaaa", fileSHAs: {} })
+    const integrity = verifyCheckpoint(cp, "aaaaaaaaaaaaaaaa")
+    expect(integrity.valid).toBe(true)
+    expect(integrity.coldMemoryMatch).toBe(true)
+  })
+
+  test("H8: 未记录（空）→ 不构成声明，跳过而非误判", () => {
+    const cp = makeCheckpoint({ coldMemorySHA: "", fileSHAs: {} })
+    const integrity = verifyCheckpoint(cp, "aaaaaaaaaaaaaaaa")
+    expect(integrity.valid).toBe(true)
+    expect(integrity.coldMemoryMatch).toBe(true)
+  })
+
+  test("H8: 外部格式（64-hex stable-prefix 指纹）resume 侧不可复现 → 跳过不误判", () => {
+    const external = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    const cp = makeCheckpoint({ coldMemorySHA: external, fileSHAs: {} })
+    const integrity = verifyCheckpoint(cp, "aaaaaaaaaaaaaaaa")
+    expect(isColdMemorySHARecorded(external)).toBe(false)
+    expect(integrity.valid).toBe(true)
+    expect(integrity.coldMemoryMatch).toBe(true)
+  })
+
+  test("H8: 无 currentSHA（无锚）→ 冷内存校验跳过", () => {
+    const cp = makeCheckpoint({ coldMemorySHA: "aaaaaaaaaaaaaaaa", fileSHAs: {} })
+    const integrity = verifyCheckpoint(cp)
+    expect(integrity.valid).toBe(true)
+    expect(integrity.coldMemoryMatch).toBe(true)
   })
 
   test("masterPlan 无 nodes/steps 时回退 checkpoint.taskSteps 恢复 tracker", async () => {

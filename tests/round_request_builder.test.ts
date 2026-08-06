@@ -88,4 +88,13 @@ describe("Round request builder", () => {
 
     expect(estimate300.roundInputTokens).toBe(estimate128.roundInputTokens)
   })
+
+  test("budget matches the disclosed tool subset, not the full set", () => {
+    const system = "system prompt"
+    const messages: Array<{ role: "user"; content: string }> = [{ role: "user", content: "hello" }]
+    const disclosed = estimateRoundTokens(system, [], messages, null, makeTools(10))
+    const full = estimateRoundTokens(system, [], messages, null, makeTools(50))
+
+    expect(disclosed.roundInputTokens).toBeLessThan(full.roundInputTokens)
+  })
 })

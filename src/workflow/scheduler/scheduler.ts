@@ -43,6 +43,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { isAbsolute, join, relative, resolve } from "node:path"
 import type { ResourceLedger } from "../../runtime/linux/scheduler/resource-ledger"
 import type { ResourceRequest } from "../../runtime/linux/contracts"
+import type { RunCancellation } from "../../harness/contracts/scope"
 
 export interface SchedulerOptions {
   maxParallel?: number
@@ -325,13 +326,17 @@ export async function runScheduler(
       const agentId = options.pool ? agentOfNodeId(node.id) : null
       if (agentId) {
         const agent = options.pool!.get(agentId)
-        if (agent && (options.pool!.isCancelled(agentId) || agent.budget.exhausted())) {
+        const exhaustedVerdict = agent?.budget.exhaustedVerdict() ?? null
+        if (agent && (options.pool!.isCancelled(agentId) || exhaustedVerdict)) {
+          // M4: an exhausted cap reports its own verdict (writes_exhausted /
+          // nodes_exhausted) so the blocked node is attributable, not a
+          // generic "budget exhausted".
           const cancelled: import("../types").WorkflowNodeResult = {
             nodeId: node.id,
             status: "failed",
             output: null,
-            error: agent.budget.exhausted()
-              ? `workflow: agent "${agentId}" budget exhausted (${JSON.stringify(agent.budget.stateSnapshot())})`
+            error: exhaustedVerdict
+              ? `workflow: agent "${agentId}" budget verdict ${exhaustedVerdict} (${JSON.stringify(agent!.budget.stateSnapshot())})`
               : `workflow: agent "${agentId}" cancelled`,
             startedAt: Date.now(),
             finishedAt: Date.now(),
@@ -353,6 +358,25 @@ export async function runScheduler(
           }
           store.put(budgetBlocked)
           return budgetBlocked
+        }
+        // M4: write budget — a write node charges the agent's write cap
+        // BEFORE execution; writes_exhausted blocks it pre-execution (the
+        // second write never runs, so side effects and cost stay capped).
+        if (isWrite) {
+          const writeVerdict = agent?.budget.chargeWrite() ?? "ok"
+          if (writeVerdict !== "ok") {
+            const writeBlocked: import("../types").WorkflowNodeResult = {
+              nodeId: node.id,
+              status: "failed",
+              output: null,
+              error: `workflow: agent "${agentId}" budget verdict ${writeVerdict}`,
+              startedAt: Date.now(),
+              finishedAt: Date.now(),
+              durationMs: 0,
+            }
+            store.put(writeBlocked)
+            return writeBlocked
+          }
         }
       }
       // G5: read-only cache hit → replay, never re-execute. H11 harness
@@ -387,8 +411,22 @@ export async function runScheduler(
               onResolved: options.interrupts.onResolved,
             }
           : undefined
+        // M5: agent-assigned nodes run under the agent's local cancellation
+        // too — pool.cancel() aborts the in-flight node (tool/LLM/loop work)
+        // without killing the shared run scope for other agents. The worktree
+        // redirect still rides enforcement.projectRoot (MACP-M3).
+        let nodeRuntime = harnessRuntime
+        if (harnessRuntime && agentId && options.pool) {
+          const agent = options.pool.get(agentId)
+          if (agent) {
+            nodeRuntime = {
+              ...harnessRuntime,
+              scope: { ...harnessRuntime.scope, cancellation: mergeCancellations(harnessRuntime.scope.cancellation, agent.cancellation) },
+            }
+          }
+        }
         const result = isHarness && harnessRuntime
-          ? await executeHarnessNode(node, harnessRuntime, store, enforcement.projectRoot !== harnessRuntime.scope.projectRoot ? enforcement.projectRoot : undefined, interruptRuntime)
+          ? await executeHarnessNode(node, nodeRuntime ?? harnessRuntime, store, enforcement.projectRoot !== harnessRuntime.scope.projectRoot ? enforcement.projectRoot : undefined, interruptRuntime)
           : await executeNode(node, registry, store)
         // MACP-M3 task 8/9: actual written paths vs declared ownership —
         // only for assigned write nodes (no pool → legacy, unchanged).
@@ -680,4 +718,31 @@ export async function runScheduler(
     }
   }
   return base
+}
+
+/** M5: compose the run-scope cancellation with an agent-local one — a
+ *  pool.cancel() aborts the agent signal while the shared run scope stays
+ *  alive for other agents. reason/throwIfCancelled report the aborted side. */
+function mergeCancellations(scope: RunCancellation, agent: RunCancellation): RunCancellation {
+  const signal = AbortSignal.any([scope.signal, agent.signal])
+  return {
+    get signal() {
+      return signal
+    },
+    get cancelled() {
+      return signal.aborted
+    },
+    get reason() {
+      return agent.signal.aborted ? agent.reason : scope.reason
+    },
+    cancel(reason: string) {
+      scope.cancel(reason)
+      agent.cancel(reason)
+    },
+    throwIfCancelled() {
+      if (signal.aborted) {
+        throw new Error(`Run cancelled: ${String(signal.reason ?? "")}`)
+      }
+    },
+  }
 }

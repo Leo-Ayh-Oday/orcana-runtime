@@ -59,8 +59,12 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
       const guard = new BudgetGuard(context.budget, (reason) => context.cancellation.cancel(reason))
 
       let finalText = ""
+      // M21: usage is counted, never dropped — modelCalls increments per
+      // provider round (token_usage provider event), toolCalls per bridged
+      // tool call, wallTimeMs spans the whole node execution.
       const usage: NodeUsage = { modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, cacheMissTokens: 0, wallTimeMs: 0 }
       let decision: LoopDecision = { kind: "continue" }
+      const startedAt = Date.now()
 
       // R1: evidence chain — snapshot ledger + artifact store before the loop;
       // the node's output is the diff (entries/artifacts ADDED by this node).
@@ -82,9 +86,11 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
           decision = { kind: "return", reason: "aborted" }
           break
         }
-        yield* translateEnvelope(envelope, context, usage, (text) => { finalText = text })
+        yield* translateEnvelope(envelope, context, usage, (text) => { finalText += text })
       }
 
+      // M21: wall clock spans the node execution (first event to loop end).
+      usage.wallTimeMs = Date.now() - startedAt
       const cancelled = context.cancellation.cancelled
       const outcome = mapDecisionToOutcome(decision, undefined, cancelled ? context.cancellation.reason : undefined).outcome
 
@@ -162,6 +168,7 @@ function* translateEnvelope(
     onText(text)
     yield { type: "node.text", nodeRunId: context.nodeRunId, text }
   } else if ("toolCall" in payload) {
+    usage.toolCalls++ // M21: every bridged tool call is counted
     yield {
       type: "node.tool.call",
       nodeRunId: context.nodeRunId,
@@ -177,6 +184,9 @@ function* translateEnvelope(
     // accumulation would double-count (noted: the H4 BudgetGuard += has the
     // same hazard on real kernel streams; tracked for H12).
     if (u.cacheSource === "provider") {
+      // M21: each provider round is one model call (kernel token_usage
+      // events are cumulative per round — totals take the last value).
+      usage.modelCalls++
       usage.inputTokens = u.inputTokens ?? usage.inputTokens
       usage.outputTokens = u.outputTokens ?? usage.outputTokens
       usage.cacheMissTokens = u.cacheMissInputTokens ?? usage.cacheMissTokens

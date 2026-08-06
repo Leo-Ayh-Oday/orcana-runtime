@@ -153,3 +153,57 @@ architecture 漏选、SR-42 弹跳按钮只选 motion 漏 ui-ux（GT 双 require
 4. **错误集跨组几乎不重叠**（disabled: TR-24/30/38；auto: TR-25/28/29/38；enabled: TR-25/27/28），
    但 **TR-38（权限系统）三组全错**——判 plan_before_code/discussion 而非 full_complex，
    是稳定边界分歧（GT 粒度 vs 模型粒度），维持结论 11 不调优。
+
+---
+
+## 2026-08-06 · P3 ORMB-CX（Context 压缩）
+
+commit: `a3c37dd`（探针集随 H9 入库）  存档: 无独立 JSON（P3 结果记录于本文件 + supervisor）
+
+**结果：8/8 case 全量（32k 窗口，compress 组 4 + rollover 组 4），8/8 触发 epoch 机制、8/8 触发 rollover；判定 8/8 通过**（CTX-C2 初判 CONSTRAINT_VIOLATED，修正探针语义后 8/8 全绿）。Tool Chain 完整 8/8（无压缩导致的工具调用失败）。
+
+### 结论 13：最终报告通道在 rollover case 上确定性失效，必须多源探针
+
+`epochRollover` 归档 `messages.slice(0, cutIndex)`（仅保留最近 3 对消息）——收尾指令/最终报告在首条 user prompt，**触发 rollover 的 case 必丢**（C1 两次验证 33/39 轮均 PROBE_MISSING；指令强化无效——不是模型不听话，是代码层面确定丢）。对策：三通道探针（① 最终报告 JSON ② 进度 JSON 流 step/done ③ 行为观测 writePaths/writeTexts/readPaths，**行为通道不受压缩影响**），verifyProbe 按 report→progress→behavior 回退。rollover 组 4/4 全部由行为/进度通道独立完成判定，零 MISSING。
+
+### 结论 14：压缩不丢关键事实（行为通道证实）
+
+8/8 case 全部触发压缩（rollover×1-4），决策（SUPERSEDED_OK）、义务（OBLIGATION_OK）、关键事实（FACTS_OK）、文件定位（FILES_OK）全部保留——**压缩后模型仍能凭压缩摘要+剩余上下文完成长任务**（C1/C3/C5/C8 均 completed 至任务完成轮）。"旧决策复活"（SUPERSEDED_REVIVED）零出现。32k 窗口 + 压缩对 30-60 轮长任务足够。
+
+### 结论 15：CTX-C2 违禁判定是探针假阳性（负约束匹配语义修正）
+
+C2 约束"不得修改 src/lib.ts"，模型写的是 `src/lib.test.ts` + package.json/tsconfig.json（r26），探针 substring 匹配（`containsAny` 的 `includes`）两类误判：
+1. **writeTexts 过宽**：package.json `"main": "./src/lib.ts"` / tsconfig include 引用 lib.ts——任务要求读取 lib.ts 写说明，配置引用是正常工程行为，≠修改文件
+2. **selfHit 过宽**：模型如实自报 `forbiddenActions: ["未修改 lib.ts"]`——自报文本含约束词被判违规
+修正：**负约束只认行为写路径的精确路径段匹配**（`p === n || p.endsWith("/" + n)`）。文件级约束对应文件级行为；内容提及/自报提及不算。
+
+### 结论 16：DUPLICATE_WRITE 对多步任务是误报模式（2 处均为合法重写）
+
+C1（sort.ts 步骤 1/3/5 合法重写）、C5（package.json 步骤 7 main 指向更新）、C6（.npmrc 4 次）——任务步骤设计里的合法重写被"间隔≥5轮"判定为重复工作。当前做警告不判失败是正确取舍；若要判失败需 manifest 显式声明"允许重写路径"。
+
+### 结论 17：done→code/repair 拒绝是正确行为（不是缺陷）
+
+DONE 终态后模型继续收尾（工具错误→尝试 repair、想继续写代码），状态机拒绝（非法转换 warning）。**拒绝是正确**——任务已判定完成，收尾动作不该改变状态；但显示层面 warning 噪音大。处理方向：DONE 后的工具错误应走 completion 层（记录/忽略），而非状态机。另外发现转换表缺 REPAIR→DONE 等出口（post-loop isDone 分支允许任意执行状态→DONE），已补（state-machine.ts，agent_run_state 6/6 回归通过）。
+
+### 结论 18：评测工具路径必须绑定 projectRoot（D7 TOOL_PATH_BASE_BOUND）
+
+`src/tools/file.ts` 纯 Node 工具相对路径用 `process.cwd()` 解析，未绑定 ToolExecutionContext 的 projectRoot——生产 cwd==projectRoot 无碍，**评测 workspaceDir≠cwd 时模型写文件落进 orcana 仓库**（C1 v3 事故：src/sort.ts+src/main.ts 写入仓库，16:55，已清理）。评测层规避：run.ts 逐 case `process.chdir(workspaceDir)`（语义与生产等价）。已记 defect D7（P2）。**生产隐患**：ToolExecutionContext 应携带 projectRoot 供 file.ts 解析基准（后续修）。
+
+### 模型行为亮点
+
+| Case | 亮点 |
+|---|---|
+| C1 决策演化 | 33-39 轮决策 v1→v2 稳定，行为通道证明无旧决策复活 |
+| C2 强约束 | 正确地只写 lib.test.ts 而非 lib.ts（测试文件不触碰公共 API） |
+| C5 代码状态 | 59 轮完整代码任务，压缩×1 后 tool chain 60 次调用无失败 |
+| C8 多 Agent 交接 | forceCompress+rollover×4+microcompact×1 最重压场景，73 次调用无失败，交接语义保留 |
+
+### 成本/性能观察
+
+- 单 case 349-1441s（5.8-24 分钟），峰值 49.4k-63.6k chars；32k 窗口下首轮 ~37% 占用，compress 阈值 ~24k（~16 轮触发）、rollover ~43k（~35 轮）
+- C6 最重（1441s/63.6k 峰值/rollover×3）；compress 组 4/4、rollover 组 4/4 全部压到窗口边缘——8 case 设计达成"必触发压缩"目标
+- done 后长尾轮次常见（模型完成判定后继续收尾直到 maxRounds）——计入轮次但行为通道不受影响
+
+### P3 总裁定：边测边修（K 系列不再盲修，context 专项修复按需驱动）
+
+8/8 全绿证明：**32k 窗口 + 现有压缩在 30-60 轮长任务上不丢关键事实/决策/义务**。"K 继续修"（继续盲修 context 系列）已无实测依据；改为**边测边修**——每个 context 相关 K 修复落地后，用 run.ts 重跑对应 case 验证，出现 SUPERSEDED_REVIVED / OBLIGATION_LOST / TOOL_CHAIN 失败再扩大修。P4 Token A/B 可按计划进行。

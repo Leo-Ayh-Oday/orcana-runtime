@@ -168,10 +168,13 @@ export class SessionStore {
   private fallbackMeta: Record<string, string> = {}
   private fallbackRounds: RoundRecord[] = []
   private fallbackCheckpoints: CheckpointRecord[] = []
+  /** H9: 保留的 checkpoint 行数上限（默认 20，与 rewind 快照深度 REWIND_MAX_DEPTH 对齐）。 */
+  private checkpointRetention: number
 
-  constructor(sessionId: string, storeDir?: string) {
+  constructor(sessionId: string, storeDir?: string, checkpointRetention = 20) {
     this.storeDir = storeDir ?? join(homedir(), ".orcana", "sessions")
     this.sessionId = sessionId
+    this.checkpointRetention = Math.max(1, Math.floor(checkpointRetention))
     mkdirSync(this.storeDir, { recursive: true })
 
     if (!DatabaseCtor) {
@@ -437,14 +440,14 @@ export class SessionStore {
 
   // ── Checkpoints ──
 
-  /** Save a checkpoint row. Keeps only the 3 most recent. */
+  /** Save a checkpoint row. Keeps only the checkpointRetention most recent (default 20). */
   saveCheckpoint(cp: Omit<CheckpointRecord, "id">): number {
     if (!this.db) {
       const id = this.fallbackCheckpoints.length + 1
       this.fallbackCheckpoints.push({ id, ...cp })
       this.fallbackCheckpoints = this.fallbackCheckpoints
         .sort((a, b) => b.roundNum - a.roundNum)
-        .slice(0, 3)
+        .slice(0, this.checkpointRetention)
         .sort((a, b) => a.roundNum - b.roundNum)
       return id
     }
@@ -469,10 +472,11 @@ export class SessionStore {
       ],
     )
 
-    // Keep only last 3
+    // Keep only the checkpointRetention most recent rows
+    // (retention 在构造函数已 sanitize 为 ≥1 的整数，可直接内联 LIMIT)
     const rowId = Number(result.lastInsertRowid ?? 0)
     this.db.run(
-      "DELETE FROM checkpoints WHERE id NOT IN (SELECT id FROM checkpoints ORDER BY round_num DESC LIMIT 3)",
+      `DELETE FROM checkpoints WHERE id NOT IN (SELECT id FROM checkpoints ORDER BY round_num DESC LIMIT ${this.checkpointRetention})`,
     )
     return rowId
   }

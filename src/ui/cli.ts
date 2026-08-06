@@ -93,10 +93,22 @@ function rememberTurn(compactor: CompactionState, turn: { role: "user" | "assist
   replaceCompactorState(compactor, addTurn(compactor, turn))
 }
 
+/** K11: 蒸馏冷却——锚已存在时避免每轮重跑 flash 蒸馏（仅在新材料 + 冷却后 supersede）。 */
+const M0_DISTILL_COOLDOWN_MS = 30_000
+let lastM0DistillAt = 0
+
 async function maybeCreateM0(compactor: CompactionState, title: string, provider?: MultiProvider, modelRouter?: ModelRouter) {
-  const thresholdTokens = envNumber("ORCANA_M0_THRESHOLD_TOKENS", 50_000)
-  if (compactor.anchor || compactor.estimatedTokens < thresholdTokens) return
-  // RC-02.5 X1 触发点③：M0 创建时用 flash 蒸馏硬约束，替代正则 DECISION_RE。
+  // K11 (M0_NO_PROTECTION_WINDOW): 默认阈值 0 → 首轮立即建锚，消除 50k 阈值前的
+  // 保护空窗（ORCANA_M0_THRESHOLD_TOKENS 仍可调高；createBaseCheckpoint 的
+  // thresholdTokens 参数同样默认 0）。
+  const thresholdTokens = envNumber("ORCANA_M0_THRESHOLD_TOKENS", 0)
+  if (compactor.estimatedTokens < thresholdTokens) return
+  // 锚已存在且无 provider → 无蒸馏能力，无需处理（锚由首轮默认创建）。
+  if (compactor.anchor && !provider) return
+  // 锚已存在 → 蒸馏受冷却约束，防每轮重跑。K12 hasNewMaterial 在
+  // createBaseCheckpoint 内部判定——无新材料时返回原状态，不产生 churn/版本自增。
+  if (compactor.anchor && Date.now() - lastM0DistillAt < M0_DISTILL_COOLDOWN_MS) return
+  // RC-02.5 X1 触发点③：M0 创建/supersede 时用 flash 蒸馏硬约束，替代正则 DECISION_RE。
   let distilledDecisions: string[] = []
   if (provider) {
     const userTexts = [...compactor.hotTurns, ...compactor.warmTurns]
@@ -120,6 +132,7 @@ async function maybeCreateM0(compactor: CompactionState, title: string, provider
     title: title.slice(0, 140),
     activeDecisions: distilledDecisions,
   }))
+  lastM0DistillAt = Date.now()
 }
 
 

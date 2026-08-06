@@ -16,6 +16,14 @@ export interface TerminationReport {
 }
 
 export function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): TerminationReport {
+  // F7（WRONG_PROCESS_KILL）：pid<=0 的信号操作必须拒绝。
+  // POSIX 语义下 pid=0（含 -0）会 signal 调用方自身的进程组（killpg(0)），
+  // pid<0 经 -pid 反转后指向无关单进程 —— 两者都是错杀。入口风险：
+  // spawn 失败时 proc.pid 为 undefined，supervisor 记 pid=0，abort/timeout
+  // 若先于 error 事件到达即命中此处。
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { processesRemaining: 0, signalSent: signal }
+  }
   // POSIX: negative pid targets the process group.
   try {
     process.kill(-pid, signal)
@@ -29,6 +37,8 @@ export function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL" = "S
 
 /** 进程组存活计数（通过 /proc 扫描，避免 ps 依赖）。 */
 export function countProcessGroup(pid: number): number {
+  // F7：pid<=0 不可能是有效进程组 —— 直接 0（避免无意义扫描与误匹配）。
+  if (!Number.isInteger(pid) || pid <= 0) return 0
   try {
     const entries = readdirSync("/proc") as string[]
     let count = 0
@@ -61,6 +71,11 @@ export function terminateTree(
   pid: number,
   options: { graceMs?: number; attempts?: number; verify?: boolean } = {},
 ): TerminationReport {
+  // F7：终止入口同防护 —— pid<=0 直接安全返回（killProcessGroup 已拒绝，
+  // 此处避免无意义的 /proc 扫描循环）。
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { processesRemaining: 0, signalSent: "SIGTERM" }
+  }
   const graceMs = options.graceMs ?? 500
   const attempts = options.attempts ?? 3
   killProcessGroup(pid, "SIGTERM")

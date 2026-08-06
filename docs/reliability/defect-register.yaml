@@ -290,7 +290,9 @@
   wave: RC-13
   invariant: NODE_SWITCH_FLUSHES_TEXT
   files: [src/agent/kernel/round.ts, src/agent/kernel/master-plan.ts]
-  status: fixed  fixedBy: in-progress
+  status: fixed
+  fixedBy: 4d9a2a6
+  verifiedAtCommit: 4d9a2a6
 
 - id: E3
   severity: P1
@@ -305,14 +307,18 @@
   wave: RC-13
   invariant: MAINTENANCE_ERRORS_OBSERVABLE
   files: [src/agent/kernel/round.ts, src/agent/maintenance/coordinator.ts]
-  status: fixed  fixedBy: in-progress
+  status: fixed
+  fixedBy: 4d9a2a6
+  verifiedAtCommit: 4d9a2a6
 
 - id: E5
   severity: P2
   wave: RC-13
   invariant: DEAD_BRANCHES_REMOVED
   files: [src/agent/gates/overflow.ts, src/agent/round/post-loop.ts]
-  status: fixed  fixedBy: in-progress
+  status: fixed
+  fixedBy: 4d9a2a6
+  verifiedAtCommit: 4d9a2a6
 
 
 ## 工具与 Provider（Wave 6）

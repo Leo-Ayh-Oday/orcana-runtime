@@ -241,6 +241,13 @@ export class CompletionOrchestrator {
       return { ...out, decision: "continue" }
     }
 
+    // RC-02: 预算耗尽且无通过证据 → incomplete（不是 continue，不再注入消息）
+    if (completionResult.incomplete) {
+      out.statusMessages.push(`completion-gate: ${completionResult.reason} — 轮次预算耗尽但无通过证据，按未完成终止`)
+      out.traceEvents.push({ gate: "semantic:budget_exhausted", decision: "incomplete", reason: completionResult.reason })
+      return { ...out, decision: "break_blocked" }
+    }
+
     // All sync gates passed — proceed to external gate
     return null
   }
@@ -473,52 +480,59 @@ export class CompletionOrchestrator {
     return CompletionOrchestrator.FUTURE_PATTERNS.some(p => p.test(text))
   }
 
-  /** Patterns for claims about verification evidence in final agent text.
+  /** Extract truth claims from final agent text.
    *
-   *  Each pattern is a pair: [claim pattern, future-tense filter].
-   *  The claim pattern matches statements of completed verification.
-   *  The future-tense filter excludes statements about planned/future actions.
+   *  RC-02: 按句切分后逐句判定——未来时态只跳过对应句子，
+   *  不再整段跳过（"已修复问题，下一步补文档"中已完成声明必须检查）。
    */
   private extractTruthClaims(text: string): TruthClaim[] {
     const claims: TruthClaim[] = []
+    // 按句切分：句末标点（中英文）后一律切行，无论是否跟空白。
+    const sentences = text
+      .replace(/([。！？；.!?;])\s*/g, "$1\n")
+      .split("\n")
+      .map(s => s.trim())
+      .filter(Boolean)
 
-    // Skip future-tense statements entirely — they're not completion claims
-    if (this.isFutureTense(text)) return claims
+    for (const sentence of sentences) {
+      // 未来时态只跳过对应句子，不跳过整段。
+      if (this.isFutureTense(sentence)) continue
 
-    // Typecheck claims
-    if (/(?:typecheck|tsc|类型检查)\s*(?:通过|passed|成功|0\s*errors?)/i.test(text)) {
-      claims.push({ kind: "typecheck", claim: "类型检查通过", pattern: "typecheck_passed" })
-    }
+      // Typecheck claims
+      if (/(?:typecheck|tsc|类型检查)\s*(?:通过|passed|成功|0\s*errors?)/i.test(sentence)) {
+        claims.push({ kind: "typecheck", claim: "类型检查通过", pattern: "typecheck_passed" })
+      }
 
-    // Test claims
-    if (/(?:test|测试)\s*(?:通过|passed|成功|全部|all\s*pass)/i.test(text)) {
-      claims.push({ kind: "test", claim: "测试全部通过", pattern: "tests_passed" })
-    }
+      // Test claims
+      if (/(?:test|测试)\s*(?:通过|passed|成功|全部|all\s*pass)/i.test(sentence)) {
+        claims.push({ kind: "test", claim: "测试全部通过", pattern: "tests_passed" })
+      }
 
-    // Build claims
-    if (/(?:build|构建|打包)\s*(?:成功|通过|passed|succeeded)/i.test(text)) {
-      claims.push({ kind: "build", claim: "构建成功", pattern: "build_passed" })
-    }
+      // Build claims
+      if (/(?:build|构建|打包)\s*(?:成功|通过|passed|succeeded)/i.test(sentence)) {
+        claims.push({ kind: "build", claim: "构建成功", pattern: "build_passed" })
+      }
 
-    // Lint claims
-    if (/(?:lint|eslint)\s*(?:通过|passed|无错误|no\s*errors?|0\s*errors?)/i.test(text)) {
-      claims.push({ kind: "typecheck", claim: "Lint 检查通过", pattern: "lint_passed" })
-    }
+      // Lint claims
+      if (/(?:lint|eslint)\s*(?:通过|passed|无错误|no\s*errors?|0\s*errors?)/i.test(sentence)) {
+        claims.push({ kind: "typecheck", claim: "Lint 检查通过", pattern: "lint_passed" })
+      }
 
-    // Generic "all tests pass" claim
-    if (/(?:所有|全部|all)\s*(?:测试|验证|检查|tests?|checks?|verifications?)\s*(?:通过|passed|成功)/i.test(text)) {
-      claims.push({ kind: "test", claim: "所有测试/验证通过", pattern: "all_verification_passed" })
-    }
+      // Generic "all tests pass" claim
+      if (/(?:所有|全部|all)\s*(?:测试|验证|检查|tests?|checks?|verifications?)\s*(?:通过|passed|成功)/i.test(sentence)) {
+        claims.push({ kind: "test", claim: "所有测试/验证通过", pattern: "all_verification_passed" })
+      }
 
-    // Implementation claims must be backed by actual writes/changed files.
-    // Keep this narrower than generic "done" so ordinary chat completions do not get trapped.
-    if (/(?:已实现|实现了|已创建|已更新|已修改|已修复|implemented|created|updated|modified|fixed|applied)/i.test(text)) {
-      claims.push({ kind: "implementation", claim: "实现/修改已完成", pattern: "implementation_completed" })
-    }
+      // Implementation claims must be backed by actual writes/changed files.
+      // Keep this narrower than generic "done" so ordinary chat completions do not get trapped.
+      if (/(?:已实现|实现了|已创建|已更新|已修改|已修复|implemented|created|updated|modified|fixed|applied)/i.test(sentence)) {
+        claims.push({ kind: "implementation", claim: "实现/修改已完成", pattern: "implementation_completed" })
+      }
 
-    // "No errors" claim (only if no more specific typecheck claim exists)
-    if (/(?:no\s*errors?|0\s*errors?|零错误|没有错误|无错误)/i.test(text) && !claims.some(c => c.pattern === "typecheck_passed")) {
-      claims.push({ kind: "typecheck", claim: "无编译错误", pattern: "no_errors" })
+      // "No errors" claim (only if no more specific typecheck claim exists)
+      if (/(?:no\s*errors?|0\s*errors?|零错误|没有错误|无错误)/i.test(sentence) && !claims.some(c => c.pattern === "typecheck_passed")) {
+        claims.push({ kind: "typecheck", claim: "无编译错误", pattern: "no_errors" })
+      }
     }
 
     return claims

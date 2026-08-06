@@ -303,12 +303,15 @@ export class FlashJudge {
 
     try {
       let responseText = ""
+      // RC-02: judge 必须有硬超时（对齐 flash-triage 的 30s）；超时→catch→NOT_SATISFIED（unavailable 语义，不 pass）。
+      const judgeAbort = AbortSignal.timeout(30_000)
       for await (const event of this.provider.streamChat({
         model: this.judgeModel,
         purpose: "completion_judge",
         system,
         messages,
         maxTokens: JUDGE_MAX_TOKENS,
+        abortSignal: judgeAbort,
       })) {
         if (event.type === "text" && typeof event.data === "string") {
           responseText += event.data

@@ -225,7 +225,10 @@ describe("R2 broker transaction", () => {
     const exit = events.find(e => e.type === "cell.exit") as { signal?: string | null } | undefined
     expect(exit?.signal).toBe("aborted")
     expect(broker.activeCells().length).toBe(0)
-    // 后台进程归零（cancelCell 后无残留）
+    // F4（ORPHAN_PROCESS）：cancelCell 后残留实测归零 —— receipt cleanup 是
+    // 真实测量值（countProcessGroup），不是假定 0
+    const receiptEvent = events.find(e => e.type === "cell.receipt") as { receipt?: { cleanup?: { processesRemaining?: number } } } | undefined
+    expect(receiptEvent?.receipt?.cleanup?.processesRemaining).toBe(0)
   })
 
   test("PR-2: receipt is persisted to the state store", async () => {

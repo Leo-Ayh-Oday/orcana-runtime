@@ -54,7 +54,8 @@ export const RESEARCH_PROVIDER: ContextProvider = {
       authority: "tool",
       // K54: evidence-family content versioned by epoch generation (research
       // context is regenerated per run/epoch; no generation counter exists).
-      freshnessContract: { kind: "evidence", generation: request.epochState.currentEpochIndex },
+      // H12: epochState optional — node-mode requests have no epoch.
+      freshnessContract: { kind: "evidence", generation: request.epochState?.currentEpochIndex ?? 0 },
     }
   },
 }

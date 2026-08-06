@@ -63,7 +63,7 @@ function legacyMessages(request: ContextRequest): ProviderMessage[] {
   const stablePrefixParts: string[] = []
   if (request.stableMemoryContext?.trim()) stablePrefixParts.push(`## Stable Cold Memory\n${request.stableMemoryContext.trim()}`)
   if (request.experienceContext) stablePrefixParts.push(request.experienceContext)
-  if (request.contextKernel.text) stablePrefixParts.push(`## Project Context Kernel\n${request.contextKernel.text}`)
+  if (request.contextKernel?.text) stablePrefixParts.push(`## Project Context Kernel\n${request.contextKernel.text}`)
   if (request.contextMapContext) stablePrefixParts.push(request.contextMapContext)
   if (request.triageSkillPrompts.length) stablePrefixParts.push(request.triageSkillPrompts.join("\n\n"))
   const frozen: ProviderMessage | null = request.frozenStablePrefixContent

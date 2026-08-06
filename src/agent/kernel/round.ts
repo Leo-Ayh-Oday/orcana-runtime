@@ -508,6 +508,13 @@ export async function* runRound(
   const estimatedOutputTokens = Math.round(finalText.length / 3 + completedToolCalls.reduce((s, tc) => s + JSON.stringify(tc.input).length / 3, 0))
   yield patch({ budget: { contextOutput: budget.contextOutput + (roundState.providerUsage?.outputTokens ?? estimatedOutputTokens) } })
   const displayedCacheHitRate = roundState.providerUsage?.cacheHitRate ?? ctx.cacheTracker.hitRate
+  // H12: cache-miss input tokens accumulate across rounds (round N carries
+  // rounds 1..N) — the same "provider usage is a cumulative snapshot"
+  // invariant as budget.contextInput/contextOutput, so the harness
+  // BudgetGuard's delta accounting counts each token exactly once. Before
+  // this fix the field was round-local while input/output were cumulative —
+  // a constant per-round cache miss was under-counted by the guard.
+  ctx.usage.cacheMissInputTokens += roundState.providerUsage?.cacheMissInputTokens ?? 0
   const finalUsageEvent = {
       requestedModel: modelName,
       actualModel: roundState.providerUsage?.actualModel,
@@ -520,7 +527,7 @@ export async function* runRound(
       cacheStatus,
       cacheSource: roundState.providerUsage ? "provider" : "estimate",
       cacheReadInputTokens: roundState.providerUsage?.cacheReadInputTokens,
-      cacheMissInputTokens: roundState.providerUsage?.cacheMissInputTokens,
+      cacheMissInputTokens: ctx.usage.cacheMissInputTokens,
       cacheCreationInputTokens: roundState.providerUsage?.cacheCreationInputTokens,
       cachePrefixShape: { firstChangedSection: cacheShape.firstChangedSection, sections: cacheShape.sections },
       contextUsagePercent: preRoundCtx.contextBudgetPercent,

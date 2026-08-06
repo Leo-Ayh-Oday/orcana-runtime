@@ -31,9 +31,11 @@ interface UsagePayload {
 
 export class BudgetGuard {
   private readonly seenRounds = new Set<number>()
-  // H12: the kernel's provider usage events are CUMULATIVE snapshots (round N
-  // carries rounds 1..N), so token accounting takes deltas against the last
-  // seen value instead of adding blindly (which double-counted).
+  // H12: the kernel's provider usage events are CUMULATIVE snapshots — round N
+  // carries rounds 1..N totals for input, output AND cache-miss tokens (the
+  // kernel accumulates all three across rounds). Token accounting therefore
+  // takes deltas against the last seen value instead of adding blindly (which
+  // double-counted on the cumulative stream).
   private lastInputTokens = 0
   private lastOutputTokens = 0
   private lastCacheMissTokens = 0

@@ -58,7 +58,13 @@ export interface ContextProvider {
   provide(request: ContextRequest): Promise<ContextContribution>
 }
 
-/** Kernel-facing request passed to every provider. */
+/** Kernel-facing request passed to every provider.
+ *
+ *  H12: contextKernel / contextMapContext / epochState are OPTIONAL — they
+ *  are kernel-round sources that a workflow node legitimately lacks (the
+ *  node-mode request builder omits them and the providers guard for absence).
+ *  The kernel path (createContextRequest) always passes them, so the frozen
+ *  loop path is byte-identical. */
 export interface ContextRequest {
   round: number
   effectivePrompt: string
@@ -69,8 +75,8 @@ export interface ContextRequest {
   frozenStablePrefixContent: string | null
   stableMemoryContext?: string
   experienceContext?: string
-  contextKernel: ContextKernel
-  contextMapContext: string
+  contextKernel?: ContextKernel
+  contextMapContext?: string
   triageSkillPrompts: string[]
   planState: PlanStateInput
   researchContextContent: string | null
@@ -80,7 +86,7 @@ export interface ContextRequest {
   taskTracker: TaskTracker | null
   mode: ModeContract
   rawMessages: ProviderMessage[]
-  epochState: EpochState
+  epochState?: EpochState
 }
 
 /** §16.5 budget policy. When disabled the pipeline keeps every contribution

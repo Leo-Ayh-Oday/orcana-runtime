@@ -143,6 +143,11 @@ export function buildLoopOptions(
     // H12: context window override (HR-015/016 reachability — default 1M is
     // unreachable in scripted evals without this knob).
     contextMaxTokens: readMetadata(input, LEGACY_CONTEXT_MAX_TOKENS),
+    // H12: the run's mode is the authority — the kernel defaults to "coder"
+    // (kernel/context.ts setActiveMode(options.activeMode ?? "coder")), so a
+    // non-coder run mode was silently ignored; wiring the run's modeStore
+    // through fixes the gap. Byte-safe: the harness default mode IS "coder".
+    activeMode: run.scope.modeStore.mode,
     runTrace: readMetadata(input, LEGACY_RUN_TRACE),
     initialPlanState: readMetadata(input, LEGACY_INITIAL_PLAN_STATE),
     planText: readMetadata(input, LEGACY_PLAN_TEXT),

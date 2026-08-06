@@ -95,6 +95,9 @@ export function createAgentRunState(input: CreateAgentRunStateInput): AgentRunSt
         estimatedInputTokens: 0,
         cacheHits: 0,
         cacheMisses: 0,
+        // H12: cumulative cache-miss input tokens (same invariant as
+        // budget.contextInput/contextOutput — see UsageStats).
+        cacheMissInputTokens: 0,
         flashRounds: 0,
         proRounds: 0,
         flashUsed: false,

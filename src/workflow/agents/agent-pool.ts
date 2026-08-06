@@ -67,6 +67,12 @@ export class AgentPool {
         error: `agent id "${spec.id}" is not a valid identifier (must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)`,
       }
     }
+    // M17: duplicate ids are rejected — re-registering would replace the
+    // Agent object while keeping the old ownership map (phantom ownership,
+    // canWrite/agent.ownerFiles divergence).
+    if (this.agents.has(spec.id)) {
+      return { ok: false, error: `agent id "${spec.id}" is already registered` }
+    }
     const violations: OwnershipViolation[] = []
     for (const file of spec.ownerFiles) {
       const owner = this.owners.get(file)

@@ -88,9 +88,10 @@ export function prepareNodeWorkspace(
     return { projectRoot: existing.root, worktree: existing }
   }
   const projectRoot = runtime.scope.projectRoot
-  const root = assignment.worktree
   try {
-    const handle = createWorktree(projectRoot, assignment.agentId, assignment.ownerFiles)
+    // M18: AgentSpec.worktree is the authoritative execution root when
+    // declared (never silently ignored in favor of the default layout).
+    const handle = createWorktree(projectRoot, assignment.agentId, assignment.ownerFiles, assignment.worktree)
     registry.byAgent.set(assignment.agentId, handle)
     return { projectRoot: handle.root, worktree: handle }
   } catch (error) {

@@ -26,6 +26,11 @@ async function sleep(ms: number) {
   await new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function parseTimeoutSec(value: unknown, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
 // ── ServiceLease ──
 
 export type ServiceCleanupPolicy = "manual" | "run-end"
@@ -192,7 +197,7 @@ export async function startServiceInternal(params: Record<string, unknown>, deps
   const command = String(params.command ?? "").trim()
   const cwd = String(params.cwd ?? process.cwd())
   const url = String(params.url ?? "")
-  const timeoutSec = Number(params.timeout ?? 30)
+  const timeoutSec = parseTimeoutSec(params.timeout, 30)
   const stopAfterReady = params.stopAfterReady === true
   const cleanupPolicy: ServiceCleanupPolicy = params.cleanupPolicy === "run-end" ? "run-end" : "manual"
   const runId = typeof params.runId === "string" && params.runId.trim() ? params.runId.trim() : undefined

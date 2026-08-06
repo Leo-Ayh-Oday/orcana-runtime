@@ -51,6 +51,7 @@ import {
   formatEpochStatus,
   totalMessageChars,
 } from "../context-epoch"
+import { distillUserConstraints, extractUserTexts, formatConstraintContext } from "../memory/user-constraints"
 import { collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
 import {
   createContextRequest,
@@ -168,7 +169,18 @@ export async function* runRound(
 
   // ── Epoch rollover (PR 4): archive volatile tail when threshold reached ──
   if (epochAction === "rollover") {
-    const rolloverResult = epochRollover(rawMessages, 3 /* keep 3 most recent turns */, planStateText, ctx.epochState, round)
+    // X1 (RC-02.5): rollover 前蒸馏被归档 user 消息中的硬约束，并入 epoch preamble（Layer 2）。
+    const archivedUserTexts = extractUserTexts(rawMessages)
+    const distilled = archivedUserTexts.length >= 3
+      ? await distillUserConstraints(ctx.provider, ctx.modelRouter?.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash", archivedUserTexts, ctx.abortSignal)
+      : null
+    let planStateForRollover = planStateText
+    if (distilled?.success && distilled.constraints.length > 0) {
+      planStateForRollover = planStateText + "\n\n" + formatConstraintContext(distilled.constraints)
+      yield stream({ type: "status", data: `user-constraints: ${distilled.constraints.length} 条约束蒸馏并入 epoch preamble` })
+      yield trace("user_constraints_distilled", { count: distilled.constraints.length, archived: archivedUserTexts.length })
+    }
+    const rolloverResult = epochRollover(rawMessages, 3 /* keep 3 most recent turns */, planStateForRollover, ctx.epochState, round)
     if ("blocked" in rolloverResult) {
       yield stream({ type: "status", data: `epoch-rollover: blocked — ${rolloverResult.reason}` })
       // Continue without rollover; will retry next round

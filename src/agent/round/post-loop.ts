@@ -156,6 +156,25 @@ export function extractPromises(text: string): string[] {
   return [...new Set(results)].slice(0, 5)
 }
 
+/** 错误特征行：压缩工具结果时保留对调试最关键的线索行。 */
+const ERROR_LINE_RE = /error|fail(ed|ure)?|traceback|fatal|exception|✗|FAILED|exit code|timed out|cannot|undefined is not|panic/i
+
+export function extractErrorLines(content: string, maxLines = 3): string[] {
+  const lines = content.split("\n")
+  const seen = new Set<string>()
+  const picked: string[] = []
+  for (const line of lines) {
+    const t = line.trim()
+    if (t.length < 5 || t.length > 400) continue
+    if (!ERROR_LINE_RE.test(t)) continue
+    if (seen.has(t)) continue
+    seen.add(t)
+    picked.push(t)
+    if (picked.length >= maxLines) break
+  }
+  return picked
+}
+
 export function microcompactToolResults(
   results: Array<Record<string, unknown>>,
   completedCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>,
@@ -175,9 +194,18 @@ export function microcompactToolResults(
       : tc.name === "shell" ? String(tc.input.command ?? "").slice(0, 80)
       : tc.name === "web_fetch" ? String(tc.input.url ?? "")
       : ""
+    // X2 (RC-02.5): head 300 + 错误特征行（≤3 行），避免大输出中错误线索被截掉。
     const prefix = r.content.slice(0, 300)
-    const placeholder = `[Microcompact: ${tc.name} ${pathOrCmd} — ${r.content.length} chars trimmed. Re-execute ${tc.name}(${JSON.stringify(pathOrCmd)}) to retrieve full content.]`
-    out.push({ ...r, content: prefix + "\n\n" + placeholder })
+    const errorLines = extractErrorLines(r.content)
+    const exitInfo = typeof r.is_error === "boolean" && r.is_error
+      ? " [is_error]"
+      : ""
+    const placeholder = `[Microcompact: ${tc.name} ${pathOrCmd} — ${r.content.length} chars trimmed${exitInfo}. Re-execute ${tc.name}(${JSON.stringify(pathOrCmd)}) to retrieve full content.]`
+    const errorBlock = errorLines.length
+      ? "\n\n[错误线索]\n" + errorLines.map(l => `> ${l}`).join("\n")
+      : ""
+    out.push({ ...r, content: prefix + errorBlock + "\n\n" + placeholder })
+
     compacted++
   }
   return { compacted, results: out }
@@ -199,7 +227,12 @@ export function compactHistoricalToolResults(messages: ProviderMessage[], keepRe
       // Only compact read_file/shell/web_fetch whose full output is embedded
       if (!/^(read_file|shell|web_fetch)/.test(tid.split("_")[0] ?? "")) continue
       if (block.content.length < MC_READFILE_CHARS && block.content.length < MC_SHELL_CHARS) continue
-      block.content = block.content.slice(0, 300) + `\n\n[Microcompact: historical ${tid.slice(0, 8)}… — content trimmed. Re-execute the original tool call to retrieve.]`
+      // X2 (RC-02.5): historical 压缩同样保留错误特征行。
+      const errorLines = extractErrorLines(block.content)
+      const errorBlock = errorLines.length
+        ? "\n\n[错误线索]\n" + errorLines.map(l => `> ${l}`).join("\n")
+        : ""
+      block.content = block.content.slice(0, 300) + errorBlock + `\n\n[Microcompact: historical ${tid.slice(0, 8)}… — content trimmed. Re-execute the original tool call to retrieve.]`
       compacted++
     }
   }

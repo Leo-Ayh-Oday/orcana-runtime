@@ -51,4 +51,21 @@ describe("cache anatomy", () => {
     expect(anatomy.stableTokens).toBeGreaterThan(0)
     expect(anatomy.volatileTokens).toBeGreaterThan(0)
   })
+
+  test("conversation messages are not marked as stable", () => {
+    const anatomy = buildCacheAnatomy({
+      system: "system",
+      tools: [],
+      messages: [
+        { role: "user", content: "earlier user turn" },
+        { role: "assistant", content: "earlier assistant turn" },
+        { role: "user", content: "current prompt" },
+      ],
+    })
+
+    const conversation = anatomy.sections.find(section => section.kind === "conversation")
+    expect(conversation).toBeDefined()
+    expect(conversation!.tokens).toBeGreaterThan(0)
+    expect(conversation!.stable).toBe(false)
+  })
 })

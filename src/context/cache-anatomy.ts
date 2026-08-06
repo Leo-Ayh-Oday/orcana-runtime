@@ -91,7 +91,7 @@ export function buildCacheAnatomy(input: {
     { kind: "system", tokens: estimateTokens(input.system), stable: true },
     { kind: "tools", tokens: estimateTokens(input.tools ?? []), stable: true },
     { kind: "stableContext", tokens: messageSummary.stableContextTokens, stable: true },
-    { kind: "conversation", tokens: messageSummary.conversationTokens, stable: true },
+    { kind: "conversation", tokens: messageSummary.conversationTokens, stable: false },
     { kind: "volatileContext", tokens: messageSummary.volatileTokens, stable: false },
     { kind: "contextBudgetGuard", tokens: messageSummary.budgetGuardTokens, stable: false },
     { kind: "currentPrompt", tokens: messageSummary.currentPromptTokens, stable: false },

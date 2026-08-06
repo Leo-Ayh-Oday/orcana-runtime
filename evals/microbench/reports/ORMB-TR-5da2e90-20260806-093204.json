@@ -1,0 +1,3937 @@
+{
+  "header": {
+    "suite": "ORMB-TR",
+    "orcanaCommit": "5da2e90",
+    "modelRequested": "deepseek-v4-flash",
+    "reasoningEffort": "none",
+    "seed": 42,
+    "configurationDigest": "PP-mock-v1",
+    "startedAt": "2026-08-06T01:32:04.466Z"
+  },
+  "suite": "ORMB-TR",
+  "cases": [
+    {
+      "caseId": "TR-01",
+      "title": "帮我分析一下微服务 vs 单体各自的优劣",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是纯架构概念对比分析，不涉及代码编写或具体项目变更，因此属于讨论模式。无需联网搜索，也没有匹配的技能和后续步骤，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是纯架构概念对比分析，不涉及代码编写或具体项目变更，因此属于讨论模式。无需联网搜索，也没有匹配的技能和后续步骤，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-02",
+      "title": "这个需求该怎么设计数据库表结构，先不写代码",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户明确要求设计数据库表结构且不写代码，属于纯方案讨论，无需执行代码或验证。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户明确要求设计数据库表结构且不写代码，属于纯方案讨论，无需执行代码或验证。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-03",
+      "title": "解释一下 React 的 useMemo 是干什么的",
+      "tags": [
+        "discussion",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求解释 React 的 useMemo，属于纯讨论/知识性解答，不涉及代码修改或项目规划。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求解释 React 的 useMemo，属于纯讨论/知识性解答，不涉及代码修改或项目规划。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-04",
+      "title": "帮我评估一下这个技术选型",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求评估技术选型，属于纯讨论/分析任务，不涉及写代码或具体文件修改。由于未提供具体技术细节，且评估主要基于架构原则，暂不需要联网搜索。mode 为 discussion，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求评估技术选型，属于纯讨论/分析任务，不涉及写代码或具体文件修改。由于未提供具体技术细节，且评估主要基于架构原则，暂不需要联网搜索。mode 为 discussion，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-05",
+      "title": "讨论一下我们该不该上 TypeScript",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是讨论是否采用 TypeScript，属于技术选型讨论，不涉及代码修改或实现，因此归类为 discussion 模式，无需联网搜索或代码验证。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是讨论是否采用 TypeScript，属于技术选型讨论，不涉及代码修改或实现，因此归类为 discussion 模式，无需联网搜索或代码验证。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-06",
+      "title": "这个架构图有什么问题，纯讨论",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求纯讨论架构图问题，不涉及代码修改或规划，属于讨论模式。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求纯讨论架构图问题，不涉及代码修改或规划，属于讨论模式。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-07",
+      "title": "帮我梳理一下这个模块的职责边界",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是梳理模块职责边界，属于架构分析与讨论，无需编写代码，因此采用 discussion 模式。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是梳理模块职责边界，属于架构分析与讨论，无需编写代码，因此采用 discussion 模式。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-08",
+      "title": "讲讲 OAuth2 的授权码流程",
+      "tags": [
+        "discussion",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是讲解 OAuth2 授权码流程，属于纯概念性讨论，无需编写代码或修改文件，因此模式为 discussion，不需要联网搜索或验证。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是讲解 OAuth2 授权码流程，属于纯概念性讨论，无需编写代码或修改文件，因此模式为 discussion，不需要联网搜索或验证。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-09",
+      "title": "这个需求要拆成几个阶段比较合理",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户询问需求拆分为几个阶段，属于方案讨论，不涉及具体代码编写，因此走 discussion 模式。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户询问需求拆分为几个阶段，属于方案讨论，不涉及具体代码编写，因此走 discussion 模式。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-10",
+      "title": "对比一下 Redis 和 Memcached",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求对比 Redis 和 Memcached，属于纯技术讨论/分析，无需编写代码或修改项目。基于通用知识即可完成，不需要联网搜索。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求对比 Redis 和 Memcached，属于纯技术讨论/分析，无需编写代码或修改项目。基于通用知识即可完成，不需要联网搜索。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-11",
+      "title": "把 README 里的拼写错误改掉",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "smoke"
+            ],
+            "reasoning": "用户只需修正 README 中的拼写错误，属于单文件、低风险修改，无需联网或规划。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "smoke"
+        ],
+        "reasoning": "用户只需修正 README 中的拼写错误，属于单文件、低风险修改，无需联网或规划。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-12",
+      "title": "这个函数名太长了，改成简短的名字",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求仅为重命名一个过长的函数名，属于单文件内的简单修改，不需要规划或跨文件分析。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求仅为重命名一个过长的函数名，属于单文件内的简单修改，不需要规划或跨文件分析。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-13",
+      "title": "修一下这个注释",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求是修复注释，属于单文件的小型修改，不需要规划、联网或复杂验证。风险极低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求是修复注释，属于单文件的小型修改，不需要规划、联网或复杂验证。风险极低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-14",
+      "title": "把按钮颜色从红色改成蓝色，一行 CSS",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "单文件 CSS 修改，直接编辑按钮颜色即可，无需规划或联网。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "单文件 CSS 修改，直接编辑按钮颜色即可，无需规划或联网。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-15",
+      "title": "删掉这个没用到的 import",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "删除未使用的导入是典型的单文件小修改，无需规划或多文件协调，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "删除未使用的导入是典型的单文件小修改，无需规划或多文件协调，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-16",
+      "title": "把日志级别从 info 改成 warn",
+      "tags": [
+        "narrow_edit",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "这是一个简单的配置修改，将日志级别从 info 改为 warn，属于单文件编辑，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "这是一个简单的配置修改，将日志级别从 info 改为 warn，属于单文件编辑，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-17",
+      "title": "这个变量少了个分号，补上",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求是补一个分号，属于单文件细节修复，无需规划或跨文件操作。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求是补一个分号，属于单文件细节修复，无需规划或跨文件操作。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-18",
+      "title": "把配置里的端口改成 8080",
+      "tags": [
+        "narrow_edit",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求仅修改配置中的端口号，属于单文件简单修改，不需要规划或联网。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求仅修改配置中的端口号，属于单文件简单修改，不需要规划或联网。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-19",
+      "title": "重命名这个文件",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "GT=narrow_edit 实际=discussion",
+          "gate": "MODE_MISMATCH"
+        }
+      ],
+      "failures": [
+        "mode 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求'重命名这个文件'非常模糊，且项目上下文为空（未指定文件或新名称）。这更像是一个需要澄清的讨论请求，而不是可直接执行的代码修改任务。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求'重命名这个文件'非常模糊，且项目上下文为空（未指定文件或新名称）。这更像是一个需要澄清的讨论请求，而不是可直接执行的代码修改任务。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-20",
+      "title": "这个报错只是类型标注写错了，改一行就行",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "surface",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户明确表示只是类型标注错误，改一行即可，属于单文件的小修复，不需要方案规划或跨文件操作。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户明确表示只是类型标注错误，改一行即可，属于单文件的小修复，不需要方案规划或跨文件操作。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-21",
+      "title": "把项目的构建系统从 webpack 迁移到 vite，先出方案",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": true,
+            "researchQueries": [
+              "webpack 迁移 vite 最佳实践",
+              "vite 迁移指南 构建配置对比"
+            ],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [
+              {
+                "id": "analyze-current-config",
+                "title": "分析现有 webpack 配置",
+                "deliverables": [
+                  "webpack 配置清单",
+                  "依赖与插件盘点"
+                ],
+                "verification": "确认所有入口、别名、插件、环境变量均已列出"
+              },
+              {
+                "id": "design-vite-config",
+                "title": "设计 vite 配置与依赖替换",
+                "deliverables": [
+                  "vite.config.ts 草案",
+                  "依赖映射表",
+                  "插件替换方案"
+                ],
+                "verification": "逐项核对 webpack 能力在 vite 中的对应实现，确认无缺失"
+              },
+              {
+                "id": "migration-plan",
+                "title": "制定迁移步骤与风险清单",
+                "deliverables": [
+                  "迁移路线图",
+                  "风险评估表",
+                  "回滚策略"
+                ],
+                "verification": "按阶段排列迁移任务，明确每步验证方式和风险缓解措施"
+              }
+            ],
+            "requiredVerification": [
+              "build"
+            ],
+            "reasoning": "用户要求将构建系统从 webpack 迁移到 vite 并先出方案，属于架构级跨文件变更，需要先规划再动手。项目上下文为空，需联网搜索最新迁移指南和最佳实践。迁移涉及构建配置全面替换，风险为中等，需产出可执行的迁移方案文档，最终以构建通过作为验证基准。",
+            "riskLevel": "medium"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": true,
+        "researchQueries": [
+          "webpack 迁移 vite 最佳实践",
+          "vite 迁移指南 构建配置对比"
+        ],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [
+          {
+            "id": "analyze-current-config",
+            "title": "分析现有 webpack 配置",
+            "deliverables": [
+              "webpack 配置清单",
+              "依赖与插件盘点"
+            ],
+            "verification": "确认所有入口、别名、插件、环境变量均已列出"
+          },
+          {
+            "id": "design-vite-config",
+            "title": "设计 vite 配置与依赖替换",
+            "deliverables": [
+              "vite.config.ts 草案",
+              "依赖映射表",
+              "插件替换方案"
+            ],
+            "verification": "逐项核对 webpack 能力在 vite 中的对应实现，确认无缺失"
+          },
+          {
+            "id": "migration-plan",
+            "title": "制定迁移步骤与风险清单",
+            "deliverables": [
+              "迁移路线图",
+              "风险评估表",
+              "回滚策略"
+            ],
+            "verification": "按阶段排列迁移任务，明确每步验证方式和风险缓解措施"
+          }
+        ],
+        "requiredVerification": [
+          "build"
+        ],
+        "reasoning": "用户要求将构建系统从 webpack 迁移到 vite 并先出方案，属于架构级跨文件变更，需要先规划再动手。项目上下文为空，需联网搜索最新迁移指南和最佳实践。迁移涉及构建配置全面替换，风险为中等，需产出可执行的迁移方案文档，最终以构建通过作为验证基准。",
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "caseId": "TR-22",
+      "title": "数据库从 MySQL 迁到 PostgreSQL，涉及连接池和 SQL 方言",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [
+              {
+                "id": "assess-current-setup",
+                "title": "评估当前数据库配置",
+                "deliverables": [
+                  "迁移影响分析文档"
+                ],
+                "verification": "确认所有连接点和SQL方言差异已列出"
+              },
+              {
+                "id": "update-connection-pool",
+                "title": "调整连接池配置",
+                "deliverables": [
+                  "数据库连接池配置文件"
+                ],
+                "verification": "连接池参数适配PostgreSQL并通过连接测试"
+              },
+              {
+                "id": "convert-sql-dialect",
+                "title": "转换SQL方言",
+                "deliverables": [
+                  "修改后的SQL查询文件"
+                ],
+                "verification": "所有查询在PostgreSQL上执行通过"
+              },
+              {
+                "id": "test-and-verify",
+                "title": "测试与验证数据一致性",
+                "deliverables": [
+                  "测试报告"
+                ],
+                "verification": "数据一致性和功能测试全部通过"
+              }
+            ],
+            "requiredVerification": [
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "数据库迁移涉及连接池与SQL方言，属于跨配置和查询的架构性改动，需先制定方案再实施。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [
+          {
+            "id": "assess-current-setup",
+            "title": "评估当前数据库配置",
+            "deliverables": [
+              "迁移影响分析文档"
+            ],
+            "verification": "确认所有连接点和SQL方言差异已列出"
+          },
+          {
+            "id": "update-connection-pool",
+            "title": "调整连接池配置",
+            "deliverables": [
+              "数据库连接池配置文件"
+            ],
+            "verification": "连接池参数适配PostgreSQL并通过连接测试"
+          },
+          {
+            "id": "convert-sql-dialect",
+            "title": "转换SQL方言",
+            "deliverables": [
+              "修改后的SQL查询文件"
+            ],
+            "verification": "所有查询在PostgreSQL上执行通过"
+          },
+          {
+            "id": "test-and-verify",
+            "title": "测试与验证数据一致性",
+            "deliverables": [
+              "测试报告"
+            ],
+            "verification": "数据一致性和功能测试全部通过"
+          }
+        ],
+        "requiredVerification": [
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "数据库迁移涉及连接池与SQL方言，属于跨配置和查询的架构性改动，需先制定方案再实施。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-23",
+      "title": "给现有系统加权限模块，跨三个服务",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "security-deep-dive",
+              "architecture-review",
+              "edge-case-hunter"
+            ],
+            "planSteps": [
+              {
+                "id": "analyze-requirements",
+                "title": "分析现有服务与权限需求",
+                "deliverables": [
+                  "docs/requirements.md"
+                ],
+                "verification": "review"
+              },
+              {
+                "id": "design-auth-model",
+                "title": "设计权限模型与接口",
+                "deliverables": [
+                  "docs/design.md",
+                  "api/permission-schema.yaml"
+                ],
+                "verification": "review"
+              },
+              {
+                "id": "implement-cross-service",
+                "title": "实现跨服务权限集成",
+                "deliverables": [
+                  "services/auth/src/permission/",
+                  "services/api/src/middleware/",
+                  "services/admin/src/routes/"
+                ],
+                "verification": "typecheck, build"
+              },
+              {
+                "id": "test-permission-cases",
+                "title": "编写权限测试用例",
+                "deliverables": [
+                  "tests/permission.unit.ts",
+                  "tests/permission.integration.ts"
+                ],
+                "verification": "test"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "build",
+              "test"
+            ],
+            "reasoning": "跨三个服务添加权限模块涉及架构变更、安全设计和多文件修改，需要先制定方案；权限直接影响数据安全，风险高。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "security-deep-dive",
+          "architecture-review",
+          "edge-case-hunter"
+        ],
+        "planSteps": [
+          {
+            "id": "analyze-requirements",
+            "title": "分析现有服务与权限需求",
+            "deliverables": [
+              "docs/requirements.md"
+            ],
+            "verification": "review"
+          },
+          {
+            "id": "design-auth-model",
+            "title": "设计权限模型与接口",
+            "deliverables": [
+              "docs/design.md",
+              "api/permission-schema.yaml"
+            ],
+            "verification": "review"
+          },
+          {
+            "id": "implement-cross-service",
+            "title": "实现跨服务权限集成",
+            "deliverables": [
+              "services/auth/src/permission/",
+              "services/api/src/middleware/",
+              "services/admin/src/routes/"
+            ],
+            "verification": "typecheck, build"
+          },
+          {
+            "id": "test-permission-cases",
+            "title": "编写权限测试用例",
+            "deliverables": [
+              "tests/permission.unit.ts",
+              "tests/permission.integration.ts"
+            ],
+            "verification": "test"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "build",
+          "test"
+        ],
+        "reasoning": "跨三个服务添加权限模块涉及架构变更、安全设计和多文件修改，需要先制定方案；权限直接影响数据安全，风险高。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-24",
+      "title": "重构这个模块，先规划再动手",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [
+              {
+                "id": "analyze-current",
+                "title": "分析现有模块",
+                "deliverables": [
+                  "模块现状分析文档"
+                ],
+                "verification": "确认模块结构和职责理解准确"
+              },
+              {
+                "id": "design-plan",
+                "title": "设计重构方案",
+                "deliverables": [
+                  "重构方案设计文档"
+                ],
+                "verification": "方案评审通过，明确改动范围与风险"
+              },
+              {
+                "id": "implement-refactor",
+                "title": "实施重构",
+                "deliverables": [
+                  "修改后的源代码文件"
+                ],
+                "verification": "类型检查通过，核心逻辑保持正确"
+              },
+              {
+                "id": "verify",
+                "title": "验证重构结果",
+                "deliverables": [
+                  "测试报告"
+                ],
+                "verification": "全部相关测试通过，无回归问题"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test"
+            ],
+            "reasoning": "用户要求重构模块并明确要求先规划，因此采用 plan_before_code 模式。由于项目上下文为空，无法确定具体技术细节，需先分析现状再制定方案。重构涉及行为变更，需类型检查和测试确保正确性。",
+            "riskLevel": "medium"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [
+          {
+            "id": "analyze-current",
+            "title": "分析现有模块",
+            "deliverables": [
+              "模块现状分析文档"
+            ],
+            "verification": "确认模块结构和职责理解准确"
+          },
+          {
+            "id": "design-plan",
+            "title": "设计重构方案",
+            "deliverables": [
+              "重构方案设计文档"
+            ],
+            "verification": "方案评审通过，明确改动范围与风险"
+          },
+          {
+            "id": "implement-refactor",
+            "title": "实施重构",
+            "deliverables": [
+              "修改后的源代码文件"
+            ],
+            "verification": "类型检查通过，核心逻辑保持正确"
+          },
+          {
+            "id": "verify",
+            "title": "验证重构结果",
+            "deliverables": [
+              "测试报告"
+            ],
+            "verification": "全部相关测试通过，无回归问题"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test"
+        ],
+        "reasoning": "用户要求重构模块并明确要求先规划，因此采用 plan_before_code 模式。由于项目上下文为空，无法确定具体技术细节，需先分析现状再制定方案。重构涉及行为变更，需类型检查和测试确保正确性。",
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "caseId": "TR-25",
+      "title": "设计 API 接口规范，需要先定方案",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "GT=plan_before_code 实际=discussion",
+          "gate": "MODE_MISMATCH"
+        }
+      ],
+      "failures": [
+        "mode 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户需要先定 API 接口规范方案，属于纯方案设计，不涉及写代码，因此走 discussion 路径。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户需要先定 API 接口规范方案，属于纯方案设计，不涉及写代码，因此走 discussion 路径。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-26",
+      "title": "引入新的状态管理库，先对比再实施",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": true,
+            "researchQueries": [
+              "状态管理库对比 2024",
+              "Zustand Redux MobX 选择",
+              "前端状态管理最佳实践"
+            ],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [
+              {
+                "id": "clarify-requirements",
+                "title": "澄清需求与技术栈",
+                "deliverables": [
+                  "需求说明",
+                  "技术栈确认"
+                ],
+                "verification": "与用户确认"
+              },
+              {
+                "id": "compare-libraries",
+                "title": "对比主流状态管理库",
+                "deliverables": [
+                  "对比报告"
+                ],
+                "verification": "报告评审"
+              },
+              {
+                "id": "select-and-plan",
+                "title": "制定选型与实施方案",
+                "deliverables": [
+                  "实施方案"
+                ],
+                "verification": "方案评审"
+              },
+              {
+                "id": "implement",
+                "title": "实施引入新库",
+                "deliverables": [
+                  "依赖文件",
+                  "改动代码"
+                ],
+                "verification": "typecheck/build"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "build"
+            ],
+            "reasoning": "用户要求先对比再实施，属于技术选型和架构变更，需要先出方案再动手。项目上下文为空，需先澄清需求。状态管理库选型需联网获取最新信息。",
+            "riskLevel": "medium"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": true,
+        "researchQueries": [
+          "状态管理库对比 2024",
+          "Zustand Redux MobX 选择",
+          "前端状态管理最佳实践"
+        ],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [
+          {
+            "id": "clarify-requirements",
+            "title": "澄清需求与技术栈",
+            "deliverables": [
+              "需求说明",
+              "技术栈确认"
+            ],
+            "verification": "与用户确认"
+          },
+          {
+            "id": "compare-libraries",
+            "title": "对比主流状态管理库",
+            "deliverables": [
+              "对比报告"
+            ],
+            "verification": "报告评审"
+          },
+          {
+            "id": "select-and-plan",
+            "title": "制定选型与实施方案",
+            "deliverables": [
+              "实施方案"
+            ],
+            "verification": "方案评审"
+          },
+          {
+            "id": "implement",
+            "title": "实施引入新库",
+            "deliverables": [
+              "依赖文件",
+              "改动代码"
+            ],
+            "verification": "typecheck/build"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "build"
+        ],
+        "reasoning": "用户要求先对比再实施，属于技术选型和架构变更，需要先出方案再动手。项目上下文为空，需先澄清需求。状态管理库选型需联网获取最新信息。",
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "caseId": "TR-27",
+      "title": "把这个单体拆成微服务，需要迁移方案",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [
+              {
+                "id": "analyze-current-architecture",
+                "title": "梳理现有单体架构",
+                "deliverables": [
+                  "architecture-analysis.md"
+                ],
+                "verification": "架构评审"
+              },
+              {
+                "id": "define-service-boundaries",
+                "title": "划分领域边界与服务",
+                "deliverables": [
+                  "service-boundaries.md"
+                ],
+                "verification": "领域专家评审"
+              },
+              {
+                "id": "design-migration-strategy",
+                "title": "设计拆分迁移策略",
+                "deliverables": [
+                  "migration-plan.md"
+                ],
+                "verification": "技术评审"
+              },
+              {
+                "id": "plan-rollback-and-risk",
+                "title": "规划风险与回滚方案",
+                "deliverables": [
+                  "risk-and-rollback-plan.md"
+                ],
+                "verification": "安全与运维评审"
+              }
+            ],
+            "requiredVerification": [],
+            "reasoning": "用户要求将单体拆分为微服务并给出迁移方案，属于架构级变更，需先规划再实施。当前项目上下文为空，无法细化，因此输出以方案设计为核心的规划步骤。风险高。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [
+          {
+            "id": "analyze-current-architecture",
+            "title": "梳理现有单体架构",
+            "deliverables": [
+              "architecture-analysis.md"
+            ],
+            "verification": "架构评审"
+          },
+          {
+            "id": "define-service-boundaries",
+            "title": "划分领域边界与服务",
+            "deliverables": [
+              "service-boundaries.md"
+            ],
+            "verification": "领域专家评审"
+          },
+          {
+            "id": "design-migration-strategy",
+            "title": "设计拆分迁移策略",
+            "deliverables": [
+              "migration-plan.md"
+            ],
+            "verification": "技术评审"
+          },
+          {
+            "id": "plan-rollback-and-risk",
+            "title": "规划风险与回滚方案",
+            "deliverables": [
+              "risk-and-rollback-plan.md"
+            ],
+            "verification": "安全与运维评审"
+          }
+        ],
+        "requiredVerification": [],
+        "reasoning": "用户要求将单体拆分为微服务并给出迁移方案，属于架构级变更，需先规划再实施。当前项目上下文为空，无法细化，因此输出以方案设计为核心的规划步骤。风险高。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-28",
+      "title": "升级 TypeScript 大版本，需要评估破坏性变更",
+      "tags": [
+        "plan",
+        "web",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "GT=plan_before_code 实际=discussion",
+          "gate": "MODE_MISMATCH"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "true"
+        }
+      ],
+      "failures": [
+        "mode 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": true,
+            "researchQueries": [
+              "TypeScript latest major version breaking changes",
+              "TypeScript major upgrade migration guide",
+              "TypeScript breaking changes list"
+            ],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求评估 TypeScript 大版本升级的破坏性变更，属于纯分析和方案设计，不需要立即编写代码。由于需要获取最新版本的官方破坏性变更列表和迁移指南，必须联网搜索。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": true,
+        "researchQueries": [
+          "TypeScript latest major version breaking changes",
+          "TypeScript major upgrade migration guide",
+          "TypeScript breaking changes list"
+        ],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求评估 TypeScript 大版本升级的破坏性变更，属于纯分析和方案设计，不需要立即编写代码。由于需要获取最新版本的官方破坏性变更列表和迁移指南，必须联网搜索。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-29",
+      "title": "加缓存层，需要设计失效策略",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review",
+              "edge-case-hunter"
+            ],
+            "planSteps": [
+              {
+                "id": "analyze-access-patterns",
+                "title": "梳理访问模式与数据热点",
+                "deliverables": [
+                  "现状分析文档"
+                ],
+                "verification": "与业务/模块确认缓存热点及一致性要求"
+              },
+              {
+                "id": "design-cache-strategy",
+                "title": "设计缓存层级与失效策略",
+                "deliverables": [
+                  "缓存架构设计（TTL/驱逐/主动失效）"
+                ],
+                "verification": "设计评审通过"
+              },
+              {
+                "id": "implement-cache-layer",
+                "title": "实现缓存层并接入",
+                "deliverables": [
+                  "缓存层代码及配置"
+                ],
+                "verification": "单元/集成测试通过"
+              },
+              {
+                "id": "verify-and-tune",
+                "title": "验证正确性与性能",
+                "deliverables": [
+                  "测试报告与调优建议"
+                ],
+                "verification": "缓存一致性/穿透/击穿测试通过"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test"
+            ],
+            "reasoning": "用户需要添加缓存层并设计失效策略，属于跨架构变更和技术选型，需要先出方案再实施；同时缓存失效涉及数据一致性和边界情况，因此选择 architecture-review 与 edge-case-hunter 技能，并将风险定为中等。",
+            "riskLevel": "medium"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review",
+          "edge-case-hunter"
+        ],
+        "planSteps": [
+          {
+            "id": "analyze-access-patterns",
+            "title": "梳理访问模式与数据热点",
+            "deliverables": [
+              "现状分析文档"
+            ],
+            "verification": "与业务/模块确认缓存热点及一致性要求"
+          },
+          {
+            "id": "design-cache-strategy",
+            "title": "设计缓存层级与失效策略",
+            "deliverables": [
+              "缓存架构设计（TTL/驱逐/主动失效）"
+            ],
+            "verification": "设计评审通过"
+          },
+          {
+            "id": "implement-cache-layer",
+            "title": "实现缓存层并接入",
+            "deliverables": [
+              "缓存层代码及配置"
+            ],
+            "verification": "单元/集成测试通过"
+          },
+          {
+            "id": "verify-and-tune",
+            "title": "验证正确性与性能",
+            "deliverables": [
+              "测试报告与调优建议"
+            ],
+            "verification": "缓存一致性/穿透/击穿测试通过"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test"
+        ],
+        "reasoning": "用户需要添加缓存层并设计失效策略，属于跨架构变更和技术选型，需要先出方案再实施；同时缓存失效涉及数据一致性和边界情况，因此选择 architecture-review 与 edge-case-hunter 技能，并将风险定为中等。",
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "caseId": "TR-30",
+      "title": "改数据库 schema，涉及数据迁移脚本",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [
+              {
+                "id": "analyze-current-schema",
+                "title": "分析当前数据库结构",
+                "deliverables": [
+                  "schema.sql",
+                  "migration-directory/"
+                ],
+                "verification": "检查现有迁移记录和 schema 定义"
+              },
+              {
+                "id": "design-migration-plan",
+                "title": "设计迁移方案",
+                "deliverables": [
+                  "migration-plan.md"
+                ],
+                "verification": "评审迁移步骤与回滚策略"
+              },
+              {
+                "id": "implement-migration-script",
+                "title": "实现迁移脚本",
+                "deliverables": [
+                  "migration-script.sql"
+                ],
+                "verification": "在测试环境执行迁移脚本"
+              },
+              {
+                "id": "verify-and-rollback",
+                "title": "验证迁移并测试回滚",
+                "deliverables": [
+                  "verification-report.md"
+                ],
+                "verification": "运行冒烟测试确认数据完整性；测试回滚路径"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "smoke"
+            ],
+            "reasoning": "数据库 schema 修改涉及跨文件操作（schema 定义、迁移脚本），且项目上下文未知，需要先制定迁移方案以规避数据风险。直接修改风险高，应规划后再实施。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [
+          {
+            "id": "analyze-current-schema",
+            "title": "分析当前数据库结构",
+            "deliverables": [
+              "schema.sql",
+              "migration-directory/"
+            ],
+            "verification": "检查现有迁移记录和 schema 定义"
+          },
+          {
+            "id": "design-migration-plan",
+            "title": "设计迁移方案",
+            "deliverables": [
+              "migration-plan.md"
+            ],
+            "verification": "评审迁移步骤与回滚策略"
+          },
+          {
+            "id": "implement-migration-script",
+            "title": "实现迁移脚本",
+            "deliverables": [
+              "migration-script.sql"
+            ],
+            "verification": "在测试环境执行迁移脚本"
+          },
+          {
+            "id": "verify-and-rollback",
+            "title": "验证迁移并测试回滚",
+            "deliverables": [
+              "verification-report.md"
+            ],
+            "verification": "运行冒烟测试确认数据完整性；测试回滚路径"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "smoke"
+        ],
+        "reasoning": "数据库 schema 修改涉及跨文件操作（schema 定义、迁移脚本），且项目上下文未知，需要先制定迁移方案以规避数据风险。直接修改风险高，应规划后再实施。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-31",
+      "title": "从零开始写一个带认证的博客系统",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review",
+              "security-deep-dive"
+            ],
+            "planSteps": [
+              {
+                "id": "setup-and-design",
+                "title": "初始化项目与架构设计",
+                "deliverables": [
+                  "architecture.md",
+                  "package.json",
+                  "tsconfig.json"
+                ],
+                "verification": "项目启动成功，架构文档明确模块划分"
+              },
+              {
+                "id": "database-setup",
+                "title": "设计数据模型与迁移",
+                "deliverables": [
+                  "prisma/schema.prisma",
+                  "src/lib/db.ts"
+                ],
+                "verification": "数据库迁移执行通过，模型关系正确"
+              },
+              {
+                "id": "auth-implementation",
+                "title": "实现用户认证与会话",
+                "deliverables": [
+                  "src/auth/*",
+                  "src/middleware.ts"
+                ],
+                "verification": "注册/登录/登出流程测试通过，会话安全"
+              },
+              {
+                "id": "blog-crud",
+                "title": "实现文章增删改查",
+                "deliverables": [
+                  "src/app/posts/*",
+                  "src/api/*"
+                ],
+                "verification": "CRUD 接口测试通过，权限校验生效"
+              },
+              {
+                "id": "ui-polish",
+                "title": "构建响应式UI界面",
+                "deliverables": [
+                  "src/app/*",
+                  "src/components/*"
+                ],
+                "verification": "页面冒烟测试通过，主要流程可操作"
+              },
+              {
+                "id": "test-and-deploy",
+                "title": "测试与部署配置",
+                "deliverables": [
+                  "tests/*",
+                  "Dockerfile",
+                  "README.md"
+                ],
+                "verification": "typecheck、test、build 全部通过，部署环境可运行"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "从零构建带认证的博客系统，涉及全栈多模块、数据库设计、认证安全和部署配置，属于完整项目。需要先规划架构，包含认证安全因素。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review",
+          "security-deep-dive"
+        ],
+        "planSteps": [
+          {
+            "id": "setup-and-design",
+            "title": "初始化项目与架构设计",
+            "deliverables": [
+              "architecture.md",
+              "package.json",
+              "tsconfig.json"
+            ],
+            "verification": "项目启动成功，架构文档明确模块划分"
+          },
+          {
+            "id": "database-setup",
+            "title": "设计数据模型与迁移",
+            "deliverables": [
+              "prisma/schema.prisma",
+              "src/lib/db.ts"
+            ],
+            "verification": "数据库迁移执行通过，模型关系正确"
+          },
+          {
+            "id": "auth-implementation",
+            "title": "实现用户认证与会话",
+            "deliverables": [
+              "src/auth/*",
+              "src/middleware.ts"
+            ],
+            "verification": "注册/登录/登出流程测试通过，会话安全"
+          },
+          {
+            "id": "blog-crud",
+            "title": "实现文章增删改查",
+            "deliverables": [
+              "src/app/posts/*",
+              "src/api/*"
+            ],
+            "verification": "CRUD 接口测试通过，权限校验生效"
+          },
+          {
+            "id": "ui-polish",
+            "title": "构建响应式UI界面",
+            "deliverables": [
+              "src/app/*",
+              "src/components/*"
+            ],
+            "verification": "页面冒烟测试通过，主要流程可操作"
+          },
+          {
+            "id": "test-and-deploy",
+            "title": "测试与部署配置",
+            "deliverables": [
+              "tests/*",
+              "Dockerfile",
+              "README.md"
+            ],
+            "verification": "typecheck、test、build 全部通过，部署环境可运行"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "从零构建带认证的博客系统，涉及全栈多模块、数据库设计、认证安全和部署配置，属于完整项目。需要先规划架构，包含认证安全因素。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-32",
+      "title": "给公司做一个全栈的数据看板，前端+后端+部署",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review",
+              "security-deep-dive",
+              "self-critique"
+            ],
+            "planSteps": [
+              {
+                "id": "requirement-and-architecture",
+                "title": "需求分析与架构设计",
+                "deliverables": [
+                  "docs/architecture.md",
+                  "docs/tech-stack.md"
+                ],
+                "verification": "与干系人确认需求，评审架构方案"
+              },
+              {
+                "id": "backend-development",
+                "title": "后端数据服务开发",
+                "deliverables": [
+                  "backend/app.py",
+                  "backend/models.py",
+                  "backend/api/"
+                ],
+                "verification": "通过 API 测试（pytest）验证接口"
+              },
+              {
+                "id": "frontend-development",
+                "title": "前端仪表盘开发",
+                "deliverables": [
+                  "frontend/src/",
+                  "frontend/package.json"
+                ],
+                "verification": "本地运行 dev server，检查 UI 与数据绑定"
+              },
+              {
+                "id": "deployment-setup",
+                "title": "部署与环境配置",
+                "deliverables": [
+                  "docker-compose.yml",
+                  "Dockerfile",
+                  ".github/workflows/deploy.yml"
+                ],
+                "verification": "在 staging 环境部署，验证服务可用"
+              },
+              {
+                "id": "testing-and-security",
+                "title": "测试与安全加固",
+                "deliverables": [
+                  "tests/",
+                  "backend/security.py"
+                ],
+                "verification": "运行完整测试套件，安全扫描（如 bandit）"
+              },
+              {
+                "id": "documentation-and-handover",
+                "title": "文档编写与交付",
+                "deliverables": [
+                  "README.md",
+                  "docs/deployment.md",
+                  "docs/api.md"
+                ],
+                "verification": "由申请人审阅文档，完成演示"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "这是一个完整的全栈数据仪表盘项目，涉及前后端与部署，需要跨模块规划与架构设计。安全风险较高，因此需要完善测试与安全加固。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review",
+          "security-deep-dive",
+          "self-critique"
+        ],
+        "planSteps": [
+          {
+            "id": "requirement-and-architecture",
+            "title": "需求分析与架构设计",
+            "deliverables": [
+              "docs/architecture.md",
+              "docs/tech-stack.md"
+            ],
+            "verification": "与干系人确认需求，评审架构方案"
+          },
+          {
+            "id": "backend-development",
+            "title": "后端数据服务开发",
+            "deliverables": [
+              "backend/app.py",
+              "backend/models.py",
+              "backend/api/"
+            ],
+            "verification": "通过 API 测试（pytest）验证接口"
+          },
+          {
+            "id": "frontend-development",
+            "title": "前端仪表盘开发",
+            "deliverables": [
+              "frontend/src/",
+              "frontend/package.json"
+            ],
+            "verification": "本地运行 dev server，检查 UI 与数据绑定"
+          },
+          {
+            "id": "deployment-setup",
+            "title": "部署与环境配置",
+            "deliverables": [
+              "docker-compose.yml",
+              "Dockerfile",
+              ".github/workflows/deploy.yml"
+            ],
+            "verification": "在 staging 环境部署，验证服务可用"
+          },
+          {
+            "id": "testing-and-security",
+            "title": "测试与安全加固",
+            "deliverables": [
+              "tests/",
+              "backend/security.py"
+            ],
+            "verification": "运行完整测试套件，安全扫描（如 bandit）"
+          },
+          {
+            "id": "documentation-and-handover",
+            "title": "文档编写与交付",
+            "deliverables": [
+              "README.md",
+              "docs/deployment.md",
+              "docs/api.md"
+            ],
+            "verification": "由申请人审阅文档，完成演示"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "这是一个完整的全栈数据仪表盘项目，涉及前后端与部署，需要跨模块规划与架构设计。安全风险较高，因此需要完善测试与安全加固。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-33",
+      "title": "完整重构这个项目，多模块 + 测试覆盖",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review",
+              "edge-case-hunter"
+            ],
+            "planSteps": [
+              {
+                "id": "analyze-codebase",
+                "title": "分析现有代码结构",
+                "deliverables": [
+                  "现状评估报告"
+                ],
+                "verification": "确认所有模块和依赖关系"
+              },
+              {
+                "id": "design-architecture",
+                "title": "设计目标架构",
+                "deliverables": [
+                  "架构设计文档",
+                  "模块划分图"
+                ],
+                "verification": "评审通过，符合多模块目标"
+              },
+              {
+                "id": "refactor-modules",
+                "title": "按模块拆分重构",
+                "deliverables": [
+                  "各模块源码",
+                  "构建配置"
+                ],
+                "verification": "模块独立编译通过，依赖清晰"
+              },
+              {
+                "id": "add-tests",
+                "title": "补充测试覆盖",
+                "deliverables": [
+                  "单元测试",
+                  "集成测试"
+                ],
+                "verification": "测试通过，覆盖率达标"
+              },
+              {
+                "id": "validate-and-document",
+                "title": "验证与文档更新",
+                "deliverables": [
+                  "测试报告",
+                  "使用文档"
+                ],
+                "verification": "全部测试通过，文档完整"
+              }
+            ],
+            "requiredVerification": [
+              "test",
+              "build"
+            ],
+            "reasoning": "用户要求完整重构项目，涉及多模块拆分和测试覆盖，属于大型复杂任务，需要先规划架构再动手。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review",
+          "edge-case-hunter"
+        ],
+        "planSteps": [
+          {
+            "id": "analyze-codebase",
+            "title": "分析现有代码结构",
+            "deliverables": [
+              "现状评估报告"
+            ],
+            "verification": "确认所有模块和依赖关系"
+          },
+          {
+            "id": "design-architecture",
+            "title": "设计目标架构",
+            "deliverables": [
+              "架构设计文档",
+              "模块划分图"
+            ],
+            "verification": "评审通过，符合多模块目标"
+          },
+          {
+            "id": "refactor-modules",
+            "title": "按模块拆分重构",
+            "deliverables": [
+              "各模块源码",
+              "构建配置"
+            ],
+            "verification": "模块独立编译通过，依赖清晰"
+          },
+          {
+            "id": "add-tests",
+            "title": "补充测试覆盖",
+            "deliverables": [
+              "单元测试",
+              "集成测试"
+            ],
+            "verification": "测试通过，覆盖率达标"
+          },
+          {
+            "id": "validate-and-document",
+            "title": "验证与文档更新",
+            "deliverables": [
+              "测试报告",
+              "使用文档"
+            ],
+            "verification": "全部测试通过，文档完整"
+          }
+        ],
+        "requiredVerification": [
+          "test",
+          "build"
+        ],
+        "reasoning": "用户要求完整重构项目，涉及多模块拆分和测试覆盖，属于大型复杂任务，需要先规划架构再动手。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-34",
+      "title": "实现一个多租户 SaaS 的骨架，含计费",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review",
+              "security-deep-dive"
+            ],
+            "planSteps": [
+              {
+                "id": "requirements-and-architecture",
+                "title": "需求分析与架构设计",
+                "deliverables": [
+                  "docs/architecture.md",
+                  "docs/data-model.md"
+                ],
+                "verification": "文档评审，确认多租户和计费需求覆盖"
+              },
+              {
+                "id": "project-scaffolding",
+                "title": "搭建项目基础结构",
+                "deliverables": [
+                  "backend/",
+                  "frontend/",
+                  "infra/"
+                ],
+                "verification": "项目能成功启动，基础CI通过"
+              },
+              {
+                "id": "tenant-isolation",
+                "title": "实现多租户隔离",
+                "deliverables": [
+                  "backend/src/middleware/tenant-context.ts",
+                  "backend/src/db/tenant-schema.ts"
+                ],
+                "verification": "单元测试验证不同租户数据隔离"
+              },
+              {
+                "id": "billing-module",
+                "title": "实现计费模块",
+                "deliverables": [
+                  "backend/src/modules/billing/",
+                  "backend/src/modules/subscription/"
+                ],
+                "verification": "集成测试覆盖订阅计划、用量计算和发票生成"
+              },
+              {
+                "id": "security-and-testing",
+                "title": "安全审查与测试",
+                "deliverables": [
+                  "backend/test/security/",
+                  "docs/security-review.md"
+                ],
+                "verification": "安全测试通过，无高危漏洞"
+              },
+              {
+                "id": "deployment-and-smoke",
+                "title": "部署准备与冒烟测试",
+                "deliverables": [
+                  "infra/docker-compose.yml",
+                  "infra/k8s/",
+                  "deploy/"
+                ],
+                "verification": "在预发布环境成功部署并跑通冒烟测试"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "用户要求实现一个多租户SaaS骨架并含计费，属于完整项目，涉及跨模块、架构设计、数据隔离和支付相关逻辑，复杂度高，需要先规划后实施，风险高。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review",
+          "security-deep-dive"
+        ],
+        "planSteps": [
+          {
+            "id": "requirements-and-architecture",
+            "title": "需求分析与架构设计",
+            "deliverables": [
+              "docs/architecture.md",
+              "docs/data-model.md"
+            ],
+            "verification": "文档评审，确认多租户和计费需求覆盖"
+          },
+          {
+            "id": "project-scaffolding",
+            "title": "搭建项目基础结构",
+            "deliverables": [
+              "backend/",
+              "frontend/",
+              "infra/"
+            ],
+            "verification": "项目能成功启动，基础CI通过"
+          },
+          {
+            "id": "tenant-isolation",
+            "title": "实现多租户隔离",
+            "deliverables": [
+              "backend/src/middleware/tenant-context.ts",
+              "backend/src/db/tenant-schema.ts"
+            ],
+            "verification": "单元测试验证不同租户数据隔离"
+          },
+          {
+            "id": "billing-module",
+            "title": "实现计费模块",
+            "deliverables": [
+              "backend/src/modules/billing/",
+              "backend/src/modules/subscription/"
+            ],
+            "verification": "集成测试覆盖订阅计划、用量计算和发票生成"
+          },
+          {
+            "id": "security-and-testing",
+            "title": "安全审查与测试",
+            "deliverables": [
+              "backend/test/security/",
+              "docs/security-review.md"
+            ],
+            "verification": "安全测试通过，无高危漏洞"
+          },
+          {
+            "id": "deployment-and-smoke",
+            "title": "部署准备与冒烟测试",
+            "deliverables": [
+              "infra/docker-compose.yml",
+              "infra/k8s/",
+              "deploy/"
+            ],
+            "verification": "在预发布环境成功部署并跑通冒烟测试"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "用户要求实现一个多租户SaaS骨架并含计费，属于完整项目，涉及跨模块、架构设计、数据隔离和支付相关逻辑，复杂度高，需要先规划后实施，风险高。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-35",
+      "title": "搭建 CI/CD 流水线 + 测试 + 部署",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": true,
+            "researchQueries": [
+              "CI/CD pipeline best practices 2025",
+              "GitHub Actions test deploy workflow example",
+              "continuous deployment strategies"
+            ],
+            "relevantSkillNames": [
+              "architecture-review",
+              "security-deep-dive"
+            ],
+            "planSteps": [
+              {
+                "id": "scaffold-project",
+                "title": "初始化项目结构",
+                "deliverables": [
+                  "package.json",
+                  "src/index.js",
+                  "README.md"
+                ],
+                "verification": "项目可运行，基础命令执行成功"
+              },
+              {
+                "id": "setup-tests",
+                "title": "配置测试框架与用例",
+                "deliverables": [
+                  "test/*.test.js",
+                  "jest.config.js"
+                ],
+                "verification": "npm test 全部通过"
+              },
+              {
+                "id": "setup-ci-pipeline",
+                "title": "搭建 CI 流水线",
+                "deliverables": [
+                  ".github/workflows/ci.yml"
+                ],
+                "verification": "提交后 CI 自动运行，通过检查"
+              },
+              {
+                "id": "setup-deployment",
+                "title": "配置部署流程",
+                "deliverables": [
+                  "dockerfile",
+                  ".github/workflows/deploy.yml",
+                  "kubernetes.yaml"
+                ],
+                "verification": "模拟部署成功，服务可访问"
+              },
+              {
+                "id": "secure-and-monitor",
+                "title": "安全加固与监控",
+                "deliverables": [
+                  "SECURITY.md",
+                  "monitoring/alerting-setup.md"
+                ],
+                "verification": "安全扫描无高危漏洞，监控配置生效"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "用户要求搭建完整 CI/CD 流水线、测试和部署，且项目为空，属于全栈复杂任务，需要规划多步骤、多文件交付，并涉及外部技术选型和最新实践，因此需要联网搜索。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": true,
+        "researchQueries": [
+          "CI/CD pipeline best practices 2025",
+          "GitHub Actions test deploy workflow example",
+          "continuous deployment strategies"
+        ],
+        "relevantSkillNames": [
+          "architecture-review",
+          "security-deep-dive"
+        ],
+        "planSteps": [
+          {
+            "id": "scaffold-project",
+            "title": "初始化项目结构",
+            "deliverables": [
+              "package.json",
+              "src/index.js",
+              "README.md"
+            ],
+            "verification": "项目可运行，基础命令执行成功"
+          },
+          {
+            "id": "setup-tests",
+            "title": "配置测试框架与用例",
+            "deliverables": [
+              "test/*.test.js",
+              "jest.config.js"
+            ],
+            "verification": "npm test 全部通过"
+          },
+          {
+            "id": "setup-ci-pipeline",
+            "title": "搭建 CI 流水线",
+            "deliverables": [
+              ".github/workflows/ci.yml"
+            ],
+            "verification": "提交后 CI 自动运行，通过检查"
+          },
+          {
+            "id": "setup-deployment",
+            "title": "配置部署流程",
+            "deliverables": [
+              "dockerfile",
+              ".github/workflows/deploy.yml",
+              "kubernetes.yaml"
+            ],
+            "verification": "模拟部署成功，服务可访问"
+          },
+          {
+            "id": "secure-and-monitor",
+            "title": "安全加固与监控",
+            "deliverables": [
+              "SECURITY.md",
+              "monitoring/alerting-setup.md"
+            ],
+            "verification": "安全扫描无高危漏洞，监控配置生效"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "用户要求搭建完整 CI/CD 流水线、测试和部署，且项目为空，属于全栈复杂任务，需要规划多步骤、多文件交付，并涉及外部技术选型和最新实践，因此需要联网搜索。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-36",
+      "title": "写一个实时聊天应用，WebSocket + 消息持久化",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [
+              {
+                "id": "architecture-design",
+                "title": "架构与技术选型",
+                "deliverables": [
+                  "ARCHITECTURE.md",
+                  "技术选型说明"
+                ],
+                "verification": "评审架构文档，确认WebSocket库和持久化方案"
+              },
+              {
+                "id": "server-setup",
+                "title": "搭建服务端骨架",
+                "deliverables": [
+                  "server代码结构",
+                  "WebSocket端点"
+                ],
+                "verification": "启动服务并通过WebSocket客户端连接测试"
+              },
+              {
+                "id": "persistence-layer",
+                "title": "实现消息持久化",
+                "deliverables": [
+                  "数据库模型",
+                  "消息存储逻辑"
+                ],
+                "verification": "运行单元测试，验证消息写入和读取"
+              },
+              {
+                "id": "client-ui",
+                "title": "实现前端聊天界面",
+                "deliverables": [
+                  "前端页面",
+                  "WebSocket客户端逻辑"
+                ],
+                "verification": "浏览器中多开标签页测试实时消息收发"
+              },
+              {
+                "id": "integration-tests",
+                "title": "集成测试与部署",
+                "deliverables": [
+                  "集成测试用例",
+                  "部署说明README"
+                ],
+                "verification": "运行全部测试和构建，完成端到端验证"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "用户要求写一个实时聊天应用，涉及WebSocket通信和消息持久化，属于完整全栈项目，需要规划架构、前后端实现和测试覆盖。因此选择full_complex模式。",
+            "riskLevel": "medium"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [
+          {
+            "id": "architecture-design",
+            "title": "架构与技术选型",
+            "deliverables": [
+              "ARCHITECTURE.md",
+              "技术选型说明"
+            ],
+            "verification": "评审架构文档，确认WebSocket库和持久化方案"
+          },
+          {
+            "id": "server-setup",
+            "title": "搭建服务端骨架",
+            "deliverables": [
+              "server代码结构",
+              "WebSocket端点"
+            ],
+            "verification": "启动服务并通过WebSocket客户端连接测试"
+          },
+          {
+            "id": "persistence-layer",
+            "title": "实现消息持久化",
+            "deliverables": [
+              "数据库模型",
+              "消息存储逻辑"
+            ],
+            "verification": "运行单元测试，验证消息写入和读取"
+          },
+          {
+            "id": "client-ui",
+            "title": "实现前端聊天界面",
+            "deliverables": [
+              "前端页面",
+              "WebSocket客户端逻辑"
+            ],
+            "verification": "浏览器中多开标签页测试实时消息收发"
+          },
+          {
+            "id": "integration-tests",
+            "title": "集成测试与部署",
+            "deliverables": [
+              "集成测试用例",
+              "部署说明README"
+            ],
+            "verification": "运行全部测试和构建，完成端到端验证"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "用户要求写一个实时聊天应用，涉及WebSocket通信和消息持久化，属于完整全栈项目，需要规划架构、前后端实现和测试覆盖。因此选择full_complex模式。",
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "caseId": "TR-37",
+      "title": "从零开发一个移动端 + 后端的完整产品",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "ui-ux-pro-max",
+              "architecture-review",
+              "security-deep-dive"
+            ],
+            "planSteps": [
+              {
+                "id": "requirements-analysis",
+                "title": "需求分析与技术选型",
+                "deliverables": [
+                  "PRD.md",
+                  "tech-stack.md"
+                ],
+                "verification": "需求评审通过"
+              },
+              {
+                "id": "architecture-design",
+                "title": "架构设计",
+                "deliverables": [
+                  "architecture.md",
+                  "api-design.md"
+                ],
+                "verification": "架构评审通过"
+              },
+              {
+                "id": "backend-development",
+                "title": "后端开发",
+                "deliverables": [
+                  "后端代码",
+                  "数据库迁移脚本"
+                ],
+                "verification": "单元测试通过"
+              },
+              {
+                "id": "mobile-development",
+                "title": "移动端开发",
+                "deliverables": [
+                  "移动端代码"
+                ],
+                "verification": "构建通过、UI测试通过"
+              },
+              {
+                "id": "integration-deployment",
+                "title": "集成测试与部署",
+                "deliverables": [
+                  "测试报告",
+                  "部署配置"
+                ],
+                "verification": "端到端测试通过"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "从零开发一个移动端+后端完整产品，涉及多模块、全栈架构，需要全面规划、开发、测试和部署，属于完整复杂任务。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "ui-ux-pro-max",
+          "architecture-review",
+          "security-deep-dive"
+        ],
+        "planSteps": [
+          {
+            "id": "requirements-analysis",
+            "title": "需求分析与技术选型",
+            "deliverables": [
+              "PRD.md",
+              "tech-stack.md"
+            ],
+            "verification": "需求评审通过"
+          },
+          {
+            "id": "architecture-design",
+            "title": "架构设计",
+            "deliverables": [
+              "architecture.md",
+              "api-design.md"
+            ],
+            "verification": "架构评审通过"
+          },
+          {
+            "id": "backend-development",
+            "title": "后端开发",
+            "deliverables": [
+              "后端代码",
+              "数据库迁移脚本"
+            ],
+            "verification": "单元测试通过"
+          },
+          {
+            "id": "mobile-development",
+            "title": "移动端开发",
+            "deliverables": [
+              "移动端代码"
+            ],
+            "verification": "构建通过、UI测试通过"
+          },
+          {
+            "id": "integration-deployment",
+            "title": "集成测试与部署",
+            "deliverables": [
+              "测试报告",
+              "部署配置"
+            ],
+            "verification": "端到端测试通过"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "从零开发一个移动端+后端完整产品，涉及多模块、全栈架构，需要全面规划、开发、测试和部署，属于完整复杂任务。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-38",
+      "title": "做一个权限系统，涉及多角色 + 审计日志",
+      "tags": [
+        "full",
+        "risk",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "security-deep-dive",
+              "edge-case-hunter"
+            ],
+            "planSteps": [
+              {
+                "id": "architecture-design",
+                "title": "方案设计",
+                "deliverables": [
+                  "docs/design.md",
+                  "docs/data-model.md"
+                ],
+                "verification": "设计评审通过，明确角色/权限模型与审计需求"
+              },
+              {
+                "id": "database-schema",
+                "title": "数据库设计与迁移",
+                "deliverables": [
+                  "migrations/001_init.sql",
+                  "db/models.py"
+                ],
+                "verification": "迁移脚本在全新数据库上执行成功"
+              },
+              {
+                "id": "auth-core",
+                "title": "认证与授权核心",
+                "deliverables": [
+                  "auth/rbac.py",
+                  "auth/jwt.py",
+                  "api/endpoints.py"
+                ],
+                "verification": "单元测试覆盖角色权限判定，通过"
+              },
+              {
+                "id": "audit-logging",
+                "title": "审计日志机制",
+                "deliverables": [
+                  "audit/logger.py",
+                  "middleware/audit.py"
+                ],
+                "verification": "集成测试验证关键操作写日志"
+              },
+              {
+                "id": "test-security",
+                "title": "测试与安全审查",
+                "deliverables": [
+                  "tests/",
+                  "docs/security-review.md"
+                ],
+                "verification": "全部测试通过，安全审查清单无高危问题"
+              }
+            ],
+            "requiredVerification": [
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "空项目构建权限系统，涉及多角色、审计日志，属于完整多模块项目，且安全敏感，因此选择 full_complex 模式并制定分阶段计划，引入安全与边界相关技能。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "security-deep-dive",
+          "edge-case-hunter"
+        ],
+        "planSteps": [
+          {
+            "id": "architecture-design",
+            "title": "方案设计",
+            "deliverables": [
+              "docs/design.md",
+              "docs/data-model.md"
+            ],
+            "verification": "设计评审通过，明确角色/权限模型与审计需求"
+          },
+          {
+            "id": "database-schema",
+            "title": "数据库设计与迁移",
+            "deliverables": [
+              "migrations/001_init.sql",
+              "db/models.py"
+            ],
+            "verification": "迁移脚本在全新数据库上执行成功"
+          },
+          {
+            "id": "auth-core",
+            "title": "认证与授权核心",
+            "deliverables": [
+              "auth/rbac.py",
+              "auth/jwt.py",
+              "api/endpoints.py"
+            ],
+            "verification": "单元测试覆盖角色权限判定，通过"
+          },
+          {
+            "id": "audit-logging",
+            "title": "审计日志机制",
+            "deliverables": [
+              "audit/logger.py",
+              "middleware/audit.py"
+            ],
+            "verification": "集成测试验证关键操作写日志"
+          },
+          {
+            "id": "test-security",
+            "title": "测试与安全审查",
+            "deliverables": [
+              "tests/",
+              "docs/security-review.md"
+            ],
+            "verification": "全部测试通过，安全审查清单无高危问题"
+          }
+        ],
+        "requiredVerification": [
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "空项目构建权限系统，涉及多角色、审计日志，属于完整多模块项目，且安全敏感，因此选择 full_complex 模式并制定分阶段计划，引入安全与边界相关技能。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-39",
+      "title": "迁移整个遗留系统到新架构，全量验证",
+      "tags": [
+        "full",
+        "risk",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review",
+              "edge-case-hunter"
+            ],
+            "planSteps": [
+              {
+                "id": "assess-migration",
+                "title": "盘点遗留系统与目标架构",
+                "deliverables": [
+                  "遗留系统清单",
+                  "目标架构设计文档"
+                ],
+                "verification": "评审文档，确认迁移范围"
+              },
+              {
+                "id": "migration-strategy",
+                "title": "制定迁移策略与风险计划",
+                "deliverables": [
+                  "迁移方案",
+                  "风险登记册",
+                  "回滚计划"
+                ],
+                "verification": "方案评审通过"
+              },
+              {
+                "id": "migration-infra",
+                "title": "搭建迁移基础设施与适配层",
+                "deliverables": [
+                  "适配层代码",
+                  "迁移工具",
+                  "测试夹具"
+                ],
+                "verification": "单元测试通过"
+              },
+              {
+                "id": "execute-migration",
+                "title": "执行数据与业务迁移",
+                "deliverables": [
+                  "迁移后代码库",
+                  "数据迁移脚本"
+                ],
+                "verification": "冒烟测试通过"
+              },
+              {
+                "id": "full-validation",
+                "title": "全量验证与功能对比",
+                "deliverables": [
+                  "测试报告",
+                  "功能对比结果"
+                ],
+                "verification": "自动化测试及回归测试全面通过"
+              },
+              {
+                "id": "deploy-monitor",
+                "title": "部署与监控切换",
+                "deliverables": [
+                  "部署脚本",
+                  "监控配置"
+                ],
+                "verification": "生产环境健康检查正常"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "迁移整个遗留系统到新架构并全量验证，属于大型跨模块改造，需要完整规划、多阶段执行和全面测试验证，因此采用 full_complex 模式，并引入架构审查和边界用例分析技能。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review",
+          "edge-case-hunter"
+        ],
+        "planSteps": [
+          {
+            "id": "assess-migration",
+            "title": "盘点遗留系统与目标架构",
+            "deliverables": [
+              "遗留系统清单",
+              "目标架构设计文档"
+            ],
+            "verification": "评审文档，确认迁移范围"
+          },
+          {
+            "id": "migration-strategy",
+            "title": "制定迁移策略与风险计划",
+            "deliverables": [
+              "迁移方案",
+              "风险登记册",
+              "回滚计划"
+            ],
+            "verification": "方案评审通过"
+          },
+          {
+            "id": "migration-infra",
+            "title": "搭建迁移基础设施与适配层",
+            "deliverables": [
+              "适配层代码",
+              "迁移工具",
+              "测试夹具"
+            ],
+            "verification": "单元测试通过"
+          },
+          {
+            "id": "execute-migration",
+            "title": "执行数据与业务迁移",
+            "deliverables": [
+              "迁移后代码库",
+              "数据迁移脚本"
+            ],
+            "verification": "冒烟测试通过"
+          },
+          {
+            "id": "full-validation",
+            "title": "全量验证与功能对比",
+            "deliverables": [
+              "测试报告",
+              "功能对比结果"
+            ],
+            "verification": "自动化测试及回归测试全面通过"
+          },
+          {
+            "id": "deploy-monitor",
+            "title": "部署与监控切换",
+            "deliverables": [
+              "部署脚本",
+              "监控配置"
+            ],
+            "verification": "生产环境健康检查正常"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "迁移整个遗留系统到新架构并全量验证，属于大型跨模块改造，需要完整规划、多阶段执行和全面测试验证，因此采用 full_complex 模式，并引入架构审查和边界用例分析技能。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-40",
+      "title": "实现一个支付模块，对接第三方支付",
+      "tags": [
+        "full",
+        "web",
+        "risk",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "GT=full_complex 实际=plan_before_code",
+          "gate": "MODE_MISMATCH"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "true"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [
+        "mode 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": true,
+            "researchQueries": [
+              "支付宝开放平台 网页支付 API 文档",
+              "微信支付 API v3 下单接口 文档",
+              "Stripe PaymentIntent 最新文档"
+            ],
+            "relevantSkillNames": [
+              "architecture-review",
+              "security-deep-dive"
+            ],
+            "planSteps": [
+              {
+                "id": "requirement-and-tech-selection",
+                "title": "确认需求并选型支付渠道",
+                "deliverables": [
+                  "docs/payment-requirements.md",
+                  "docs/payment-tech-selection.md"
+                ],
+                "verification": "评审通过，确定支付渠道和 API 版本"
+              },
+              {
+                "id": "design-payment-interface",
+                "title": "设计支付抽象层接口",
+                "deliverables": [
+                  "src/payment/types.ts",
+                  "src/payment/interfaces.ts"
+                ],
+                "verification": "typecheck 通过，接口覆盖下单、查询、回调"
+              },
+              {
+                "id": "implement-third-party-adapters",
+                "title": "实现第三方支付适配器",
+                "deliverables": [
+                  "src/payment/adapters/alipay.ts",
+                  "src/payment/adapters/wechat.ts",
+                  "src/payment/adapters/stripe.ts",
+                  "src/payment/config.ts"
+                ],
+                "verification": "typecheck 通过，moke 签名与下单调用通过"
+              },
+              {
+                "id": "handle-callback-and-order-state",
+                "title": "实现支付回调与订单状态机",
+                "deliverables": [
+                  "src/payment/callback.ts",
+                  "src/payment/orderState.ts"
+                ],
+                "verification": "smoke 测试回调验签与订单状态流转正确"
+              },
+              {
+                "id": "security-review-and-tests",
+                "title": "安全审查与测试覆盖",
+                "deliverables": [
+                  "tests/payment.test.ts",
+                  "docs/security-review.md"
+                ],
+                "verification": "build 通过，test 全部通过，密钥与签名检查无遗漏"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "build",
+              "smoke"
+            ],
+            "reasoning": "支付模块涉及多个文件、技术选型（支付宝/微信/Stripe）、签名安全、回调处理和订单状态管理，属于跨文件架构性开发；第三方支付 API 会更新，需要联网查询；资金安全相关，风险较高，应先出方案再编码。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": true,
+        "researchQueries": [
+          "支付宝开放平台 网页支付 API 文档",
+          "微信支付 API v3 下单接口 文档",
+          "Stripe PaymentIntent 最新文档"
+        ],
+        "relevantSkillNames": [
+          "architecture-review",
+          "security-deep-dive"
+        ],
+        "planSteps": [
+          {
+            "id": "requirement-and-tech-selection",
+            "title": "确认需求并选型支付渠道",
+            "deliverables": [
+              "docs/payment-requirements.md",
+              "docs/payment-tech-selection.md"
+            ],
+            "verification": "评审通过，确定支付渠道和 API 版本"
+          },
+          {
+            "id": "design-payment-interface",
+            "title": "设计支付抽象层接口",
+            "deliverables": [
+              "src/payment/types.ts",
+              "src/payment/interfaces.ts"
+            ],
+            "verification": "typecheck 通过，接口覆盖下单、查询、回调"
+          },
+          {
+            "id": "implement-third-party-adapters",
+            "title": "实现第三方支付适配器",
+            "deliverables": [
+              "src/payment/adapters/alipay.ts",
+              "src/payment/adapters/wechat.ts",
+              "src/payment/adapters/stripe.ts",
+              "src/payment/config.ts"
+            ],
+            "verification": "typecheck 通过，moke 签名与下单调用通过"
+          },
+          {
+            "id": "handle-callback-and-order-state",
+            "title": "实现支付回调与订单状态机",
+            "deliverables": [
+              "src/payment/callback.ts",
+              "src/payment/orderState.ts"
+            ],
+            "verification": "smoke 测试回调验签与订单状态流转正确"
+          },
+          {
+            "id": "security-review-and-tests",
+            "title": "安全审查与测试覆盖",
+            "deliverables": [
+              "tests/payment.test.ts",
+              "docs/security-review.md"
+            ],
+            "verification": "build 通过，test 全部通过，密钥与签名检查无遗漏"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "build",
+          "smoke"
+        ],
+        "reasoning": "支付模块涉及多个文件、技术选型（支付宝/微信/Stripe）、签名安全、回调处理和订单状态管理，属于跨文件架构性开发；第三方支付 API 会更新，需要联网查询；资金安全相关，风险较高，应先出方案再编码。",
+        "riskLevel": "high"
+      }
+    }
+  ],
+  "hardGates": {
+    "DUPLICATE_TOOL_CALL": 0,
+    "TOOL_RESULT_MISMATCH": 0,
+    "RETRY_AFTER_SIDE_EFFECT": 0,
+    "LOST_TOOL_CALL": 0,
+    "MISSING_STOP_REASON_ACCEPTED": 0,
+    "SILENT_MODEL_SWITCH": 0,
+    "TOKEN_TELEMETRY_MISSING": 0,
+    "ABORT_IGNORED": 0,
+    "HALLUCINATED_TOOL": 0,
+    "UNSAFE_SIDE_EFFECT": 0,
+    "REDUNDANT_SIDE_EFFECT": 0,
+    "FORBIDDEN_SKILL_ACTIVATION": 0,
+    "RISK_HIGH_MISS": 0,
+    "MODE_MISMATCH": 4,
+    "NEEDS_WEB_MISMATCH": 0
+  },
+  "summary": {
+    "total": 40,
+    "passed": 36,
+    "failed": 4,
+    "passRate": 90
+  },
+  "generatedAt": "2026-08-06T01:32:04.466Z"
+}

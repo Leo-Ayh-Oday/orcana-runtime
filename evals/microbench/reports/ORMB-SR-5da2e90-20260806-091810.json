@@ -1,0 +1,3811 @@
+{
+  "header": {
+    "suite": "ORMB-SR",
+    "orcanaCommit": "5da2e90",
+    "modelRequested": "deepseek-v4-flash",
+    "reasoningEffort": "none",
+    "seed": 42,
+    "configurationDigest": "PP-mock-v1",
+    "startedAt": "2026-08-06T01:18:10.256Z"
+  },
+  "suite": "ORMB-SR",
+  "cases": [
+    {
+      "caseId": "SR-01",
+      "title": "帮我提升界面的视觉质感，主要涉及前端方面的内容",
+      "tags": [
+        "direct",
+        "ui-ux-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max"
+        ],
+        "triage": null,
+        "fallback": [
+          "ui-ux-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [
+          "ui-ux-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-02",
+      "title": "这个任务需要UI，提升界面的视觉质感一下",
+      "tags": [
+        "direct",
+        "ui-ux-pro-max",
+        "skill"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": false,
+          "detail": "缺: ui-ux-pro-max",
+          "gate": "LOST_TOOL_CALL"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [
+        "语义 required 全激活"
+      ],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max"
+        ],
+        "triage": [],
+        "fallback": [
+          "ui-ux-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [
+          "ui-ux-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-03",
+      "title": "帮我做页面动效，主要涉及动效方面的内容",
+      "tags": [
+        "direct",
+        "motion-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max,motion-pro-max"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "motion-pro-max"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "motion-pro-max"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 5,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ],
+        "triage": [
+          "motion-pro-max"
+        ],
+        "fallback": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [
+          "motion-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-04",
+      "title": "这个任务需要动画，做页面动效一下",
+      "tags": [
+        "direct",
+        "motion-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max,motion-pro-max"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ],
+        "triage": null,
+        "fallback": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [
+          "motion-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-05",
+      "title": "帮我评审系统架构，主要涉及架构方面的内容",
+      "tags": [
+        "direct",
+        "architecture-review",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "architecture-review"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "architecture-review"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "architecture-review"
+        ],
+        "triage": [
+          "architecture-review"
+        ],
+        "fallback": [
+          "architecture-review"
+        ]
+      },
+      "gt": {
+        "required": [
+          "architecture-review"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-06",
+      "title": "这个任务需要architecture，评审系统架构一下",
+      "tags": [
+        "direct",
+        "architecture-review",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "architecture-review"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "architecture-review"
+        ],
+        "triage": null,
+        "fallback": [
+          "architecture-review"
+        ]
+      },
+      "gt": {
+        "required": [
+          "architecture-review"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-07",
+      "title": "帮我审查方案，主要涉及审查方面的内容",
+      "tags": [
+        "direct",
+        "self-critique",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique"
+        ]
+      },
+      "gt": {
+        "required": [
+          "self-critique"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-08",
+      "title": "这个任务需要review，审查方案一下",
+      "tags": [
+        "direct",
+        "self-critique",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique"
+        ]
+      },
+      "gt": {
+        "required": [
+          "self-critique"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-09",
+      "title": "帮我检查边界情况，主要涉及边界方面的内容",
+      "tags": [
+        "direct",
+        "edge-case-hunter",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique,edge-case-hunter"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique",
+            "edge-case-hunter"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique",
+            "edge-case-hunter"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique",
+          "edge-case-hunter"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique",
+          "edge-case-hunter"
+        ]
+      },
+      "gt": {
+        "required": [
+          "edge-case-hunter"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-10",
+      "title": "这个任务需要edge，检查边界情况一下",
+      "tags": [
+        "direct",
+        "edge-case-hunter",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique,edge-case-hunter"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique",
+            "edge-case-hunter"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique",
+            "edge-case-hunter"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique",
+          "edge-case-hunter"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique",
+          "edge-case-hunter"
+        ]
+      },
+      "gt": {
+        "required": [
+          "edge-case-hunter"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-11",
+      "title": "帮我做安全审查，主要涉及安全方面的内容",
+      "tags": [
+        "direct",
+        "security-deep-dive",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique,security-deep-dive"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "security-deep-dive"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique",
+            "security-deep-dive"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "security-deep-dive"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique",
+            "security-deep-dive"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 5,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique",
+          "security-deep-dive"
+        ],
+        "triage": [
+          "security-deep-dive"
+        ],
+        "fallback": [
+          "self-critique",
+          "security-deep-dive"
+        ]
+      },
+      "gt": {
+        "required": [
+          "security-deep-dive"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-12",
+      "title": "这个任务需要security，做安全审查一下",
+      "tags": [
+        "direct",
+        "security-deep-dive",
+        "skill"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique,security-deep-dive"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": false,
+          "detail": "缺: security-deep-dive",
+          "gate": "LOST_TOOL_CALL"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [
+        "语义 required 全激活"
+      ],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique",
+            "security-deep-dive"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique",
+            "security-deep-dive"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique",
+          "security-deep-dive"
+        ],
+        "triage": [],
+        "fallback": [
+          "self-critique",
+          "security-deep-dive"
+        ]
+      },
+      "gt": {
+        "required": [
+          "security-deep-dive"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-13",
+      "title": "帮我调试，主要涉及bug方面的内容",
+      "tags": [
+        "direct",
+        "systematic-debugging",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "systematic-debugging"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "systematic-debugging"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "systematic-debugging"
+        ],
+        "triage": [
+          "systematic-debugging"
+        ],
+        "fallback": [
+          "systematic-debugging"
+        ]
+      },
+      "gt": {
+        "required": [
+          "systematic-debugging"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-14",
+      "title": "这个任务需要调试，调试一下",
+      "tags": [
+        "direct",
+        "systematic-debugging",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "systematic-debugging"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "systematic-debugging"
+        ],
+        "triage": null,
+        "fallback": [
+          "systematic-debugging"
+        ]
+      },
+      "gt": {
+        "required": [
+          "systematic-debugging"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-15",
+      "title": "这个页面看起来太简陋了，帮我提升一下它的视觉档次",
+      "tags": [
+        "implicit",
+        "ui-ux-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[ui-ux-pro-max]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max"
+        ],
+        "triage": null,
+        "fallback": [
+          "ui-ux-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [
+          "ui-ux-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-16",
+      "title": "给这个网站加一些交互反馈效果，让操作更有节奏感",
+      "tags": [
+        "implicit",
+        "motion-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": null,
+        "fallback": []
+      },
+      "gt": {
+        "required": [
+          "motion-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-17",
+      "title": "我们在两个方案之间犹豫，帮我分析一下哪个更合适",
+      "tags": [
+        "implicit",
+        "architecture-review",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "architecture-review"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": [
+          "architecture-review"
+        ],
+        "fallback": []
+      },
+      "gt": {
+        "required": [
+          "architecture-review"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-18",
+      "title": "帮我从反方角度挑挑这个设计的毛病",
+      "tags": [
+        "implicit",
+        "self-critique",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[ui-ux-pro-max,self-critique]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "self-critique,architecture-review"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max",
+            "self-critique"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "architecture-review",
+            "self-critique"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max",
+            "self-critique"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 6,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max",
+          "self-critique"
+        ],
+        "triage": [
+          "architecture-review",
+          "self-critique"
+        ],
+        "fallback": [
+          "ui-ux-pro-max",
+          "self-critique"
+        ]
+      },
+      "gt": {
+        "required": [
+          "self-critique"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-19",
+      "title": "这个接口可能会收到各种奇怪的输入，帮我考虑周全",
+      "tags": [
+        "implicit",
+        "edge-case-hunter",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": null,
+        "fallback": []
+      },
+      "gt": {
+        "required": [
+          "edge-case-hunter"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-20",
+      "title": "这个登录功能做得靠谱吗，帮我检查一下",
+      "tags": [
+        "implicit",
+        "security-deep-dive",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[self-critique]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique"
+        ]
+      },
+      "gt": {
+        "required": [
+          "security-deep-dive"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-21",
+      "title": "程序时不时就卡住，帮我查一下原因",
+      "tags": [
+        "implicit",
+        "systematic-debugging",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "systematic-debugging"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": [
+          "systematic-debugging"
+        ],
+        "fallback": []
+      },
+      "gt": {
+        "required": [
+          "systematic-debugging"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-22",
+      "title": "写一封关于 CSS 历史的科普邮件",
+      "tags": [
+        "trap",
+        "ui-ux-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: ui-ux-pro-max"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: ui-ux-pro-max"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max"
+        ],
+        "triage": null,
+        "fallback": [
+          "ui-ux-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "ui-ux-pro-max"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-23",
+      "title": "帮我把这段 HTML 导出成 PDF",
+      "tags": [
+        "trap",
+        "ui-ux-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "未误触发"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "未误触发"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": null,
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "ui-ux-pro-max"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-24",
+      "title": "给这篇动画电影写一篇影评",
+      "tags": [
+        "trap",
+        "motion-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "motion-pro-max"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: motion-pro-max"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: motion-pro-max"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "motion-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "motion-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "motion-pro-max"
+        ],
+        "triage": null,
+        "fallback": [
+          "motion-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "motion-pro-max"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-25",
+      "title": "翻译一下 motion 这个词在不同语境下的含义",
+      "tags": [
+        "trap",
+        "motion-pro-max",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "motion-pro-max"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: motion-pro-max"
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: motion-pro-max"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "motion-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "motion-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "motion-pro-max"
+        ],
+        "triage": [],
+        "fallback": [
+          "motion-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "motion-pro-max"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-26",
+      "title": "把这个文档里的 architecture 单词全部替换成 structure",
+      "tags": [
+        "trap",
+        "architecture-review",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "architecture-review"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: architecture-review"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: architecture-review"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "architecture-review"
+        ],
+        "triage": null,
+        "fallback": [
+          "architecture-review"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "architecture-review"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-27",
+      "title": "整理一份关于设计模式的读书笔记",
+      "tags": [
+        "trap",
+        "architecture-review",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max,architecture-review"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: architecture-review"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: architecture-review"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max",
+            "architecture-review"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max",
+            "architecture-review"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max",
+          "architecture-review"
+        ],
+        "triage": null,
+        "fallback": [
+          "ui-ux-pro-max",
+          "architecture-review"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "architecture-review"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-28",
+      "title": "把 review 这个词翻译成中文",
+      "tags": [
+        "trap",
+        "self-critique",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: self-critique"
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: self-critique"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique"
+        ],
+        "triage": [],
+        "fallback": [
+          "self-critique"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "self-critique"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-29",
+      "title": "给这篇文章写一个摘要，不用评价好坏",
+      "tags": [
+        "trap",
+        "self-critique",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "未误触发"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "未误触发"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": null,
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "self-critique"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-30",
+      "title": "帮我把测试报告整理成表格",
+      "tags": [
+        "trap",
+        "edge-case-hunter",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "edge-case-hunter"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: edge-case-hunter"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: edge-case-hunter"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "edge-case-hunter"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "edge-case-hunter"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "edge-case-hunter"
+        ],
+        "triage": null,
+        "fallback": [
+          "edge-case-hunter"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "edge-case-hunter"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-31",
+      "title": "这周的空值率统计报表帮我核对一下",
+      "tags": [
+        "trap",
+        "edge-case-hunter",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "edge-case-hunter"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: edge-case-hunter"
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: edge-case-hunter"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "edge-case-hunter"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "edge-case-hunter"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "edge-case-hunter"
+        ],
+        "triage": [],
+        "fallback": [
+          "edge-case-hunter"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "edge-case-hunter"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-32",
+      "title": "README 里出现了 security 这个单词，帮我翻译这个文件",
+      "tags": [
+        "trap",
+        "security-deep-dive",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "security-deep-dive"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: security-deep-dive"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: security-deep-dive"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "security-deep-dive"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "security-deep-dive"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "security-deep-dive"
+        ],
+        "triage": null,
+        "fallback": [
+          "security-deep-dive"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "security-deep-dive"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-33",
+      "title": "把这篇文章里的 token 全部替换成占位符",
+      "tags": [
+        "trap",
+        "security-deep-dive",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "security-deep-dive"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: security-deep-dive"
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: security-deep-dive"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "security-deep-dive"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "security-deep-dive"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "security-deep-dive"
+        ],
+        "triage": [],
+        "fallback": [
+          "security-deep-dive"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "security-deep-dive"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-34",
+      "title": "别修 bug，把这段报错日志存档就行",
+      "tags": [
+        "trap",
+        "systematic-debugging",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "systematic-debugging"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: systematic-debugging"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: systematic-debugging"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "systematic-debugging"
+        ],
+        "triage": null,
+        "fallback": [
+          "systematic-debugging"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "systematic-debugging"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-35",
+      "title": "把 crash 这个英文单词在代码注释里的用法列出来",
+      "tags": [
+        "trap",
+        "systematic-debugging",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "systematic-debugging"
+        },
+        {
+          "label": "关键词误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: systematic-debugging"
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback 误触发记录（baseline）",
+          "passed": true,
+          "detail": "误激活: systematic-debugging"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "systematic-debugging"
+        ],
+        "triage": null,
+        "fallback": [
+          "systematic-debugging"
+        ]
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": [
+          "systematic-debugging"
+        ]
+      }
+    },
+    {
+      "caseId": "SR-36",
+      "title": "做一个带动效的落地页，配色和排版都好看点",
+      "tags": [
+        "combo",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max,motion-pro-max"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ],
+        "triage": null,
+        "fallback": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-37",
+      "title": "调试这个 bug，顺便从反方角度审查一下我的方案",
+      "tags": [
+        "combo",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique,systematic-debugging"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique",
+            "systematic-debugging"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique",
+            "systematic-debugging"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique",
+          "systematic-debugging"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique",
+          "systematic-debugging"
+        ]
+      },
+      "gt": {
+        "required": [
+          "systematic-debugging",
+          "self-critique"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-38",
+      "title": "重构这个模块，先做架构评审再动手",
+      "tags": [
+        "combo",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "architecture-review"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "architecture-review"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "architecture-review"
+        ],
+        "triage": null,
+        "fallback": [
+          "architecture-review"
+        ]
+      },
+      "gt": {
+        "required": [
+          "architecture-review"
+        ],
+        "optional": [
+          "self-critique"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-39",
+      "title": "安全审查这个登录模块，重点看注入和边界情况",
+      "tags": [
+        "combo",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique,edge-case-hunter,security-deep-dive"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique",
+            "edge-case-hunter",
+            "security-deep-dive"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique",
+            "edge-case-hunter",
+            "security-deep-dive"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 6,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique",
+          "edge-case-hunter",
+          "security-deep-dive"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique",
+          "edge-case-hunter",
+          "security-deep-dive"
+        ]
+      },
+      "gt": {
+        "required": [
+          "security-deep-dive",
+          "edge-case-hunter"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-40",
+      "title": "这段报错日志为什么偶尔出现",
+      "tags": [
+        "confusable",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "systematic-debugging"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "systematic-debugging"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 2,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "systematic-debugging"
+        ],
+        "triage": null,
+        "fallback": [
+          "systematic-debugging"
+        ]
+      },
+      "gt": {
+        "required": [
+          "systematic-debugging"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-41",
+      "title": "检查这个函数在并发下的行为",
+      "tags": [
+        "confusable",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "self-critique,edge-case-hunter"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "self-critique",
+            "edge-case-hunter"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "self-critique",
+            "edge-case-hunter"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 4,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "self-critique",
+          "edge-case-hunter"
+        ],
+        "triage": null,
+        "fallback": [
+          "self-critique",
+          "edge-case-hunter"
+        ]
+      },
+      "gt": {
+        "required": [
+          "edge-case-hunter"
+        ],
+        "optional": [
+          "self-critique"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-42",
+      "title": "给按钮加个弹跳效果",
+      "tags": [
+        "confusable",
+        "skill"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "ui-ux-pro-max,motion-pro-max"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": false,
+          "detail": "缺: ui-ux-pro-max",
+          "gate": "LOST_TOOL_CALL"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [
+        "语义 required 全激活"
+      ],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [
+            "motion-pro-max"
+          ],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 5,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ],
+        "triage": [
+          "motion-pro-max"
+        ],
+        "fallback": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ]
+      },
+      "gt": {
+        "required": [
+          "ui-ux-pro-max",
+          "motion-pro-max"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-43",
+      "title": "帮我修这个拼写错误",
+      "tags": [
+        "confusable",
+        "no-skill",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": null,
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-44",
+      "title": "这个登录接口老是被绕过，帮我看看",
+      "tags": [
+        "confusable",
+        "implicit",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词路径不可达（隐含匹配设计如此）",
+          "passed": true,
+          "detail": "keyword=[]"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": null,
+        "fallback": []
+      },
+      "gt": {
+        "required": [
+          "security-deep-dive"
+        ],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-45",
+      "title": "把昨天的会议记录整理成要点",
+      "tags": [
+        "no-skill",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义分诊失败→回退关键词",
+          "passed": true,
+          "detail": "triage=null（记录，不算失败）"
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": null,
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": null,
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-46",
+      "title": "帮我写一首关于秋天的诗",
+      "tags": [
+        "no-skill",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": [],
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-47",
+      "title": "这个表格怎么导入 Excel",
+      "tags": [
+        "no-skill",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": [],
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-48",
+      "title": "给我推荐三本编程书",
+      "tags": [
+        "no-skill",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": [],
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-49",
+      "title": "帮我把这段文字翻译成英文",
+      "tags": [
+        "no-skill",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": [],
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": []
+      }
+    },
+    {
+      "caseId": "SR-50",
+      "title": "设置一个 8 点的闹钟提醒",
+      "tags": [
+        "no-skill",
+        "skill"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "关键词 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "关键词 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "语义 required 全激活",
+          "passed": true,
+          "detail": "(空)"
+        },
+        {
+          "label": "语义 forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "fallback forbidden 未激活",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "keyword",
+          "data": [],
+          "seq": 1
+        },
+        {
+          "type": "triage",
+          "data": [],
+          "seq": 2
+        },
+        {
+          "type": "fallback",
+          "data": [],
+          "seq": 3
+        }
+      ],
+      "calls": 0,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "pathResult": {
+        "keyword": [],
+        "triage": [],
+        "fallback": []
+      },
+      "gt": {
+        "required": [],
+        "optional": [],
+        "forbidden": []
+      }
+    }
+  ],
+  "hardGates": {
+    "DUPLICATE_TOOL_CALL": 0,
+    "TOOL_RESULT_MISMATCH": 0,
+    "RETRY_AFTER_SIDE_EFFECT": 0,
+    "LOST_TOOL_CALL": 3,
+    "MISSING_STOP_REASON_ACCEPTED": 0,
+    "SILENT_MODEL_SWITCH": 0,
+    "TOKEN_TELEMETRY_MISSING": 0,
+    "ABORT_IGNORED": 0,
+    "HALLUCINATED_TOOL": 0,
+    "UNSAFE_SIDE_EFFECT": 0,
+    "REDUNDANT_SIDE_EFFECT": 0,
+    "FORBIDDEN_SKILL_ACTIVATION": 0,
+    "RISK_HIGH_MISS": 0,
+    "MODE_MISMATCH": 0,
+    "NEEDS_WEB_MISMATCH": 0
+  },
+  "summary": {
+    "total": 50,
+    "passed": 47,
+    "failed": 3,
+    "passRate": 94
+  },
+  "generatedAt": "2026-08-06T01:18:10.257Z"
+}

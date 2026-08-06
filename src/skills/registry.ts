@@ -139,17 +139,27 @@ function registered(): SkillDef[] {
 
 export const SKILLS = registered()
 
-/** Match skills against user prompt. Returns activated skill prompts. */
-export function activateSkills(prompt: string, maxSkills = 3): string[] {
+/** Match skills against prompt text; returns activated skill names (keyword path). */
+export function activateSkillNames(prompt: string, maxSkills = 3): string[] {
   const lower = prompt.toLowerCase()
-  const activated: string[] = []
+  const names: string[] = []
   for (const skill of SKILLS) {
     if (!skill.autoTrigger) continue
     const matched = skill.triggers.some(t => lower.includes(t.toLowerCase()))
     if (matched) {
-      activated.push(skill.prompt)
-      if (activated.length >= maxSkills) break
+      names.push(skill.name)
+      if (names.length >= maxSkills) break
     }
+  }
+  return names
+}
+
+/** Match skills against user prompt. Returns activated skill prompts. */
+export function activateSkills(prompt: string, maxSkills = 3): string[] {
+  const activated: string[] = []
+  for (const name of activateSkillNames(prompt, maxSkills)) {
+    const skill = SKILLS.find(s => s.name === name)
+    if (skill) activated.push(skill.prompt)
   }
   return activated
 }

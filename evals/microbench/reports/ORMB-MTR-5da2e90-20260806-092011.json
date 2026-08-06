@@ -1,0 +1,740 @@
+{
+  "header": {
+    "suite": "ORMB-MTR",
+    "orcanaCommit": "5da2e90",
+    "modelRequested": "deepseek-v4-flash",
+    "reasoningEffort": "none",
+    "seed": 42,
+    "configurationDigest": "PP-mock-v1",
+    "startedAt": "2026-08-06T01:20:11.371Z"
+  },
+  "suite": "ORMB-MTR",
+  "cases": [
+    {
+      "caseId": "MTR-01",
+      "title": "架构设计 → 安全修复 → CSS 动效",
+      "tags": [
+        "multiturn"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "真实 轮1 skill 正确",
+          "passed": true,
+          "detail": "triage: architecture-review"
+        },
+        {
+          "label": "真实 轮2 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: self-critique,security-deep-dive,systematic-debugging"
+        },
+        {
+          "label": "真实 轮3 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: ui-ux-pro-max,motion-pro-max"
+        },
+        {
+          "label": "理想对照（每轮新实例）",
+          "passed": true,
+          "detail": "2/3 轮正确"
+        },
+        {
+          "label": "Turn3 未继承 Turn1 的 skill",
+          "passed": true,
+          "detail": "t1=[architecture-review] t3=[ui-ux-pro-max,motion-pro-max]"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "real",
+          "data": [
+            {
+              "round": 1,
+              "prompt": "帮我设计这个系统的整体架构，对比两个方案",
+              "activated": [
+                "architecture-review"
+              ],
+              "source": "triage"
+            },
+            {
+              "round": 2,
+              "prompt": "登录接口有注入漏洞，帮我修复",
+              "activated": [
+                "self-critique",
+                "security-deep-dive",
+                "systematic-debugging"
+              ],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "prompt": "只改这个按钮的 hover 样式，加个动效",
+              "activated": [
+                "ui-ux-pro-max",
+                "motion-pro-max"
+              ],
+              "source": "keyword-fallback"
+            }
+          ],
+          "seq": 1
+        },
+        {
+          "type": "ideal",
+          "data": [
+            {
+              "round": 1,
+              "activated": [
+                "architecture-review"
+              ],
+              "source": "triage"
+            },
+            {
+              "round": 2,
+              "activated": [
+                "self-critique",
+                "security-deep-dive",
+                "systematic-debugging"
+              ],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "activated": [
+                "motion-pro-max"
+              ],
+              "source": "triage"
+            }
+          ],
+          "seq": 2
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "realRounds": [
+        {
+          "round": 1,
+          "prompt": "帮我设计这个系统的整体架构，对比两个方案",
+          "activated": [
+            "architecture-review"
+          ],
+          "source": "triage"
+        },
+        {
+          "round": 2,
+          "prompt": "登录接口有注入漏洞，帮我修复",
+          "activated": [
+            "self-critique",
+            "security-deep-dive",
+            "systematic-debugging"
+          ],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "prompt": "只改这个按钮的 hover 样式，加个动效",
+          "activated": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "source": "keyword-fallback"
+        }
+      ],
+      "idealRounds": [
+        {
+          "round": 1,
+          "activated": [
+            "architecture-review"
+          ],
+          "source": "triage"
+        },
+        {
+          "round": 2,
+          "activated": [
+            "self-critique",
+            "security-deep-dive",
+            "systematic-debugging"
+          ],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "activated": [
+            "motion-pro-max"
+          ],
+          "source": "triage"
+        }
+      ]
+    },
+    {
+      "caseId": "MTR-02",
+      "title": "方案讨论 → 代码实现 → 边界测试",
+      "tags": [
+        "multiturn"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "真实 轮1 skill 正确",
+          "passed": true,
+          "detail": "triage: "
+        },
+        {
+          "label": "真实 轮2 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: "
+        },
+        {
+          "label": "真实 轮3 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: edge-case-hunter"
+        },
+        {
+          "label": "理想对照（每轮新实例）",
+          "passed": true,
+          "detail": "2/3 轮正确"
+        },
+        {
+          "label": "Turn3 未继承 Turn1 的 skill",
+          "passed": true,
+          "detail": "t1=[] t3=[edge-case-hunter]"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "real",
+          "data": [
+            {
+              "round": 1,
+              "prompt": "先讨论一下这个功能怎么设计",
+              "activated": [],
+              "source": "triage"
+            },
+            {
+              "round": 2,
+              "prompt": "按刚才的方案把代码写出来",
+              "activated": [],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "prompt": "给这个函数写边界测试",
+              "activated": [
+                "edge-case-hunter"
+              ],
+              "source": "keyword-fallback"
+            }
+          ],
+          "seq": 1
+        },
+        {
+          "type": "ideal",
+          "data": [
+            {
+              "round": 1,
+              "activated": [],
+              "source": "triage"
+            },
+            {
+              "round": 2,
+              "activated": [],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "activated": [],
+              "source": "triage"
+            }
+          ],
+          "seq": 2
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "realRounds": [
+        {
+          "round": 1,
+          "prompt": "先讨论一下这个功能怎么设计",
+          "activated": [],
+          "source": "triage"
+        },
+        {
+          "round": 2,
+          "prompt": "按刚才的方案把代码写出来",
+          "activated": [],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "prompt": "给这个函数写边界测试",
+          "activated": [
+            "edge-case-hunter"
+          ],
+          "source": "keyword-fallback"
+        }
+      ],
+      "idealRounds": [
+        {
+          "round": 1,
+          "activated": [],
+          "source": "triage"
+        },
+        {
+          "round": 2,
+          "activated": [],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "activated": [],
+          "source": "triage"
+        }
+      ]
+    },
+    {
+      "caseId": "MTR-03",
+      "title": "模块重构 → 入场动画 → 加载报错",
+      "tags": [
+        "multiturn"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "真实 轮1 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: architecture-review"
+        },
+        {
+          "label": "真实 轮2 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: ui-ux-pro-max,motion-pro-max"
+        },
+        {
+          "label": "真实 轮3 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: ui-ux-pro-max,systematic-debugging"
+        },
+        {
+          "label": "理想对照（每轮新实例）",
+          "passed": true,
+          "detail": "2/3 轮正确"
+        },
+        {
+          "label": "Turn3 未继承 Turn1 的 skill",
+          "passed": true,
+          "detail": "t1=[architecture-review] t3=[ui-ux-pro-max,systematic-debugging]"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "real",
+          "data": [
+            {
+              "round": 1,
+              "prompt": "重构这个模块，先做架构评审",
+              "activated": [
+                "architecture-review"
+              ],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 2,
+              "prompt": "给页面加入场动画",
+              "activated": [
+                "ui-ux-pro-max",
+                "motion-pro-max"
+              ],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "prompt": "页面加载时报错，帮我查一下",
+              "activated": [
+                "ui-ux-pro-max",
+                "systematic-debugging"
+              ],
+              "source": "keyword-fallback"
+            }
+          ],
+          "seq": 1
+        },
+        {
+          "type": "ideal",
+          "data": [
+            {
+              "round": 1,
+              "activated": [
+                "architecture-review"
+              ],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 2,
+              "activated": [
+                "ui-ux-pro-max",
+                "motion-pro-max"
+              ],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "activated": [],
+              "source": "triage"
+            }
+          ],
+          "seq": 2
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "realRounds": [
+        {
+          "round": 1,
+          "prompt": "重构这个模块，先做架构评审",
+          "activated": [
+            "architecture-review"
+          ],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 2,
+          "prompt": "给页面加入场动画",
+          "activated": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "prompt": "页面加载时报错，帮我查一下",
+          "activated": [
+            "ui-ux-pro-max",
+            "systematic-debugging"
+          ],
+          "source": "keyword-fallback"
+        }
+      ],
+      "idealRounds": [
+        {
+          "round": 1,
+          "activated": [
+            "architecture-review"
+          ],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 2,
+          "activated": [
+            "ui-ux-pro-max",
+            "motion-pro-max"
+          ],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "activated": [],
+          "source": "triage"
+        }
+      ]
+    },
+    {
+      "caseId": "MTR-04",
+      "title": "接口设计 → 安全审查 → 拼写修复",
+      "tags": [
+        "multiturn"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "真实 轮1 skill 正确",
+          "passed": true,
+          "detail": "triage: "
+        },
+        {
+          "label": "真实 轮2 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: self-critique,security-deep-dive"
+        },
+        {
+          "label": "真实 轮3 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: "
+        },
+        {
+          "label": "理想对照（每轮新实例）",
+          "passed": true,
+          "detail": "3/3 轮正确"
+        },
+        {
+          "label": "Turn3 未继承 Turn1 的 skill",
+          "passed": true,
+          "detail": "t1=[] t3=[]"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "real",
+          "data": [
+            {
+              "round": 1,
+              "prompt": "设计这套 API 的接口规范",
+              "activated": [],
+              "source": "triage"
+            },
+            {
+              "round": 2,
+              "prompt": "对现有代码做一次安全审查",
+              "activated": [
+                "self-critique",
+                "security-deep-dive"
+              ],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "prompt": "把文档里的错别字改掉",
+              "activated": [],
+              "source": "keyword-fallback"
+            }
+          ],
+          "seq": 1
+        },
+        {
+          "type": "ideal",
+          "data": [
+            {
+              "round": 1,
+              "activated": [],
+              "source": "triage"
+            },
+            {
+              "round": 2,
+              "activated": [
+                "security-deep-dive"
+              ],
+              "source": "triage"
+            },
+            {
+              "round": 3,
+              "activated": [],
+              "source": "triage"
+            }
+          ],
+          "seq": 2
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "realRounds": [
+        {
+          "round": 1,
+          "prompt": "设计这套 API 的接口规范",
+          "activated": [],
+          "source": "triage"
+        },
+        {
+          "round": 2,
+          "prompt": "对现有代码做一次安全审查",
+          "activated": [
+            "self-critique",
+            "security-deep-dive"
+          ],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "prompt": "把文档里的错别字改掉",
+          "activated": [],
+          "source": "keyword-fallback"
+        }
+      ],
+      "idealRounds": [
+        {
+          "round": 1,
+          "activated": [],
+          "source": "triage"
+        },
+        {
+          "round": 2,
+          "activated": [
+            "security-deep-dive"
+          ],
+          "source": "triage"
+        },
+        {
+          "round": 3,
+          "activated": [],
+          "source": "triage"
+        }
+      ]
+    },
+    {
+      "caseId": "MTR-05",
+      "title": "落地页 → 后端接口 → 数据库迁移",
+      "tags": [
+        "multiturn"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "真实 轮1 skill 正确",
+          "passed": false,
+          "detail": "GT=[ui-ux-pro-max] 实际=",
+          "gate": "LOST_TOOL_CALL"
+        },
+        {
+          "label": "真实 轮2 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: "
+        },
+        {
+          "label": "真实 轮3 skill 正确",
+          "passed": true,
+          "detail": "keyword-fallback: "
+        },
+        {
+          "label": "理想对照（每轮新实例）",
+          "passed": true,
+          "detail": "2/3 轮正确"
+        },
+        {
+          "label": "Turn3 未继承 Turn1 的 skill",
+          "passed": true,
+          "detail": "t1=[] t3=[]"
+        }
+      ],
+      "failures": [
+        "真实 轮1 skill 正确"
+      ],
+      "trace": [
+        {
+          "type": "real",
+          "data": [
+            {
+              "round": 1,
+              "prompt": "做这个产品的落地页",
+              "activated": [],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 2,
+              "prompt": "写后端接口实现",
+              "activated": [],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "prompt": "把数据从 MySQL 迁移到 PostgreSQL",
+              "activated": [],
+              "source": "keyword-fallback"
+            }
+          ],
+          "seq": 1
+        },
+        {
+          "type": "ideal",
+          "data": [
+            {
+              "round": 1,
+              "activated": [],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 2,
+              "activated": [],
+              "source": "keyword-fallback"
+            },
+            {
+              "round": 3,
+              "activated": [],
+              "source": "triage"
+            }
+          ],
+          "seq": 2
+        }
+      ],
+      "calls": 3,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "realRounds": [
+        {
+          "round": 1,
+          "prompt": "做这个产品的落地页",
+          "activated": [],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 2,
+          "prompt": "写后端接口实现",
+          "activated": [],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "prompt": "把数据从 MySQL 迁移到 PostgreSQL",
+          "activated": [],
+          "source": "keyword-fallback"
+        }
+      ],
+      "idealRounds": [
+        {
+          "round": 1,
+          "activated": [],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 2,
+          "activated": [],
+          "source": "keyword-fallback"
+        },
+        {
+          "round": 3,
+          "activated": [],
+          "source": "triage"
+        }
+      ]
+    }
+  ],
+  "hardGates": {
+    "DUPLICATE_TOOL_CALL": 0,
+    "TOOL_RESULT_MISMATCH": 0,
+    "RETRY_AFTER_SIDE_EFFECT": 0,
+    "LOST_TOOL_CALL": 1,
+    "MISSING_STOP_REASON_ACCEPTED": 0,
+    "SILENT_MODEL_SWITCH": 0,
+    "TOKEN_TELEMETRY_MISSING": 0,
+    "ABORT_IGNORED": 0,
+    "HALLUCINATED_TOOL": 0,
+    "UNSAFE_SIDE_EFFECT": 0,
+    "REDUNDANT_SIDE_EFFECT": 0,
+    "FORBIDDEN_SKILL_ACTIVATION": 0,
+    "RISK_HIGH_MISS": 0,
+    "MODE_MISMATCH": 0,
+    "NEEDS_WEB_MISMATCH": 0
+  },
+  "summary": {
+    "total": 5,
+    "passed": 4,
+    "failed": 1,
+    "passRate": 80
+  },
+  "generatedAt": "2026-08-06T01:20:11.371Z"
+}

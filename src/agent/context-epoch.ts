@@ -305,10 +305,6 @@ export function epochRollover(
 
   const archivedMessages = messages.slice(0, cutIndex)
   const retainedMessages = messages.slice(cutIndex)
-  // charsTrimmed: actual reduction in raw messages (preamble adds its own chars,
-  // so this slightly overstates the net context reduction by ~preamble length).
-  const charsAfter = totalMessageChars(retainedMessages)
-  const charsTrimmed = charsBefore - charsAfter
 
   // Build epoch preamble — replaces the archived messages
   const preamble: ProviderMessage = {
@@ -317,12 +313,17 @@ export function epochRollover(
       planStateContext,
       "",
       "## Epoch Rollover",
-      `Epoch ${state.currentEpochIndex} archived. ${archivedMessages.length} messages (${charsTrimmed} chars) moved to archive.`,
+      `Epoch ${state.currentEpochIndex} archived. ${archivedMessages.length} messages (${totalMessageChars(archivedMessages)} chars) moved to archive.`,
       "Continue from the plan state above. The volatile context has been reset, but all plan state, decisions, and obligations are preserved.",
       "",
       "Do NOT re-execute completed steps — check the Plan State for current progress.",
     ].join("\n"),
   }
+
+  // charsTrimmed: net reduction — the preamble replaces the archived
+  // messages, so its own chars are subtracted from the gross reduction.
+  const charsAfter = totalMessageChars(retainedMessages)
+  const charsTrimmed = Math.max(0, charsBefore - charsAfter - msgCharLen(preamble))
 
   const snapshot: EpochSnapshot = {
     index: state.currentEpochIndex,

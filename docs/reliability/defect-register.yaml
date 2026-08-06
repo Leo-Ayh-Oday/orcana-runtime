@@ -504,9 +504,10 @@
 
 ## 上下文全景（K 系列，RC-18 Context Authority 细化，来源：2026-08 上下文系统全景 55 项）
 
-注：K4 已由 RC-02.5 X2 关闭；K13 为部分修复，缺口保持 open（Batch E 处理）；
-K25/K36 由 RC-18 关闭（K25 @af12939；K36 @a4472d0，compactor anchor 生命周期归 Batch E）；
-K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
+注：K4 已由 RC-02.5 X2 关闭；K25/K36 由 RC-18 关闭（K25 @af12939；K36 @a4472d0）；
+K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）；
+K18 能力就位（轨迹输入接口 + 验证通过佐证"已解决"），生产接线在 src/ui/cli.ts 与
+src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
 
 - id: K1
   severity: P0
@@ -594,7 +595,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: THINKING_NAMESPACED_BY_PROJECT
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: ThinkingStore 全局目录无项目隔离（跨项目串线）
 
 - id: K11
@@ -611,7 +613,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: M0_SUPERSEDABLE
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: M0 一次性锚点无法修正（遗漏长期漏掉）
 
 - id: K13
@@ -619,7 +622,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: WARM_GIST_STRUCTURED_EXTRACTION
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: warm gist 层 Decision 提取仍用低召回正则（X1 未覆盖层）
   related: X1(partial)
 
@@ -628,7 +632,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: WARM_GIST_TAIL_PRESERVED
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Warm gist 只保留开头 220 字符（尾部约束被截断）
 
 - id: K15
@@ -636,7 +641,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: CAP_LIMITS_NEVER_SILENT
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: 多处固定数量上限静默淘汰旧事实（无 omission manifest）
 
 - id: K16
@@ -644,7 +650,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: COLD_ARCHIVE_COMPLETE_AND_ATOMIC
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Cold archive 非完整原始来源 + 非原子写
   related: H6(原子性)
 
@@ -653,7 +660,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: DYNAMIC_MEMORY_BUDGET_ORDER_SAFE
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Dynamic memory 预算顺序挤掉真实对话（无省略告知）
 
 - id: K18
@@ -661,7 +669,9 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: COMPACTOR_SEES_RUN_TRAJECTORY
   files: [src/ui/cli.ts, src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
+  note: 能力就位（轨迹输入 + 证据佐证）；cli/bootstrap 接线缺口见顶部注记
   desc: Compactor 看不到 Agent 内部轨迹（tool calls/verification/gates）
 
 - id: K19
@@ -873,7 +883,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: THINKING_RETRIEVAL_NAMESPACED
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Thinking Retrieval 无 workspace/commit/model 绑定
   related: K10
 
@@ -882,7 +893,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: SEMANTIC_SCORER_FULL_CANDIDATE
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Semantic Scorer 只看到候选 80 字符标题（非完整推理）
 
 - id: K44
@@ -890,7 +902,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: NO_RAW_THINK_REPLAY
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: 过去原始推理链以 <think> 形式注入（模仿错误路径/假设污染）
 
 - id: K45
@@ -898,7 +911,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: MEMORY_SUPERSEDE_BY_EVIDENCE
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Thinking Memory 时间衰减伪解决（缺席≠已解决，需 Evidence supersede）
 
 - id: K46
@@ -906,7 +920,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: KNOWLEDGE_NAMESPACED
   files: [src/memory/knowledge.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: KnowledgeBase 全局存储无项目命名空间（无来源/适用范围）
 
 - id: K47
@@ -914,7 +929,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
   wave: RC-18
   invariant: KNOWLEDGE_CONFLICT_RESOLVED
   files: [src/memory/knowledge.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Knowledge 无冲突解析（矛盾知识可同时注入）
 
 - id: K48
@@ -988,6 +1004,6 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）。
 
 - 合计: 118（原 63 项 + 上下文全景 K 系列 55 项）
 - 原 63 项: P0 18 / P1 27 / P2 18（A8 B6 C5 D6 E5 F7 G12 H12 X2）
-- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 16（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0）；open 39
-- 已修总计: 38（原 22 + K4 + Batch A 9 + Batch B 6）
+- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 30（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0；Batch E 14 @1320e25）；open 25
+- 已修总计: 52（原 22 + K4 + Batch A 9 + Batch B 6 + Batch E 14）
 - 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）

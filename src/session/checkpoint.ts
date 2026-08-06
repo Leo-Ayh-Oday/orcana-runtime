@@ -6,7 +6,8 @@
  *
  * Design invariants:
  *   - Zero LLM dependency. Checkpoints are pure filesystem + SHA snapshots.
- *   - SQLite-backed (per-session database), 3 most recent retained.
+ *   - SQLite-backed (per-session database), bounded retention (default 20,
+ *     aligned with rewind depth REWIND_MAX_DEPTH — H9).
  *   - File recovery: revert changed files to SHA captured at checkpoint boundary.
  *   - Cold memory recovery: verify SHA integrity after restore (H8: 16-hex
  *     记录格式才可验证，外部格式/未记录跳过——见 isColdMemorySHARecorded)。

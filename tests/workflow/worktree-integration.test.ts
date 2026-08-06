@@ -77,6 +77,9 @@ function reg(): HandlerRegistry {
     content: "merged",
     metadata: { merged: {}, conflicts: [], valueConflicts: [] },
   }))
+  // M7: H11 write nodes need a passing verification node to complete the
+  // run — the integration specs declare one for the write nodes.
+  registry.register("tool.run_targeted_verification", "verify", async () => ({ content: "verified" }))
   return registry
 }
 
@@ -115,6 +118,7 @@ describe("M9: worktree changes integrated before dispose", () => {
           writeNode("a1:w:1", "a.ts"),
           writeNode("b1:w:1", "b.ts"),
           mergeNode("m:1", ["a1:w:1", "b1:w:1"]),
+          { id: "v:1", handler: "tool.run_targeted_verification", input: {}, dependsOn: ["a1:w:1", "b1:w:1"] },
         ]),
         reg(),
         { harness: env, pool },
@@ -162,7 +166,14 @@ describe("M9: worktree changes integrated before dispose", () => {
     const pool = new AgentPool()
     pool.register({ id: "a1", ownerFiles: ["a.ts"], worktree: join(projectRoot, ".orcana", "worktrees", "a1") })
     try {
-      const run = await runScheduler(spec([writeNode("a1:w:1", "a.ts")]), reg(), { harness: env, pool })
+      const run = await runScheduler(
+        spec([
+          writeNode("a1:w:1", "a.ts"),
+          { id: "v:1", handler: "tool.run_targeted_verification", input: {}, dependsOn: ["a1:w:1"] },
+        ]),
+        reg(),
+        { harness: env, pool },
+      )
       expect(resultOf(run, "a1:w:1").status).toBe("done")
       // 无 merge 声明：正式工作区保持干净，worktree 被清理
       expect(existsSync(join(projectRoot, "a.ts"))).toBe(false)

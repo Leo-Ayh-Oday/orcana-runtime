@@ -21,6 +21,7 @@ import { ConcurrencyController } from "./concurrency-controller"
 import type { HandlerRegistry } from "../execution/handler-registry"
 import { executeNode } from "../execution/node-executor"
 import { aggregateEvidence } from "../reducers/aggregate-evidence"
+import { evaluateCriterion } from "../reducers/criterion-evaluator"
 import { ResultCache, cacheKeyFor } from "../results/result-cache"
 import { evaluateReadiness } from "./dependency-policy"
 import { isHarnessNode } from "../harness/workflow-node-adapter"
@@ -545,14 +546,31 @@ export async function runScheduler(
     results,
   }
 
-  const hasWriteNode = spec.nodes.some(n => registry.isWriteHandler(n.handler))
+  // M20: a verification node that ingested failing results must not report
+  // done — its "succeeded" is ingestion success, not verification success.
+  // Rewrite it to failed (with a structured kind) so the M6 aggregation
+  // below can never let the run complete (FAILED_VERIFICATION_NEVER_SUCCEEDS).
+  for (const result of results) {
+    const out = result.output as { failedCount?: unknown } | null
+    if (result.status === "done" && out && typeof out.failedCount === "number" && out.failedCount > 0) {
+      result.status = "failed"
+      result.errorKind = "verification_failed"
+      result.error = `verification node "${result.nodeId}" ingested ${out.failedCount} failing result(s)`
+    }
+  }
+
+  // M7: the completion gate uses the same write classification as the
+  // single-writer enforcement (writeNodeIds includes H11 tool capabilities
+  // with sideEffect "write") — a H11 write node without passing evidence
+  // never completes (H11_WRITES_REQUIRE_EVIDENCE).
+  const hasWriteNode = spec.nodes.some(n => writeNodeIds.has(n.id))
   if (hasWriteNode) {
     const evidence = aggregateEvidence(spec, results)
     base.evidence = evidence
     // A failed write node never completes, even if a verification node
     // reported passed (G3 completion gate + G4 convergence).
     const writeFailed = spec.nodes
-      .filter(n => registry.isWriteHandler(n.handler))
+      .filter(n => writeNodeIds.has(n.id))
       .some(n => results.find(r => r.nodeId === n.id)?.status === "failed")
     if (!evidence.some(e => e.passed) || writeFailed) {
       base.status = "blocked_no_evidence"
@@ -584,6 +602,41 @@ export async function runScheduler(
     base.status = "failed"
   } else if (blockedNodes.length > 0) {
     base.status = "blocked"
+  }
+
+  // M22: production enforcement of declared completion criteria — a hard
+  // criterion that cannot be satisfied blocks the run (never done). Node-
+  // level failure/block above keeps precedence; criteria only decide runs
+  // that would otherwise complete.
+  if (spec.completionCriteria && spec.completionCriteria.length > 0) {
+    const cwd = options.harness?.scope.projectRoot ?? process.cwd()
+    // Evidence comes from verification nodes that declare it: a node whose
+    // output.metadata.evidenceKind names a kind contributes an entry with
+    // its passed state and sandbox attributes. M20 already rewrote nodes
+    // that ingested failing results to "failed", so passed aligns with
+    // actual verification success, never with ingestion alone.
+    const evidence = results
+      .filter(r => {
+        const meta = (r.output as { metadata?: Record<string, unknown> } | null)?.metadata
+        return meta !== undefined && meta !== null && typeof meta.evidenceKind === "string"
+      })
+      .map(r => {
+        const meta = (r.output as { metadata: Record<string, unknown> }).metadata
+        return {
+          kind: meta.evidenceKind as string,
+          passed: r.status === "done",
+          summary: typeof meta.summary === "string" ? meta.summary : undefined,
+          backend: typeof meta.backend === "string" ? meta.backend : undefined,
+          degraded: typeof meta.degraded === "boolean" ? meta.degraded : undefined,
+          cleanupVerified: typeof meta.cleanupVerified === "boolean" ? meta.cleanupVerified : undefined,
+        }
+      })
+    const verdicts = await Promise.all(spec.completionCriteria.map(c => evaluateCriterion(c, { cwd, evidence })))
+    base.criteria = verdicts
+    const hardFailed = verdicts.filter(v => v.hard && !v.passed)
+    if (hardFailed.length > 0 && base.status === "done") {
+      base.status = "blocked"
+    }
   }
   return base
 }

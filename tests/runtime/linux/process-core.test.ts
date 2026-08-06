@@ -10,7 +10,7 @@ import { platform } from "node:os"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { runSupervised, streamSupervised } from "../../../src/runtime/linux/process/supervisor"
-import { countProcessGroup, terminateTree } from "../../../src/runtime/linux/process/termination"
+import { countProcessGroup, killProcessGroup, terminateTree } from "../../../src/runtime/linux/process/termination"
 import { createOutputLimiter, finalizeOutput, TRUNCATION_MARKER } from "../../../src/runtime/linux/process/output-limiter"
 import { buildExplicitEnvironment, hostKeyDenied, environmentLeaksHostSecrets } from "../../../src/runtime/linux/environment"
 import { bindSecrets, newSecretBinding } from "../../../src/runtime/linux/secrets"
@@ -240,6 +240,38 @@ describe("LF-2: process supervision (linux)", () => {
     await new Promise(r => setTimeout(r, 200))
     expect(countProcessGroup(proc.pid ?? 0)).toBe(0)
     expect(report.processesRemaining).toBe(0)
+  })
+})
+
+describe("LF-2: WRONG_PROCESS_KILL (F7, pid<=0)", () => {
+  test("killProcessGroup refuses pid<=0 signal operations", () => {
+    // pid=0：POSIX 语义 signal 调用方自身进程组（killpg(0)）；
+    // pid<0：-pid 反转后指向无关单进程。防护若回归，以下调用会杀死
+    // bun test 自身（process.kill(-0) / kill(own pid)）—— 测试即金丝雀。
+    expect(killProcessGroup(0, "SIGTERM").processesRemaining).toBe(0)
+    expect(killProcessGroup(-1, "SIGTERM").processesRemaining).toBe(0)
+    expect(killProcessGroup(-process.pid, "SIGKILL").processesRemaining).toBe(0)
+  })
+
+  test("terminateTree refuses pid<=0 (no kill escalation loop)", () => {
+    expect(terminateTree(0).processesRemaining).toBe(0)
+    expect(terminateTree(-process.pid).processesRemaining).toBe(0)
+    expect(terminateTree(Number.NaN).processesRemaining).toBe(0)
+  })
+
+  test("countProcessGroup returns 0 for pid<=0", () => {
+    expect(countProcessGroup(0)).toBe(0)
+    expect(countProcessGroup(-5)).toBe(0)
+  })
+
+  test("valid pid still kills the group (guard does not break normal path)", async () => {
+    const { spawn } = await import("node:child_process")
+    const proc = spawn("/bin/sh", ["-c", "sleep 10"], { detached: true, stdio: "ignore" })
+    await new Promise(r => setTimeout(r, 200))
+    const pid = proc.pid ?? 0
+    expect(pid).toBeGreaterThan(0)
+    expect(countProcessGroup(pid)).toBeGreaterThanOrEqual(1)
+    expect(killProcessGroup(pid, "SIGKILL").processesRemaining).toBe(0)
   })
 })
 

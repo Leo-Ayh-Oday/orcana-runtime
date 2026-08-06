@@ -223,8 +223,8 @@ export function createBubblewrapBackend(): ExecutionBackend {
       const cacheSource = (c: { target: string; kind: string; key: string }) =>
         materialization?.cacheHostPaths?.[c.target] ?? `/cache/${c.kind}/${c.key}`
       // PR-7：sealed-file secrets 真实挂载进沙盒（ro）。
-      const secretMounts = Object.entries(materialization?.secretFiles ?? {})
-        .map(([target, source]) => ({ target, source }))
+      const secretMounts: MountRule[] = Object.entries(materialization?.secretFiles ?? {})
+        .map(([target, source]) => ({ source, target, mode: "ro" as const, required: true, recursive: false }))
       const argv = compileBwrapArgv(spec, caps, {
         worktreeRoot: spec.filesystem.worktreeRoot,
         extraReadonly: [...spec.filesystem.readonlyMounts, ...secretMounts],

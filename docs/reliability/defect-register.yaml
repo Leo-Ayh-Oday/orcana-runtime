@@ -458,7 +458,472 @@
   verifiedAtCommit: 0874f8c
 
 
+
+## 上下文全景（K 系列，RC-18 Context Authority 细化，来源：2026-08 上下文系统全景 55 项）
+
+注：K4 已由 RC-02.5 X2 关闭；K13/K25/K36 为部分修复，缺口保持 open；
+K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
+
+- id: K1
+  severity: P0
+  wave: RC-18
+  invariant: USER_HARD_CONSTRAINTS_NEVER_SILENTLY_EVICTED
+  files: [src/agent/round/helpers.ts]
+  status: open
+  desc: 用户硬约束在进入 Agent 前消失（窗口 break 语义：超长单条直接 break，更早短消息不纳入）
+  related: X1(partial)
+
+- id: K2
+  severity: P0
+  wave: RC-18
+  invariant: PLAN_STATE_DECISIONS_WIRED
+  files: [src/harness/context/request.ts]
+  status: open
+  desc: Plan State decisions 来源为空（createContextRequest decisions: [] TODO）
+
+- id: K3
+  severity: P0
+  wave: RC-18
+  invariant: EPOCH_ARCHIVE_PRESERVES_SOURCE
+  files: [src/agent/context-epoch.ts]
+  status: open
+  desc: Epoch archive 不保存被移除原始消息（有元数据记录的删除）
+
+- id: K4
+  severity: P1
+  wave: RC-02.5
+  invariant: MICROCOMPACT_PRESERVES_ERROR_LINES
+  files: [src/agent/round/post-loop.ts]
+  status: fixed
+  fixedBy: 0874f8c
+  desc: 工具结果压缩丢失失败线索
+  fixedBy: 0874f8c (X2)
+
+- id: K5
+  severity: P0
+  wave: RC-18
+  invariant: TOOL_OUTPUT_PERSISTED_BEFORE_COMPRESSION
+  files: [src/agent/round/post-loop.ts]
+  status: open
+  desc: 被压缩的完整 Tool Output 无原始 Artifact（重执行不可复现）
+
+- id: K6
+  severity: P0
+  wave: RC-18
+  invariant: RESUME_PRESERVES_CONSTRAINTS
+  files: [src/session/checkpoint.ts, src/ui/cli.ts]
+  status: open
+  desc: Session Resume 丢早期约束（2+4 条消息，正则摘要）
+  related: X1(partial)
+
+- id: K7
+  severity: P0
+  wave: RC-18
+  invariant: AUTHORITY_LEVELS_DISTINGUISHED
+  files: [src/harness/context/*]
+  status: open
+  desc: 不同权威等级内容混成普通 user 消息（权威混淆+注入面）
+  related: E3(partial)
+
+- id: K8
+  severity: P0
+  wave: RC-18
+  invariant: VERIFIED_INSIGHTS_EVIDENCE_BOUND
+  files: [src/agent/maintenance/coordinator.ts]
+  status: open
+  desc: Thinking Compaction verified 无 Evidence 绑定（上下文真值污染）
+
+- id: K9
+  severity: P1
+  wave: RC-18
+  invariant: TOOL_CHAIN_ID_EXACT_MATCH
+  files: [src/harness/context/*]
+  status: open
+  desc: 历史 Tool Chain 验证未按 ID 严格匹配（错配关联）
+
+- id: K10
+  severity: P1
+  wave: RC-18
+  invariant: THINKING_NAMESPACED_BY_PROJECT
+  files: [src/memory/thinking-store.ts]
+  status: open
+  desc: ThinkingStore 全局目录无项目隔离（跨项目串线）
+
+- id: K11
+  severity: P1
+  wave: RC-18
+  invariant: M0_NO_PROTECTION_WINDOW
+  files: [src/memory/compactor.ts, src/ui/cli.ts]
+  status: open
+  desc: M0 创建太晚（50k 阈值前存在保护空窗）
+  related: X1③(partial)
+
+- id: K12
+  severity: P1
+  wave: RC-18
+  invariant: M0_SUPERSEDABLE
+  files: [src/memory/compactor.ts]
+  status: open
+  desc: M0 一次性锚点无法修正（遗漏长期漏掉）
+
+- id: K13
+  severity: P1
+  wave: RC-18
+  invariant: WARM_GIST_STRUCTURED_EXTRACTION
+  files: [src/memory/compactor.ts]
+  status: open
+  desc: warm gist 层 Decision 提取仍用低召回正则（X1 未覆盖层）
+  related: X1(partial)
+
+- id: K14
+  severity: P1
+  wave: RC-18
+  invariant: WARM_GIST_TAIL_PRESERVED
+  files: [src/memory/compactor.ts]
+  status: open
+  desc: Warm gist 只保留开头 220 字符（尾部约束被截断）
+
+- id: K15
+  severity: P1
+  wave: RC-18
+  invariant: CAP_LIMITS_NEVER_SILENT
+  files: [src/memory/compactor.ts]
+  status: open
+  desc: 多处固定数量上限静默淘汰旧事实（无 omission manifest）
+
+- id: K16
+  severity: P1
+  wave: RC-18
+  invariant: COLD_ARCHIVE_COMPLETE_AND_ATOMIC
+  files: [src/memory/compactor.ts]
+  status: open
+  desc: Cold archive 非完整原始来源 + 非原子写
+  related: H6(原子性)
+
+- id: K17
+  severity: P1
+  wave: RC-18
+  invariant: DYNAMIC_MEMORY_BUDGET_ORDER_SAFE
+  files: [src/memory/compactor.ts]
+  status: open
+  desc: Dynamic memory 预算顺序挤掉真实对话（无省略告知）
+
+- id: K18
+  severity: P1
+  wave: RC-18
+  invariant: COMPACTOR_SEES_RUN_TRAJECTORY
+  files: [src/ui/cli.ts, src/memory/compactor.ts]
+  status: open
+  desc: Compactor 看不到 Agent 内部轨迹（tool calls/verification/gates）
+
+- id: K19
+  severity: P1
+  wave: RC-18
+  invariant: EPOCH_THRESHOLDS_CALIBRATED
+  files: [src/agent/context-epoch.ts]
+  status: open
+  desc: Epoch 阈值基于 chars/3 无真实 token 校准
+
+- id: K20
+  severity: P1
+  wave: RC-18
+  invariant: EPOCH_ROLLOVER_SCOPE_MATCHES
+  files: [src/agent/context-epoch.ts, src/agent/kernel/round.ts]
+  status: open
+  desc: Epoch 计算全部 Context 却只裁 rawMessages（重复 rollover 风险）
+
+- id: K21
+  severity: P2
+  wave: RC-18
+  invariant: COMPRESS_IMMEDIATE
+  files: [src/agent/kernel/round.ts]
+  status: open
+  desc: compress 不立即压缩已有上下文；forceCompress 警告延迟一轮
+
+- id: K22
+  severity: P1
+  wave: RC-18
+  invariant: ROLLOVER_BLOCK_FALLBACK
+  files: [src/agent/context-epoch.ts]
+  status: open
+  desc: Tool Chain 阻止 Rollover 后无应急恢复路径（可能被迫停止）
+
+- id: K23
+  severity: P2
+  wave: RC-18
+  invariant: EPOCH_SNAPSHOT_AUDITABLE
+  files: [src/agent/context-epoch.ts]
+  status: open
+  desc: Epoch snapshot planStateDigest 非 hash（不可审计恢复）
+
+- id: K24
+  severity: P2
+  wave: RC-17
+  invariant: CHARS_TRIMMED_ACCURATE
+  files: [src/agent/context-epoch.ts]
+  status: open
+  desc: charsTrimmed 虚高（未扣 preamble）
+  related: H12
+
+- id: K25
+  severity: P1
+  wave: RC-18
+  invariant: TOOL_RESULT_LIFECYCLE_PINNING
+  files: [src/agent/round/post-loop.ts]
+  status: open
+  desc: 成功/失败结果同压缩策略（无 Pin/生命周期分级）
+  related: X2(partial)
+
+- id: K26
+  severity: P0
+  wave: RC-16
+  invariant: HISTORICAL_MICROCOMPACT_ROUNDS_FIXED
+  files: [src/agent/round/post-loop.ts]
+  status: open
+  desc: Historical Microcompact 轮次计算倒置（messages.length-keepRecentRounds*2 vs assistantCount，经常不执行）
+  RC-02.5 遗漏
+
+- id: K27
+  severity: P0
+  wave: RC-16
+  invariant: HISTORICAL_MICROCOMPACT_TOOL_MATCH
+  files: [src/agent/round/post-loop.ts]
+  status: open
+  desc: Historical Microcompact 通过 tool_use_id 前缀猜类型（provider id 形如 toolu_/call_ 永不匹配）
+  RC-02.5 遗漏
+
+- id: K28
+  severity: P2
+  wave: RC-16
+  invariant: READFILE_COMPACT_SEMANTICS_UNIFORM
+  files: [src/agent/round/post-loop.ts]
+  status: open
+  desc: read_file 前向/历史压缩语义不一致（ORCANA_READFILE_COMPACT_CHARS=0 两路径含义不同）
+
+- id: K29
+  severity: P1
+  wave: RC-18
+  invariant: PIPELINE_SINGLE_ENTRYPOINT
+  files: [src/harness/context/*]
+  status: open
+  desc: Harness Context Pipeline 不是上下文唯一入口（conversation-tail metadata-only）
+
+- id: K30
+  severity: P1
+  wave: RC-18
+  invariant: PIPELINE_BUDGET_ENABLED
+  files: [src/harness/context/*]
+  status: open
+  desc: Pipeline 预算分配在生产路径关闭（Budget stays disabled）
+
+- id: K31
+  severity: P1
+  wave: RC-18
+  invariant: CONTEXT_FRESHNESS_ENFORCED
+  files: [src/harness/context/*]
+  status: open
+  desc: Freshness/Dedupe 基本未生效（sourceRefs 空/freshness undefined）
+
+- id: K32
+  severity: P1
+  wave: RC-18
+  invariant: REQUIRED_CONTEXT_REVALIDATED
+  files: [src/harness/context/*]
+  status: open
+  desc: Required Context 过期/超预算仍保留（无 REVALIDATE 状态）
+
+- id: K33
+  severity: P1
+  wave: RC-18
+  invariant: TRIM_SEMANTIC_NOT_WHOLESALE
+  files: [src/harness/context/*]
+  status: open
+  desc: Trim 整块删除而非语义压缩
+
+- id: K34
+  severity: P1
+  wave: RC-18
+  invariant: DROPPED_WARNINGS_AUTHORITATIVE
+  files: [src/harness/context/*]
+  status: open
+  desc: Pipeline dropped/warnings 未进运行权威状态
+
+- id: K35
+  severity: P1
+  wave: RC-18
+  invariant: STABLE_PREFIX_TRULY_STABLE
+  files: [src/agent/kernel/*]
+  status: open
+  desc: Frozen Stable Prefix 含会变化内容（为缓存牺牲 freshness）
+  related: H1
+
+- id: K36
+  severity: P1
+  wave: RC-18
+  invariant: THINKING_UPDATES_REACH_STABLE_PREFIX
+  files: [src/agent/maintenance/coordinator.ts]
+  status: open
+  desc: Thinking Compaction 更新未进 Frozen Stable Prefix/Compactor Anchor
+  related: X1③(partial)
+
+- id: K37
+  severity: P1
+  wave: RC-18
+  invariant: STAGED_FILES_HASH_REFRESHED
+  files: [src/context/staged/*]
+  status: open
+  desc: Staged Files 缓存可能旧版本（无 hash/mtime 刷新）
+
+- id: K38
+  severity: P2
+  wave: RC-18
+  invariant: STAGED_CONTEXT_RELEVANCE_RANKED
+  files: [src/context/staged/*]
+  status: open
+  desc: Staged Context 机械文件头+文件名优先级（无相关性排序）
+
+- id: K39
+  severity: P2
+  wave: RC-18
+  invariant: KERNEL_TAIL_PRESERVED
+  files: [src/context/kernel.ts]
+  status: open
+  desc: Project Kernel 文件头截断（AGENTS.md 后半段被忽略）
+
+- id: K40
+  severity: P1
+  wave: RC-18
+  invariant: FORK_STABLE_CONTEXT_IMMUTABLE
+  files: [src/harness/context/*]
+  status: open
+  desc: 子 Agent forkStableContext 放入可变文件内容（缓存命中≠正确）
+
+- id: K41
+  severity: P1
+  wave: RC-17
+  invariant: STABLE_TOKENS_TRULY_STABLE
+  files: [src/context/cache-anatomy.ts]
+  status: open
+  desc: Cache Anatomy 统计失真（conversation 标 stable/memory 硬编码 0）
+  related: H1
+
+- id: K42
+  severity: P1
+  wave: RC-18
+  invariant: THINKING_RETRIEVAL_NAMESPACED
+  files: [src/memory/thinking-store.ts]
+  status: open
+  desc: Thinking Retrieval 无 workspace/commit/model 绑定
+  related: K10
+
+- id: K43
+  severity: P2
+  wave: RC-18
+  invariant: SEMANTIC_SCORER_FULL_CANDIDATE
+  files: [src/memory/thinking-store.ts]
+  status: open
+  desc: Semantic Scorer 只看到候选 80 字符标题（非完整推理）
+
+- id: K44
+  severity: P1
+  wave: RC-18
+  invariant: NO_RAW_THINK_REPLAY
+  files: [src/memory/thinking-store.ts]
+  status: open
+  desc: 过去原始推理链以 <think> 形式注入（模仿错误路径/假设污染）
+
+- id: K45
+  severity: P1
+  wave: RC-18
+  invariant: MEMORY_SUPERSEDE_BY_EVIDENCE
+  files: [src/memory/thinking-store.ts]
+  status: open
+  desc: Thinking Memory 时间衰减伪解决（缺席≠已解决，需 Evidence supersede）
+
+- id: K46
+  severity: P1
+  wave: RC-18
+  invariant: KNOWLEDGE_NAMESPACED
+  files: [src/memory/knowledge.ts]
+  status: open
+  desc: KnowledgeBase 全局存储无项目命名空间（无来源/适用范围）
+
+- id: K47
+  severity: P1
+  wave: RC-18
+  invariant: KNOWLEDGE_CONFLICT_RESOLVED
+  files: [src/memory/knowledge.ts]
+  status: open
+  desc: Knowledge 无冲突解析（矛盾知识可同时注入）
+
+- id: K48
+  severity: P1
+  wave: RC-16
+  invariant: TOKEN_ESTIMATE_UNIFIED
+  files: [全库]
+  status: open
+  desc: Token 估算到处用不同除法（length/3, /2.5, JSON 等）
+
+- id: K49
+  severity: P1
+  wave: RC-17
+  invariant: TOOL_SCHEMA_IN_BUDGET
+  files: [src/agent/round/request-builder.ts]
+  status: open
+  desc: Context Budget 未计算 Tool Schema（实际请求远大于估算）
+
+- id: K50
+  severity: P1
+  wave: RC-17
+  invariant: TOOL_SCHEMA_CAP_CONSISTENT
+  files: [src/agent/round/request-builder.ts]
+  status: open
+  desc: Tool Schema >128 静默截断（模型看不到 vs 系统认为可用不一致）
+
+- id: K51
+  severity: P2
+  wave: RC-17
+  invariant: DYNAMIC_TOOL_DISCLOSURE
+  files: [src/agent/round/request-builder.ts]
+  status: open
+  desc: cacheStableTools 默认发送全量工具集（token/延迟/选择难度代价）
+
+- id: K52
+  severity: P1
+  wave: RC-18
+  invariant: CONTEXT_RETENTION_MANIFEST
+  files: [src/harness/context/*]
+  status: open
+  desc: 无 Context Retention Manifest（每轮 retained/compressed/archived/dropped）
+
+- id: K53
+  severity: P0
+  wave: RC-18
+  invariant: CRITICAL_FACT_COVERAGE_GATE
+  files: [src/harness/context/*]
+  status: open
+  desc: 无 Critical Fact Coverage Gate（裁剪前验证硬约束/义务/证据覆盖）
+
+- id: K54
+  severity: P1
+  wave: RC-18
+  invariant: CONTEXT_FRESHNESS_CONTRACT
+  files: [src/harness/context/*]
+  status: open
+  desc: 无 Context Freshness Contract（文件=hash/计划=version/证据=generation）
+
+- id: K55
+  severity: P1
+  wave: RC-18
+  invariant: CONTEXT_AUTHORITY_ARBITRATION
+  files: [src/harness/context/*]
+  status: open
+  desc: 无 Context 权威冲突检测与仲裁优先级
+
 ## 汇总
 
-- 合计: 76（P0: 23 / P1: 33 / P2: 20）
+- 合计: 118（原 63 项 + 上下文全景 K 系列 55 项）
+- 原 63 项: P0 18 / P1 27 / P2 18（A8 B6 C5 D6 E5 F7 G12 H12 X2）
+- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 1（K4 @0874f8c）；open 54
+- 已修总计: 23（原 22 + K4）
 - 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）

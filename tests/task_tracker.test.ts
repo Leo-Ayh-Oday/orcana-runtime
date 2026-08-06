@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { addEvidence, createEvidenceLedger, latestEvidence } from "../src/agent/evidence-ledger"
@@ -274,5 +274,29 @@ describe("TaskTracker", () => {
 
     const fresh = createTaskTracker("做一个全栈项目", "long_task")!
     expect(missingTaskRequirements(fresh).some(item => item.includes("缺少验证证据: typecheck"))).toBe(true)
+  })
+
+  test("promotes exactly one pending step per update", () => {
+    const tracker = createTaskTracker("Build a full-stack blog", "long_task")!
+    tracker.steps = [
+      { id: "plan", title: "规划项目结构", status: "done" },
+      { id: "backend", title: "创建后端接口", status: "pending" },
+      { id: "frontend", title: "创建前端页面", status: "pending" },
+    ]
+    updateTaskTrackerAfterTools({
+      tracker,
+      changedFiles: [],
+      toolNames: ["shell"],
+      skipLegacyStepIds: true,
+    })
+
+    const running = tracker.steps.filter(step => step.status === "running")
+    expect(running.map(step => step.id)).toEqual(["backend"])
+    expect(tracker.steps.find(step => step.id === "frontend")?.status).toBe("pending")
+  })
+
+  test("no unreachable duplicate step-promotion block remains", () => {
+    const source = readFileSync(new URL("../src/agent/task-tracker.ts", import.meta.url), "utf-8")
+    expect(source).not.toContain('if (running?.status === "done")')
   })
 })

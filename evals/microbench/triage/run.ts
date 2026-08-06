@@ -13,7 +13,7 @@
 import { FileAuthStore } from "../../../src/config/auth-store"
 import { loadConfig } from "../../../src/config/config-loader"
 import { DeepSeekProvider } from "../../../src/provider/deepseek"
-import { FlashTriage, activateSkillNamesByKeywords, type FlashTriageResult } from "../../../src/agent/flash-triage"
+import { FlashTriage, activateSkillNamesByKeywords, type FlashTriageResult, type TriageThinking } from "../../../src/agent/flash-triage"
 import { SKILLS, activateSkillNames } from "../../../src/skills/registry"
 import { HARD_GATES, type HardGateName } from "../contracts/metrics"
 import type { MBEAssertion, MBECaseResult } from "../contracts/case"
@@ -39,13 +39,22 @@ function fail(label: string, detail: string, gate?: HardGateName): MBEAssertion 
 
 // ── Provider（live 用）──
 
+/** A/B 对比：--thinking=disabled|auto|enabled1024 注入不同 thinking 配置。 */
+let THINKING: TriageThinking = undefined
+export function resolveThinkingArg(v: string | undefined): TriageThinking {
+  if (v === "disabled") return { type: "disabled" }
+  if (v === "enabled1024") return { type: "enabled", budget_tokens: 1024 }
+  if (v === "enabled512") return { type: "enabled", budget_tokens: 512 }
+  return undefined // auto：不传
+}
+
 async function makeTriage(): Promise<FlashTriage | null> {
   const auth = new FileAuthStore()
   const apiKey = await auth.get("deepseek")
   if (!apiKey) return null
   const config = loadConfig()
   const provider = new DeepSeekProvider(apiKey, config.providers?.deepseek?.baseUrl ?? undefined)
-  return new FlashTriage(provider)
+  return new FlashTriage(provider, undefined, THINKING)
 }
 
 // ── 路径执行 ──
@@ -62,6 +71,7 @@ interface SkillRun {
   triage: string[] | null // null = 分诊失败（breaker/超时/解析失败）
   fallback: string[]
   triageErr?: string // 失败原因分类（FlashTriage.lastError）
+  triageMs?: number // triage 调用耗时（A/B 延迟对比）
 }
 
 async function runSkillPaths(prompt: string, live: boolean): Promise<SkillRun> {
@@ -71,9 +81,10 @@ async function runSkillPaths(prompt: string, live: boolean): Promise<SkillRun> {
 
   const triage = await makeTriage()
   if (!triage) return { keyword, triage: null, fallback }
+  const t0 = Date.now()
   const result = await triage.triage(prompt)
   const triageErr = triage.lastError
-  return { keyword, triage: result?.relevantSkillNames ?? null, fallback, triageErr }
+  return { keyword, triage: result?.relevantSkillNames ?? null, fallback, triageErr, triageMs: Date.now() - t0 }
 }
 
 // ── 指标计算（计划 §四/§五）──
@@ -191,7 +202,7 @@ async function runSkillCase(c: SkillCase, live: boolean): Promise<MBECaseResult>
     calls: run.keyword.length + (run.triage?.length ?? 0) + run.fallback.length,
     retries: 0,
     sleepsMs: [],
-    durationMs: 0,
+    durationMs: run.triageMs ?? 0,
     modelRequested: MODEL,
     // 附加明细
     ...({ pathResult: run, gt: c.gt } as object),
@@ -204,10 +215,13 @@ async function runModeCase(c: ModeCase, live: boolean): Promise<MBECaseResult> {
   let result: FlashTriageResult | null = null
   let triageError = ""
 
+  let triageMs = 0
   if (live) {
     const triage = await makeTriage()
     if (triage) {
+      const t0 = Date.now()
       result = await triage.triage(c.prompt)
+      triageMs = Date.now() - t0
       if (result === null) triageError = `triage 失败（${triage.lastError || "null"}）`
     } else {
       triageError = "无 API key"
@@ -257,7 +271,7 @@ async function runModeCase(c: ModeCase, live: boolean): Promise<MBECaseResult> {
     calls: 1,
     retries: 0,
     sleepsMs: [],
-    durationMs: 0,
+    durationMs: triageMs,
     modelRequested: MODEL,
     ...({ triageResult: result } as object),
   }
@@ -498,7 +512,11 @@ function printModeMetrics(report: MBEReport): void {
 
   const modeScores = Object.entries(byMode).map(([k, a]) => `${k}:F1=${(prfScore(a).f1 * 100).toFixed(1)}%`)
   const macroF1 = Object.values(byMode).reduce((n, a) => n + prfScore(a).f1, 0) / Math.max(1, Object.keys(byMode).length)
+  const lats = report.cases.filter((c) => c.tags.includes("mode") && c.durationMs > 0).map((c) => c.durationMs).sort((a, b) => a - b)
+  const pct = (p: number) => lats.length ? lats[Math.min(lats.length - 1, Math.floor(lats.length * p))]! : 0
+  const nullCount = report.cases.filter((c) => c.tags.includes("mode") && (c as unknown as { triageResult?: unknown }).triageResult === null).length
   console.log(`\n── Mode 指标（计划 §五）──`)
+  console.log(`   triage 延迟: P50=${pct(0.5)}ms P95=${pct(0.95)}ms 分诊失败=${nullCount}/${report.cases.filter((c) => c.tags.includes("mode")).length}`)
   console.log(`   per-mode F1: ${modeScores.join("  ")}`)
   console.log(`   Mode Macro F1: ${(macroF1 * 100).toFixed(1)}%（计划 v1.0 目标 ≥93%）`)
   console.log(`   Under-routing: ${under}  Over-routing: ${over}  (of ${total})`)
@@ -558,5 +576,7 @@ if (import.meta.main) {
   const filter = args.find((a) => a.startsWith("--case="))?.slice(7)
   const live = !args.includes("--no-live")
   const save = args.includes("--save") || args.includes("-s")
+  THINKING = resolveThinkingArg(args.find((a) => a.startsWith("--thinking="))?.slice(11))
+  console.log(`[run] thinking=${THINKING ? JSON.stringify(THINKING) : "auto"}`)
   await runP2(filter, live, save)
 }

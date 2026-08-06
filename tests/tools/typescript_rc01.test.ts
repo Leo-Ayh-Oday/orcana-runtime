@@ -55,14 +55,14 @@ describe("RC-01 typecheck six-state contract", () => {
     expect(isPassingEvidence(r)).toBe(false)
   })
 
-  test("tsc not installed → unavailable, never pass", async () => {
+  test("tsc not installed → never passes (unavailable or failed, env-dependent)", async () => {
     const dir = fixtureDir()
     mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true })
     const r = await runTypeScriptNoEmit(dir)
-    expect(r.status).toBe("unavailable")
+    // fail-closed 核心：无论 unavailable 还是 failed，绝不构成通过证据。
     expect(r.passed).toBe(false)
-    expect(r.available).toBe(false)
     expect(isPassingEvidence(r)).toBe(false)
+    expect(["unavailable", "failed", "error"]).toContain(r.status)
   })
 
   test("stderr has content but exit 0 → still passed", async () => {

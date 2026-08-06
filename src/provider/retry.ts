@@ -66,8 +66,10 @@ export function classifyProviderError(error: unknown): ProviderErrorInfo {
   return { kind: "unknown", retryable: false, status, message }
 }
 
+const MAX_RETRY_AFTER_MS = 60_000
+
 export function providerRetryDelayMs(info: ProviderErrorInfo, attempt: number): number {
-  if (info.retryAfterMs !== undefined) return info.retryAfterMs
+  if (info.retryAfterMs !== undefined) return Math.min(info.retryAfterMs, MAX_RETRY_AFTER_MS)
   // Capacity errors need longer backoff (DeepSeek may be under heavy load)
   const base = info.kind === "capacity" ? 5_000 : info.kind === "rate_limit" ? 2_000 : 1_000
   return Math.min(30_000, base * 2 ** attempt)

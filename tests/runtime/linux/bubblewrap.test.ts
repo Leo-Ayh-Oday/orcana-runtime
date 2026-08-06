@@ -9,7 +9,10 @@
 
 import { describe, expect, test } from "bun:test"
 import { platform } from "node:os"
-import { compileBwrapArgv, DEFAULT_ROOT_LAYOUT, createBubblewrapBackend, BWRAP_FORBIDDEN_MOUNTS } from "../../../src/runtime/linux/backends/bubblewrap"
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { compileBwrapArgv, DEFAULT_ROOT_LAYOUT, createBubblewrapBackend, BWRAP_FORBIDDEN_MOUNTS, loopbackWrapper } from "../../../src/runtime/linux/backends/bubblewrap"
 import { probeLinuxCapabilities } from "../../../src/runtime/linux/capability-probe"
 import { runSupervised } from "../../../src/runtime/linux/process/supervisor"
 import { buildExplicitEnvironment } from "../../../src/runtime/linux/environment"
@@ -21,7 +24,7 @@ function baseSpec(overrides: Partial<ExecutionCellSpec> = {}): ExecutionCellSpec
   return {
     schemaVersion: "1.0",
     identity: { cellId: "c1", runId: "r1", nodeRunId: "r1:n1", attempt: 1 },
-    command: { executable: "/bin/true", args: [], cwd: "/workspace", stdin: "closed" },
+    command: { executable: "/bin/true", args: [], cwd: "/tmp", stdin: "closed" },
     profile: "build",
     isolation: { minimum: "namespace", preferredBackend: "bubblewrap", allowDegradation: false },
     filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/tmp/lnxf-wt" },
@@ -90,6 +93,88 @@ describe("LF-3: bwrap argv compiler", () => {
   })
 })
 
+describe("PR-4: bwrap production wiring", () => {
+  test("tmpfs mounts carry explicit --size (size actually enforced)", () => {
+    const argv = compileBwrapArgv(baseSpec(), caps, { tmpfs: [{ target: "/tmp", sizeBytes: 512 * 1024 * 1024 }] })
+    const sizeIdx = argv.indexOf("--size")
+    expect(sizeIdx).toBeGreaterThan(-1)
+    expect(argv[sizeIdx + 1]).toBe(String(512 * 1024 * 1024))
+    expect(argv[sizeIdx + 2]).toBe("--tmpfs")
+    expect(argv[sizeIdx + 3]).toBe("/tmp")
+  })
+
+  test("seccomp uses the FD protocol (--seccomp 3), not a file path", () => {
+    const argv = compileBwrapArgv(baseSpec(), caps, { seccompFile: "/tmp/whatever.bpf" })
+    expect(argv).toContain("--seccomp")
+    const idx = argv.indexOf("--seccomp")
+    expect(argv[idx + 1]).toBe("3")
+    // 文件路径绝不进入 argv
+    expect(argv).not.toContain("/tmp/whatever.bpf")
+  })
+
+  test("loopback wrapper never interpolates target/args into the shell string", () => {
+    const wrapper = loopbackWrapper(caps, "/bin/sh", ["-c", "$(touch /tmp/pwned); touch /tmp/pwned2"])
+    expect(wrapper.executable).toBe("/bin/sh")
+    // 固定脚本：lo up + exec "$@" —— 参数经位置参数传递，不参与 shell 解析
+    expect(wrapper.args[1]).toBe('ip link set lo up 2>/dev/null; exec "$@"')
+    expect(wrapper.args[2]).toBe("sh")
+    expect(wrapper.args.slice(3)).toEqual(["/bin/sh", "-c", "$(touch /tmp/pwned); touch /tmp/pwned2"])
+    expect(wrapper.args[1]).not.toContain("pwned")
+  })
+
+  test("validateSpec rejects spec without worktreeRoot (WORKSPACE_MISSING)", () => {
+    const backend = createBubblewrapBackend()
+    const noWt = baseSpec({ filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true } })
+    const errors = backend.validateSpec(noWt)
+    expect(errors.some(e => e.includes("WORKSPACE_MISSING"))).toBe(true)
+  })
+
+  test("validateSpec rejects noExec/noSuid/noDev mount semantics (unsupported → fail-closed)", () => {
+    const backend = createBubblewrapBackend()
+    const spec = baseSpec({
+      filesystem: { ...baseSpec().filesystem, readonlyMounts: [{ source: "/usr", target: "/usr", mode: "ro", required: true, recursive: true, noExec: true }] },
+    })
+    const errors = backend.validateSpec(spec)
+    expect(errors.some(e => e.includes("MOUNT_SEMANTICS_UNSUPPORTED"))).toBe(true)
+  })
+
+  linuxOnly("compile rejects non-existent host cwd (host/guest cwd separation)", () => {
+    const backend = createBubblewrapBackend()
+    expect(() => backend.compile(baseSpec({ command: { executable: "/bin/true", args: [], cwd: "/nonexistent-xyz-404", stdin: "closed" } }), caps))
+      .toThrow(/host cwd does not exist/)
+  })
+
+  linuxOnly("compiled host cwd is the real host directory, not /workspace", () => {
+    const backend = createBubblewrapBackend()
+    const compiled = backend.compile(baseSpec(), caps)
+    expect(compiled.cwd).toBe("/tmp")
+    // 沙盒内部 cwd 由 --chdir /workspace 决定
+    expect(compiled.argv).toContain("--chdir")
+    expect(compiled.argv[compiled.argv.indexOf("--chdir") + 1]).toBe("/workspace")
+  })
+
+  linuxOnly("supervisor passes seccomp file as FD 3 (readable via <&3)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lnxf-seccomp-"))
+    const bpf = join(dir, "filter.bpf")
+    writeFileSync(bpf, "SECCOMP-BPF")
+    try {
+      const result = await runSupervised({
+        executable: "/bin/sh",
+        args: ["-c", "head -c 11 <&3"],
+        cwd: "/tmp",
+        env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
+        limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
+        wallTimeMs: 5000,
+        seccompFdPath: bpf,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain("SECCOMP-BPF")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("LF-3: backend policy", () => {
   test("backend rejects container minimum", () => {
     const backend = createBubblewrapBackend()
@@ -142,9 +227,10 @@ describe("LF-3: true sandbox (runs only when bwrap installed)", () => {
 
   bwrapTest("empty home hides host files", async () => {
     const backend = createBubblewrapBackend()
+    const wt = mkdtempSync(join(tmpdir(), "lnxf-wt-"))
     const spec = baseSpec({
-      command: { executable: "/bin/sh", args: ["-c", "ls /home/orcana; test ! -e /home/fuqiang && echo HOME_HIDDEN"], cwd: "/workspace", stdin: "closed" },
-      filesystem: { ...baseSpec().filesystem, worktreeRoot: "/tmp" },
+      command: { executable: "/bin/sh", args: ["-c", "ls /home/orcana; test ! -e /home/fuqiang && echo HOME_HIDDEN"], cwd: wt, stdin: "closed" },
+      filesystem: { ...baseSpec().filesystem, worktreeRoot: wt },
     })
     const events: string[] = []
     for await (const event of backend.run(spec, { capabilities: caps })) {
@@ -155,8 +241,10 @@ describe("LF-3: true sandbox (runs only when bwrap installed)", () => {
 
   bwrapTest("project-relative writes land in worktree only", async () => {
     const backend = createBubblewrapBackend()
+    const wt = mkdtempSync(join(tmpdir(), "lnxf-wt-"))
     const spec = baseSpec({
-      command: { executable: "/bin/sh", args: ["-c", "echo x > /workspace/out.txt; test ! -e /etc/passwd.copy && echo NO_ESCAPE"], cwd: "/workspace", stdin: "closed" },
+      command: { executable: "/bin/sh", args: ["-c", "echo x > /workspace/out.txt; test ! -e /etc/passwd.copy && echo NO_ESCAPE"], cwd: wt, stdin: "closed" },
+      filesystem: { ...baseSpec().filesystem, worktreeRoot: wt },
     })
     const events: string[] = []
     for await (const event of backend.run(spec, { capabilities: caps })) {
@@ -167,8 +255,10 @@ describe("LF-3: true sandbox (runs only when bwrap installed)", () => {
 
   bwrapTest("host processes are invisible (new pid ns)", async () => {
     const backend = createBubblewrapBackend()
+    const wt = mkdtempSync(join(tmpdir(), "lnxf-wt-"))
     const spec = baseSpec({
-      command: { executable: "/bin/sh", args: ["-c", "ps -e 2>/dev/null | wc -l"], cwd: "/workspace", stdin: "closed" },
+      command: { executable: "/bin/sh", args: ["-c", "ps -e 2>/dev/null | wc -l"], cwd: wt, stdin: "closed" },
+      filesystem: { ...baseSpec().filesystem, worktreeRoot: wt },
     })
     const events: string[] = []
     for await (const event of backend.run(spec, { capabilities: caps })) {
@@ -181,8 +271,10 @@ describe("LF-3: true sandbox (runs only when bwrap installed)", () => {
 
   bwrapTest("network egress fails (none)", async () => {
     const backend = createBubblewrapBackend()
+    const wt = mkdtempSync(join(tmpdir(), "lnxf-wt-"))
     const spec = baseSpec({
-      command: { executable: "/bin/sh", args: ["-c", "cat /etc/hosts > /dev/null 2>&1; (exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null && echo CONNECTED || echo NO_NET"], cwd: "/workspace", stdin: "closed" },
+      command: { executable: "/bin/sh", args: ["-c", "cat /etc/hosts > /dev/null 2>&1; (exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null && echo CONNECTED || echo NO_NET"], cwd: wt, stdin: "closed" },
+      filesystem: { ...baseSpec().filesystem, worktreeRoot: wt },
     })
     const events: string[] = []
     for await (const event of backend.run(spec, { capabilities: caps })) {
@@ -193,7 +285,8 @@ describe("LF-3: true sandbox (runs only when bwrap installed)", () => {
 
   bwrapTest("receipt records the sandbox execution", async () => {
     const backend = createBubblewrapBackend()
-    const spec = baseSpec()
+    const wt = mkdtempSync(join(tmpdir(), "lnxf-wt-"))
+    const spec = baseSpec({ filesystem: { ...baseSpec().filesystem, worktreeRoot: wt } })
     let receiptSeen = false
     for await (const event of backend.run(spec, { capabilities: caps })) {
       if (event.type === "cell.receipt") {

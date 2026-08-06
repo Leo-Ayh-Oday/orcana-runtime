@@ -63,11 +63,12 @@ const DEFAULT_STDOUT_MAX = 4 * 1024 * 1024
 const DEFAULT_STDERR_MAX = 4 * 1024 * 1024
 
 function capabilityRequestFromRequest(request: ProcessRequest): CapabilityRequest {
+  const cwd = request.cwd ?? process.cwd()
   return {
     command: {
       executable: request.command,
       args: request.args,
-      cwd: request.cwd ?? process.cwd(),
+      cwd,
       stdin: "closed",
     },
     profile: request.profile ?? "build",
@@ -77,6 +78,9 @@ function capabilityRequestFromRequest(request: ProcessRequest): CapabilityReques
     timeoutMs: request.timeoutMs ?? 120_000,
     stdoutMaxBytes: request.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX,
     stderrMaxBytes: request.stderrMaxBytes ?? DEFAULT_STDERR_MAX,
+    // PR-4：worktreeRoot 自动从执行上下文投影 —— bwrap 后端把宿主 cwd 挂载为
+    // 沙盒内 /workspace（chdir 目标必须存在）；host-audit 用宿主 cwd 直连。
+    worktreeRoot: cwd,
   }
 }
 

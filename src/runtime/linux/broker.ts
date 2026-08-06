@@ -301,9 +301,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
       let cellReceipt: SandboxReceipt | undefined
       try {
-        // Isolation Lock：worktree 独占（无 worktree 时 main-workspace 独占）。
+        // Isolation Lock（PR-4）：worktreeRoot + agentId → 按 Agent 的 worktree
+        // 独占；worktreeRoot 无 agentId（工具投影）→ main-workspace 独占（正式
+        // 工作区单写者）；无 worktree → main-workspace 独占。
         const lockTarget = compiled.filesystem.worktreeRoot
-          ? IsolationDomainLock.worktreeKey(agentId ?? cellId)
+          ? (agentId ? IsolationDomainLock.worktreeKey(agentId) : IsolationDomainLock.mainWorkspaceKey())
           : IsolationDomainLock.mainWorkspaceKey()
         if (!locks.acquire(lockTarget, "exclusive", cellId)) {
           throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `isolation lock held: ${lockTarget}`, { lockTarget })

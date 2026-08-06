@@ -361,7 +361,11 @@ export interface CompiledExecution {
   argv: string[]
   /** 额外环境变量（后端进程自身使用）。 */
   env: Record<string, string>
+  /** 宿主侧 spawn 工作目录 —— 必须是真实存在的宿主目录
+   *  （PR-4：与沙盒内部 cwd 分离；内部 cwd 由后端 argv 决定）。 */
   cwd: string
+  /** bwrap seccomp BPF 文件：supervisor 以 FD 3 打开并传入（--seccomp 3）。 */
+  seccompFdPath?: string
 }
 
 export interface BackendRunContext {

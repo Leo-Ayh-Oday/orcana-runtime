@@ -67,7 +67,8 @@
   wave: RC-17
   invariant: NO_MOJIBAKE_IN_MODEL_CONTEXT
   files: [src/agent/task-tracker.ts]
-  status: open
+  status: fixed
+  fixedBy: 96ac920
 - id: A8
   severity: P1
   wave: RC-03
@@ -268,7 +269,8 @@
   wave: RC-12
   invariant: COLD_ARCHIVE_ATOMIC
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: fb85f22
 - id: H7
   severity: P2
   wave: RC-12
@@ -352,67 +354,78 @@
   wave: RC-15
   invariant: MCP_REQUEST_CORRELATION
   files: [src/tools/mcp.ts]
-  status: open
+  status: fixed
+  fixedBy: ccbccd1
 - id: G3
   severity: P0
   wave: RC-14
   invariant: DUPLICATE_PROVIDER_SIDE_EFFECT=0
   files: [src/provider/openai.ts, src/provider/retry.ts]
-  status: open
+  status: fixed
+  fixedBy: 948dd1d
 - id: G4
   severity: P1
   wave: RC-16
   invariant: DURATION_MEASURED_FROM_START
   files: [src/tools/shell.ts]
-  status: open
+  status: fixed
+  fixedBy: 5a2c9c8
 - id: G5
   severity: P1
   wave: RC-16
   invariant: PROJECT_STRUCTURE_SKIPS_DEPS
   files: [src/tools/codegraph.ts]
-  status: open
+  status: fixed
+  fixedBy: 5a2c9c8
 - id: G6
   severity: P1
   wave: RC-14
   invariant: THINKING_BLOCKS_SENT_ONCE
   files: [src/provider/deepseek.ts, src/provider/anthropic.ts]
-  status: open
+  status: fixed
+  fixedBy: 62d87f9
 - id: G7
   severity: P1
   wave: RC-16
   invariant: SERVICE_LOG_TAIL_READ
   files: [src/tools/service.ts]
-  status: open
+  status: fixed
+  fixedBy: 9b9680a
 - id: G8
   severity: P1
   wave: RC-16
   invariant: EDIT_SYMBOL_IN_TRANSACTION
   files: [src/tools/file.ts]
-  status: open
+  status: fixed
+  fixedBy: 7064b69
 - id: G9
   severity: P1
   wave: RC-14
   invariant: FIM_HAS_TIMEOUT
   files: [src/provider/fim.ts]
-  status: open
+  status: fixed
+  fixedBy: 6c1a896
 - id: G10
   severity: P2
   wave: RC-16
   invariant: TOKEN_ESTIMATE_MEANINGFUL
   files: [src/tools/repo-map.ts]
-  status: open
+  status: fixed
+  fixedBy: 385ae4b
 - id: G11
   severity: P1
   wave: RC-14
   invariant: RETRY_AFTER_CAPPED
   files: [src/provider/retry.ts]
-  status: open
+  status: fixed
+  fixedBy: bf99b44
 - id: G12
   severity: P2
   wave: RC-16
   invariant: TIMEOUT_PARSE_GUARDED
   files: [src/tools/shell.ts, src/tools/process.ts, src/tools/service.ts]
-  status: open
+  status: fixed
+  fixedBy: cb9fc58
 
 ## 卫生与长期（Wave 7）
 
@@ -421,25 +434,29 @@
   wave: RC-17
   invariant: STABLE_TOKENS_TRULY_STABLE
   files: [src/context/cache-anatomy.ts]
-  status: open
+  status: fixed
+  fixedBy: 049aa58
 - id: H3
   severity: P2
   wave: RC-17
   invariant: SYMBOL_REGEX_ESCAPED
   files: [src/tools/codegraph.ts]
-  status: open
+  status: fixed
+  fixedBy: 78065e5
 - id: H4
   severity: P1
   wave: RC-17
   invariant: DEAD_CODE_DISPOSITION_PER_SYMBOL
   files: [全库]
-  status: open
+  status: fixed
+  fixedBy: a5faeed
 - id: H10
   severity: P2
   wave: RC-17
   invariant: TRIAGE_HIGH_RISK_PRESERVED
   files: [src/agent/flash-triage.ts]
-  status: open
+  status: fixed
+  fixedBy: 29af4c4
 - id: H11
   severity: P2
   wave: RC-17
@@ -454,7 +471,8 @@
   wave: RC-17
   invariant: CHARS_TRIMMED_ACCURATE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: 188a662
 
 ## 上下文压缩专项（ContextGuard）
 
@@ -680,9 +698,10 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-17
   invariant: CHARS_TRIMMED_ACCURATE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
   desc: charsTrimmed 虚高（未扣 preamble）
   related: H12
+  fixedBy: b0f475b
 
 - id: K25
   severity: P1
@@ -822,9 +841,10 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-17
   invariant: STABLE_TOKENS_TRULY_STABLE
   files: [src/context/cache-anatomy.ts]
-  status: open
+  status: fixed
   desc: Cache Anatomy 统计失真（conversation 标 stable/memory 硬编码 0）
   related: H1
+  fixedBy: 7d4a9cf
 
 - id: K42
   severity: P1
@@ -888,24 +908,27 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-17
   invariant: TOOL_SCHEMA_IN_BUDGET
   files: [src/agent/round/request-builder.ts]
-  status: open
+  status: fixed
   desc: Context Budget 未计算 Tool Schema（实际请求远大于估算）
+  fixedBy: bb9a1d3
 
 - id: K50
   severity: P1
   wave: RC-17
   invariant: TOOL_SCHEMA_CAP_CONSISTENT
   files: [src/agent/round/request-builder.ts]
-  status: open
+  status: fixed
   desc: Tool Schema >128 静默截断（模型看不到 vs 系统认为可用不一致）
+  fixedBy: 0c56278
 
 - id: K51
   severity: P2
   wave: RC-17
   invariant: DYNAMIC_TOOL_DISCLOSURE
   files: [src/agent/round/request-builder.ts]
-  status: open
+  status: fixed
   desc: cacheStableTools 默认发送全量工具集（token/延迟/选择难度代价）
+  fixedBy: 09d2e02
 
 - id: K52
   severity: P1

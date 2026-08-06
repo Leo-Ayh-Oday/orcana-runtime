@@ -10,6 +10,7 @@
  */
 
 import { AgentBudget } from "./agent-budget"
+import { isValidAgentId } from "./worktree"
 
 export interface AgentSpec {
   id: string
@@ -45,6 +46,9 @@ export interface RegisterResult {
   ok: boolean
   agent?: Agent
   violations?: OwnershipViolation[]
+  /** M2: registration rejected because the agent id is not a valid
+   *  identifier (it must never be interpretable as a path). */
+  error?: string
 }
 
 export class AgentPool {
@@ -55,6 +59,14 @@ export class AgentPool {
 
   /** Register an agent; disjoint-ownership enforced. */
   register(spec: AgentSpec): RegisterResult {
+    // M2: the id is joined into the worktree path — reject path-like ids
+    // before any ownership bookkeeping (no "../../victim" registrations).
+    if (!isValidAgentId(spec.id)) {
+      return {
+        ok: false,
+        error: `agent id "${spec.id}" is not a valid identifier (must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)`,
+      }
+    }
     const violations: OwnershipViolation[] = []
     for (const file of spec.ownerFiles) {
       const owner = this.owners.get(file)

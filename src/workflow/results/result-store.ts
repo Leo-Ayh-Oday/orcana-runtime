@@ -29,6 +29,12 @@ export interface ResultStoreFreshness {
   workspaceDigest?: string
 }
 
+/** M12: spec ids are identifiers, never paths — the checkpoint file name
+ *  joins the id directly. Fail closed at construction. */
+export function isSafeSpecId(specId: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(specId)
+}
+
 export class ResultStore {
   private readonly results = new Map<string, WorkflowNodeResult>()
   private readonly specId: string
@@ -37,6 +43,13 @@ export class ResultStore {
   private readonly workspaceDigest?: string
 
   constructor(specId: string, checkpointDir?: string, freshness?: ResultStoreFreshness) {
+    // M12: reject path-escape spec ids before any checkpoint file is formed
+    // (both the constructor's join and restore()'s fallback join).
+    if (!isSafeSpecId(specId)) {
+      throw new Error(
+        `workflow: specId "${specId}" is not a valid checkpoint identifier (must match ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$)`,
+      )
+    }
     this.specId = specId
     this.specDigest = freshness?.specDigest
     this.workspaceDigest = freshness?.workspaceDigest

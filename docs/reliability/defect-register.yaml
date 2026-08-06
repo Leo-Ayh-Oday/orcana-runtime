@@ -850,7 +850,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: STAGED_FILES_HASH_REFRESHED
   files: [src/context/staged/*]
-  status: open
+  status: fixed
+  fixedBy: ad08730
   desc: Staged Files 缓存可能旧版本（无 hash/mtime 刷新）
 
 - id: K38
@@ -858,7 +859,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: STAGED_CONTEXT_RELEVANCE_RANKED
   files: [src/context/staged/*]
-  status: open
+  status: fixed
+  fixedBy: ad08730
   desc: Staged Context 机械文件头+文件名优先级（无相关性排序）
 
 - id: K39
@@ -866,7 +868,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: KERNEL_TAIL_PRESERVED
   files: [src/context/kernel.ts]
-  status: open
+  status: fixed
+  fixedBy: ad08730
   desc: Project Kernel 文件头截断（AGENTS.md 后半段被忽略）
 
 - id: K40
@@ -874,8 +877,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: FORK_STABLE_CONTEXT_IMMUTABLE
   files: [src/harness/context/*]
-  status: open
-  note: harness 侧契约已就位（文件 digest/指纹、权威标注 @e149587）；根因在 src/context/staged.ts:166（forkStableContext，全仓无调用方休眠代码），随 Batch C 修复
+  status: fixed
+  fixedBy: ad08730
   desc: 子 Agent forkStableContext 放入可变文件内容（缓存命中≠正确）
 
 - id: K41
@@ -1026,6 +1029,6 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
 
 - 合计: 118（原 63 项 + 上下文全景 K 系列 55 项）
 - 原 63 项: P0 18 / P1 27 / P2 18（A8 B6 C5 D6 E5 F7 G12 H12 X2）
-- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 43（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0；Batch E 14 @1320e25；Batch D 13 @e149587）；open 12
-- 已修总计: 65（原 22 + K4 + Batch A 9 + Batch B 6 + Batch E 14 + Batch D 13）
+- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 47（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0；Batch E 14 @1320e25；Batch D 13 @e149587；Batch C 4 @ad08730）；open 8
+- 已修总计: 69（原 22 + K4 + Batch A 9 + Batch B 6 + Batch E 14 + Batch D 13 + Batch C 4）
 - 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）

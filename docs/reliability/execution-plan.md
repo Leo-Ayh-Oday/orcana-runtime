@@ -121,3 +121,67 @@ git diff --check
 
 - X1 用户约束滚动蒸馏：flash 提取硬约束（禁止/必须/验收标准/负面反馈）→ planStateContext，触发点：epoch rollover 前 / 入口窗口截断 / M0 创建
 - X2 错误特征行保留：microcompact 保留 head 300 + error/fail/traceback 行 ≤3 行 + exit code/is_error
+
+## RC-18 Context Authority 细化（K 系列 55 项，2026-08 上下文全景并入）
+
+> 关闭原则：先持久化事实，再压缩表示。任何硬约束不得静默消失；任何 Tool Output
+> 不得在原始证据持久化前被有损压缩。
+
+### 第一批：约束与事实持久化（P0）
+
+| ID | 内容 |
+|---|---|
+| K1 | 窗口 break 语义（超长单条不得阻断更早短消息纳入） |
+| K2 | Plan State decisions 接线（createContextRequest TODO） |
+| K3 | Epoch archive 保存被移除原始消息（真实归档） |
+| K5 | Tool Output 完整保存 → hash → 结构化证据 → 再压缩（Artifact Store） |
+| K6 | Resume 从权威状态重建约束（替换 2+4 正则摘要） |
+| K7 | 权威等级分层（用户指令/内部约束/模型推理/外部内容不混层） |
+| K8 | Thinking verified 绑定 Evidence ID/workspace digest |
+| K53 | Critical Fact Coverage Gate（裁剪前验证覆盖） |
+
+### 第二批：Epoch 与压缩正确性
+
+| ID | 内容 |
+|---|---|
+| K11 | M0 创建时机前移（或窗口裁剪前强制建锚） |
+| K12 | M0 支持 supersede |
+| K13 | warm gist 结构化抽取（X1 蒸馏下沉） |
+| K14 | warm gist 尾部保留（约束不截断） |
+| K15 | 固定上限淘汰带 omission manifest |
+| K16 | cold archive 完整 + 原子写 |
+| K17 | dynamic memory 预算顺序保护真实对话 |
+| K18 | compactor 记录 run 轨迹（tool/verification/gate 摘要） |
+| K19 | Epoch 阈值按 provider usage 校准 |
+| K20 | rollover 范围与计算范围一致 |
+| K22 | rollover 被阻断时应急路径 |
+| K25 | 工具结果生命周期（失败 Pin / 成功激进压缩 / 新证据 supersede） |
+
+### 第三批：Pipeline 与缓存
+
+| ID | 内容 |
+|---|---|
+| K29-K34 | Pipeline 唯一入口 / 预算启用 / freshness 生效 / required 重验证 / trim 语义化 / dropped 权威化 |
+| K35-K40 | Stable Prefix 真稳定 / thinking 更新进 prefix / staged hash 刷新 / staged 相关性 / kernel 尾部 / fork 不可变 |
+| K36 | Thinking compaction 更新进 frozen prefix |
+| K21/K23/K24 | compress 即时性 / snapshot 审计性 / charsTrimmed 准确 |
+| K37/K38/K39/K40 | staged/kernel/fork 缓存正确性 |
+
+### 第四批：检索与知识隔离
+
+| ID | 内容 |
+|---|---|
+| K10/K42 | Thinking 按 project+commit+model 命名空间 |
+| K43 | 语义评分看完整候选 |
+| K44 | 禁原始 <think> 重放（结构化 insight） |
+| K45 | 记忆由 Evidence supersede 而非时间衰减 |
+| K46/K47 | Knowledge 命名空间 + 冲突解析 |
+
+### 第五批：预算与可观测（部分并入 RC-16/17）
+
+| ID | 内容 |
+|---|---|
+| K26/K27/K28 | Historical microcompact 轮次/ID/语义修复（RC-16，RC-02.5 遗漏） |
+| K48 | Token 估算统一 |
+| K49/K50/K51 | Tool Schema 入预算 / 128 截断一致 / 动态披露 |
+| K52/K54/K55 | Retention Manifest / Freshness Contract / 权威仲裁 |

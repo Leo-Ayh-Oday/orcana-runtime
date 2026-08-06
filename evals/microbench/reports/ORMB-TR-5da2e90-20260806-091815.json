@@ -1,0 +1,2327 @@
+{
+  "header": {
+    "suite": "ORMB-TR",
+    "orcanaCommit": "5da2e90",
+    "modelRequested": "deepseek-v4-flash",
+    "reasoningEffort": "none",
+    "seed": 42,
+    "configurationDigest": "PP-mock-v1",
+    "startedAt": "2026-08-06T01:18:15.555Z"
+  },
+  "suite": "ORMB-TR",
+  "cases": [
+    {
+      "caseId": "TR-01",
+      "title": "帮我分析一下微服务 vs 单体各自的优劣",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是分析微服务与单体架构的优劣，属于纯讨论/分析类，不涉及编写代码或修改文件，因此走 discussion 模式。无需联网搜索，也没有相关技能匹配，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是分析微服务与单体架构的优劣，属于纯讨论/分析类，不涉及编写代码或修改文件，因此走 discussion 模式。无需联网搜索，也没有相关技能匹配，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-02",
+      "title": "这个需求该怎么设计数据库表结构，先不写代码",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户明确说'先不写代码'，只需要讨论数据库表结构设计，属于纯方案分析，因此走 discussion 模式。无需联网，通过架构审查技能辅助设计。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户明确说'先不写代码'，只需要讨论数据库表结构设计，属于纯方案分析，因此走 discussion 模式。无需联网，通过架构审查技能辅助设计。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-03",
+      "title": "解释一下 React 的 useMemo 是干什么的",
+      "tags": [
+        "discussion",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户仅要求解释 React 的 useMemo 的用途，属于纯技术讨论，不需要修改代码或联网搜索最新文档。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户仅要求解释 React 的 useMemo 的用途，属于纯技术讨论，不需要修改代码或联网搜索最新文档。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-04",
+      "title": "帮我评估一下这个技术选型",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是评估技术选型，属于纯讨论/分析/方案设计，无需编写或修改代码。当前项目上下文为空，没有具体文件可参考，因此应引导用户进行技术方案的权衡讨论。相关技能为架构审查，用于分析技术选型的合理性。此任务无代码变更风险，风险等级为低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是评估技术选型，属于纯讨论/分析/方案设计，无需编写或修改代码。当前项目上下文为空，没有具体文件可参考，因此应引导用户进行技术方案的权衡讨论。相关技能为架构审查，用于分析技术选型的合理性。此任务无代码变更风险，风险等级为低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-05",
+      "title": "讨论一下我们该不该上 TypeScript",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是纯讨论是否采用 TypeScript，不涉及代码编写或文件修改，也没有架构落地需求，因此归为 discussion 模式。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是纯讨论是否采用 TypeScript，不涉及代码编写或文件修改，也没有架构落地需求，因此归为 discussion 模式。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-06",
+      "title": "这个架构图有什么问题，纯讨论",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是讨论架构图存在的问题，属于纯分析讨论，无需编写代码或进行修改。选择 architecture-review 技能作为相关技能，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是讨论架构图存在的问题，属于纯分析讨论，无需编写代码或进行修改。选择 architecture-review 技能作为相关技能，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-07",
+      "title": "帮我梳理一下这个模块的职责边界",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是梳理模块的职责边界，属于纯讨论/分析任务，不需要写代码或规划实现。项目上下文为空，无法进行具体代码审查，因此仅提供方法论引导。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是梳理模块的职责边界，属于纯讨论/分析任务，不需要写代码或规划实现。项目上下文为空，无法进行具体代码审查，因此仅提供方法论引导。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-08",
+      "title": "讲讲 OAuth2 的授权码流程",
+      "tags": [
+        "discussion",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求解释 OAuth2 授权码流程，属于纯知识讨论，不涉及代码编写或项目修改，因此选择 discussion 模式，无需联网搜索或执行计划。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求解释 OAuth2 授权码流程，属于纯知识讨论，不涉及代码编写或项目修改，因此选择 discussion 模式，无需联网搜索或执行计划。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-09",
+      "title": "这个需求要拆成几个阶段比较合理",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求的是如何将需求拆分为阶段的咨询性问题，属于纯讨论/方案设计，不涉及实际代码编写或文件修改，因此归为 discussion 模式。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求的是如何将需求拆分为阶段的咨询性问题，属于纯讨论/方案设计，不涉及实际代码编写或文件修改，因此归为 discussion 模式。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-10",
+      "title": "对比一下 Redis 和 Memcached",
+      "tags": [
+        "discussion",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "discussion"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是对比 Redis 和 Memcached，属于纯技术讨论/分析，不涉及代码编写或文件修改，因此模式为 discussion。该对比基于通用知识即可完成，无需联网搜索最新文档。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是对比 Redis 和 Memcached，属于纯技术讨论/分析，不涉及代码编写或文件修改，因此模式为 discussion。该对比基于通用知识即可完成，无需联网搜索最新文档。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-11",
+      "title": "把 README 里的拼写错误改掉",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-12",
+      "title": "这个函数名太长了，改成简短的名字",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求重命名一个过长的函数名，这是一个局部、低风险的代码修改，通常只涉及单个文件，不需要跨文件规划或预先方案设计。因此选择 narrow_edit 模式，验证只需类型检查确保引用无误。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求重命名一个过长的函数名，这是一个局部、低风险的代码修改，通常只涉及单个文件，不需要跨文件规划或预先方案设计。因此选择 narrow_edit 模式，验证只需类型检查确保引用无误。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-13",
+      "title": "修一下这个注释",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求仅涉及修改注释，属于单文件修复，无需规划或联网搜索，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求仅涉及修改注释，属于单文件修复，无需规划或联网搜索，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-14",
+      "title": "把按钮颜色从红色改成蓝色，一行 CSS",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "任务是将按钮颜色从红色改为蓝色，仅需一行 CSS 修改，属于单文件小改动，无需联网搜索、无跨文件影响、无需规划。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "任务是将按钮颜色从红色改为蓝色，仅需一行 CSS 修改，属于单文件小改动，无需联网搜索、无跨文件影响、无需规划。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-15",
+      "title": "删掉这个没用到的 import",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "单文件修改，删除未使用的 import，不需要规划，只需类型检查确认无破坏。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "单文件修改，删除未使用的 import，不需要规划，只需类型检查确认无破坏。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-16",
+      "title": "把日志级别从 info 改成 warn",
+      "tags": [
+        "narrow_edit",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "这是一个简单的单文件日志级别修改，不涉及跨文件或架构变更，属于窄范围编辑。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "这是一个简单的单文件日志级别修改，不涉及跨文件或架构变更，属于窄范围编辑。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-17",
+      "title": "这个变量少了个分号，补上",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "这是一个简单的单文件语法修复（补分号），不需要规划或跨文件变更，属于窄编辑任务。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "这是一个简单的单文件语法修复（补分号），不需要规划或跨文件变更，属于窄编辑任务。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-18",
+      "title": "把配置里的端口改成 8080",
+      "tags": [
+        "narrow_edit",
+        "web",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "false"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求仅修改配置中的端口为8080，属于单文件简单修改，无需联网或详细规划，风险低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求仅修改配置中的端口为8080，属于单文件简单修改，无需联网或详细规划，风险低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-19",
+      "title": "重命名这个文件",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户请求重命名文件，属于单文件操作，不需要规划或联网。项目上下文为空，风险较低。可能需确认具体文件与新名称，但按现有信息归类为窄编辑。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户请求重命名文件，属于单文件操作，不需要规划或联网。项目上下文为空，风险较低。可能需确认具体文件与新名称，但按现有信息归类为窄编辑。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-20",
+      "title": "这个报错只是类型标注写错了，改一行就行",
+      "tags": [
+        "narrow_edit",
+        "over-trap",
+        "surface",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "narrow_edit"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "narrow_edit",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "用户明确表示这是一个类型标注错误，只需修改一行，属于单文件小修复，无需规划，只需类型检查验证。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "narrow_edit",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "用户明确表示这是一个类型标注错误，只需修改一行，属于单文件小修复，无需规划，只需类型检查验证。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-21",
+      "title": "把项目的构建系统从 webpack 迁移到 vite，先出方案",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "plan_before_code"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "plan_before_code",
+            "needsWeb": true,
+            "researchQueries": [
+              "webpack to vite migration guide 2025",
+              "vite migration from webpack best practices",
+              "vite config equivalent webpack"
+            ],
+            "relevantSkillNames": [
+              "architecture-review"
+            ],
+            "planSteps": [
+              {
+                "id": "analyze-current-build",
+                "title": "分析现有构建配置",
+                "deliverables": [
+                  "webpack-config-analysis.md"
+                ],
+                "verification": "列出所有 webpack 配置项及对应功能"
+              },
+              {
+                "id": "design-vite-config",
+                "title": "设计 vite 迁移方案",
+                "deliverables": [
+                  "vite-migration-plan.md",
+                  "vite-config-draft.md"
+                ],
+                "verification": "对比 webpack/vite 插件与 loader 覆盖情况"
+              },
+              {
+                "id": "identify-risks",
+                "title": "识别风险与兼容性",
+                "deliverables": [
+                  "risk-mitigation-list.md"
+                ],
+                "verification": "检查依赖、代码拆分、环境变量差异"
+              },
+              {
+                "id": "validate-with-poc",
+                "title": "制定 POC 验证方案",
+                "deliverables": [
+                  "poc-validation-checklist.md"
+                ],
+                "verification": "确定最小验证项目及成功标准"
+              }
+            ],
+            "requiredVerification": [
+              "build"
+            ],
+            "reasoning": "请求是将构建系统从 webpack 迁移到 vite，并要求先出方案，属于架构变更和跨文件工作，需要规划阶段。需要联网获取最新迁移指南和最佳实践。涉及架构审查技能，迁移复杂度中等，存在兼容性和配置差异风险。",
+            "riskLevel": "medium"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "plan_before_code",
+        "needsWeb": true,
+        "researchQueries": [
+          "webpack to vite migration guide 2025",
+          "vite migration from webpack best practices",
+          "vite config equivalent webpack"
+        ],
+        "relevantSkillNames": [
+          "architecture-review"
+        ],
+        "planSteps": [
+          {
+            "id": "analyze-current-build",
+            "title": "分析现有构建配置",
+            "deliverables": [
+              "webpack-config-analysis.md"
+            ],
+            "verification": "列出所有 webpack 配置项及对应功能"
+          },
+          {
+            "id": "design-vite-config",
+            "title": "设计 vite 迁移方案",
+            "deliverables": [
+              "vite-migration-plan.md",
+              "vite-config-draft.md"
+            ],
+            "verification": "对比 webpack/vite 插件与 loader 覆盖情况"
+          },
+          {
+            "id": "identify-risks",
+            "title": "识别风险与兼容性",
+            "deliverables": [
+              "risk-mitigation-list.md"
+            ],
+            "verification": "检查依赖、代码拆分、环境变量差异"
+          },
+          {
+            "id": "validate-with-poc",
+            "title": "制定 POC 验证方案",
+            "deliverables": [
+              "poc-validation-checklist.md"
+            ],
+            "verification": "确定最小验证项目及成功标准"
+          }
+        ],
+        "requiredVerification": [
+          "build"
+        ],
+        "reasoning": "请求是将构建系统从 webpack 迁移到 vite，并要求先出方案，属于架构变更和跨文件工作，需要规划阶段。需要联网获取最新迁移指南和最佳实践。涉及架构审查技能，迁移复杂度中等，存在兼容性和配置差异风险。",
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "caseId": "TR-22",
+      "title": "数据库从 MySQL 迁到 PostgreSQL，涉及连接池和 SQL 方言",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-23",
+      "title": "给现有系统加权限模块，跨三个服务",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-24",
+      "title": "重构这个模块，先规划再动手",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-25",
+      "title": "设计 API 接口规范，需要先定方案",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "GT=plan_before_code 实际=discussion",
+          "gate": "MODE_MISMATCH"
+        }
+      ],
+      "failures": [
+        "mode 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求是设计 API 接口规范并先定方案，属于纯方案设计讨论，不需要写代码，不需要联网搜索，风险较低。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求是设计 API 接口规范并先定方案，属于纯方案设计讨论，不需要写代码，不需要联网搜索，风险较低。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-26",
+      "title": "引入新的状态管理库，先对比再实施",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-27",
+      "title": "把这个单体拆成微服务，需要迁移方案",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-28",
+      "title": "升级 TypeScript 大版本，需要评估破坏性变更",
+      "tags": [
+        "plan",
+        "web",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "GT=plan_before_code 实际=discussion",
+          "gate": "MODE_MISMATCH"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": true,
+          "detail": "true"
+        }
+      ],
+      "failures": [
+        "mode 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": true,
+            "researchQueries": [
+              "TypeScript major version breaking changes",
+              "TypeScript upgrade guide migration",
+              "TypeScript breaking changes list"
+            ],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户要求评估 TypeScript 大版本升级的破坏性变更，属于纯分析/方案设计，不需要编写代码，因此走 discussion 模式。需要联网获取最新版本官方迁移文档和破坏性变更列表。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": true,
+        "researchQueries": [
+          "TypeScript major version breaking changes",
+          "TypeScript upgrade guide migration",
+          "TypeScript breaking changes list"
+        ],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户要求评估 TypeScript 大版本升级的破坏性变更，属于纯分析/方案设计，不需要编写代码，因此走 discussion 模式。需要联网获取最新版本官方迁移文档和破坏性变更列表。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-29",
+      "title": "加缓存层，需要设计失效策略",
+      "tags": [
+        "plan",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "GT=plan_before_code 实际=discussion",
+          "gate": "MODE_MISMATCH"
+        }
+      ],
+      "failures": [
+        "mode 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "discussion",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [],
+            "reasoning": "用户请求为项目添加缓存层并设计失效策略，但未提供任何项目文件或上下文（文件树为空/未扫描）。这属于方案设计讨论，而非直接编码任务。无需联网搜索，也不涉及具体文件修改，因此采用 discussion 模式。",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "discussion",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [],
+        "reasoning": "用户请求为项目添加缓存层并设计失效策略，但未提供任何项目文件或上下文（文件树为空/未扫描）。这属于方案设计讨论，而非直接编码任务。无需联网搜索，也不涉及具体文件修改，因此采用 discussion 模式。",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-30",
+      "title": "改数据库 schema，涉及数据迁移脚本",
+      "tags": [
+        "plan",
+        "under-trap",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-31",
+      "title": "从零开始写一个带认证的博客系统",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"security-deep-dive\", \"architecture-review\"],\n  \"planSteps\": [\n    {\n      \"id\": \"requirements-and-st",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"security-deep-dive\", \"architecture-review\"],\n  \"planSteps\": [\n    {\n      \"id\": \"requirements-and-st",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-32",
+      "title": "给公司做一个全栈的数据看板，前端+后端+部署",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"architecture-review\", \"security-deep-dive\", \"ui-ux-pro-max\"],\n  \"planSteps\": [\n    {\n      \"id\": \"re",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"architecture-review\", \"security-deep-dive\", \"ui-ux-pro-max\"],\n  \"planSteps\": [\n    {\n      \"id\": \"re",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-33",
+      "title": "完整重构这个项目，多模块 + 测试覆盖",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-34",
+      "title": "实现一个多租户 SaaS 的骨架，含计费",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck"
+            ],
+            "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"architecture-review\", \"security-deep-dive\", \"edge-case-hunter\"],\n  \"planSteps\": [\n    {\n      \"id\": ",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck"
+        ],
+        "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"architecture-review\", \"security-deep-dive\", \"edge-case-hunter\"],\n  \"planSteps\": [\n    {\n      \"id\": ",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-35",
+      "title": "搭建 CI/CD 流水线 + 测试 + 部署",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck",
+              "test"
+            ],
+            "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [],\n  \"planSteps\": [\n    {\n      \"id\": \"init-project\",\n      \"title\": \"初始化项目结构\",\n      \"deliverables\":",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck",
+          "test"
+        ],
+        "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [],\n  \"planSteps\": [\n    {\n      \"id\": \"init-project\",\n      \"title\": \"初始化项目结构\",\n      \"deliverables\":",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-36",
+      "title": "写一个实时聊天应用，WebSocket + 消息持久化",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-37",
+      "title": "从零开发一个移动端 + 后端的完整产品",
+      "tags": [
+        "full",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [],
+            "planSteps": [],
+            "requiredVerification": [
+              "typecheck",
+              "test"
+            ],
+            "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"architecture-review\", \"ui-ux-pro-max\"],\n  \"planSteps\": [\n    {\n      \"id\": \"requirements-analysis\",\n",
+            "riskLevel": "low"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [],
+        "planSteps": [],
+        "requiredVerification": [
+          "typecheck",
+          "test"
+        ],
+        "reasoning": "{\n  \"mode\": \"full_complex\",\n  \"needsWeb\": false,\n  \"researchQueries\": [],\n  \"relevantSkillNames\": [\"architecture-review\", \"ui-ux-pro-max\"],\n  \"planSteps\": [\n    {\n      \"id\": \"requirements-analysis\",\n",
+        "riskLevel": "low"
+      }
+    },
+    {
+      "caseId": "TR-38",
+      "title": "做一个权限系统，涉及多角色 + 审计日志",
+      "tags": [
+        "full",
+        "risk",
+        "mode"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "mode 匹配",
+          "passed": true,
+          "detail": "full_complex"
+        },
+        {
+          "label": "高风险未漏判",
+          "passed": true,
+          "detail": "risk=high"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": {
+            "mode": "full_complex",
+            "needsWeb": false,
+            "researchQueries": [],
+            "relevantSkillNames": [
+              "security-deep-dive",
+              "architecture-review",
+              "edge-case-hunter"
+            ],
+            "planSteps": [
+              {
+                "id": "requirement-analysis",
+                "title": "需求分析与角色建模",
+                "deliverables": [
+                  "roles-permissions-matrix.md"
+                ],
+                "verification": "与用户确认角色和权限清单"
+              },
+              {
+                "id": "architecture-design",
+                "title": "架构与数据模型设计",
+                "deliverables": [
+                  "db-schema.sql",
+                  "api-design.md"
+                ],
+                "verification": "架构评审通过"
+              },
+              {
+                "id": "auth-implementation",
+                "title": "认证与授权实现",
+                "deliverables": [
+                  "auth-service",
+                  "permission-check"
+                ],
+                "verification": "单元测试覆盖权限判定"
+              },
+              {
+                "id": "audit-logging",
+                "title": "审计日志模块",
+                "deliverables": [
+                  "audit-service",
+                  "log-collector"
+                ],
+                "verification": "审计事件正确记录并不可篡改"
+              },
+              {
+                "id": "testing-integration",
+                "title": "集成测试与安全验证",
+                "deliverables": [
+                  "test-suite",
+                  "security-report"
+                ],
+                "verification": "全部测试通过，安全审查无高危漏洞"
+              }
+            ],
+            "requiredVerification": [
+              "typecheck",
+              "test",
+              "build"
+            ],
+            "reasoning": "权限系统涉及多角色和审计日志，属于完整的安全敏感项目，需要先进行架构设计、数据模型建模和权限设计，再实现认证授权和审计模块，最后进行安全测试。风险高，需要规划和多文件操作。",
+            "riskLevel": "high"
+          },
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": {
+        "mode": "full_complex",
+        "needsWeb": false,
+        "researchQueries": [],
+        "relevantSkillNames": [
+          "security-deep-dive",
+          "architecture-review",
+          "edge-case-hunter"
+        ],
+        "planSteps": [
+          {
+            "id": "requirement-analysis",
+            "title": "需求分析与角色建模",
+            "deliverables": [
+              "roles-permissions-matrix.md"
+            ],
+            "verification": "与用户确认角色和权限清单"
+          },
+          {
+            "id": "architecture-design",
+            "title": "架构与数据模型设计",
+            "deliverables": [
+              "db-schema.sql",
+              "api-design.md"
+            ],
+            "verification": "架构评审通过"
+          },
+          {
+            "id": "auth-implementation",
+            "title": "认证与授权实现",
+            "deliverables": [
+              "auth-service",
+              "permission-check"
+            ],
+            "verification": "单元测试覆盖权限判定"
+          },
+          {
+            "id": "audit-logging",
+            "title": "审计日志模块",
+            "deliverables": [
+              "audit-service",
+              "log-collector"
+            ],
+            "verification": "审计事件正确记录并不可篡改"
+          },
+          {
+            "id": "testing-integration",
+            "title": "集成测试与安全验证",
+            "deliverables": [
+              "test-suite",
+              "security-report"
+            ],
+            "verification": "全部测试通过，安全审查无高危漏洞"
+          }
+        ],
+        "requiredVerification": [
+          "typecheck",
+          "test",
+          "build"
+        ],
+        "reasoning": "权限系统涉及多角色和审计日志，属于完整的安全敏感项目，需要先进行架构设计、数据模型建模和权限设计，再实现认证授权和审计模块，最后进行安全测试。风险高，需要规划和多文件操作。",
+        "riskLevel": "high"
+      }
+    },
+    {
+      "caseId": "TR-39",
+      "title": "迁移整个遗留系统到新架构，全量验证",
+      "tags": [
+        "full",
+        "risk",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    },
+    {
+      "caseId": "TR-40",
+      "title": "实现一个支付模块，对接第三方支付",
+      "tags": [
+        "full",
+        "web",
+        "risk",
+        "mode"
+      ],
+      "passed": false,
+      "assertions": [
+        {
+          "label": "mode 分诊可用",
+          "passed": false,
+          "detail": "triage 失败（null）"
+        },
+        {
+          "label": "mode 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "needsWeb 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        },
+        {
+          "label": "riskLevel 匹配",
+          "passed": false,
+          "detail": "无分诊结果"
+        }
+      ],
+      "failures": [
+        "mode 分诊可用",
+        "mode 匹配",
+        "needsWeb 匹配",
+        "riskLevel 匹配"
+      ],
+      "trace": [
+        {
+          "type": "triage-result",
+          "data": null,
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash",
+      "triageResult": null
+    }
+  ],
+  "hardGates": {
+    "DUPLICATE_TOOL_CALL": 0,
+    "TOOL_RESULT_MISMATCH": 0,
+    "RETRY_AFTER_SIDE_EFFECT": 0,
+    "LOST_TOOL_CALL": 0,
+    "MISSING_STOP_REASON_ACCEPTED": 0,
+    "SILENT_MODEL_SWITCH": 0,
+    "TOKEN_TELEMETRY_MISSING": 0,
+    "ABORT_IGNORED": 0,
+    "HALLUCINATED_TOOL": 0,
+    "UNSAFE_SIDE_EFFECT": 0,
+    "REDUNDANT_SIDE_EFFECT": 0,
+    "FORBIDDEN_SKILL_ACTIVATION": 0,
+    "RISK_HIGH_MISS": 0,
+    "MODE_MISMATCH": 3,
+    "NEEDS_WEB_MISMATCH": 0
+  },
+  "summary": {
+    "total": 40,
+    "passed": 26,
+    "failed": 14,
+    "passRate": 65
+  },
+  "generatedAt": "2026-08-06T01:18:15.555Z"
+}

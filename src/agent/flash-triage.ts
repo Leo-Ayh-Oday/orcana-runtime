@@ -13,9 +13,14 @@
 
 import type { LLMProvider, ProviderMessage } from "../provider/types"
 import { shouldSkipProviderPurpose } from "../provider/cost-policy"
+import { SKILLS } from "../skills/registry"
 import type { IntentMode } from "./intent"
 import type { TaskIntent, TaskStep } from "./task-tracker"
 import type { VerificationKind } from "../verification/result"
+
+/** autoTrigger 技能 = 语义分诊可见的技能集（与 registry 单一事实源）。
+ *  手动触发技能（motion-review）不参与自动路由。 */
+const TRIAGE_VISIBLE = SKILLS.filter((s) => s.autoTrigger)
 
 // ── Triage result ──
 
@@ -33,8 +38,13 @@ export interface FlashTriageResult {
 // ── Config ──
 
 const TRIAGE_MODEL = "deepseek-v4-flash"
-const TRIAGE_MAX_TOKENS = 512
-const TRIAGE_TIMEOUT_MS = 8000
+// deepseek-v4-flash 强制 thinking：512 max_tokens 常被思考耗尽 → text 为空
+// （ORMB-TR 实测：40 个 mode 用例 12 个 empty-stream 全因此）。2048 留出思考+JSON 余量。
+const TRIAGE_MAX_TOKENS = 2048
+// 实测延迟 2-19s 波动（连续请求时段 zen/go 变慢）：8s/15s 会把慢请求误杀成
+// empty-stream，拉高分诊失败率。30s 覆盖绝大多数请求；代价是 TTFB 上限变长
+// （Triage Latency 指标会记录实际分布，见 ORMB-TR）。
+const TRIAGE_TIMEOUT_MS = 30000
 
 export type FlashTriagePolicy = "off" | "auto" | "always"
 
@@ -64,6 +74,7 @@ export function shouldUseFlashTriage(policy: FlashTriagePolicy, prompt: string, 
 function buildTriagePrompt(prompt: string, projectFiles: string): string {
   const lines = [
     "你是任务分诊器。分析用户的编程请求，判断应该走什么执行路径。",
+    "直接输出 JSON，不要输出思考过程或解释。",
     "",
     "## 用户请求",
     prompt.slice(0, 1000),
@@ -87,12 +98,7 @@ function buildTriagePrompt(prompt: string, projectFiles: string): string {
     "",
     "### relevantSkillNames",
     "从以下列表中选择最相关的 1-3 个技能（按名匹配）：",
-    "- design-quality: 前端设计质量标准，防止「能跑就行」",
-    "- architecture-review: 强制对比替代方案+trade-off分析+风险标注",
-    "- self-critique: 输出前推演反方观点+重建论证",
-    "- edge-case-hunter: 穷举边界/异常/并发/资源约束",
-    "- security-deep-dive: OWASP Top 10+供应链+注入检测",
-    "- systematic-debugging: 根因追踪+条件断点+假设验证",
+    ...TRIAGE_VISIBLE.map((s) => `- ${s.name}: ${s.description.split(/[—\-]/)[0]!.trim().slice(0, 40)}`),
     "如果都不匹配，返回空数组",
     "",
     "### planSteps（仅 plan_before_code 或 full_complex 需要）",
@@ -179,20 +185,19 @@ class TriageCircuitBreaker {
 
 // ── Main class ──
 
-/** Known skill names → translations for fallback activation. */
-const SKILL_TRIGGER_MAP: Record<string, string[]> = {
-  "design-quality": ["前端", "UI", "设计", "界面", "页面", "组件", "CSS", "样式"],
-  "architecture-review": ["架构", "重构", "设计模式", "系统设计", "选型"],
-  "self-critique": ["审查", "检查", "推翻", "反驳", "漏洞", "审计"],
-  "edge-case-hunter": ["边界", "测试", "异常", "空值", "并发", "corner"],
-  "security-deep-dive": ["安全", "auth", "token", "密码", "注入", "XSS", "认证"],
-  "systematic-debugging": ["bug", "调试", "报错", "error", "崩溃", "不工作"],
-}
+/** Known skill names → triggers for fallback activation.
+ *  从 registry 动态生成（单一事实源）：此前硬编码含 phantom "design-quality"、
+ *  缺 ui-ux-pro-max/motion-pro-max，导致 fallback 路径结构不可达（ORMB-TR 实测发现）。 */
+const SKILL_TRIGGER_MAP: Record<string, string[]> = Object.fromEntries(
+  TRIAGE_VISIBLE.map((s) => [s.name, s.triggers]),
+)
 
 export class FlashTriage {
   private provider: LLMProvider
   private breaker = new TriageCircuitBreaker()
   private triageModel: string
+  /** 最近一次 triage() 的失败原因（供调用方/测试诊断；成功时为 ""）。 */
+  lastError = ""
 
   constructor(provider: LLMProvider, triageModel = TRIAGE_MODEL) {
     this.provider = provider
@@ -217,6 +222,7 @@ export class FlashTriage {
     const messages: ProviderMessage[] = [{ role: "user", content: userPrompt }]
 
     let responseText = ""
+    this.lastError = ""
 
     try {
       const started = Date.now()
@@ -226,16 +232,31 @@ export class FlashTriage {
         system,
         messages,
         maxTokens: TRIAGE_MAX_TOKENS,
+        // thinking 配置待 ORMB-TR 测试结果定夺（当前与 run3 同款：不传参数，模型自决）。
+        // maxTokens 2048 已为思考留出空间（512 时实测 thinking 吃满导致空响应）。
         abortSignal: AbortSignal.timeout(TRIAGE_TIMEOUT_MS),
       })) {
         if (event.type === "text" && typeof event.data === "string") {
           responseText += event.data
+        } else if (event.type === "error") {
+          // provider 重试耗尽后的错误事件——之前被静默忽略，表现为"空响应"，
+          // 掩盖了真实失败（ORMB-TR 实测：40 个用例 12 个空响应全是 provider 错误）。
+          this.lastError = `provider: ${String(event.data).slice(0, 120)}`
         }
         if (Date.now() - started > TRIAGE_TIMEOUT_MS) break
       }
 
+      // 空响应必须诚实报告失败（→ 关键词 fallback），不能返回"伪成功"兜底值。
+      // 伪成功会让调用方把 {mode:narrow_edit, riskLevel:low, skills:[]} 当真实分诊，
+      // 30% 的空响应即可把 Mode 指标整体拖到不可信（ORMB-TR 实测发现）。
+      if (!responseText.trim()) {
+        this.lastError = this.lastError || "empty-stream"
+        return null
+      }
+
       const parsed = parseTriageResponse(responseText)
       if (parsed) return parsed
+      if (!this.lastError) this.lastError = "parse-failure"
 
       // Text fallback: try basic classification from unstructured response
       const lower = responseText.toLowerCase()
@@ -255,6 +276,7 @@ export class FlashTriage {
         riskLevel: lower.includes("high") || lower.includes("高") ? "medium" : "low",
       }
     } catch {
+      this.lastError = this.lastError || "exception"
       return null
     }
   }

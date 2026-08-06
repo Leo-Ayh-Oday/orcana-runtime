@@ -165,6 +165,7 @@ export function createPodmanBackend(): ExecutionBackend {
         if (rule.noDev) opts.push("nodev")
         return `${rule.source}:${rule.target}:${opts.join(",")}`
       }
+      const cacheVolumes: Array<{ source: string; target: string; mode: "ro" | "rw" }> = spec.cache.map(c => ({ source: cacheSource(c), target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" }))
       return {
         backend: "rootless-podman",
         argv: [podmanPath, ...compilePodmanArgv(spec, caps, {
@@ -172,7 +173,7 @@ export function createPodmanBackend(): ExecutionBackend {
           volumes: [
             ...spec.filesystem.readonlyMounts.map(volumeOf),
             ...spec.filesystem.writableMounts.map(volumeOf),
-            ...spec.cache.map(c => ({ source: cacheSource(c), target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" })),
+            ...cacheVolumes,
             ...Object.entries(materialization?.secretFiles ?? {}).map(([target, source]) => `${source}:${target}:ro,Z`),
           ],
           labels: { "io.orcana.run": spec.identity.runId, "io.orcana.cell": spec.identity.cellId },

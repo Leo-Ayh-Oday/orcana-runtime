@@ -45,6 +45,19 @@ function continue_(ctx: CompletionContext, reason: string, assistantMsg: string,
   ctx.traceEvent = trace ? { gate: reason, decision: "continue", ...trace } : null
 }
 
+
+// ── RC-02: 末轮语义 — BUDGET_EXHAUSTED ≠ COMPLETED ──
+
+/** 末轮且无通过证据 → incomplete（不能继续 ≠ 已经完成）。 */
+function finalRoundNoEvidence(ctx: CompletionContext): { pass: true } | { pass: false; reason: string; incomplete: true } {
+  const hasPassingEvidence =
+    ctx.lastTypecheck?.passed === true ||
+    (ctx.lastVerificationResults?.some(r => r.passed) ?? false)
+  if (hasPassingEvidence) return { pass: true }
+  ctx.injectMessages = []
+  return { pass: false, reason: "budget_exhausted_no_evidence", incomplete: true }
+}
+
 // ── Gate: Ripple Exit ──
 
 export class RippleExitGate implements Gate<CompletionContext> {
@@ -54,7 +67,7 @@ export class RippleExitGate implements Gate<CompletionContext> {
     if (ctx.intentPolicy.mode === "readonly") return pass(ctx), { pass: true }
     const blocking = getBlockingObligations(ctx.pendingRippleObligations)
     if (blocking.length === 0) return pass(ctx), { pass: true }
-    if (ctx.round + 1 >= ctx.maxRounds) return pass(ctx), { pass: true }
+    if (ctx.round + 1 >= ctx.maxRounds) return finalRoundNoEvidence(ctx)
 
     const assistantMsg = compactAssistantContext(ctx.finalText)
     const userMsg = formatRippleExitGateCallers(
@@ -75,7 +88,7 @@ export class PlanningArtifactGate implements Gate<CompletionContext> {
 
   evaluate(ctx: CompletionContext) {
     if (!ctx.taskTracker || ctx.taskTracker.phase !== "planning") return pass(ctx), { pass: true }
-    if (ctx.round + 1 >= ctx.maxRounds) return pass(ctx), { pass: true }
+    if (ctx.round + 1 >= ctx.maxRounds) return finalRoundNoEvidence(ctx)
 
     // User already confirmed — skip gate, enter execution directly
     if (ctx.planApproved) {
@@ -154,7 +167,7 @@ export class TaskTrackerCompletionGate implements Gate<CompletionContext> {
   evaluate(ctx: CompletionContext) {
     const missing = missingTaskRequirements(ctx.taskTracker)
     if (!ctx.taskTracker || taskTrackerComplete(ctx.taskTracker) || missing.length === 0) return pass(ctx), { pass: true }
-    if (ctx.round + 1 >= ctx.maxRounds) return pass(ctx), { pass: true }
+    if (ctx.round + 1 >= ctx.maxRounds) return finalRoundNoEvidence(ctx)
 
     const assistantMsg = compactAssistantContext(ctx.finalText)
     const userMsg = [
@@ -181,7 +194,7 @@ export class QualityGate implements Gate<CompletionContext> {
   evaluate(ctx: CompletionContext) {
     if (ctx.intentPolicy.mode === "readonly") return pass(ctx), { pass: true }
     if (!ctx.taskHadWrite && ctx.taskToolErrors === 0) return pass(ctx), { pass: true }
-    if (ctx.round + 1 >= ctx.maxRounds) return pass(ctx), { pass: true }
+    if (ctx.round + 1 >= ctx.maxRounds) return finalRoundNoEvidence(ctx)
 
     // Build signals from context
     const rippleDecision = ctx.lastRippleReports.some(r => r.decision === "block") ? "block" as const

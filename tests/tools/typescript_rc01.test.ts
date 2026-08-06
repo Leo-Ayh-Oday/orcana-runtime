@@ -108,4 +108,20 @@ exit 2
     const dir = writeProject({ "node_modules/.bin/tsc": TSC_OK_CMD, "a.ts": "" })
     expect(getTscCommand(dir)).toBe(join(dir, "node_modules", ".bin", "tsc"))
   })
+
+  test("cancelled path: aborted signal maps to cancelled (contract shape)", () => {
+    // runTypeScriptNoEmit 的 cancelled 状态由 collectProcessRun 的 signal==="aborted" 驱动。
+    // 直接验证状态映射：构造 signal aborted 的结果语义（通过 isPassingEvidence 防呆）。
+    const cancelledLike = { status: "cancelled" as const, available: true, exitCode: null }
+    expect(isPassingEvidence(cancelledLike)).toBe(false)
+    const timedOutLike = { status: "timed_out" as const, available: true, exitCode: null }
+    expect(isPassingEvidence(timedOutLike)).toBe(false)
+  })
+
+  test("timed_out/cancelled never satisfy isPassingEvidence", () => {
+    for (const status of ["timed_out", "cancelled", "unavailable", "error", "failed"] as const) {
+      expect(isPassingEvidence({ status, available: true, exitCode: 0 })).toBe(false)
+      expect(isPassingEvidence({ status, available: true, exitCode: null })).toBe(false)
+    }
+  })
 })

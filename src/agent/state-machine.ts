@@ -70,12 +70,15 @@ export interface AgentContext {
 
 const ALLOWED_TRANSITIONS: Map<AgentState, Set<AgentState>> = new Map([
   [AgentState.IDLE, new Set<AgentState>([AgentState.UNDERSTAND])],
-  [AgentState.UNDERSTAND, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.BLOCKED])],
-  [AgentState.SEARCH, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.UNDERSTAND, AgentState.BLOCKED])],
-  [AgentState.PLAN, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.BLOCKED])],
-  [AgentState.CODE, new Set<AgentState>([AgentState.VERIFY, AgentState.CODE, AgentState.SEARCH, AgentState.BLOCKED])],
+  // DONE 出口：post-loop updateStateMachine 的 isDone 分支优先（task complete
+  // 可在任意执行状态发生——本轮验证通过、或工具失败后任务恰好完成），
+  // 转换表必须与之一致（此前仅 VERIFY→DONE，REPAIR 等状态完成任务打非法转换）。
+  [AgentState.UNDERSTAND, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.REPAIR, AgentState.DONE, AgentState.BLOCKED])],
+  [AgentState.SEARCH, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.UNDERSTAND, AgentState.REPAIR, AgentState.DONE, AgentState.BLOCKED])],
+  [AgentState.PLAN, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.DONE, AgentState.BLOCKED])],
+  [AgentState.CODE, new Set<AgentState>([AgentState.VERIFY, AgentState.CODE, AgentState.SEARCH, AgentState.REPAIR, AgentState.DONE, AgentState.BLOCKED])],
   [AgentState.VERIFY, new Set<AgentState>([AgentState.DONE, AgentState.REPAIR, AgentState.BLOCKED])],
-  [AgentState.REPAIR, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.BLOCKED])],
+  [AgentState.REPAIR, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.VERIFY, AgentState.DONE, AgentState.BLOCKED])],
   [AgentState.DONE, new Set<AgentState>()],
   [AgentState.BLOCKED, new Set<AgentState>()],
 ])

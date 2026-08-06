@@ -61,9 +61,12 @@ W4 K 系列(46) ──► RC-18 完成 ──► P3 解锁 ───────
   2. 总指挥 b7cf90e 提交时卷走 W3 重新 staged 的 H9 4 文件（rewind.ts/checkpoint.ts/sqlite-session.ts/tests/rewind.test.ts，md5 与 a3c37dd 版相同 = 无损）——**W3 注意：H9 实际入库于 b7cf90e**
   教训：窗口 reset/rebase 与总指挥 add/commit 均构成竞态；总指挥提交改为 add 后立即 commit，窗口 reset 前先通报。
 
-## 当前动作（2026-08-06 18:1x）
+## 当前动作（2026-08-07 08:5x）
 
-1. W3（Linux 域）：✅ PR-10 Gate 回填 5 项全绿（F2/F4/F7/C5/C1，5 commits；F4 修真缺陷×2、F7 修 pid<=0 防护缺失、C5 修无清理路径）→ gate-matrix 5 TBD 已回填 0。下一批候选：RC-11 余项 D4/H8/H9（D4 属 src/session；H8/H9 需查 harness-2.0-plan 与 W4 域重叠后定）
-2. W4：✅ Batch D（e149587+55141ff）K 43/12 → **Batch C 已授权**（K37/K38/K39 + K40 根因 staged.ts）进行中
-3. 总指挥：✅ **P3 收尾完成**——全量 8/8 case 判定通过（C2 假阳性修正后确认）、observations 结论 13-18 + 总裁定"边测边修"（b7cf90e）、探针集代码入库（17f5372）。**11 个专项高难度题：用户已放行移交其他窗口全权执行**（2026-08-06 晚，总指挥今晚休息不再调度）——**执行窗口可自由复用/修改 evals/microbench/context/**（总指挥域已放行），引用探针用法见 observations 结论 13-18 与 run.ts 注释；结果或阻塞向用户汇报
-4. 汇合点：W4 Batch C 已提交（fecc426 H12 清偿）；W3 余批（H9 已入库 b7cf90e，K11 待）；探针集已提交（17f5372）→ 全量门禁 → 0.8.26.2 合流
+1. W3：✅ K11 已提交（3cd8fbd M0 保护空窗关闭）——RC-11 余项清。checkpoint typecheck 红已自愈（bunx tsc 全量零错 ✅）
+2. W4：✅ **H12 技术债清偿完成**（fecc426，21 文件 483+/43-，仅 H12 文件）：BudgetGuard cacheMiss 跨轮累计真 bug 修正（kernel/round.ts + 2 新测试）、LlmAgentNode 证据链 8/8、Node Context 富化（Golden 字节不变 + 6 新测试 + 52/52 回归）、VerificationNode kernelRoundState 全量接线。门禁 build/pack/diff-check 绿
+3. 总指挥：✅ P3 收尾（17f5372）+ 11 题放行（40a9f4f）。**汇合门禁核查中**：typecheck ✅；rc01 5 fail 确认（G1 同类：PR-9 fail-closed 后 executor 测试未适配 authority）
+4. **汇合前待办（用户裁决）**：
+   - **rc01 适配**：tests/tools/typescript_rc01.test.ts 5 fail（executor fail-closed 要求 setExecutionAuthority）——G1 先例裁决测试适配 via withTestAuthority；建议派 W3（0f5a310 同款）或汇合时统一适配
+   - **git_rt8 适配未提交**：tests/tools/git_rt8.test.ts withTestAuthority 完整（已核验）但从未入库——阻塞汇合红线"工作区干净"；归 W1/W2 遗留，建议确认后提交
+5. 汇合点：W3/W4 批次齐（fecc426+3cd8fbd+探针集）→ rc01/git_rt8 清 → 全量门禁 → 0.8.26.2

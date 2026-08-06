@@ -140,7 +140,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   const caps = requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
-  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string }>()
+  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController }>()
 
   const ledger = options.ledger ?? new ResourceLedger()
   const stateStore = options.stateStore ?? new RuntimeStateStore()
@@ -337,7 +337,17 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
 
         const cell: ExecutionCell = { cellId, runId, nodeRunId: compiled.identity.nodeRunId, agentId, spec: compiled, state: "running" }
         cells.set(cellId, cell)
-        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath })
+        // PR-3：每个 Cell 持有自己的 AbortController —— cancelCell 能主动触发
+        // Supervisor 取消信号（不再依赖调用方持有外部 abortSignal）。
+        const controller = new AbortController()
+        if (executeOptions?.abortSignal) {
+          if (executeOptions.abortSignal.aborted) {
+            controller.abort()
+          } else {
+            executeOptions.abortSignal.addEventListener("abort", () => controller.abort(), { once: true })
+          }
+        }
+        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller })
         stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId) })
 
         // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
@@ -345,7 +355,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         try {
           for await (const event of backend.run(compiled, {
             capabilities: caps,
-            abortSignal: executeOptions?.abortSignal,
+            abortSignal: controller.signal,
             cgroupPath: cgroupCellPath,
             materialization,
             attachCell: pid => {
@@ -432,11 +442,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     async cancelCell(cellId) {
       const record = cellRuns.get(cellId)
       if (!record) return
+      // PR-3：AbortController 主动触发 Supervisor 取消（进程组终止），
+      // cgroup.kill 为树级兜底 —— 双通道保证取消生效。
+      record.controller?.abort()
       if (cgroup && record.cgroupCellPath) {
         cgroup.kill(record.cgroupCellPath)
       }
-      // 进程组终止由后端 runSupervised 的 abortSignal 处理；此处 cgroup.kill
-      // 为树级兜底（P0-4/P0-3 修复）。
     },
     async cancelAgent(agentId) {
       domainManager.cancelAgent(agentId)

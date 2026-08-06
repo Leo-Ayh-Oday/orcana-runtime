@@ -75,12 +75,17 @@ async function grep(pattern: string, glob = "*.{ts,tsx,js,jsx,py,rs,go}", maxRes
   return grepNode(pattern, glob, maxResults)
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 async function find_symbol(params: Record<string, unknown>): Promise<ToolResult> {
   const name = String(params.name ?? "")
   const kind = String(params.kind ?? "")
-  const pattern = kind === "function" ? `(def|async def)\\s+${name}\\b` :
-    kind === "class" ? `class\\s+${name}\\b` :
-    `(def|class)\\s+${name}\\b|${name}\\s*[:=]`
+  const escaped = escapeRegExp(name)
+  const pattern = kind === "function" ? `(def|async def)\\s+${escaped}\\b` :
+    kind === "class" ? `class\\s+${escaped}\\b` :
+    `(def|class)\\s+${escaped}\\b|${escaped}\\s*[:=]`
 
   const results = await grep(pattern, "*.{py,ts,tsx,js,jsx,rs,go}", Number(params.max_results ?? 15))
   if (!results.length) return Result.ok(`Symbol '${name}' not found`)
@@ -92,7 +97,7 @@ async function find_symbol(params: Record<string, unknown>): Promise<ToolResult>
 
 async function find_references(params: Record<string, unknown>): Promise<ToolResult> {
   const name = String(params.name ?? "")
-  const results = await grep(`\\b${name}\\b`, "*.{py,ts,tsx,js,jsx,rs,go}", Number(params.max_results ?? 20))
+  const results = await grep(`\\b${escapeRegExp(name)}\\b`, "*.{py,ts,tsx,js,jsx,rs,go}", Number(params.max_results ?? 20))
   if (!results.length) return Result.ok(`No references for '${name}'`)
 
   const lines = [`${results.length} reference(s) to '${name}':`]

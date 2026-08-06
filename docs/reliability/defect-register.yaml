@@ -524,7 +524,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: PLAN_STATE_DECISIONS_WIRED
   files: [src/harness/context/request.ts]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Plan State decisions 来源为空（createContextRequest decisions: [] TODO）
 
 - id: K3
@@ -569,7 +570,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: AUTHORITY_LEVELS_DISTINGUISHED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 不同权威等级内容混成普通 user 消息（权威混淆+注入面）
   related: E3(partial)
 
@@ -587,7 +589,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: TOOL_CHAIN_ID_EXACT_MATCH
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 历史 Tool Chain 验证未按 ID 严格匹配（错配关联）
 
 - id: K10
@@ -773,7 +776,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: PIPELINE_SINGLE_ENTRYPOINT
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Harness Context Pipeline 不是上下文唯一入口（conversation-tail metadata-only）
 
 - id: K30
@@ -781,7 +785,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: PIPELINE_BUDGET_ENABLED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Pipeline 预算分配在生产路径关闭（Budget stays disabled）
 
 - id: K31
@@ -789,7 +794,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: CONTEXT_FRESHNESS_ENFORCED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Freshness/Dedupe 基本未生效（sourceRefs 空/freshness undefined）
 
 - id: K32
@@ -797,7 +803,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: REQUIRED_CONTEXT_REVALIDATED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Required Context 过期/超预算仍保留（无 REVALIDATE 状态）
 
 - id: K33
@@ -805,7 +812,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: TRIM_SEMANTIC_NOT_WHOLESALE
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Trim 整块删除而非语义压缩
 
 - id: K34
@@ -813,7 +821,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: DROPPED_WARNINGS_AUTHORITATIVE
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Pipeline dropped/warnings 未进运行权威状态
 
 - id: K35
@@ -866,6 +875,7 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   invariant: FORK_STABLE_CONTEXT_IMMUTABLE
   files: [src/harness/context/*]
   status: open
+  note: harness 侧契约已就位（文件 digest/指纹、权威标注 @e149587）；根因在 src/context/staged.ts:166（forkStableContext，全仓无调用方休眠代码），随 Batch C 修复
   desc: 子 Agent forkStableContext 放入可变文件内容（缓存命中≠正确）
 
 - id: K41
@@ -973,7 +983,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: CONTEXT_RETENTION_MANIFEST
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Context Retention Manifest（每轮 retained/compressed/archived/dropped）
 
 - id: K53
@@ -981,7 +992,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: CRITICAL_FACT_COVERAGE_GATE
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Critical Fact Coverage Gate（裁剪前验证硬约束/义务/证据覆盖）
 
 - id: K54
@@ -989,7 +1001,8 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: CONTEXT_FRESHNESS_CONTRACT
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Context Freshness Contract（文件=hash/计划=version/证据=generation）
 
 - id: K55
@@ -997,13 +1010,22 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
   wave: RC-18
   invariant: CONTEXT_AUTHORITY_ARBITRATION
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Context 权威冲突检测与仲裁优先级
 
+
+- id: D7
+  severity: P2
+  wave: ORMB-P3
+  invariant: TOOL_PATH_BASE_BOUND
+  files: [src/tools/file.ts]
+  status: open
+  desc: file.ts 纯 Node 工具（write_file/read_file 等）相对路径用 process.cwd() 解析，未绑定 projectRoot/权威 hostRoot（ToolExecutionContext 无 projectRoot 字段）。生产 cwd==projectRoot 无影响；projectRoot≠cwd 场景（ORMB-P3 评测实测：C1 探针任务写 src/sort.ts 落进 orcana 仓库）路径错误且 checkForbiddenFile 同基准放行。评测层已用逐 case chdir 规避；生产修复归 Linux/工具域（file.ts 属 W2 遗留领地）。
 ## 汇总
 
 - 合计: 118（原 63 项 + 上下文全景 K 系列 55 项）
 - 原 63 项: P0 18 / P1 27 / P2 18（A8 B6 C5 D6 E5 F7 G12 H12 X2）
-- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 30（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0；Batch E 14 @1320e25）；open 25
-- 已修总计: 52（原 22 + K4 + Batch A 9 + Batch B 6 + Batch E 14）
+- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 43（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0；Batch E 14 @1320e25；Batch D 13 @e149587）；open 12
+- 已修总计: 65（原 22 + K4 + Batch A 9 + Batch B 6 + Batch E 14 + Batch D 13）
 - 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）

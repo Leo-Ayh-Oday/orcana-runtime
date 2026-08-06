@@ -38,7 +38,7 @@ import {
 import { setCascadeFiles } from "../../ripple/engine"
 import { checkNarrowEditCompletion } from "../completion-orchestrator"
 import { formatRuntimeSelfEditGate, isRuntimeSourceFile, missingExplicitRequiredFiles, rootRuntimeVerificationPassed } from "../round/pre-loop"
-import { runTypeScriptNoEmit } from "../../tools/typescript"
+import { runTypeScriptNoEmit, isPassingEvidence } from "../../tools/typescript"
 import { formatTaskTrackerStatus, snapshotTaskTracker, updateTaskTrackerAfterTools } from "../task-tracker"
 import { getWriteGeneration } from "../../file-state"
 import { currentTransactionEvidenceBinding } from "../patch-transaction"
@@ -140,8 +140,9 @@ export async function* runRippleVerificationPhase(
       verificationState.lastTypecheck = { passed: false, issues: rippleVerification.issues, output: rippleVerification.output || "ripple verification failed" }
       yield { type: "status", data: "ripple-verification: failed; obligations retained" }
     } else if (modifiedFilesThisRound.size > 0) {
-      verificationState.lastTypecheck = { passed: true, issues: 0, output: rippleVerification.output || "tsc unavailable" }
-      yield { type: "status", data: "ripple-verification: skipped; tsc unavailable" }
+      // RC-01: tsc 不可用 ≠ 通过证据；跳过必须显式 unavailable，不得 passed。
+      verificationState.lastTypecheck = { passed: false, status: "unavailable", issues: 0, output: rippleVerification.output || "tsc unavailable" }
+      yield { type: "status", data: "ripple-verification: skipped; tsc unavailable (not counted as pass)" }
     }
     for (const report of rippleReportsThisRound) {
       verificationState.rippleObligations = mergeObligations(
@@ -239,9 +240,11 @@ export async function* runBatchTypecheckAndTaskTracker(
         store: ctx.artifactStore,
         ledger: ctx.evidenceLedger,
         runId: ctx.runId ?? "",
-        passed: tscResult.available ? tscResult.passed : true,
-        issues: tscResult.available ? tscResult.issues : 0,
-        output: tscResult.available ? tscResult.output : (tscResult.output || "tsc unavailable"),
+        // RC-01: unavailable 不得入账为通过。isPassingEvidence 是唯一判定。
+        passed: isPassingEvidence(tscResult),
+        status: tscResult.status,
+        issues: tscResult.issues,
+        output: tscResult.output,
         command: "tsc --noEmit",
         producedBy: "batch_typecheck",
         generation: getWriteGeneration(),
@@ -249,9 +252,11 @@ export async function* runBatchTypecheckAndTaskTracker(
       })
     } else {
       ingestTypecheck(ctx.evidenceLedger, {
-        passed: tscResult.available ? tscResult.passed : true,
-        issues: tscResult.available ? tscResult.issues : 0,
-        output: tscResult.available ? tscResult.output : (tscResult.output || "tsc unavailable"),
+        // RC-01: unavailable 不得入账为通过。isPassingEvidence 是唯一判定。
+        passed: isPassingEvidence(tscResult),
+        status: tscResult.status,
+        issues: tscResult.issues,
+        output: tscResult.output,
         command: "tsc --noEmit",
         generation: getWriteGeneration(),
       })

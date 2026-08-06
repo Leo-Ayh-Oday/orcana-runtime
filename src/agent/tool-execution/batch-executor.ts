@@ -385,16 +385,18 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
       execution.consecutiveErrors = 0
     }
     if (containsTypecheckFailure(resultContent)) {
+      // RC-01: unavailable/失败均不得入账为通过——没有通过证据就是 false。
       verificationState.lastTypecheck = {
-        passed: isVerificationUnavailable(resultContent),
+        passed: false,
+        status: isVerificationUnavailable(resultContent) ? "unavailable" : "failed",
         issues: countTypecheckIssues(resultContent),
         output: resultContent.slice(0, 1000),
       }
     } else if (tc.name === "shell" && /\btsc\b|typescript|typecheck/i.test(String(tc.input.command ?? "")) && !resultObj.success) {
-      const unavailable = isVerificationUnavailable(resultContent)
       verificationState.lastTypecheck = {
-        passed: unavailable,
-        issues: unavailable ? 0 : 1,
+        passed: false,
+        status: isVerificationUnavailable(resultContent) ? "unavailable" : "failed",
+        issues: isVerificationUnavailable(resultContent) ? 0 : 1,
         output: resultContent.slice(0, 1000),
       }
     }

@@ -73,7 +73,7 @@ export interface AgentRunState {
     evidenceLedger: EvidenceLedger
     rippleObligations: RippleObligation[]
     lastResults: VerificationResult[]
-    lastTypecheck?: { passed: boolean; issues: number; output?: string }
+    lastTypecheck?: { passed: boolean; issues: number; output?: string; status?: string }
     lastRippleReports: RippleReport[]
   }
 

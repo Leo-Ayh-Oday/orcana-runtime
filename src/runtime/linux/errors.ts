@@ -40,6 +40,12 @@ export const LINUX_ERROR_CODES = [
   "IMAGE_NOT_APPROVED",
   "MOUNT_SEMANTICS_UNSUPPORTED",
   "WORKSPACE_MISSING",
+  "EXECUTION_AUTHORITY_MISSING",
+  "WORKSPACE_NOT_AUTHORIZED",
+  "WORKSPACE_PATH_ESCAPE",
+  "WORKSPACE_CWD_MISSING",
+  "WORKSPACE_READONLY",
+  "WORKSPACE_OWNER_FILE_VIOLATION",
 ] as const
 
 export type LinuxErrorCode = (typeof LINUX_ERROR_CODES)[number]
@@ -86,6 +92,12 @@ export const LINUX_ERROR_OUTCOME: Record<LinuxErrorCode, LinuxErrorOutcome> = {
   IMAGE_NOT_APPROVED: "execution_failed",
   MOUNT_SEMANTICS_UNSUPPORTED: "execution_failed",
   WORKSPACE_MISSING: "execution_failed",
+  EXECUTION_AUTHORITY_MISSING: "execution_failed",
+  WORKSPACE_NOT_AUTHORIZED: "execution_failed",
+  WORKSPACE_PATH_ESCAPE: "execution_failed",
+  WORKSPACE_CWD_MISSING: "execution_failed",
+  WORKSPACE_READONLY: "execution_failed",
+  WORKSPACE_OWNER_FILE_VIOLATION: "execution_failed",
   PROCESS_CANCELLED: "cancelled",
   PROCESS_TIMEOUT: "timed_out",
 }

@@ -328,8 +328,8 @@ export function executeApplyPatchTransaction(params: Record<string, unknown>, pr
     return Result.fail(`transaction rolled back (nothing written): ${message}`, message)
   }
 
-  // Phase 2 — commit every patch for real (validation already passed, so
-  // this phase cannot fail on content).
+  // Phase 2 — commit every patch for real. RC-03 G1: 阶段 2 存在 TOCTOU
+  // 窗口（base-hash 复查）与 hunk 匹配失败可能——未应用绝不报告"已提交"。
   const all: ApplyFileResult[] = []
   let totalAdditions = 0
   let totalDeletions = 0
@@ -337,6 +337,14 @@ export function executeApplyPatchTransaction(params: Record<string, unknown>, pr
     for (const patch of patches) {
       const expectedHashes = patch.baseHash ? { "*": patch.baseHash } : undefined
       const out = applyDiffString(patch.diff, { projectRoot, dryRun: false, expectedBaseHashes: expectedHashes })
+      const notApplied = out.files.filter(f => !f.applied)
+      if (notApplied.length > 0) {
+        const details = notApplied.map(f => `${f.path}: ${f.error}`).join("; ")
+        return Result.fail(
+          `transaction NOT committed — ${notApplied.length} file(s) failed to apply (possibly modified concurrently): ${details}`,
+          details,
+        )
+      }
       all.push(...out.files)
       totalAdditions += out.totalAdditions
       totalDeletions += out.totalDeletions

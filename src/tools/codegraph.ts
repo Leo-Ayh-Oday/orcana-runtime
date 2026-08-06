@@ -106,7 +106,7 @@ async function project_structure(params: Record<string, unknown>): Promise<ToolR
 
   const lines = [
     `Target project: ${resolve(root)}`,
-    "Boundary: this tree is the user's project. Runtime artifacts such as .orcana are excluded.",
+    "Boundary: user source tree only. Hidden entries, Runtime artifacts (.orcana), and dependency/build directories (node_modules, dist, build, .next, __pycache__, .venv) are skipped.",
   ]
   walk(resolve(root), "", maxDepth, lines)
   return Result.ok(lines.slice(0, 100).join("\n"))
@@ -116,7 +116,7 @@ function walk(dir: string, prefix: string, maxDepth: number, out: string[], dept
   if (depth >= maxDepth) return
   try {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".") && SKIP_DIRS.has(entry.name)) continue
+      if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue
       if (entry.isFile() && SKIP_FILES.has(entry.name)) continue
       const indent = "  ".repeat(depth) + "├─ "
       if (entry.isDirectory()) {

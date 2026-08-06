@@ -1,20 +1,26 @@
 /** LNXF-1.0: cgroup v2 hierarchy + manager (LF-4, plan §11.1–11.4).
  *
- *  Hierarchy: orcana.scope → run-<runId> → {agent-<id>, system} → cell-<id>.
+ *  Hierarchy: base → orcana.scope → run-<runId> → {agent-<id>, system} → cell-<id>.
  *  Cell-level controllers: cpu.max, cpu.weight, memory.high/max,
  *  memory.swap.max, memory.oom.group, pids.max, io.weight. Cancellation =
  *  cgroup.kill (tree). The filesystem layer is injectable so the full
  *  lifecycle is testable without a delegated cgroup.
+ *
+ *  PR-5：移除协议 = cgroupfs 生命周期（kill → 验证 populated=0 → rmdir），
+ *  禁止用普通递归文件删除代替；子层 controller 由父层 subtree_control 授权
+ *  （v2 语义），或cana.scope 在委托点显式创建。
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
+import { sleep } from "../process/termination"
 
 export interface CgroupFs {
   exists(path: string): boolean
   read(path: string): string
   write(path: string, content: string): void
   mkdir(path: string): void
+  /** 非递归 rmdir —— cgroup 生命周期协议；目录必须已空且无进程。 */
   rm(path: string): void
   readdir(path: string): string[]
 }
@@ -31,7 +37,7 @@ export const REAL_CGROUP_FS: CgroupFs = {
     mkdir(path)
   },
   rm(path) {
-    rm(path)
+    rmdir(path)
   },
   readdir(path) {
     return readdir(path)
@@ -47,12 +53,16 @@ function writeFile(path: string, content: string): void {
 function mkdir(path: string): void {
   mkdirSync(path, { recursive: true })
 }
-function rm(path: string): void {
-  rmSync(path, { recursive: true, force: true })
+function rmdir(path: string): void {
+  rmdirSync(path)
 }
 function readdir(path: string): string[] {
   return readdirSync(path)
 }
+
+/** populated=0 等待上限（kill 后进程退出轮询；默认最多 500ms）。 */
+export const POPULATED_WAIT_ATTEMPTS = 20
+export const POPULATED_WAIT_MS = 25
 
 export interface CellLimits {
   cpuQuotaMicros?: number
@@ -93,6 +103,17 @@ export class CgroupManager {
   constructor(options: CgroupManagerOptions) {
     this.base = options.base
     this.fs = options.fs ?? REAL_CGROUP_FS
+    // PR-5：委托点显式创建 orcana.scope 并授权父级 subtree_control。
+    this.ensureScope()
+  }
+
+  /** 委托点创建 orcana.scope + 启用 base 的 subtree_control（v2 授权）。 */
+  private ensureScope(): void {
+    const scope = join(this.base, "orcana.scope")
+    this.enableControllers(this.base, ["cpu", "memory", "pids"])
+    this.ensure(scope)
+    // scope 内部再授权，供 run 层启用子控制器。
+    this.enableControllers(scope, ["cpu", "memory", "pids"])
   }
 
   private ensure(path: string): void {
@@ -108,10 +129,11 @@ export class CgroupManager {
     this.fs.write(full, value)
   }
 
-  /** 创建 Run 层（总资源 + 全局取消点）。 */
+  /** 创建 Run 层（全局取消点 + 树级取消；聚合预算由上层 AgentDomain 提供）。 */
   createRun(runId: string, limits: Partial<CellLimits> = {}): string {
     const { run } = hierarchyPaths(this.base, runId, undefined, "x")
     this.ensure(run)
+    // PR-5：controller 在父层（scope）授权后，run 层再授权给 agent 层。
     this.enableControllers(run, ["cpu", "memory", "pids"])
     if (limits.memoryMaxBytes) this.writeAttr(run, "memory.max", String(limits.memoryMaxBytes))
     if (limits.pidsMax) this.writeAttr(run, "pids.max", String(limits.pidsMax))
@@ -121,10 +143,11 @@ export class CgroupManager {
     return run
   }
 
-  /** 创建 Agent 层。 */
+  /** 创建 Agent 层（Domain 聚合预算；无预算时不设限）。 */
   createAgent(runId: string, agentId: string, limits: Partial<CellLimits> = {}): string {
     const { agent } = hierarchyPaths(this.base, runId, agentId, "x")
     this.ensure(agent)
+    // PR-5：agent 层授权 cell 层使用 controller。
     this.enableControllers(agent, ["cpu", "memory", "pids"])
     if (limits.memoryMaxBytes) this.writeAttr(agent, "memory.max", String(limits.memoryMaxBytes))
     if (limits.pidsMax) this.writeAttr(agent, "pids.max", String(limits.pidsMax))
@@ -132,11 +155,10 @@ export class CgroupManager {
     return agent
   }
 
-  /** 创建 Cell 层（完整限制）。 */
+  /** 创建 Cell 层（完整限制；叶子目录无需 subtree_control）。 */
   createCell(runId: string, agentId: string | undefined, cellId: string, limits: CellLimits): string {
     const { cell } = hierarchyPaths(this.base, runId, agentId, cellId)
     this.ensure(cell)
-    this.enableControllers(cell, ["cpu", "memory", "pids", "io"])
     if (limits.cpuQuotaMicros && limits.cpuPeriodMicros) {
       this.writeAttr(cell, "cpu.max", `${limits.cpuQuotaMicros} ${limits.cpuPeriodMicros}`)
     }
@@ -156,6 +178,7 @@ export class CgroupManager {
     return cell
   }
 
+  /** 在父目录启用 controller 授权（v2：子目录使用某 controller 需父目录授权）。 */
   private enableControllers(path: string, controllers: string[]): void {
     const controlFile = join(path, "cgroup.subtree_control")
     if (!this.fs.exists(controlFile)) return
@@ -192,6 +215,67 @@ export class CgroupManager {
     }
   }
 
+  /** 等待 populated=0（kill 后进程退出；超时返回 false）。 */
+  waitEmpty(path: string): boolean {
+    for (let i = 0; i < POPULATED_WAIT_ATTEMPTS; i++) {
+      const current = this.pidsCurrent(path)
+      if (current === 0) return true
+      if (current < 0) return false
+      sleep(POPULATED_WAIT_MS)
+    }
+    return this.pidsCurrent(path) === 0
+  }
+
+  /** 枚举 cgroup 子树目录（cgroup 目录 = 含 cgroup.procs 的路径）。 */
+  private collectSubtreeDirs(root: string): string[] {
+    const dirs: string[] = [root]
+    const walk = (dir: string): void => {
+      let children: string[] = []
+      try {
+        children = this.fs.readdir(dir)
+      } catch {
+        return
+      }
+      for (const name of children) {
+        const child = join(dir, name)
+        if (this.fs.exists(join(child, "cgroup.procs"))) {
+          dirs.push(child)
+          walk(child)
+        }
+      }
+    }
+    walk(root)
+    return dirs
+  }
+
+  /** 移除 Cell：kill → populated=0 → rmdir（PR-5 生命周期协议）。 */
+  removeCell(cellPath: string): boolean {
+    try {
+      this.kill(cellPath)
+      if (!this.waitEmpty(cellPath)) return false
+      this.fs.rm(cellPath)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 移除整个 run 子树：树级 kill → 自底向上 populated=0 + rmdir。 */
+  removeRun(runPath: string): boolean {
+    try {
+      this.kill(runPath)
+      // 自底向上：先删最深目录（必须等待各级 populated=0）。
+      const dirs = this.collectSubtreeDirs(runPath).sort((a, b) => b.length - a.length)
+      for (const dir of dirs) {
+        if (!this.waitEmpty(dir)) return false
+        this.fs.rm(dir)
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /** 进程计数。 */
   pidsCurrent(path: string): number {
     try {
@@ -221,28 +305,6 @@ export class CgroupManager {
       return out
     } catch {
       return {}
-    }
-  }
-
-  /** 移除 Cell（先 kill）。 */
-  removeCell(cellPath: string): boolean {
-    try {
-      this.kill(cellPath)
-      this.fs.rm(cellPath)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  /** 移除整个 run 子树（cleanup.ts 职责之一）。 */
-  removeRun(runPath: string): boolean {
-    try {
-      this.kill(runPath)
-      this.fs.rm(runPath)
-      return true
-    } catch {
-      return false
     }
   }
 

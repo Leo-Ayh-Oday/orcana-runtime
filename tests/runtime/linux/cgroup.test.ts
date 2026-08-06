@@ -21,14 +21,14 @@ function mockFs(attrs: Record<string, string> = {}, controllers = "cpuset cpu io
   const state = new Map<string, string>(Object.entries(attrs))
   const writes: Array<{ path: string; content: string }> = []
   const dirs = new Set<string>(["/sys/fs/cgroup"])
-  const CELL_ATTRS = ["cgroup.procs", "cgroup.kill", "pids.max", "memory.max", "memory.events", "cpu.max", "memory.oom.group", "memory.current", "cpu.weight", "memory.swap.max", "io.weight", "memory.high", "memory.peak", "pids.peak", "cgroup.controllers"]
+  const CELL_ATTRS = ["cgroup.procs", "cgroup.kill", "pids.max", "pids.current", "memory.max", "memory.events", "cpu.max", "memory.oom.group", "memory.current", "cpu.weight", "memory.swap.max", "io.weight", "memory.high", "memory.peak", "pids.peak", "cgroup.controllers"]
   const mkdirRecursive = (path: string): void => {
     if (path === "/" || dirs.has(path)) return
     const parent = path.slice(0, path.lastIndexOf("/"))
     if (parent) mkdirRecursive(parent)
     dirs.add(path)
     for (const attr of CELL_ATTRS) {
-      state.set(`${path}/${attr}`, attr === "pids.max" ? "max" : attr === "cgroup.kill" ? "" : attr === "memory.events" ? "oom 0\noom_kill 0" : attr === "cgroup.controllers" ? controllers : "0")
+      state.set(`${path}/${attr}`, attr === "pids.max" ? "max" : attr === "pids.current" ? "0" : attr === "cgroup.kill" ? "" : attr === "memory.events" ? "oom 0\noom_kill 0" : attr === "cgroup.controllers" ? controllers : "0")
     }
   }
   const fs: CgroupFs = {
@@ -59,11 +59,12 @@ function mockFs(attrs: Record<string, string> = {}, controllers = "cpuset cpu io
       mkdirRecursive(path)
     },
     rm(path) {
-      for (const key of [...state.keys()]) if (key.startsWith(path)) state.delete(key)
-      for (const dir of [...dirs]) if (dir.startsWith(path)) dirs.delete(dir)
+      // PR-5 语义：非递归 rmdir —— 目录必须已空；子目录由协议自底向上删除。
+      dirs.delete(path)
+      for (const key of [...state.keys()]) if (key.startsWith(path + "/")) state.delete(key)
     },
     readdir(path) {
-      return [...dirs].filter(d => d.startsWith(path + "/")).map(d => d.slice(path.length + 1).split("/")[0] ?? "")
+      return [...new Set([...dirs].filter(d => d.startsWith(path + "/")).map(d => d.slice(path.length + 1).split("/")[0] ?? ""))]
     },
   }
   return { fs, writes, state }
@@ -169,6 +170,85 @@ describe("LF-4: manager (mock fs)", () => {
     const scopes = scanOrcanaScopes(fs, BASE)
     expect(scopes).toContain("run-zombie-1")
     expect(scopes).toContain("run-zombie-2")
+  })
+})
+
+describe("PR-5: cgroup lifecycle protocol", () => {
+  test("constructor creates orcana.scope at the delegation point", () => {
+    const { fs } = mockFs()
+    const manager = new CgroupManager({ base: BASE, fs })
+    expect(fs.exists(`${BASE}/orcana.scope`)).toBe(true)
+    const run = manager.createRun("r1")
+    expect(fs.exists(run)).toBe(true)
+  })
+
+  test("removeCell uses kill → populated=0 → non-recursive rmdir", () => {
+    const { fs } = mockFs()
+    let rmCalls: string[] = []
+    const manager = new CgroupManager({
+      base: BASE,
+      fs: {
+        ...fs,
+        rm: p => { rmCalls.push(p); fs.rm(p) },
+      },
+    })
+    const cell = manager.createCell("r1", "a1", "c1", { memoryMaxBytes: 1024, pidsMax: 5 })
+    expect(manager.removeCell(cell)).toBe(true)
+    // 非递归 rmdir：恰好一次调用，目标是 cell 目录本身
+    expect(rmCalls).toEqual([cell])
+    expect(fs.exists(cell)).toBe(false)
+    // 父级保留（只删 cell）
+    expect(fs.exists(`${BASE}/orcana.scope/run-r1/agent-a1`)).toBe(true)
+  })
+
+  test("removeRun removes the whole subtree bottom-up (leaf first)", () => {
+    const { fs } = mockFs()
+    let rmCalls: string[] = []
+    const manager = new CgroupManager({
+      base: BASE,
+      fs: {
+        ...fs,
+        rm: p => { rmCalls.push(p); fs.rm(p) },
+      },
+    })
+    const run = manager.createRun("r1")
+    manager.createAgent("r1", "a1", {})
+    manager.createCell("r1", "a1", "c1", { memoryMaxBytes: 1024, pidsMax: 5 })
+    expect(manager.removeRun(run)).toBe(true)
+    // 自底向上：cell 先于 agent 先于 run 删除
+    const cell = `${run}/agent-a1/cell-c1`
+    const agent = `${run}/agent-a1`
+    expect(rmCalls).toEqual([cell, agent, run])
+    expect(fs.exists(run)).toBe(false)
+  })
+
+  test("removeCell refuses when populated stays non-zero (waitEmpty fails)", () => {
+    const { fs, state } = mockFs()
+    const manager = new CgroupManager({ base: BASE, fs })
+    const cell = manager.createCell("r1", "a1", "c1", { memoryMaxBytes: 1024, pidsMax: 5 })
+    // 模拟进程未退出：pids.current 恒 > 0
+    state.set(`${cell}/pids.current`, "3")
+    expect(manager.removeCell(cell)).toBe(false)
+    // 未删除 —— 调用方必须继续清理（fail-closed）
+    expect(fs.exists(cell)).toBe(true)
+  })
+
+  test("kill → waitEmpty → rmdir order is enforced (CGROUP_LEAK: 0 protocol)", () => {
+    const { fs } = mockFs()
+    const events: string[] = []
+    const manager = new CgroupManager({
+      base: BASE,
+      fs: {
+        ...fs,
+        write: (p, c) => { if (p.endsWith("cgroup.kill")) events.push("kill"); fs.write(p, c) },
+        rm: p => { events.push("rmdir"); fs.rm(p) },
+      },
+    })
+    const cell = manager.createCell("r1", "a1", "c1", { memoryMaxBytes: 1024, pidsMax: 5 })
+    expect(manager.removeCell(cell)).toBe(true)
+    // kill 先于 rmdir
+    expect(events.indexOf("kill")).toBeGreaterThan(-1)
+    expect(events.indexOf("kill")).toBeLessThan(events.indexOf("rmdir"))
   })
 })
 

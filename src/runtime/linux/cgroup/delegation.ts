@@ -6,7 +6,7 @@
  *  is marked degraded; strict profiles refuse).
  */
 
-import { existsSync, readdirSync, writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, readdirSync, writeFileSync, mkdirSync, readFileSync, rmdirSync } from "node:fs"
 import { join } from "node:path"
 import type { CgroupFs } from "./manager"
 
@@ -43,7 +43,7 @@ export const REAL_DELEGATION_FS: CgroupFs = {
     mkdirSync(path, { recursive: true })
   },
   rm(path) {
-    rmSync(path, { recursive: true, force: true })
+    rmdirSync(path)
   },
   readdir(path) {
     return readdirSync(path)
@@ -59,7 +59,7 @@ function probeWritable(dir: string): boolean {
     const probe = join(dir, `.probe-${process.pid}`)
     mkdirSync(probe, { recursive: true })
     writeFileSync(join(probe, "pids.max"), "max")
-    rmSync(probe, { recursive: true, force: true })
+    rmdirSync(probe)
     return true
   } catch {
     return false

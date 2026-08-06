@@ -300,6 +300,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       const lockKeys: string[] = []
       // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
       let cellReceipt: SandboxReceipt | undefined
+      // PR-5：attach 失败不再吞掉 —— 记入 Receipt degradation（fail-closed 审计）。
+      let attachFailure: string | undefined
       try {
         // Isolation Lock（PR-4）：worktreeRoot + agentId → 按 Agent 的 worktree
         // 独占；worktreeRoot 无 agentId（工具投影）→ main-workspace 独占（正式
@@ -324,8 +326,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           cgroupRunPath = hierarchyPaths(cgroup.base, runId, undefined, "x").run
           cgroupAgentPath = domain?.cgroupPath ?? hierarchyPaths(cgroup.base, runId, agentId, "x").agent
           if (!domain?.cgroupPath) {
-            cgroup.createRun(runId, { memoryMaxBytes: compiled.resources.memoryMaxBytes, pidsMax: compiled.resources.pidsMax })
-            if (agentId) cgroup.createAgent(runId, agentId, { memoryMaxBytes: compiled.resources.memoryMaxBytes, pidsMax: compiled.resources.pidsMax })
+            // PR-5：Run/Agent 层不重复使用单个 Cell 的预算 —— 聚合预算只来自
+            // AgentDomain（createAgentDomain 已按 budget 创建）；无 Domain 时
+            // 上层不设限（资源约束由 Cell 层承担），避免"单 Cell 预算冒充聚合"。
+            cgroup.createRun(runId)
+            if (agentId) cgroup.createAgent(runId, agentId)
           }
           cgroupCellPath = cgroup.createCell(runId, agentId, cellId, {
             memoryMaxBytes: compiled.resources.memoryMaxBytes,
@@ -365,8 +370,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               if (cgroup && cgroupCellPath) {
                 try {
                   cgroup.attach(pid, cgroupCellPath)
-                } catch {
-                  // attach 失败不阻断执行（CGROUP_ATTACH_FAILED 记入 Receipt degradation）
+                } catch (error) {
+                  attachFailure = `CGROUP_ATTACH_FAILED: ${error instanceof Error ? error.message : String(error)}`
                 }
               }
             },
@@ -410,9 +415,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             }
           }
           if (cellReceipt) {
-            // 最终 Receipt：合并真实清理结果，重算自摘要后持久化。
+            // 最终 Receipt：合并真实清理结果 + attach 失败降级，重算自摘要后持久化。
             const finalReceipt: SandboxReceipt = {
               ...cellReceipt,
+              degradationReasons: attachFailure
+                ? [...cellReceipt.degradationReasons, attachFailure]
+                : cellReceipt.degradationReasons,
               cleanup: {
                 ...cellReceipt.cleanup,
                 cgroupRemoved: cgroupRemoved || cellReceipt.cleanup.cgroupRemoved,

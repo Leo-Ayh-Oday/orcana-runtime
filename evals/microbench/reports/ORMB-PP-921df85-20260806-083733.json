@@ -1,0 +1,2078 @@
+{
+  "header": {
+    "suite": "ORMB-PP",
+    "orcanaCommit": "921df85",
+    "modelRequested": "deepseek-v4-flash",
+    "reasoningEffort": "none",
+    "seed": 42,
+    "configurationDigest": "PP-mock-v1",
+    "startedAt": "2026-08-06T00:37:33.092Z"
+  },
+  "suite": "ORMB-PP",
+  "cases": [
+    {
+      "caseId": "PP-M01",
+      "title": "正常 thinking → tool → final 三阶段完整流",
+      "tags": [
+        "mock",
+        "normal"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "thinking 完整捕获",
+          "passed": true,
+          "detail": "[{\"thinking\":\"让我先分析\",\"signature\":\"sig-1\"}]"
+        },
+        {
+          "label": "thinking 内容与签名正确",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "tool call 完整解析",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "tool_use 轮不产 done",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "a.ts"
+            }
+          },
+          "seq": 3
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "让我先分析",
+              "signature": "sig-1"
+            }
+          ],
+          "seq": 4
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 3,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M02",
+      "title": "无 thinking 的 tool → final 两轮 Tool Loop",
+      "tags": [
+        "mock",
+        "two-round",
+        "normal"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "tool call 恰好一次",
+          "passed": true,
+          "detail": "round2 无重复"
+        },
+        {
+          "label": "round2 final 文本正确",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "round2 产 done",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "a.ts"
+            }
+          },
+          "seq": 3
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 4
+        },
+        {
+          "type": "text",
+          "data": "文件内容是 42",
+          "seq": 5
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 6
+        },
+        {
+          "type": "done",
+          "data": "文件内容是 42",
+          "seq": 7
+        }
+      ],
+      "calls": 2,
+      "retries": 1,
+      "sleepsMs": [],
+      "durationMs": 2,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M03",
+      "title": "thinking signature 缺失仍正常",
+      "tags": [
+        "mock",
+        "thinking"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "signature 缺失被容忍",
+          "passed": true,
+          "detail": "thinking=\"分析内容\""
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "产 done",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "答案",
+          "seq": 2
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 3
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "分析内容",
+              "signature": ""
+            }
+          ],
+          "seq": 4
+        },
+        {
+          "type": "done",
+          "data": "答案",
+          "seq": 5
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 1,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M04",
+      "title": "thinking 空内容不产 thinking_blocks",
+      "tags": [
+        "mock",
+        "thinking"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "空 thinking 不 emit",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "产 done",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "ok",
+          "seq": 2
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 3
+        },
+        {
+          "type": "done",
+          "data": "ok",
+          "seq": 4
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M05",
+      "title": "Tool JSON 分片累积（3 片拼接）",
+      "tags": [
+        "mock",
+        "tool-json"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "分片拼接后解析正确",
+          "passed": true,
+          "detail": "input={\"path\":\"x.txt\",\"content\":\"hi\"}"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "write_file",
+            "input": {
+              "path": "x.txt",
+              "content": "hi"
+            }
+          },
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M06",
+      "title": "Tool JSON 尾逗号修复",
+      "tags": [
+        "mock",
+        "tool-json",
+        "repair"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "尾逗号修复",
+          "passed": true,
+          "detail": "input={\"path\":\"x.txt\",\"content\":\"hi\"}"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "write_file",
+            "input": {
+              "path": "x.txt",
+              "content": "hi"
+            }
+          },
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 1,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M07",
+      "title": "Tool JSON Python 字面量修复",
+      "tags": [
+        "mock",
+        "tool-json",
+        "repair"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "Python 字面量修复",
+          "passed": true,
+          "detail": "input={\"enabled\":true,\"retries\":3}"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "run_process",
+            "input": {
+              "enabled": true,
+              "retries": 3
+            }
+          },
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M08",
+      "title": "Tool JSON 缺闭合括号修复",
+      "tags": [
+        "mock",
+        "tool-json",
+        "repair"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "缺闭合括号修复",
+          "passed": true,
+          "detail": "input={\"path\":\"x.txt\"}"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "x.txt"
+            }
+          },
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M09",
+      "title": "Tool JSON 字段别名修复",
+      "tags": [
+        "mock",
+        "tool-json",
+        "repair"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "字段别名修复",
+          "passed": true,
+          "detail": "input={\"path\":\"x.txt\",\"content\":\"hi\"}"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "x.txt",
+              "content": "hi"
+            }
+          },
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M10",
+      "title": "Tool JSON 不可修复 → 拒绝执行",
+      "tags": [
+        "mock",
+        "tool-json",
+        "repair"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "不可修复 JSON 报错",
+          "passed": true,
+          "detail": "error=provider returned invalid tool call JSON for write_file"
+        },
+        {
+          "label": "无 tool_call 泄漏",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "error",
+          "data": "provider returned invalid tool call JSON for write_file",
+          "seq": 2
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M11",
+      "title": "Tool Call 输出一半断流 → incomplete",
+      "tags": [
+        "mock",
+        "tool-json"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "半途断流报 incomplete",
+          "passed": true,
+          "detail": "error=provider stream ended with an incomplete tool call"
+        },
+        {
+          "label": "无 tool_call 泄漏",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "error",
+          "data": "provider stream ended with an incomplete tool call",
+          "seq": 2
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M12",
+      "title": "content_block_start 携带完整 tool input",
+      "tags": [
+        "mock",
+        "tool-json"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "initialInput 直接使用",
+          "passed": true,
+          "detail": "input={\"path\":\"/src\"}"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "list_files",
+            "input": {
+              "path": "/src"
+            }
+          },
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M13",
+      "title": "text 输出后断网 → 不重试",
+      "tags": [
+        "mock",
+        "retry",
+        "network"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "断流后不重试",
+          "passed": true,
+          "detail": "calls=1"
+        },
+        {
+          "label": "已输出 text 保留",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无第二次流输出",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "报 network 错误",
+          "passed": true,
+          "detail": "error=network: connection reset"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "部分回答",
+          "seq": 2
+        },
+        {
+          "type": "error",
+          "data": "network: connection reset",
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 1,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M14",
+      "title": "429 + Retry-After → 重试成功",
+      "tags": [
+        "mock",
+        "retry",
+        "rate-limit"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "429 后重试",
+          "passed": true,
+          "detail": "calls=2"
+        },
+        {
+          "label": "Retry-After 生效",
+          "passed": true,
+          "detail": "sleeps=[1000]"
+        },
+        {
+          "label": "retry 状态上报",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "最终正常完成",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "status",
+          "data": "provider retry: rate_limit 429, waiting 1s (1/2)",
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "ok",
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 4
+        },
+        {
+          "type": "done",
+          "data": "ok",
+          "seq": 5
+        }
+      ],
+      "calls": 2,
+      "retries": 1,
+      "sleepsMs": [
+        1000
+      ],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M15",
+      "title": "500 → 指数退避重试成功",
+      "tags": [
+        "mock",
+        "retry",
+        "server"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "500 后重试",
+          "passed": true,
+          "detail": "calls=2"
+        },
+        {
+          "label": "基础退避 1s",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "最终正常完成",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "status",
+          "data": "provider retry: server 500, waiting 1s (1/2)",
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "recovered",
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 4
+        },
+        {
+          "type": "done",
+          "data": "recovered",
+          "seq": 5
+        }
+      ],
+      "calls": 2,
+      "retries": 1,
+      "sleepsMs": [
+        1000
+      ],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M16",
+      "title": "capacity_error → 长退避重试",
+      "tags": [
+        "mock",
+        "retry",
+        "capacity"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "capacity 重试",
+          "passed": true,
+          "detail": "calls=2"
+        },
+        {
+          "label": "capacity 退避 5s",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "capacity 状态上报",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "status",
+          "data": "provider retry: capacity 503, waiting 5s (1/2)",
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "up",
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 4
+        },
+        {
+          "type": "done",
+          "data": "up",
+          "seq": 5
+        }
+      ],
+      "calls": 2,
+      "retries": 1,
+      "sleepsMs": [
+        5000
+      ],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M17",
+      "title": "quota 耗尽 → 不重试",
+      "tags": [
+        "mock",
+        "retry",
+        "quota"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "quota 不重试",
+          "passed": true,
+          "detail": "calls=1"
+        },
+        {
+          "label": "无 retry 状态",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "报 quota 错误",
+          "passed": true,
+          "detail": "error=quota 429: insufficient_quota: Your account balance is too low"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "error",
+          "data": "quota 429: insufficient_quota: Your account balance is too low",
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M18",
+      "title": "401 认证失败 → 不重试",
+      "tags": [
+        "mock",
+        "retry",
+        "auth"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "401 不重试",
+          "passed": true,
+          "detail": "calls=1"
+        },
+        {
+          "label": "报 auth 错误",
+          "passed": true,
+          "detail": "error=auth 401: invalid api key"
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "error",
+          "data": "auth 401: invalid api key",
+          "seq": 1
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M19",
+      "title": "本地 abort → 流关闭 + 无残留",
+      "tags": [
+        "mock",
+        "abort"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "底层流已关闭",
+          "passed": true,
+          "detail": "closed=[\"controller.abort\",\"stream.abort\",\"stream.return\",\"stream.return\"]"
+        },
+        {
+          "label": "abort 后不再产出",
+          "passed": true,
+          "detail": "text=\"ab\""
+        },
+        {
+          "label": "abort 状态上报",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "abort 非错误",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "abort 无 done",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "a",
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "b",
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stream: aborted by local budget guard",
+          "seq": 4
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 1,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M20",
+      "title": "EOF 无 stop_reason → interrupted",
+      "tags": [
+        "mock",
+        "stop-reason"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "EOF 报 interrupted",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无 done",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "partial answer",
+          "seq": 2
+        },
+        {
+          "type": "error",
+          "data": "provider stream ended unexpectedly without stop_reason",
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M21",
+      "title": "max_tokens 截断 → 可恢复错误",
+      "tags": [
+        "mock",
+        "stop-reason"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "max_tokens 状态上报",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "报 max_tokens 错误",
+          "passed": true,
+          "detail": "error=provider stop_reason=max_tokens: response hit the output token limit before completion"
+        },
+        {
+          "label": "无 done",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "已输出文本保留",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "partial table",
+          "seq": 2
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: max_tokens",
+          "seq": 3
+        },
+        {
+          "type": "error",
+          "data": "provider stop_reason=max_tokens: response hit the output token limit before completion",
+          "seq": 4
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M22",
+      "title": "actualModel 与 requestedModel 不一致 → 上报",
+      "tags": [
+        "mock",
+        "model",
+        "telemetry"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "actualModel 已上报",
+          "passed": true,
+          "detail": "actual=deepseek-v4-flash-0123"
+        },
+        {
+          "label": "requestedModel 保留",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash-0123",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "x",
+          "seq": 2
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 3
+        },
+        {
+          "type": "done",
+          "data": "x",
+          "seq": 4
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash-0123",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M23",
+      "title": "actualModel 与 requestedModel 一致",
+      "tags": [
+        "mock",
+        "model",
+        "telemetry"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "actualModel 一致上报",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "x",
+          "seq": 2
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 3
+        },
+        {
+          "type": "done",
+          "data": "x",
+          "seq": 4
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M24",
+      "title": "多 tool call 顺序保持，无重复无丢失",
+      "tags": [
+        "mock",
+        "multi-tool"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "2 个 tool call",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "顺序保持",
+          "passed": true,
+          "detail": "t1,t2"
+        },
+        {
+          "label": "id 无重复",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "a.ts"
+            }
+          },
+          "seq": 3
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t2",
+            "name": "write_file",
+            "input": {
+              "path": "b.ts",
+              "content": "x"
+            }
+          },
+          "seq": 4
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M25",
+      "title": "usage 遥测完整捕获",
+      "tags": [
+        "mock",
+        "telemetry"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "inputTokens=100",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "outputTokens=5",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "cacheRead=60",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "cacheCreation=30",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "inputTokens": 100,
+            "outputTokens": 5,
+            "cacheReadInputTokens": 60,
+            "cacheCreationInputTokens": 30,
+            "cacheMissInputTokens": 40,
+            "source": "provider",
+            "cacheHitRate": 60,
+            "outputShare": 4.8,
+            "missShare": 38.1,
+            "claudeStyleCacheShape": false,
+            "requestedModel": "deepseek-v4-flash",
+            "purpose": "agent_main"
+          },
+          "seq": 1
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "ok",
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 4
+        },
+        {
+          "type": "done",
+          "data": "ok",
+          "seq": 5
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 1,
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 5,
+        "cacheReadInputTokens": 60,
+        "cacheCreationInputTokens": 30,
+        "cacheMissInputTokens": 40,
+        "source": "provider",
+        "cacheHitRate": 60,
+        "outputShare": 4.8,
+        "missShare": 38.1,
+        "claudeStyleCacheShape": false,
+        "requestedModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "actualModel": "deepseek-v4-flash"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M26",
+      "title": "thinking + 2 tool 混合流顺序",
+      "tags": [
+        "mock",
+        "thinking",
+        "multi-tool"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "thinking 捕获",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "tool 顺序正确",
+          "passed": true,
+          "detail": "search_files,read_file"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "search_files",
+            "input": {
+              "query": "x"
+            }
+          },
+          "seq": 3
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t2",
+            "name": "read_file",
+            "input": {
+              "path": "y"
+            }
+          },
+          "seq": 4
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "先思考",
+              "signature": "sig"
+            }
+          ],
+          "seq": 5
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M27",
+      "title": "text + tool + text 混合（无 done）",
+      "tags": [
+        "mock",
+        "mixed"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "text 流式完整",
+          "passed": true,
+          "detail": "\"先分析后结论\""
+        },
+        {
+          "label": "tool call 完整",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "有 tool 的轮不产 done",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "text",
+          "data": "先分析",
+          "seq": 2
+        },
+        {
+          "type": "text",
+          "data": "后结论",
+          "seq": 3
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 4
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "a.ts"
+            }
+          },
+          "seq": 5
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M28",
+      "title": "两轮 Tool Loop 连续性（tool→final）",
+      "tags": [
+        "mock",
+        "two-round",
+        "normal"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "tool_call 全程一次",
+          "passed": true,
+          "detail": "got 1"
+        },
+        {
+          "label": "round2 final 文本",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "round2 产 done",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: tool_use",
+          "seq": 2
+        },
+        {
+          "type": "tool_call",
+          "data": {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "a.ts"
+            }
+          },
+          "seq": 3
+        },
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 4
+        },
+        {
+          "type": "text",
+          "data": "答案 = 42",
+          "seq": 5
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 6
+        },
+        {
+          "type": "done",
+          "data": "答案 = 42",
+          "seq": 7
+        }
+      ],
+      "calls": 2,
+      "retries": 1,
+      "sleepsMs": [],
+      "durationMs": 1,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M29",
+      "title": "空响应正常结束（无内容无 tool）",
+      "tags": [
+        "mock",
+        "edge"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "无 tool_call",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "空响应无 done 无 text",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "label": "stop 状态上报",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 2
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    },
+    {
+      "caseId": "PP-M30",
+      "title": "thinking 无 content_block_stop → recovery 捕获",
+      "tags": [
+        "mock",
+        "thinking",
+        "edge"
+      ],
+      "passed": true,
+      "assertions": [
+        {
+          "label": "recovery 捕获 thinking",
+          "passed": true,
+          "detail": "[{\"thinking\":\"只分析了半段\",\"signature\":\"sig\"}]"
+        },
+        {
+          "label": "无错误",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "failures": [],
+      "trace": [
+        {
+          "type": "token_usage",
+          "data": {
+            "requestedModel": "deepseek-v4-flash",
+            "actualModel": "deepseek-v4-flash",
+            "purpose": "agent_main",
+            "source": "provider"
+          },
+          "seq": 1
+        },
+        {
+          "type": "status",
+          "data": "provider-stop: end_turn",
+          "seq": 2
+        },
+        {
+          "type": "thinking_blocks",
+          "data": [
+            {
+              "thinking": "只分析了半段",
+              "signature": "sig"
+            }
+          ],
+          "seq": 3
+        }
+      ],
+      "calls": 1,
+      "retries": 0,
+      "sleepsMs": [],
+      "durationMs": 0,
+      "usage": {
+        "requestedModel": "deepseek-v4-flash",
+        "actualModel": "deepseek-v4-flash",
+        "purpose": "agent_main",
+        "source": "provider"
+      },
+      "modelRequested": "deepseek-v4-flash"
+    }
+  ],
+  "hardGates": {
+    "DUPLICATE_TOOL_CALL": 0,
+    "TOOL_RESULT_MISMATCH": 0,
+    "RETRY_AFTER_SIDE_EFFECT": 0,
+    "LOST_TOOL_CALL": 0,
+    "MISSING_STOP_REASON_ACCEPTED": 0,
+    "SILENT_MODEL_SWITCH": 0,
+    "TOKEN_TELEMETRY_MISSING": 0,
+    "ABORT_IGNORED": 0
+  },
+  "summary": {
+    "total": 30,
+    "passed": 30,
+    "failed": 0,
+    "passRate": 100
+  },
+  "generatedAt": "2026-08-06T00:37:33.092Z"
+}

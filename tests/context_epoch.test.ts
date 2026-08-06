@@ -354,10 +354,12 @@ describe("epochRollover", () => {
     ]
     const result = epochRollover(messages, 1, "ps", state, 10)
     if (!("blocked" in result)) {
-      // charsTrimmed = charsBefore - charsAfter, where charsAfter is retainedMessages only
-      const retained = result.messages.slice(1) // skip preamble
-      const expectedTrimmed = totalMessageChars(messages) - totalMessageChars(retained)
-      expect(result.charsTrimmed).toBe(expectedTrimmed)
+      // charsTrimmed must equal the NET context reduction: the preamble
+      // replaces the archived messages, so its own chars are not "trimmed".
+      const netTrimmed = totalMessageChars(messages) - totalMessageChars(result.messages)
+      expect(result.charsTrimmed).toBe(netTrimmed)
+      const grossTrimmed = totalMessageChars(messages) - totalMessageChars(result.messages.slice(1))
+      expect(result.charsTrimmed).toBeLessThan(grossTrimmed)
     }
   })
 })

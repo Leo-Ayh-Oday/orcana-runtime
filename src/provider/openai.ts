@@ -12,7 +12,7 @@
  */
 
 import type { StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage } from "./types"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs } from "./retry"
+import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt } from "./retry"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
 
@@ -86,12 +86,13 @@ export class OpenAIProvider implements LLMProvider {
     const body = this.buildRequestBody(options)
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      let unsafeToRetry = false
       try {
-        yield* this.streamOnce(body, options)
+        yield* this.streamOnce(body, value => { unsafeToRetry = value }, options)
         return
       } catch (e) {
         const info = classifyProviderError(e)
-        const canRetry = info.retryable && attempt < this.maxRetries
+        const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry)
         if (!canRetry) {
           yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
           return
@@ -228,6 +229,7 @@ export class OpenAIProvider implements LLMProvider {
 
   private async *streamOnce(
     body: Record<string, unknown>,
+    markUnsafeToRetry: (value: boolean) => void,
     options: ProviderCallOptions,
   ): AsyncGenerator<StreamEvent> {
     const response = await this.fetchFn(this.chatCompletionsURL(), {
@@ -292,11 +294,13 @@ export class OpenAIProvider implements LLMProvider {
               const delta = choice.delta
 
               if (delta.content) {
+                markUnsafeToRetry(true)
                 textChunks.push(delta.content)
                 yield { type: "text", data: delta.content }
               }
 
               if (delta.tool_calls) {
+                markUnsafeToRetry(true)
                 for (const tc of delta.tool_calls) {
                   const existing = toolCalls.get(tc.index)
                   if (!existing || (tc.id && existing.id && tc.id !== existing.id)) {

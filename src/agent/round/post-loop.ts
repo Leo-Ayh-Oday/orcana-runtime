@@ -24,15 +24,16 @@ export async function runPostEditDiagnostics(path: string, result: { success: bo
       if (ruff.stdout.trim()) diagnostics = ruff.stdout.trim()
     }
     if (path.endsWith(".ts") || path.endsWith(".tsx")) {
-      // LSP fast path: notify change + read cached diagnostics for this file
+      // LSP fast path: notify change, wait a tick for publishDiagnostics, then read cache.
+      // RC-03 A8: 无诊断（null）≠ 通过——回退 tsc ground truth，不静默漏报。
       const lsp = getLSPClient()
-      lsp.notifyChange(path).catch(() => {})
-      // Small delay for LSP to process (non-blocking — we just wait a tick)
+      await lsp.notifyChange(path).catch(() => {})
+      await new Promise(resolve => setTimeout(resolve, 100))
       const lspResult = lsp.getVerificationResult(path)
       if (lspResult && lspResult.issues > 0) {
         diagnostics = lspResult.summary
-      } else if (!lsp.isAvailable) {
-        // LSP unavailable — fall back to full tsc (preserved ground truth)
+      } else if (!lspResult || !lsp.isAvailable) {
+        // LSP 无该文件诊断或不可用 —— 回退全量 tsc（preserved ground truth）
         const check = await runTypeScriptNoEmit(process.cwd())
         const out = check.passed ? "" : check.output
         if (out.trim() && out.includes(path)) diagnostics = out.trim().split("\n").filter(l => l.includes(path)).join("\n")

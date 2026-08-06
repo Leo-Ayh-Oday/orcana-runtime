@@ -8,7 +8,7 @@
 import { spawnSyncLegacy } from "../../runtime/legacy-process"
 const spawnSync = spawnSyncLegacy
 import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
-import { join, resolve, sep } from "node:path"
+import { isAbsolute, join, resolve, sep } from "node:path"
 
 export interface WorktreeHandle {
   agentId: string
@@ -59,8 +59,10 @@ function snapshotCopy(src: string, dst: string): void {
   }
 }
 
-/** Create an isolated worktree for an agent. */
-export function createWorktree(projectRoot: string, agentId: string, files?: string[]): WorktreeHandle {
+/** Create an isolated worktree for an agent.
+ *  `declaredRoot` (M18): the AgentSpec.worktree root is authoritative when
+ *  declared — the execution root must match what the pool configured. */
+export function createWorktree(projectRoot: string, agentId: string, files?: string[], declaredRoot?: string): WorktreeHandle {
   // M2/M3: validate BEFORE any fs mutation — an escaping agent id would make
   // the rmSync below target an arbitrary directory; escaping owner files
   // would read from / write to outside the project. Both fail closed.
@@ -69,11 +71,14 @@ export function createWorktree(projectRoot: string, agentId: string, files?: str
       `worktree: invalid agent id "${agentId}" (must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)`,
     )
   }
+  if (declaredRoot !== undefined && !isAbsolute(declaredRoot)) {
+    throw new Error(`worktree: declared root for agent "${agentId}" must be an absolute path (got "${declaredRoot}")`)
+  }
   for (const file of files ?? []) {
     assertContained(projectRoot, file, "project root")
-    assertContained(worktreeRoot(projectRoot, agentId), file, "worktree root")
+    assertContained(declaredRoot ?? worktreeRoot(projectRoot, agentId), file, "worktree root")
   }
-  const root = worktreeRoot(projectRoot, agentId)
+  const root = declaredRoot ?? worktreeRoot(projectRoot, agentId)
   rmSync(root, { recursive: true, force: true })
   mkdirSync(root, { recursive: true })
 

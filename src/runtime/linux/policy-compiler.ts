@@ -13,10 +13,11 @@
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
 import { existsSync, realpathSync } from "node:fs"
 import { randomUUID } from "node:crypto"
-import type { CapabilityRequest, ExecutionCellSpec, ExecutionProfile, IsolationMinimum, MountRule, NetworkMode } from "./contracts"
+import type { ExecutionCellSpec, ExecutionProfile, IsolationMinimum, MountRule, NetworkMode, TrustedExecutionAuthority, UntrustedCapabilityRequest } from "./contracts"
 import { LinuxExecutionError } from "./errors"
 import { hostKeyDenied } from "./environment"
 import { applyProfileDefaults, profileDefaults, PROFILE_DEFAULTS } from "./profiles"
+import { WorkspaceAuthorityRegistry } from "./workspace/workspace-authority"
 
 /** 隔离等级序：audit < namespace < container（数字越大越严格）。 */
 const ISOLATION_LEVEL: Record<IsolationMinimum, number> = { audit: 0, namespace: 1, container: 2 }
@@ -241,40 +242,59 @@ export function compileCellSpec(
   return { ok: true, spec: deepFreeze(withDigest) }
 }
 
-export interface CompileRequestContext {
-  runId?: string
-  nodeRunId?: string
-  agentId?: string
-  assignmentId?: string
-  attempt?: number
-}
+/** R2 PR-9：Untrusted Capability Request + Trusted Execution Authority
+ *  → 冻结 Spec（INV-A/INV-B）。
+ *
+ *  身份（runId/nodeRunId/attempt/agentId/assignmentId）只来自 authority；
+ *  worktreeRoot/ownerFiles 只来自 authority.workspace；command.cwd 由
+ *  authority.workspace + relativeCwd 权威解析。请求不得覆盖任何权威字段。
+ */
+/** B2（R2）：namespace/container 隔离下沙盒可继承的安全宿主键 ——
+ *  registry 凭据键（NPM_CONFIG_* / YARN_* / PNPM_* / BUN_*）被裁剪。 */
+const SAFE_SANDBOX_HOST_KEYS = [
+  "PATH", "HOME", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
+  "TERM", "CI", "USER", "LOGNAME",
+]
 
-/** Capability Request → 冻结 Spec（P0-1/P0-2：身份由 Runtime 生成、Profile
- *  是隔离权威、override 只能收紧）。工具/模型绝不直接提交 ExecutionCellSpec。 */
 export function compileCapabilityRequest(
-  request: CapabilityRequest,
-  ctx: CompileRequestContext = {},
+  request: UntrustedCapabilityRequest,
+  authority: TrustedExecutionAuthority,
+  registry?: WorkspaceAuthorityRegistry,
 ): { ok: true; spec: ExecutionCellSpec } | { ok: false; errors: string[] } {
-  const attempt = request.attempt ?? ctx.attempt ?? 1
-  const runId = request.runId ?? ctx.runId ?? `run-${randomUUID().slice(0, 8)}`
-  const nodeRunId = request.nodeRunId ?? ctx.nodeRunId ?? `${runId}:n${attempt}`
+  const attempt = authority.identity.attempt
   const cellId = `cell-${randomUUID().slice(0, 8)}`
-  const identity = { cellId, runId, nodeRunId, attempt, agentId: request.agentId ?? ctx.agentId, assignmentId: request.assignmentId ?? ctx.assignmentId }
+  const identity = { cellId, ...authority.identity }
+  const workspace = authority.workspace
+
+  let canonicalCwd: string
+  try {
+    canonicalCwd = registry
+      ? registry.resolveCwd(workspace, request.command.relativeCwd)
+      : resolveAuthorizedCwd(workspace, request.command.relativeCwd)
+  } catch (error) {
+    return { ok: false, errors: [error instanceof Error ? error.message : String(error)] }
+  }
+
+  // B2：按隔离收窄宿主键继承（audit 原样；namespace/container 只保留安全键）。
+  const isolation = {
+    minimum: PROFILE_DEFAULTS[request.profile].minimum,
+    preferredBackend: "auto" as const,
+    allowDegradation: PROFILE_DEFAULTS[request.profile].allowDegradation,
+  }
+  const allowedHostKeys = isolation.minimum === "audit"
+    ? (request.allowedHostKeys ?? [])
+    : (request.allowedHostKeys ?? []).filter(k => SAFE_SANDBOX_HOST_KEYS.includes(k))
 
   const overrides: Partial<ExecutionCellSpec> = {
-    isolation: {
-      minimum: PROFILE_DEFAULTS[request.profile].minimum,
-      preferredBackend: "auto",
-      allowDegradation: PROFILE_DEFAULTS[request.profile].allowDegradation,
-    },
+    isolation,
     filesystem: {
       readonlyMounts: request.readonlyMounts ?? [],
       writableMounts: request.writableMounts ?? [],
       tmpfsMounts: [],
       hiddenPaths: [],
       emptyHome: PROFILE_DEFAULTS[request.profile].emptyHome,
-      worktreeRoot: request.worktreeRoot,
-      ownerFiles: request.ownerFiles,
+      worktreeRoot: workspace.hostRoot,
+      ownerFiles: [...workspace.ownerFiles],
     },
     network: {
       mode: request.network?.mode ?? PROFILE_DEFAULTS[request.profile].network,
@@ -283,7 +303,7 @@ export function compileCapabilityRequest(
     },
     environment: {
       variables: request.env ?? {},
-      allowedHostKeys: request.allowedHostKeys ?? [],
+      allowedHostKeys,
       inheritHost: false,
       locale: "C.UTF-8",
       pathEntries: ["/usr/local/bin"],
@@ -306,10 +326,40 @@ export function compileCapabilityRequest(
   const command = {
     executable: request.command.executable,
     args: request.command.args,
-    cwd: request.command.cwd ?? "/workspace",
+    cwd: canonicalCwd,
     stdin: request.command.stdin ?? "closed",
   }
 
   const spec = applyProfileDefaults(identity, command, request.profile, overrides)
   return compileCellSpec(spec)
+}
+
+/** 相对逻辑 cwd → canonical host cwd（无 Registry 时的直接解析；同
+ *  WorkspaceAuthorityRegistry.resolveCwd 语义）。 */
+export function resolveAuthorizedCwd(
+  workspace: import("./contracts").AuthorizedWorkspace,
+  requestedRelativeCwd?: string,
+): string {
+  const relative = requestedRelativeCwd ?? "."
+  if (relative.includes("\0")) {
+    throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", "cwd contains NUL byte")
+  }
+  if (isAbsolute(relative)) {
+    throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `cwd must be relative to workspace: ${relative}`)
+  }
+  if (relative.split(sep).includes("..")) {
+    throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `cwd must stay inside workspace: ${relative}`)
+  }
+  const candidate = resolve(workspace.hostRoot, normalize(relative))
+  if (candidate !== workspace.hostRoot && !candidate.startsWith(workspace.hostRoot + sep)) {
+    throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `cwd escapes workspace: ${relative}`)
+  }
+  const realProbe = existsSync(candidate) ? realpathSafe(candidate) : resolve(workspace.hostRoot)
+  if (realProbe !== workspace.hostRoot && !realProbe.startsWith(workspace.hostRoot + sep)) {
+    throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `cwd escapes workspace via symlink: ${candidate}`)
+  }
+  if (!existsSync(candidate)) {
+    throw new LinuxExecutionError("WORKSPACE_CWD_MISSING", `cwd missing: ${candidate}`)
+  }
+  return candidate
 }

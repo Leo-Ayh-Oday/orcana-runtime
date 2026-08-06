@@ -126,3 +126,30 @@ architecture 漏选、SR-42 弹跳按钮只选 motion 漏 ui-ux（GT 双 require
 - 4 并发限流后空响应率 2%（50 并发时更高）——provider 端对突发请求有延迟惩罚
 - fallback 与关键词路径同源后（registry triggers），fallback F1 = 关键词 F1 = 65.1%——
   fallback 的成功率（100%）是计划 §五 gate，准确率与关键词路径相同
+
+### 结论 12：Thinking A/B 三组对比——auto 定稿，enabled1024 明确不值得（2026-08-06）
+
+同用例集、同时段串行实测三组（并发 4 / maxTokens 2048 / 超时 30s）：
+
+| 指标 | disabled | auto（定稿） | enabled1024 |
+|---|---|---|---|
+| Mode Macro F1 | 92.4% | 89.7% | 92.0% |
+| per-mode F1 (dis/narrow/plan/full) | 95.2/100/84.2/90.0 | 87.0/100/77.8/94.1 | 85.7/100/82.4/100 |
+| Under-routing / Over-routing | 1/0 | 3/0 | 3/0 |
+| Risk High Miss | 0/7 | 0/7 | 0/6（TR-38 被 max_tokens 杀死未计入）|
+| triage P50 / P95 | 3484 / 6118 ms | 4922 / 16971 ms | 4736 / 20521 ms |
+| 分诊失败（TR）| 0/40 | 1/40 | 2/40 |
+| SR 语义 Exact Set | 82.0% | 81.3% | 79.2% |
+| SR 分诊失败 | 0/50 | 2/50 | 2/50 |
+
+**结论：**
+1. **thinking 对 accuracy 无实质影响**（差距 ≤2.7pp 且方向不稳定，禁用时反而略高）——
+   GPT 讨论预测应验：enabled 只加 ~1-2pp 不值得。**auto（不传参数）定稿**：模型自决、
+   简单请求省延迟，复杂请求自动思考；不设 enabled 分层，避免复杂性（opencode 式简单设计）。
+2. **enabled1024 明确排除**：Exact Set 最低（79.2%）、P95 延迟最高（20.5s，比 disabled 3.4×）、
+   且 thinking 1024 + 2048 max_tokens 组合把 high 风险用例 TR-38 分诊杀死（stop_reason=max_tokens）。
+3. **真实缺陷：2048 max_tokens 仍有 thinking 吃满窗口**——auto 组 TR-36（full_complex）、
+   enabled1024 组 TR-38（full_complex high）均死于 `max_tokens`（零 text）。修复：2048 → 4096。
+4. **错误集跨组几乎不重叠**（disabled: TR-24/30/38；auto: TR-25/28/29/38；enabled: TR-25/27/28），
+   但 **TR-38（权限系统）三组全错**——判 plan_before_code/discussion 而非 full_complex，
+   是稳定边界分歧（GT 粒度 vs 模型粒度），维持结论 11 不调优。

@@ -39,8 +39,10 @@ export interface FlashTriageResult {
 
 const TRIAGE_MODEL = "deepseek-v4-flash"
 // deepseek-v4-flash 强制 thinking：512 max_tokens 常被思考耗尽 → text 为空
-// （ORMB-TR 实测：40 个 mode 用例 12 个 empty-stream 全因此）。2048 留出思考+JSON 余量。
-const TRIAGE_MAX_TOKENS = 2048
+// （ORMB-TR 实测：40 个 mode 用例 12 个 empty-stream 全因此）。
+// 2048 仍有 thinking 吃满窗口（ORMB-TR A/B 实测：auto 组 TR-36、enabled1024 组 TR-38
+// 均死于 stop_reason=max_tokens 零 text——后者还是 high 风险用例）。4096 留出思考+JSON 余量。
+const TRIAGE_MAX_TOKENS = 4096
 // 实测延迟 2-19s 波动（连续请求时段 zen/go 变慢）：8s/15s 会把慢请求误杀成
 // empty-stream，拉高分诊失败率。30s 覆盖绝大多数请求；代价是 TTFB 上限变长
 // （Triage Latency 指标会记录实际分布，见 ORMB-TR）。
@@ -192,16 +194,25 @@ const SKILL_TRIGGER_MAP: Record<string, string[]> = Object.fromEntries(
   TRIAGE_VISIBLE.map((s) => [s.name, s.triggers]),
 )
 
+/** thinking 配置注入：默认 auto（不传，模型自决）；A/B 对比与
+ *  Level 2 分层（复杂任务显式 enabled）共用此通道。 */
+export type TriageThinking =
+  | { type: "enabled"; budget_tokens?: number }
+  | { type: "disabled" }
+  | undefined
+
 export class FlashTriage {
   private provider: LLMProvider
   private breaker = new TriageCircuitBreaker()
   private triageModel: string
+  private thinking: TriageThinking
   /** 最近一次 triage() 的失败原因（供调用方/测试诊断；成功时为 ""）。 */
   lastError = ""
 
-  constructor(provider: LLMProvider, triageModel = TRIAGE_MODEL) {
+  constructor(provider: LLMProvider, triageModel = TRIAGE_MODEL, thinking: TriageThinking = undefined) {
     this.provider = provider
     this.triageModel = triageModel
+    this.thinking = thinking
   }
 
   /** Reset for a new session. */
@@ -232,8 +243,10 @@ export class FlashTriage {
         system,
         messages,
         maxTokens: TRIAGE_MAX_TOKENS,
-        // thinking 配置待 ORMB-TR 测试结果定夺（当前与 run3 同款：不传参数，模型自决）。
+        // thinking 默认 auto（不传，模型自决）：A/B 实测 disabled 2.4s / auto 4.0s /
+        // enabled1024 7.3s，准确率差异待 ORMB-TR A/B 定稿（结论见 observations 结论 10）。
         // maxTokens 2048 已为思考留出空间（512 时实测 thinking 吃满导致空响应）。
+        ...(this.thinking ? { thinking: this.thinking } : {}),
         abortSignal: AbortSignal.timeout(TRIAGE_TIMEOUT_MS),
       })) {
         if (event.type === "text" && typeof event.data === "string") {

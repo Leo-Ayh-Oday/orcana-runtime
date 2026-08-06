@@ -31,6 +31,12 @@ import { executeCapability, type CapabilityArtifactTracker } from "../../src/har
 import { createCapabilityDescriptor } from "../../src/harness/capabilities/descriptor"
 import { assembleRunScope, createNoopTraceWriter } from "../../src/harness/runtime/run-scope"
 import { RunRegistry } from "../../src/harness/runtime/run-registry"
+import {
+  createRuntimeExecutionContext,
+  runWithRuntimeExecutionContext,
+  setExecutionAuthority,
+} from "../../src/runtime/execution-context"
+import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contracts"
 import { SERVICE_STATUS_TOOL, startServiceInternal } from "../../src/tools/service"
 import { createArtifactStore } from "../../src/harness/artifacts/artifact-store"
 import type { JsonSchema } from "../../src/harness/contracts/schema"
@@ -38,6 +44,35 @@ import type { JsonSchema } from "../../src/harness/contracts/schema"
 function tmpProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "orcana-tl-"))
   return dir
+}
+
+/** Project dir inside the workspace root — managed execution only allows
+ *  cwd relative to the authorized workspace (hostRoot = process.cwd()). */
+function workspaceProject(prefix: string): { root: string; relCwd: string } {
+  const root = mkdtempSync(join(process.cwd(), prefix))
+  return { root, relCwd: root.slice(process.cwd().length).replace(/^[/\\]/, "") }
+}
+
+/** Run fn with a test-only trusted execution authority bound to its own
+ *  async-local context — real execution paths fail closed without one, and
+ *  concurrent tests must not stomp each other's authority. */
+function withTestAuthority<T>(hostRoot: string, fn: () => T | Promise<T>): Promise<T> {
+  const context = createRuntimeExecutionContext()
+  return runWithRuntimeExecutionContext(context, async () => {
+    const authority: TrustedExecutionAuthority = {
+      identity: { runId: "tl-test", nodeRunId: "tl-test-0", attempt: 1 },
+      workspace: {
+        workspaceId: "tl-ws",
+        projectId: "tl-proj",
+        hostRoot,
+        kind: "main",
+        access: "readwrite",
+        ownerFiles: [],
+      },
+    }
+    setExecutionAuthority(authority)
+    return await fn()
+  })
 }
 
 function sh(cmd: string, cwd: string) {
@@ -117,7 +152,9 @@ describe("TL-002 — cancelled processes leave no orphans", () => {
   })
 
   test("runProcess timeout marks timedOut and kills the process", async () => {
-    const result = await runProcess({ command: "sleep", args: ["30"], timeoutMs: 400 })
+    const result = await withTestAuthority(process.cwd(), () =>
+      runProcess({ command: "sleep", args: ["30"], timeoutMs: 400 }),
+    )
     expect(result.timedOut).toBe(true)
     expect(result.exitCode).not.toBe(0)
   })
@@ -173,12 +210,12 @@ describe("TL-005 — multi-file transaction rolls back on partial failure", () =
 
 describe("TL-006 — verification failure does not commit", () => {
   test("verify_claim refuses a claim the verification actually fails", async () => {
-    const root = tmpProject()
+    const { root, relCwd } = workspaceProject(".tl-006-")
     writeFileSync(join(root, "package.json"), JSON.stringify({
       name: "tl-006",
       scripts: { typecheck: "node -e \"process.exit(1)\"" },
     }))
-    const result = await VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: root })
+    const result = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
     expect(result.success).toBe(false)
     expect(result.content).toContain("UNVERIFIED")
     rmSync(root, { recursive: true, force: true })
@@ -231,10 +268,10 @@ describe("TL-008 — git special-character paths are safe", () => {
 
 describe("TL-009 — rg-style special patterns cause no command injection", () => {
   test("run_process passes args verbatim (no shell interpolation)", async () => {
-    const root = tmpProject()
+    const { root, relCwd } = workspaceProject(".tl-009-")
     writeFileSync(join(root, "a.txt"), "findme\n")
     const pattern = "$(touch injected.txt);*"
-    const result = await runProcess({ command: "rg", args: [pattern, root], cwd: root })
+    const result = await withTestAuthority(process.cwd(), () => runProcess({ command: "rg", args: [pattern, root], cwd: relCwd }))
     expect(existsSync(join(root, "injected.txt"))).toBe(false)
     // rg treats the pattern as a literal-ish search; exit semantics irrelevant
     expect(result).toBeDefined()
@@ -365,16 +402,16 @@ describe("TL-015 — stale LSP-style diagnostics are rejected via freshness", ()
 
 describe("TL-016 — verify_claim refuses stale evidence", () => {
   test("a previously-passed claim is re-run and fails after the project breaks", async () => {
-    const root = tmpProject()
+    const { root, relCwd } = workspaceProject(".tl-016-")
     const script = { name: "tl-016", scripts: { typecheck: "node -e \"process.exit(0)\"" } }
     writeFileSync(join(root, "package.json"), JSON.stringify(script))
     // 1. first pass (evidence would be recorded)
-    const first = await VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: root })
+    const first = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
     expect(first.success).toBe(true)
     // 2. project breaks — claim must NOT be trusted from the earlier run
     script.scripts.typecheck = "node -e \"process.exit(1)\""
     writeFileSync(join(root, "package.json"), JSON.stringify(script))
-    const second = await VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: root })
+    const second = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
     expect(second.success).toBe(false)
     expect(second.content).toContain("UNVERIFIED")
     rmSync(root, { recursive: true, force: true })

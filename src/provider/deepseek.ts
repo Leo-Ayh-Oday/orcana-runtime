@@ -187,16 +187,15 @@ export class DeepSeekProvider implements LLMProvider {
             if (!ct.input_json && ct.initialInput) {
               input = ct.initialInput
             } else {
-              try {
-                input = JSON.parse(ct.input_json)
-              } catch {
-                const repaired = repairToolCall(ct.input_json)
-                if (repaired) input = repaired
-                else {
-                  toolCallError = `provider returned invalid tool call JSON for ${ct.name}`
-                  ct = null
-                  continue
-                }
+              // 一律走 repairToolCall：其内部先做字段别名 + Python 字面量预处理，
+              // 再尝试解析。直接 JSON.parse 成功会跳过字段别名修复——{"filePath":...}
+              // 是合法 JSON，但字段名需规范化为 {"path":...}（repair.ts 头部注释点名的坑）。
+              const repaired = repairToolCall(ct.input_json)
+              if (repaired) input = repaired
+              else {
+                toolCallError = `provider returned invalid tool call JSON for ${ct.name}`
+                ct = null
+                continue
               }
             }
             toolBlocks.push({ id: ct.id, name: ct.name, input })

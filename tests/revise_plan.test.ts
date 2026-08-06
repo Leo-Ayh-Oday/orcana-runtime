@@ -22,7 +22,7 @@ describe("revisePlan", () => {
     expect(running.evidence).toContain("3 次")
   })
 
-  test("marks all pending steps as failed", () => {
+  test("marks running step failed and pending steps cancelled", () => {
     const t = trackerInBuilding()
     // Ensure we have at least 2 pending steps after the running one
     const remaining = t.steps.filter(s => s.status === "pending")
@@ -30,13 +30,14 @@ describe("revisePlan", () => {
       t.steps.push({ id: "extra1", title: "测试", status: "pending" })
       t.steps.push({ id: "extra2", title: "构建", status: "pending" })
     }
+    const runningId = t.steps.find(s => s.status === "running")!.id
+    const pendingIds = t.steps.filter(s => s.status === "pending").map(s => s.id)
 
     revisePlan(t, "stuck")
 
-    for (const s of t.steps) {
-      if (s.id !== "revise" && s.status !== "done") {
-        expect(s.status).toBe("failed")
-      }
+    expect(t.steps.find(s => s.id === runningId)!.status).toBe("failed")
+    for (const pid of pendingIds) {
+      expect(t.steps.find(s => s.id === pid)!.status).toBe("cancelled")
     }
   })
 
@@ -122,7 +123,7 @@ describe("revisePlan", () => {
     expect(t.phase as string).toBe("planning")
   })
 
-  test("does not touch done steps beyond marking pending as failed", () => {
+  test("does not touch done steps beyond marking pending as cancelled", () => {
     const t = trackerInBuilding()
     t.steps[0]!.status = "done"  // step 0 is done, not running
     // Ensure there are pending steps
@@ -132,8 +133,8 @@ describe("revisePlan", () => {
     revisePlan(t, "stuck")
 
     expect(t.steps.find(s => s.id === "plan")!.status).toBe("done")  // done stays done
-    expect(t.steps.find(s => s.id === "pend1")!.status).toBe("failed")
-    expect(t.steps.find(s => s.id === "pend2")!.status).toBe("failed")
+    expect(t.steps.find(s => s.id === "pend1")!.status).toBe("cancelled")
+    expect(t.steps.find(s => s.id === "pend2")!.status).toBe("cancelled")
   })
 
   test("integration: full revise-plan cycle", () => {

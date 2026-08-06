@@ -83,7 +83,9 @@ describe("RT-6 edit_symbol", () => {
   })
 
   test("edits the symbol in place via the AST span", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "rt6-sym2-"))
+    // Must live inside the project root — managed patch transactions refuse out-of-root paths.
+    // Ripple preview scans the whole project for callers (cold ~7s), so allow 15s.
+    const cwd = mkdtempSync(join(process.cwd(), ".rt6-sym2-"))
     try {
       const p = join(cwd, "lib.ts")
       writeFileSync(p, TS_FILE)
@@ -100,7 +102,7 @@ describe("RT-6 edit_symbol", () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }
-  })
+  }, 15000)
 
   test("missing symbol fails", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "rt6-sym3-"))

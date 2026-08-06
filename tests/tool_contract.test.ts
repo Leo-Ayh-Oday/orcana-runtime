@@ -297,7 +297,7 @@ describe("ToolContract projection", () => {
       "multi_edit:bd01af46e7ffe175654bb58e7646e1f5041cba74a0f888034ff94b7bd322d48d",
       "edit_fim:fc75fcd080561a80e1d5741f4c08a532208362f214d8ff7034b6834e1775d14a",
       "rollback_transaction:bd4ceed1a486ff0148894eca74974868a20731709d009cf8858553a3c9f26495",
-      "edit_symbol:30bb730387157e6b6e582b0f829105da0896e2e53bb3417f04cd41e543c52dc2",
+      "edit_symbol:8b9cbf53ff1131da7e926584a64858095509a01c82c8179e986ad0aec7291775",
       "apply_patch:32f957d0c5a55edf5802407d790a899e376c3b65e36aa007e80f20cc80f48c2c",
       "apply_patch_transaction:33c36dc0ba9db0f502dea29d9fc87c36b8516eebbf869fa8b9da6cd8d8581fb8",
       "shell:5163d7bdacab8e07f9c612a574d9fbf53feb9d417114b2f53ff4b8cb8e669969",

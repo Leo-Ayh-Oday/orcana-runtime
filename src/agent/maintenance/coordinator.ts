@@ -68,6 +68,25 @@ export interface MaintenanceContext {
   runTrace?: AgentRunTrace
 }
 
+/** RC-13 E3: 追加用户侧上下文——与相邻 user 消息合并，杜绝连续 user 消息
+ *  （违反 provider 角色交替约束）。tool_results 数组消息 → append text block；
+ *  字符串消息 → 拼接；否则新消息。 */
+export function appendUserContext(rawMessages: ProviderMessage[], content: string): void {
+  const last = rawMessages[rawMessages.length - 1]
+  if (last && last.role === "user") {
+    if (Array.isArray(last.content)) {
+      ;(last.content as Array<Record<string, unknown>>).push({ type: "text", text: content })
+      return
+    }
+    if (typeof last.content === "string") {
+      last.content = last.content + "\n\n" + content
+      return
+    }
+  }
+  rawMessages.push({ role: "user", content })
+}
+
+
 // ── Historical microcompact (retrospective pass) ──
 
 /**
@@ -293,7 +312,7 @@ export async function* runThinkingCompaction(ctx: MaintenanceContext): AsyncGene
           ...compactResult.output.open.map((o, i) => `? [open] ${o}`),
           "</system-reminder>",
         ].join("\n")
-        ctx.rawMessages.push({ role: "user", content: compactSummary })
+        appendUserContext(ctx.rawMessages, compactSummary)
         ctx.stableMemoryContext = mergeResult.merged
         yield { type: "status", data: `thinking-compaction: ${thinkingRounds.length} rounds → ${insightCount} insights (appended, cache preserved)` }
       }
@@ -362,7 +381,7 @@ export async function* runSemanticRecall(ctx: MaintenanceContext): AsyncGenerato
       if (historicalContext) {
         // Inject as an additional user message before the next round.
         // This goes into L3 volatile — does NOT affect prefix cache.
-        ctx.rawMessages.push({ role: "user", content: historicalContext })
+        appendUserContext(ctx.rawMessages, historicalContext)
       }
     }
   } catch { /* semantic recall is best-effort */ }

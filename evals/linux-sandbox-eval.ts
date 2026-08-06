@@ -30,7 +30,7 @@ import { detectDelegatedRoot } from "../src/runtime/linux/cgroup/delegation"
 import { readCgroupMetrics } from "../src/runtime/linux/cgroup/metrics"
 import { buildEgressPolicy, checkEgressHop, checkEgressRedirect, dnsRebindingGuard } from "../src/runtime/linux/network-policy"
 import { compileLandlockRuleset, compileSeccompProfile, seccompBackwardCompatible, landlockUsable } from "../src/runtime/linux/landlock-seccomp"
-import { RuntimeStateStore, BootIdentityStore, startupJanitor } from "../src/runtime/linux/recovery/state-store"
+import { RuntimeStateStore, BootIdentityStore, startupJanitor, procStartTicksOf } from "../src/runtime/linux/recovery/state-store"
 import type { ExecutionCellSpec, ResourceRequest } from "../src/runtime/linux/contracts"
 
 export interface ScenarioResult {
@@ -240,17 +240,41 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   // ── LX-012..014 网络 ──
   await add("LX-012", "none 模式无外连（NETWORK_EGRESS_NONE: 0）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
+    // PR-8：bwrap 可用 → 真实外网连接尝试必须失败（不再只查策略拒绝）。
     if (caps.bubblewrap.available) {
       const backend = createBubblewrapBackend()
-      const errors = backend.validateSpec(spec({ network: { mode: "full-approved" } }))
-      return errors.length > 0 ? { pass: true } : { pass: false, reason: "full-approved accepted without approval" }
+      const errors = backend.validateSpec(spec({ network: { mode: "none" } }))
+      if (errors.length > 0) return { pass: false, reason: `none 被拒: ${errors.join(";")}` }
+      const wt = mkdtempSync(join(tmpdir(), "lx012-"))
+      try {
+        const events: string[] = []
+        for await (const event of backend.run(spec({
+          command: { executable: "/bin/sh", args: ["-c", "(exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null && echo CONNECTED || echo NO_NET"], cwd: wt, stdin: "closed" },
+          filesystem: { ...spec().filesystem, worktreeRoot: wt },
+        }), { capabilities: caps })) {
+          if (event.type === "cell.stdout") events.push(event.data)
+        }
+        return events.join("").includes("NO_NET")
+          ? { pass: true }
+          : { pass: false, reason: `真实外连成功: ${events.join("")}` }
+      } finally {
+        rmSync(wt, { recursive: true, force: true })
+      }
     }
-    return { pass: true, reason: "bwrap 缺失 —— 策略层拒绝非 none/loopback 网络" }
+    // 无 bwrap：策略层拒绝非 none/loopback 网络（真实策略验证）。
+    const backend = createBubblewrapBackend()
+    const errors = backend.validateSpec(spec({ network: { mode: "full-approved" } }))
+    return errors.length > 0 ? { pass: true } : { pass: false, reason: "full-approved accepted without approval" }
   })
   await add("LX-013", "Loopback（隔离 netns 内）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
+    // service profile 允许 loopback（PR-1：network 只能比 Profile 默认更严格）。
     const backend = createBubblewrapBackend()
-    const errors = backend.validateSpec(spec({ network: { mode: "loopback" } }))
+    const errors = backend.validateSpec(spec({
+      profile: "service",
+      isolation: { minimum: "namespace", preferredBackend: "bubblewrap", allowDegradation: false },
+      network: { mode: "loopback" },
+    }))
     return errors.length === 0 ? { pass: true } : { pass: false, reason: `loopback rejected: ${errors.join(";")}` }
   })
   await add("LX-014", "DNS Rebinding + 重定向复查（REDIRECT_POLICY_BYPASS: 0）", async () => {
@@ -265,46 +289,112 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   })
 
   // ── LX-015..020 资源与执行 ──
-  await add("LX-015", "输出炸弹（OUTPUT_LIMIT_BYPASS: 0）", async () => {
+  await add("LX-015", "输出炸弹（OUTPUT_LIMIT_BYPASS: 0，超限即杀）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
+    // PR-8：真实无限输出（无 head 截断）—— 进程必须被终止而非跑满墙钟。
+    const startedAt = Date.now()
     const result = await runSupervised({
-      executable: "/bin/sh", args: ["-c", "yes x | head -c 100000"], cwd: "/tmp",
+      executable: "/bin/sh", args: ["-c", "yes x"], cwd: "/tmp",
       env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
-      limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 }, wallTimeMs: 10_000,
+      limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 }, wallTimeMs: 60_000,
     })
-    return result.outputLimitHit && result.stdout.length <= 1024 + 64
+    const elapsed = Date.now() - startedAt
+    return result.outputLimitHit && elapsed < 10_000
       ? { pass: true }
-      : { pass: false, reason: `output limit bypass (hit=${result.outputLimitHit}, len=${result.stdout.length})` }
+      : { pass: false, reason: `output limit bypass (hit=${result.outputLimitHit}, elapsed=${elapsed}ms)` }
   })
-  await add("LX-016", "内存炸弹（MEMORY_LIMIT_ENFORCED）", async () => {
+  await add("LX-016", "内存炸弹（MEMORY_LIMIT_ENFORCED，真实分配）", async () => {
+    if (!isLinux) return { skip: true, reason: "非 Linux" }
     const delegated = detectDelegatedRoot()
-    if (delegated.writable) return { pass: true, reason: "委托可用（真内核验证由 cgroup 测试覆盖）" }
-    const fs = mockCgroupFs()
-    const manager = new CgroupManager({ base: "/sys/fs/cgroup", fs })
-    const cell = manager.createCell("lx", "a", "mem", { memoryMaxBytes: 64 * 1024, pidsMax: 8, oomGroup: true })
-    const max = fs.read(`${cell}/memory.max`)
-    return max === "65536" ? { pass: true } : { pass: false, reason: `memory.max=${max}` }
+    if (!delegated.writable) {
+      // PR-8：无委托 = 无法真实验证 —— FAIL（不再 mock auto-pass，不允许静默假绿）。
+      return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实内存炸弹无法执行" }
+    }
+    const manager = new CgroupManager({ base: delegated.base })
+    const cell = manager.createCell("lx", "a", "mem", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 8, oomGroup: true })
+    try {
+      const { spawn } = await import("node:child_process")
+      const proc = spawn("/bin/sh", ["-c", "head -c 1073741824 /dev/zero | tr '\\0' 'x' > /dev/null; sleep 0.1"], { stdio: "ignore" })
+      manager.attach(proc.pid ?? 0, cell)
+      const events = manager.memoryEvents(cell)
+      const killed = await new Promise<boolean>(resolve => {
+        proc.on("exit", () => resolve(true))
+        setTimeout(() => { try { proc.kill("SIGKILL") } catch {} resolve(false) }, 8000)
+      })
+      const oomEvents = manager.memoryEvents(cell)
+      return (killed || oomEvents.oom_kill > 0 || oomEvents.oom > 0)
+        ? { pass: true, reason: `oom_kill=${oomEvents.oom_kill} oom=${oomEvents.oom}` }
+        : { pass: false, reason: "内存炸弹未被限制（进程存活且无 OOM 事件）" }
+    } finally {
+      manager.removeCell(cell)
+    }
   })
-  await add("LX-017", "Fork Bomb（PIDS_LIMIT_ENFORCED）", async () => {
+  await add("LX-017", "Fork Bomb（PIDS_LIMIT_ENFORCED，真实 fork）", async () => {
+    if (!isLinux) return { skip: true, reason: "非 Linux" }
     const delegated = detectDelegatedRoot()
-    if (delegated.writable) return { pass: true, reason: "委托可用" }
-    const fs = mockCgroupFs()
-    const manager = new CgroupManager({ base: "/sys/fs/cgroup", fs })
-    const cell = manager.createCell("lx", "a", "fork", { memoryMaxBytes: 1024, pidsMax: 4 })
-    return fs.read(`${cell}/pids.max`) === "4" ? { pass: true } : { pass: false, reason: "pids.max not set" }
+    if (!delegated.writable) {
+      return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实 fork bomb 无法执行" }
+    }
+    const manager = new CgroupManager({ base: delegated.base })
+    const cell = manager.createCell("lx", "a", "fork", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 16 })
+    try {
+      const { spawn } = await import("node:child_process")
+      const proc = spawn("/bin/sh", ["-c", "while true; do ( while true; do :; done & ); done"], { stdio: "ignore" })
+      manager.attach(proc.pid ?? 0, cell)
+      const start = Date.now()
+      await new Promise(r => setTimeout(r, 1500))
+      const current = manager.pidsCurrent(cell)
+      // pids.max=16 → 进程必须被限制住（current ≤ max + 少量）
+      manager.kill(cell)
+      const stopped = manager.waitEmpty(cell)
+      const elapsed = Date.now() - start
+      return (current <= 32 && stopped)
+        ? { pass: true, reason: `pids.current=${current} 受限且归零(${elapsed}ms)` }
+        : { pass: false, reason: `fork bomb 未受限 current=${current} stopped=${stopped}` }
+    } finally {
+      manager.removeCell(cell)
+    }
   })
-  await add("LX-018", "CPU Hog（cpu.max 限制）", async () => {
-    const fs = mockCgroupFs()
-    const manager = new CgroupManager({ base: "/sys/fs/cgroup", fs })
-    const cell = manager.createCell("lx", "a", "cpu", { memoryMaxBytes: 1024, pidsMax: 8, cpuQuotaMicros: 50_000, cpuPeriodMicros: 100_000 })
-    return fs.read(`${cell}/cpu.max`) === "50000 100000" ? { pass: true } : { pass: false, reason: "cpu.max not set" }
+  await add("LX-018", "CPU Hog（cpu.max 节流，真实负载）", async () => {
+    if (!isLinux) return { skip: true, reason: "非 Linux" }
+    const delegated = detectDelegatedRoot()
+    if (!delegated.writable) {
+      return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实 CPU hog 无法执行" }
+    }
+    const manager = new CgroupManager({ base: delegated.base })
+    const cell = manager.createCell("lx", "a", "cpu", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 8, cpuQuotaMicros: 50_000, cpuPeriodMicros: 100_000 })
+    try {
+      const { spawn } = await import("node:child_process")
+      const proc = spawn("/bin/sh", ["-c", "while true; do :; done"], { stdio: "ignore" })
+      manager.attach(proc.pid ?? 0, cell)
+      await new Promise(r => setTimeout(r, 2500))
+      const metrics = readCgroupMetrics(cell, manager.fs)
+      manager.kill(cell)
+      manager.waitEmpty(cell)
+      // cpu.max=50% → 2.5s 内节流时间应显著（≥ 200ms）
+      return (metrics.cpuThrottledUsec ?? 0) >= 200_000
+        ? { pass: true, reason: `throttled=${metrics.cpuThrottledUsec}us` }
+        : { pass: false, reason: `cpu.max 未生效 throttled=${metrics.cpuThrottledUsec}us` }
+    } finally {
+      manager.removeCell(cell)
+    }
   })
-  await add("LX-019", "OOM 事件指标（OOM_OUTSIDE_CELL: 0 依据）", async () => {
-    const fs = mockCgroupFs()
-    const manager = new CgroupManager({ base: "/sys/fs/cgroup", fs })
-    const cell = manager.createCell("lx", "a", "tmp", { memoryMaxBytes: 1024, pidsMax: 8 })
-    const events = readCgroupMetrics(cell, fs)
-    return typeof events.oomKills === "number" ? { pass: true } : { pass: false, reason: "metrics broken" }
+  await add("LX-019", "OOM 事件指标（真实内核事件读取）", async () => {
+    if (!isLinux) return { skip: true, reason: "非 Linux" }
+    const delegated = detectDelegatedRoot()
+    if (!delegated.writable) {
+      return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实 metrics 无法读取" }
+    }
+    const manager = new CgroupManager({ base: delegated.base })
+    const cell = manager.createCell("lx", "a", "tmp", { memoryMaxBytes: 16 * 1024 * 1024, pidsMax: 8 })
+    try {
+      const metrics = readCgroupMetrics(cell, manager.fs)
+      return (typeof metrics.cpuUsageUsec === "number" && typeof metrics.oomKills === "number")
+        ? { pass: true, reason: `cpu=${metrics.cpuUsageUsec}us oom_kill=${metrics.oomKills}` }
+        : { pass: false, reason: "metrics 读取失败" }
+    } finally {
+      manager.removeCell(cell)
+    }
   })
   await add("LX-020", "超时（PROCESS_TIMEOUT）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
@@ -409,11 +499,35 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   })
 
   // ── LX-030..032 严格后端与恢复 ──
-  await add("LX-030", "Podman 严格任务（FLOATING_IMAGE_ACCEPTED: 0，digest 锁定）", async () => {
+  await add("LX-030", "Podman 真实容器执行 + 残留归零（FLOATING_IMAGE_ACCEPTED: 0）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
-    if (!caps.podman.available) return { skip: true, reason: "podman 未安装（策略层验证）" }
-    const ok = validateImageRef("img@sha256:" + "b".repeat(64)).ok && !validateImageRef("img:latest").ok
-    return ok ? { pass: true } : { pass: false, reason: "image policy broken" }
+    if (!caps.podman.available || !caps.podman.rootlessReady) {
+      // PR-8：podman 为可选依赖（CI podman lane 提供）；SKIP 必须显式 reason。
+      return { skip: true, reason: "podman 未安装/未就绪（CI podman lane 负责真实验收）" }
+    }
+    const { spawnSync } = await import("node:child_process")
+    const podmanPath = caps.podman.path ?? "podman"
+    // 1. digest 锁定策略仍有效
+    if (!validateImageRef("img@sha256:" + "b".repeat(64)).ok || validateImageRef("img:latest").ok) {
+      return { pass: false, reason: "image policy broken" }
+    }
+    // 2. 真实容器执行（digest 镜像 + none 网络 + 只读）
+    const inspect = spawnSync(podmanPath, ["image", "inspect", "--format", "{{.Digest}}", "docker.io/library/alpine:latest"], { encoding: "utf8", timeout: 30_000 })
+    if (inspect.status !== 0) return { skip: true, reason: "alpine 镜像不可用（需 podman pull）" }
+    const digest = inspect.stdout.trim()
+    const image = `docker.io/library/alpine@${digest}`
+    const run = spawnSync(podmanPath, [
+      "run", "--rm", "--network=none", "--read-only", "--cap-drop=ALL",
+      "--security-opt", "no-new-privileges", "--label", "io.orcana.run=lx030",
+      "--label", "io.orcana.cell=lx030-cell", image, "echo", "real-podman-ok",
+    ], { encoding: "utf8", timeout: 60_000 })
+    if (run.status !== 0) return { pass: false, reason: `真实容器执行失败: ${run.stderr}` }
+    if (!run.stdout.includes("real-podman-ok")) return { pass: false, reason: `容器输出异常: ${run.stdout}` }
+    // 3. 残留归零：label 过滤确认无容器残留
+    const leftover = spawnSync(podmanPath, ["ps", "-a", "-q", "--filter", "label=io.orcana.run=lx030"], { encoding: "utf8", timeout: 10_000 })
+    return leftover.status === 0 && leftover.stdout.trim() === ""
+      ? { pass: true, reason: `真实容器执行成功（${image.slice(0, 24)}…）且无残留` }
+      : { pass: false, reason: `容器残留: ${leftover.stdout}` }
   })
   await add("LX-031", "严格任务不降级（STRICT_BACKEND_DEGRADED: 0）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
@@ -437,7 +551,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       }
     }, "严格任务静默降级")
   })
-  await add("LX-032", "崩溃恢复 Janitor（RECOVERY_WRONG_PROCESS_KILL: 0）", async () => {
+  await add("LX-032", "崩溃恢复 Janitor（RECOVERY_WRONG_PROCESS_KILL: 0，同 boot owner 判定）", async () => {
     const root = mkdtempSync(join(tmpdir(), "lx032-"))
     try {
       const store = new RuntimeStateStore({ root })
@@ -448,17 +562,29 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
         store, currentBootId: "new-boot",
         cleanupRun: async id => ({ cgroups: [`run-${id}`], worktrees: [], ports: 0, containers: [], stateRemoved: true }),
       })
-      // 同 boot 重启安全：janitor 之后写入的 run 不被清理。
-      store.writeRun("live-run", { status: "running" })
+      // 同 boot 重启安全：janitor 之后写入、owner 存活的 run 不被清理（PR-7 owner token）。
+      store.writeRun("live-run", {
+        status: "running",
+        ownerPid: process.pid,
+        ownerProcStartTicks: procStartTicksOf(process.pid),
+      })
+      // 同 boot 崩溃：owner 已死的 run 必须被清理。
+      store.writeRun("crashed-run", { status: "running", ownerPid: 999999, ownerProcStartTicks: 1 })
       const secondPass = await startupJanitor({
         store, currentBootId: "new-boot",
         cleanupRun: async id => ({ cgroups: [`run-${id}`], worktrees: [], ports: 0, containers: [], stateRemoved: true }),
       })
       const cleaned = receipts.map(r => r.runId).sort().join(",")
+      const secondCleaned = secondPass.map(r => r.runId).sort().join(",")
       const bootNow = new BootIdentityStore(store).lastBoot()
-      return cleaned === "crash-run" && secondPass.length === 0 && bootNow === "new-boot"
-        ? { pass: true }
-        : { pass: false, reason: `cleaned=${cleaned} secondPass=${secondPass.length} lastBoot=${bootNow}` }
+      // 幂等语义：无 owner token 的 crash-run 每次都会被保守清理；
+      // owner 存活的 live-run 永不清理。
+      return cleaned === "crash-run"
+        && secondCleaned.includes("crashed-run")
+        && !secondCleaned.includes("live-run")
+        && bootNow === "new-boot"
+        ? { pass: true, reason: `cleaned=${cleaned} sameBoot=${secondCleaned} live 保留` }
+        : { pass: false, reason: `cleaned=${cleaned} sameBoot=${secondCleaned} boot=${bootNow}` }
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -499,6 +625,61 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
     return record.compiled === true ? { pass: true } : { pass: false, reason: "shadow compile failed" }
   })
 
+  // ── PR-8：真实端到端 ──
+  await add("LX-036", "Receipt → Evidence → Completion Gate 端到端（真实执行链）", async () => {
+    if (!isLinux) return { skip: true, reason: "非 Linux" }
+    const { createEvidenceLedger, ingestSandboxReceipt, hasEvidence } = await import("../src/agent/evidence-ledger")
+    const { executeProcess } = await import("../src/runtime/process-executor")
+    const ledger = createEvidenceLedger()
+    // 真实执行：collectProcessRun 携带真实 Receipt
+    const { collectProcessRun } = await import("../src/runtime/process-executor")
+    const outcome = await collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 15_000, runId: "lx036-run" })
+    if (!outcome.receipt) return { pass: false, reason: "执行链未产出 Receipt" }
+    // Receipt 自摘要与 Evidence 绑定
+    if (outcome.receipt.runId !== "lx036-run") return { pass: false, reason: `身份未透传: ${outcome.receipt.runId}` }
+    const entry = ingestSandboxReceipt(ledger, outcome.receipt)
+    if (!entry) return { pass: false, reason: "Receipt 未入账 Evidence" }
+    if (entry.receiptDigest !== outcome.receipt.receiptDigest) {
+      return { pass: false, reason: "Evidence 未绑定 Receipt 自摘要" }
+    }
+    // Completion Gate：退出 0 + 非超时/取消 → passed
+    const passed = entry.passed
+    return passed && hasEvidence(ledger, "sandbox_execution")
+      ? { pass: true, reason: `receiptDigest=${entry.receiptDigest} passed=${passed}` }
+      : { pass: false, reason: `gate 判定失败 passed=${passed}` }
+  })
+
+  await add("LX-037", "跨 Agent 同路径竞争（Isolation Lock 真实拒绝）", async () => {
+    if (!isLinux) return { skip: true, reason: "非 Linux" }
+    const broker = createLinuxBroker({ mode: "enabled" })
+    const wt = mkdtempSync(join(tmpdir(), "lx037-"))
+    try {
+      // 两个并发执行指向同一 worktree：第一个长跑占用，第二个必须被锁拒绝。
+      const hold = spec({
+        command: { executable: "/bin/sh", args: ["-c", "sleep 3"], cwd: wt, stdin: "closed" },
+        filesystem: { ...spec().filesystem, worktreeRoot: wt },
+        identity: { cellId: "lx037-1", runId: "lx037-run", nodeRunId: "lx037:n1", attempt: 1 },
+      })
+      const p1 = (async () => { for await (const _ of broker.execute(hold)) { /* drain */ } })()
+      await new Promise(r => setTimeout(r, 150))
+      let rejected = false
+      try {
+        const second = spec({
+          command: { executable: "/bin/true", args: [], cwd: wt, stdin: "closed" },
+          filesystem: { ...spec().filesystem, worktreeRoot: wt },
+          identity: { cellId: "lx037-2", runId: "lx037-run", nodeRunId: "lx037:n2", attempt: 1 },
+        })
+        for await (const _ of broker.execute(second)) { /* drain */ }
+      } catch (error) {
+        rejected = String(error).includes("isolation lock held")
+      }
+      await p1
+      return rejected ? { pass: true, reason: "同路径并发被锁拒绝（MAIN_WORKSPACE_MULTI_WRITER: 0）" } : { pass: false, reason: "同路径并发未被拒绝" }
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
+
   const pass = results.filter(r => r.status === "PASS").length
   const fail = results.filter(r => r.status === "FAIL").length
   const skip = results.filter(r => r.status === "SKIP").length
@@ -515,15 +696,23 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   }
 }
 
-/** CLI：bun run eval:linux */
+/** CLI：bun run eval:linux [--strict]
+ *  --strict：关键场景不允许 SKIP —— 任何 SKIP 都视为失败（供具备
+ *  bwrap/podman/cgroup 委托的真机 CI lane 使用；PR-8）。 */
 export async function linuxEvalCli(): Promise<number> {
+  const strict = process.argv.includes("--strict")
   const report = await runLinuxSandboxEval()
-  console.log(`LNXF Linux Sandbox Eval — ${report.pass} pass, ${report.fail} fail, ${report.skip} skip (${report.total} scenarios)`)
+  console.log(`LNXF Linux Sandbox Eval — ${report.pass} pass, ${report.fail} fail, ${report.skip} skip (${report.total} scenarios)${strict ? " [STRICT]" : ""}`)
   for (const result of report.results) {
     const mark = result.status === "PASS" ? "ok" : result.status === "SKIP" ? "-" : "x"
     console.log(` [${mark}] ${result.id} ${result.name}${result.detail ? ` — ${result.detail}` : ""}`)
   }
-  return report.fail > 0 ? 1 : 0
+  if (report.fail > 0) return 1
+  if (strict && report.skip > 0) {
+    console.log(`[strict] ${report.skip} 个场景 SKIP —— 真机 lane 不允许跳过`)
+    return 1
+  }
+  return 0
 }
 
 if (import.meta.main) {

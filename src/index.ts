@@ -105,9 +105,9 @@ async function main() {
           return {
             cgroups: [],
             worktrees: [],
-            ports: removed,
-            containers: removed,
-            stateRemoved: removed > 0,
+            ports: removed.removed,
+            containers: [],
+            stateRemoved: removed.removed > 0,
           }
         },
       })

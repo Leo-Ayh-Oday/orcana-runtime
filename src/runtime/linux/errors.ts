@@ -37,6 +37,9 @@ export const LINUX_ERROR_CODES = [
   "SANDBOX_VIOLATION",
   "SANDBOX_CLEANUP_INCOMPLETE",
   "SANDBOX_RECEIPT_INCOMPLETE",
+  "IMAGE_NOT_APPROVED",
+  "MOUNT_SEMANTICS_UNSUPPORTED",
+  "WORKSPACE_MISSING",
 ] as const
 
 export type LinuxErrorCode = (typeof LINUX_ERROR_CODES)[number]
@@ -80,6 +83,9 @@ export const LINUX_ERROR_OUTCOME: Record<LinuxErrorCode, LinuxErrorOutcome> = {
   SANDBOX_VIOLATION: "execution_failed",
   SANDBOX_CLEANUP_INCOMPLETE: "execution_failed",
   SANDBOX_RECEIPT_INCOMPLETE: "execution_failed",
+  IMAGE_NOT_APPROVED: "execution_failed",
+  MOUNT_SEMANTICS_UNSUPPORTED: "execution_failed",
+  WORKSPACE_MISSING: "execution_failed",
   PROCESS_CANCELLED: "cancelled",
   PROCESS_TIMEOUT: "timed_out",
 }

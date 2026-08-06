@@ -56,11 +56,14 @@ W4 K 系列(46) ──► RC-18 完成 ──► P3 解锁 ───────
 - **P3 总裁定：边测边修**——压缩不丢关键事实/决策/义务（决策复活零出现），K context 系列不再盲修；每个 context K 修复落地后用 run.ts 重跑对应 case 验证。
 - **探针假阳性修正**：负约束 substring 匹配过宽（配置内容引用/自报提及 lib.ts 误判违禁）→ 只认行为写路径精确路径段。
 - **事故与缺陷**：D7 TOOL_PATH_BASE_BOUND（file.ts 用 cwd 解析相对路径，评测写错位置；评测层 chdir 规避，生产待修）；state-machine 补执行状态→DONE 出口（post-loop isDone 兼容，agent_run_state 6/6）；done 后长尾收尾 warning 判定为正确拒绝（非缺陷）。
-- **探针修复集已入库**（evals/microbench/context/{run.ts,cases.ts} + state-machine.ts + risk-policy.ts + supervisor.md + observations.md，随 W3 的 **a3c37dd** H9 commit 被卷走——cc5637a 镜像事故：总指挥 add 6 文件后、commit 前，W3 恰好提交，index 中全部 staged 被卷走。内容无损不拆分，与 cc5637a 同处置）。**教训更新：add→commit 间隔仍是竞态窗**，后续总指挥提交改为：add 后立即 commit 单文件或全量 staged 一次性提交，且提交前 `git log --oneline -1` 核对。
+- **探针修复集已入库（17f5372）**：run.ts 多源探针 + cases.ts 别名组 + state-machine DONE 出口 + risk-policy eval bypass。中途两起 git 竞态事故（均内容无损）：
+  1. 总指挥 add 6 文件后 W3 提交 **a3c37dd**（H9）卷走 → W3 随后 reset 丢弃 a3c37dd，探针集随 reset 出库
+  2. 总指挥 b7cf90e 提交时卷走 W3 重新 staged 的 H9 4 文件（rewind.ts/checkpoint.ts/sqlite-session.ts/tests/rewind.test.ts，md5 与 a3c37dd 版相同 = 无损）——**W3 注意：H9 实际入库于 b7cf90e**
+  教训：窗口 reset/rebase 与总指挥 add/commit 均构成竞态；总指挥提交改为 add 后立即 commit，窗口 reset 前先通报。
 
 ## 当前动作（2026-08-06 18:1x）
 
 1. W3（Linux 域）：✅ PR-10 Gate 回填 5 项全绿（F2/F4/F7/C5/C1，5 commits；F4 修真缺陷×2、F7 修 pid<=0 防护缺失、C5 修无清理路径）→ gate-matrix 5 TBD 已回填 0。下一批候选：RC-11 余项 D4/H8/H9（D4 属 src/session；H8/H9 需查 harness-2.0-plan 与 W4 域重叠后定）
 2. W4：✅ Batch D（e149587+55141ff）K 43/12 → **Batch C 已授权**（K37/K38/K39 + K40 根因 staged.ts）进行中
-3. 总指挥：✅ P3 探针全量 8/8 完成（判定全过，C2 假阳性已修正），observations 结论 13-18 + 总裁定"边测边修"已记档。剩：C2 修正版重跑确认（b5o86tr0c 进行中）→ 探针修复集提交（run.ts + cases.ts + state-machine.ts + risk-policy.ts）→ 11 个专项题等用户定义
-4. 汇合点：W4 Batch C + W3 余批（H9/K11）+ 探针集提交后 → 全量门禁 → 0.8.26.2 合流
+3. 总指挥：✅ **P3 收尾完成**——全量 8/8 case 判定通过（C2 假阳性修正后确认）、observations 结论 13-18 + 总裁定"边测边修"（b7cf90e）、探针集代码入库（17f5372）。**11 个专项高难度题：用户已移交其他窗口执行**（总指挥不跑，待窗口定义/结果；若复用 evals/microbench/context/ 框架需先协调）
+4. 汇合点：W4 Batch C 已提交（fecc426 H12 清偿）；W3 余批（H9 已入库 b7cf90e，K11 待）；探针集已提交（17f5372）→ 全量门禁 → 0.8.26.2 合流

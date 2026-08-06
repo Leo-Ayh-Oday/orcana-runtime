@@ -8,9 +8,12 @@ const cyan = (s: string) => `\x1b[1;36m${s}\x1b[0m`
  * Start readline input loop. Every line is forwarded to `onLine` —
  * command dispatch happens in cli.ts via CommandRegistry.execute.
  *
+ * `onClose` runs when the readline stream closes (EOF/Ctrl-D) — the CLI
+ * uses it to flush the session before process.exit (D5 EXIT_PATH_FLUSHES_SESSION).
+ *
  * Returns the readline interface so the caller can reprompt.
  */
-export function startInput(onLine: (line: string) => void) {
+export function startInput(onLine: (line: string) => void, onClose?: () => void) {
   const isTTY = process.stdin.isTTY
   const rl = readline.createInterface({
     input: process.stdin,
@@ -28,7 +31,10 @@ export function startInput(onLine: (line: string) => void) {
     onLine(line)
   })
 
-  rl.on("close", () => process.exit(0))
+  rl.on("close", () => {
+    if (onClose) onClose()
+    process.exit(0)
+  })
 
   return rl
 }

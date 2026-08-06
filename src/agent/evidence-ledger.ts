@@ -13,6 +13,7 @@
 
 import type { TransactionEvidenceBinding, VerificationKind, VerificationResult } from "../verification/result"
 import type { TaskTracker } from "./task-tracker"
+import { computeReceiptDigest } from "../runtime/linux/receipt"
 
 // ── Evidence types ──
 
@@ -574,8 +575,9 @@ export function deserializeLedger(data: SerializedLedger): EvidenceLedger {
  *
  *  仅完整 Receipt（backend + digests + 已结束）可入账；不完整 Receipt 拒绝
  *  （SANDBOX_RECEIPT_INCOMPLETE: 0）。sandbox_execution 证据绑定
- *  receiptDigest/backend/networkMode/degraded；清理验证通过（进程归零 +
- *  cgroup 移除）额外产生 sandbox_cleanup 证据。
+ *  receiptDigest（PR-2：Receipt 自摘要，完整 Outcome 绑定而非 cellSpecDigest）
+ *  /backend/networkMode/degraded；清理验证通过（进程归零 + cgroup 移除）
+ *  额外产生 sandbox_cleanup 证据。
  */
 export function ingestSandboxReceipt(
   ledger: EvidenceLedger,
@@ -583,6 +585,7 @@ export function ingestSandboxReceipt(
 ): EvidenceEntry | null {
   if (receipt.finishedAt <= 0 || !receipt.cellSpecDigest || !receipt.backend) return null
   const cleanupVerified = receipt.cleanup.processesRemaining === 0 && receipt.cleanup.cgroupRemoved === true
+  const receiptDigest = receipt.receiptDigest || computeReceiptDigest(receipt)
   const entry: EvidenceEntry = {
     id: generateEvidenceId(),
     kind: "sandbox_execution",
@@ -590,7 +593,7 @@ export function ingestSandboxReceipt(
     output: `backend=${receipt.backend} profile=${receipt.profile} exit=${receipt.exitCode} degraded=${receipt.degradationReasons.length > 0}`,
     passed: receipt.exitCode === 0 && !receipt.timedOut && !receipt.cancelled,
     timestamp: receipt.finishedAt,
-    receiptDigest: receipt.cellSpecDigest,
+    receiptDigest,
     backend: receipt.backend,
     cleanupVerified,
     networkMode: receipt.networkMode,
@@ -605,7 +608,7 @@ export function ingestSandboxReceipt(
       output: "processesRemaining=0 cgroupRemoved=true",
       passed: true,
       timestamp: receipt.finishedAt,
-      receiptDigest: receipt.cellSpecDigest,
+      receiptDigest,
       backend: receipt.backend,
       cleanupVerified: true,
     })

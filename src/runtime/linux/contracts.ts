@@ -253,6 +253,8 @@ export interface SandboxViolation {
 
 export interface SandboxReceipt {
   schemaVersion: "1.0"
+  /** Receipt 自摘要（完整 Outcome 的 sha256，PR-2；Evidence 绑定此值）。 */
+  receiptDigest: string
   cellId: string
   runId: string
   nodeRunId: string

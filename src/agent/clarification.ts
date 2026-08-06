@@ -11,7 +11,7 @@ export interface ClarificationResult {
 }
 
 export interface ChatMessage {
-  role: "user" | "assistant"
+  role: "user" | "assistant" | "system"
   content: string
 }
 

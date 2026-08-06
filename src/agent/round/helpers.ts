@@ -4,7 +4,7 @@ import { AgentState } from "../state-machine"
 import type { AgentContext } from "../state-machine"
 
 export interface StringHistoryMessage {
-  role: "user" | "assistant"
+  role: "user" | "assistant" | "system"
   content: string
 }
 

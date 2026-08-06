@@ -60,3 +60,69 @@ actualModel 恒为 deepseek-v4-flash，无 SILENT_MODEL_SWITCH。
 - Zen 按 token 计费（非按调用数）：P0 live 全量 12 次调用 ≈ $0.0008；Go 会员按请求限额（v4-flash ~31,650 次/5h），用量可忽略。
 - Token per Task 均值 188（TU），每次用例 3-8 轮、2-7 次工具调用。
 - 模型倾向于先 search 再 read（合理前缀），不宜在断言里要求"只读目标文件"。
+
+---
+
+## ORMB-SR/TR/MTR（P2）：Skill 路由 + Mode 分诊 + 多轮切换
+
+### 结果（run3 全量，commit 5da2e90，报告 ORMB-SR/TR/MTR-5da2e90-20260806-0930xx.json）
+
+| 套件 | 通过 | 关键指标 | 计划 v1.0 目标 |
+|---|---|---|---|
+| ORMB-SR | 48/50 | 语义 F1=86.1%（P 79.5 R 93.9）、Exact Set 79.6%、No-Skill 7/7 | Macro F1 ≥ 90 |
+| ORMB-TR | 36/40 | Mode Macro F1=90.2%、Under 2/Over 0、needsWeb P=100% R=25%、Risk High Miss 0/7 | Macro F1 ≥ 93、高险漏判 0 |
+| ORMB-MTR | 5/5 | 真实/理想路径全对，Turn3 无继承 | 切换准确率 ≥ 90 |
+
+### 结论 7：语义分诊显著优于关键词路由（P2 核心结论）
+
+同 50 用例：关键词路径 F1=65.1%（P 54.0 R 81.8，关键词误触发是主要污染源）vs 语义路径 F1=86.1%（P 79.5 R 93.9）。
+语义路径召回 93.9% vs 关键词 81.8%——隐含需求（无触发词）只有语义路径能接住。
+代价：每次 triage 一次模型调用（实测 2-19s 波动，均值 ~5s）。
+
+### 结论 8：triage 可见技能集必须与 registry 单一事实源同步（生产缺陷）
+
+`buildTriagePrompt` 硬编码 6 个技能名：含 phantom `design-quality`（registry 不存在——
+模型选中后激活静默丢失），缺 ui-ux-pro-max/motion-pro-max（语义路径结构不可达，
+这 8 个用例永远路由不到）。`SKILL_TRIGGER_MAP`（fallback 关键词）同样 6 个含 phantom。
+修复：两处均从 registry `SKILLS` 动态生成（autoTrigger 子集）。修复后 ui-ux/motion
+从"结构不可达"变为可达，MTR-01 Turn3（CSS 动效）正确激活 motion-pro-max。
+
+### 结论 9：空响应必须诚实失败，伪成功会污染全部指标（生产缺陷）
+
+文本 fallback 在空响应时返回 `{mode:narrow_edit, risk:low, skills:[]}` 兜底值：
+40 个 mode 用例 12 个被污染（30%），Mode Macro F1 被拖到 63.9%（真实 90.2%），
+Risk High Miss 6/7 里有 6 个是兜底值假漏判（真实 0/7）。修复：空响应返回 null → 关键词 fallback。
+教训：**兜底值的"看起来正常"比明显错误更危险**——调用方无法区分"模型真判断"和"分诊失败"。
+
+### 结论 10：deepseek-v4-flash 强制 thinking + 512 max_tokens = 空响应（基础设施）
+
+- thinking 实测：disabled 2.4s/0 字符，默认 4.0s/385 字符，enabled(1024) 7.3s/797 字符
+- maxTokens 512 时 thinking 吃满 → `stop_reason=max_tokens` + 零 text → 空响应
+- 慢请求 12-19s（连续请求时段 zen/go 延迟波动），8s/15s 超时把慢请求误杀成空响应
+- 修复组合：maxTokens 2048 + 超时 30s + 测试并发 50→4。失败率 62% → 2%（1/50）
+- 最终 thinking 配置：不传参数（模型自决）——run3 验证 F1 90.2%/失败率 2%，待 A/B 对比 enabled 小预算
+
+### 结论 11：剩余误判全部是边界分歧，无系统性缺陷
+
+4 个 MODE_MISMATCH：TR-19 模糊任务保守化（"重命名这个文件"→discussion）、
+TR-25/28 讨论/规划边界（接口规范设计、TS 大版本评估判 discussion——但 needsWeb 判对）、
+TR-40 单模块判 plan 档（web/风险识别全对，只差档位）。2 个 SR：SR-17 隐含
+architecture 漏选、SR-42 弹跳按钮只选 motion 漏 ui-ux（GT 双 required 偏严）。
+均属 GT 标注粒度 vs 模型分类粒度的边界摩擦，不触发"修复 prompt"式调优。
+
+### 模型行为亮点
+
+| 用例 | 亮点 |
+|---|---|
+| MTR-01 | Turn3 "只改 hover 动效" 正确路由 motion，未继承 Turn1 的 architecture（breaker 未造成继承污染） |
+| TR-28 | TS 大版本升级 needsWeb=true + 搜索词质量高（"breaking changes/migration guide"），仅 mode 档位偏 discussion |
+| TR-40 | 支付模块 web 搜索词对准支付宝/微信/Stripe 官方文档，风险 high 未漏判 |
+| SR 语义路径 | 隐含需求（无触发词）召回 93.9%，"接口各种奇怪输入→edge-case-hunter" 等语义匹配准确 |
+
+### 成本/性能观察（P2）
+
+- 单次 triage：~1.5-2K tokens（2048 上限，thinking 385-797 字符），延迟均值 ~5s
+- P2 全量 110 次 triage 调用，Go 会员限额内可忽略（v4-flash ~31,650 次/5h）
+- 4 并发限流后空响应率 2%（50 并发时更高）——provider 端对突发请求有延迟惩罚
+- fallback 与关键词路径同源后（registry triggers），fallback F1 = 关键词 F1 = 65.1%——
+  fallback 的成功率（100%）是计划 §五 gate，准确率与关键词路径相同

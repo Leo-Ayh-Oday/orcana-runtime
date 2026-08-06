@@ -17,11 +17,14 @@
 import type { ContextRequest } from "../contracts/context"
 import type { RunPhaseContext } from "../../agent/kernel/types"
 import type { PlanStateInput } from "../../agent/context-epoch"
-import type { EvidenceKind } from "../../agent/evidence-ledger"
+import type { EvidenceKind, EvidenceEntry } from "../../agent/evidence-ledger"
 import { latestEvidence, hasFreshPassingEvidence, requiredEvidenceKinds } from "../../agent/evidence-ledger"
+import type { RippleObligation } from "../../ripple/obligations"
 import { getBlockingObligations } from "../../ripple/obligations"
+import type { TaskTracker } from "../../agent/task-tracker"
 import { currentNode } from "../../agent/master-plan"
-import { getActiveMode } from "../../agent/mode-contract"
+import { getActiveMode, MODES } from "../../agent/mode-contract"
+import type { AgentRunScope } from "../contracts/run"
 
 // ── RC-18 K7 / K55: contribution authority levels ──
 
@@ -135,8 +138,14 @@ const EVIDENCE_KINDS: EvidenceKind[] = ["typecheck", "test", "build", "manual", 
  *  Empty ledger / no obligations / no required kinds → [] (byte-identical
  *  to the pre-K2 output, golden trace safe).
  */
-export function buildPlanStateDecisions(ctx: RunPhaseContext): string[] {
-  const entries = ctx.evidenceLedger?.entries ?? []
+/** Shared decision builder — sources read only from the ledger, obligations
+ *  and task requirements, so the node-mode request (no RunPhaseContext) can
+ *  reuse it with the run scope's ledger (H12). */
+export function buildPlanStateDecisionsFrom(
+  entries: EvidenceEntry[],
+  rippleObligations: RippleObligation[],
+  taskTracker: TaskTracker | null,
+): string[] {
   const ledger = { entries }
   const decisions: string[] = []
   const surfaced = new Set<EvidenceKind>()
@@ -157,13 +166,13 @@ export function buildPlanStateDecisions(ctx: RunPhaseContext): string[] {
   }
 
   // Ripple — only obligations that still block completion (non-waived).
-  for (const ob of getBlockingObligations(ctx.verificationState.rippleObligations)) {
+  for (const ob of getBlockingObligations(rippleObligations)) {
     decisions.push(`[ripple] ${ob.reason}: ${ob.targetFile} (via ${ob.symbol})`)
   }
 
   // Verification — required kinds with no fresh passing evidence and no
   // surfaced evidence line above (avoid "failed" + "missing" redundancy).
-  for (const kind of requiredEvidenceKinds(ctx.planning.taskTracker)) {
+  for (const kind of requiredEvidenceKinds(taskTracker)) {
     if (!surfaced.has(kind) && !hasFreshPassingEvidence(ledger, kind)) {
       decisions.push(`[verification] missing: ${kind}`)
     }
@@ -171,6 +180,18 @@ export function buildPlanStateDecisions(ctx: RunPhaseContext): string[] {
 
   return decisions.slice(-8)
 }
+
+export function buildPlanStateDecisions(ctx: RunPhaseContext): string[] {
+  return buildPlanStateDecisionsFrom(
+    ctx.evidenceLedger?.entries ?? [],
+    ctx.verificationState.rippleObligations,
+    ctx.planning.taskTracker,
+  )
+}
+
+/** H12: node-mode context budget — informational only (no provider consumes
+ *  request.contextMax today); the node path has no kernel CONTEXT_MAX. */
+export const NODE_CONTEXT_MAX_TOKENS = 128_000
 
 /** Build the context request for one round from the kernel run context. */
 export function createContextRequest(ctx: RunPhaseContext, round: number): ContextRequest {
@@ -217,6 +238,49 @@ export function createContextRequest(ctx: RunPhaseContext, round: number): Conte
     rawMessages: ctx.rawMessages,
     epochState: ctx.epochState,
     // RC-18 K55: reserved conflict signal — no topic registry exists yet.
+    conflicts: [],
+  }
+}
+
+/** H12: node-mode ContextRequest construction — kernel-side independent.
+ *
+ *  A workflow node has no RunPhaseContext, so the request is built from the
+ *  run scope + node input directly. Kernel-round sources (context kernel,
+ *  context map, staged context, thinking store, knowledge base, raw
+ *  conversation, epoch) are absent by definition — the node providers
+ *  contribute nothing for them. Mode comes from the RUN's modeStore (the
+ *  run's mode is the authority in harness mode, not the module-level active
+ *  mode), and plan-state decisions reuse the K2 builder over the scope's
+ *  evidence ledger + ripple session. */
+export function createNodeContextRequest(
+  scope: AgentRunScope,
+  input: { prompt: string },
+  round: number,
+): ContextRequest {
+  const planStore = scope.planStore
+  const obligations = scope.rippleSession.obligations as RippleObligation[]
+  return {
+    round,
+    effectivePrompt: input.prompt,
+    contextMax: NODE_CONTEXT_MAX_TOKENS,
+    langInstruction: "",
+    frozenStablePrefixContent: null,
+    triageSkillPrompts: [],
+    planState: {
+      masterPlan: planStore.current,
+      taskTracker: null,
+      taskPacket: planStore.current
+        ? (currentNode(planStore.current)?._packet ?? null)
+        : null,
+      rippleObligations: obligations,
+      userGoal: planStore.current?.goal ?? input.prompt.slice(0, 200),
+      decisions: buildPlanStateDecisionsFrom(scope.evidenceLedger.entries, obligations, null),
+      round,
+    },
+    researchContextContent: null,
+    taskTracker: null,
+    mode: MODES[scope.modeStore.mode],
+    rawMessages: [],
     conflicts: [],
   }
 }

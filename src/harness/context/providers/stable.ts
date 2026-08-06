@@ -84,14 +84,18 @@ export const PROJECT_KERNEL_PROVIDER: ContextProvider = {
   cacheable: true,
   async provide(request: ContextRequest) {
     if (request.frozenStablePrefixContent !== null) return part("project-kernel", 20, "", { authority: "system" })
-    const text = request.contextKernel.text
+    // H12: contextKernel is optional — node-mode requests (no kernel round
+    // state) omit it and contribute nothing here.
+    const text = request.contextKernel?.text ?? ""
     return part("project-kernel", 20, text ? `## Project Context Kernel\n${text}` : "", {
-      cacheKey: `kernel:${request.contextKernel.hash}`,
+      cacheKey: `kernel:${request.contextKernel?.hash ?? "none"}`,
       // K7: project rules / kernel — system authority.
       authority: "system",
       // K54/K40: file-sourced (drift-prone) — digest from the kernel's own
       // content hash; a fork can re-derive it and detect drift.
-      freshnessContract: { kind: "file", digest: request.contextKernel.hash },
+      ...(request.contextKernel
+        ? { freshnessContract: { kind: "file" as const, digest: request.contextKernel.hash } }
+        : {}),
     })
   },
 }
@@ -103,12 +107,14 @@ export const CONTEXT_MAP_PROVIDER: ContextProvider = {
   cacheable: true,
   async provide(request: ContextRequest) {
     if (request.frozenStablePrefixContent !== null) return part("context-map", 30, "", { authority: "tool" })
-    return part("context-map", 30, request.contextMapContext, {
+    // H12: contextMapContext is optional — node-mode requests omit it.
+    const contextMap = request.contextMapContext ?? ""
+    return part("context-map", 30, contextMap, {
       // K7: repo facts gathered by tooling — tool authority.
       authority: "tool",
       // K54/K40: fingerprint the content string so fork/cache drift is
       // detectable without re-reading files.
-      freshnessContract: { kind: "file", digest: contentDigest(request.contextMapContext) },
+      freshnessContract: { kind: "file", digest: contentDigest(contextMap) },
     })
   },
 }

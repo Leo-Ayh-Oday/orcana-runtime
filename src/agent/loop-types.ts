@@ -14,6 +14,11 @@ export interface UsageStats {
   estimatedInputTokens: number
   cacheHits: number
   cacheMisses: number
+  /** H12: cumulative cache-miss INPUT tokens across rounds — the final
+   *  provider usage event carries this as a run total so every counter on
+   *  the stream (input/output/cacheMiss) shares the same "cumulative
+   *  snapshot" invariant the harness BudgetGuard deltas against. */
+  cacheMissInputTokens: number
   flashRounds: number
   proRounds: number
   flashUsed: boolean

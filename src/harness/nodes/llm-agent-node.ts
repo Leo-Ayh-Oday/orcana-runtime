@@ -180,9 +180,9 @@ function* translateEnvelope(
     const u = payload.usage as { inputTokens?: number; outputTokens?: number; cacheMissInputTokens?: number; cacheSource?: string }
     // Provider-sourced usage only (estimate events carry whole-round totals).
     // The kernel's provider events are CUMULATIVE snapshots (round N carries
-    // rounds 1..N), so we take the last value rather than accumulate —
-    // accumulation would double-count (noted: the H4 BudgetGuard += has the
-    // same hazard on real kernel streams; tracked for H12).
+    // rounds 1..N totals for input/output/cache-miss — H12), so we take the
+    // last value rather than accumulate: accumulation would double-count.
+    // The H4 BudgetGuard uses the same invariant with delta accounting.
     if (u.cacheSource === "provider") {
       // M21: each provider round is one model call (kernel token_usage
       // events are cumulative per round — totals take the last value).

@@ -201,10 +201,19 @@ export async function buildRunContext(
   const flashJudge = new FlashJudge(provider, judgeModel)
   const testimonyLedger = new TestimonyLedger()
   const permissionGate = new PermissionGate()
-  // Load user + project permission configs (gracefully)
+  // Load user + project permission configs.
+  // RC-02 B2: 损坏配置 → invalid → 进入 permission-safe-mode（deny 规则不可用即拒绝默认），
+  // 绝不静默退回 allow。
   const userCfg = loadUserConfig()
   const projectCfg = loadProjectConfig(projectRoot)
-  permissionGate.loadRules(userCfg?.rules ?? [], projectCfg?.rules ?? [])
+  const userRules = userCfg.status === "valid" ? userCfg.config.rules : []
+  const projectRules = projectCfg.status === "valid" ? projectCfg.config.rules : []
+  permissionGate.loadRules(userRules, projectRules)
+  if (userCfg.status === "invalid" || projectCfg.status === "invalid") {
+    const bad = userCfg.status === "invalid" ? "~/.orcana/permissions.json" : "<root>/.orcana/permissions.json"
+    const err = userCfg.status === "invalid" ? userCfg.error : (projectCfg.status === "invalid" ? projectCfg.error : "")
+    permissionGate.enterSafeMode(`permission 配置损坏（${bad}: ${err}）—— 写入/进程/网络/MCP 全部 ask，用户规则暂停生效`)
+  }
   // Sandbox init — shared Job Object for all shell commands in this agent run.
   // H3: the harness may inject its run-scoped sandbox so a run has a single
   // owner; otherwise created here with the same defaults.

@@ -11,6 +11,8 @@
 
 import { AgentBudget } from "./agent-budget"
 import { isValidAgentId } from "./worktree"
+import type { RunCancellation } from "../../harness/contracts/scope"
+import { createRunCancellation } from "../../harness/runtime/cancellation"
 
 export interface AgentSpec {
   id: string
@@ -34,6 +36,10 @@ export interface Agent {
   writable: boolean
   cancelled: boolean
   budget: AgentBudget
+  /** M5: agent-local cancellation — cancel() aborts this signal so RUNNING
+   *  nodes observe the abort (running tool/LLM/loop work stops), without
+   *  touching other agents' signals (they share only the run scope). */
+  cancellation: RunCancellation
 }
 
 export interface OwnershipViolation {
@@ -89,6 +95,7 @@ export class AgentPool {
       writable: spec.writable ?? true,
       cancelled: false,
       budget: new AgentBudget(spec.budget),
+      cancellation: createRunCancellation(new AbortController()),
     }
     this.agents.set(spec.id, agent)
     return { ok: true, agent }
@@ -117,11 +124,14 @@ export class AgentPool {
     return this.agents.get(agentId)?.cancelled ?? false
   }
 
-  /** Cancel an agent: pending nodes fail fast, running nodes abort. */
+  /** Cancel an agent: pending nodes fail fast, running nodes abort
+   *  (M5: the agent-local signal fires — in-flight tool/LLM work observes
+   *  the abort and releases locks/worktrees). */
   cancel(agentId: string): boolean {
     const agent = this.agents.get(agentId)
     if (!agent) return false
     agent.cancelled = true
+    agent.cancellation.cancel("agent_cancelled")
     return true
   }
 

@@ -38,8 +38,8 @@ export interface PodmanCompileOptions {
   image: string
   /** 镜像内工作目录。 */
   workdir?: string
-  /** 显式 volume（host → container，ro/rw）。 */
-  volumes?: Array<{ source: string; target: string; mode: "ro" | "rw" }>
+  /** 显式 volume（host → container，ro/rw；PR-7 支持完整选项字符串）。 */
+  volumes?: Array<{ source: string; target: string; mode: "ro" | "rw" } | string>
   /** 拉取策略（默认 never）。 */
   pullPolicy?: "never" | "missing"
   /** 标签（io.orcana.*）。 */
@@ -77,7 +77,11 @@ export function compilePodmanArgv(spec: ExecutionCellSpec, caps: LinuxCapabiliti
     argv.push("--volume", `${spec.filesystem.worktreeRoot}:/workspace:rw,Z`)
   }
   for (const volume of opts.volumes ?? []) {
-    argv.push("--volume", `${volume.source}:${volume.target}:${volume.mode},Z`)
+    if (typeof volume === "string") {
+      argv.push("--volume", volume)
+    } else {
+      argv.push("--volume", `${volume.source}:${volume.target}:${volume.mode},Z`)
+    }
   }
   if (opts.seccompProfile) argv.push("--security-opt", `seccomp=${opts.seccompProfile}`)
   for (const [key, value] of Object.entries(opts.env ?? {})) {
@@ -151,11 +155,26 @@ export function createPodmanBackend(): ExecutionBackend {
       const cidfile = `/tmp/orcana-${spec.identity.runId}-${spec.identity.cellId}.cid`
       const cacheSource = (c: { target: string; kind: string; key: string }) =>
         materialization?.cacheHostPaths?.[c.target] ?? `/cache/${c.kind}/${c.key}`
+      // PR-7：Volume 全部来自经过校验的 MountRule（含 noexec/nosuid 语义，
+      // podman 支持 :noexec/:nosuid 挂载选项 —— bwrap 不支持所以此前拒绝）。
+      const volumeOf = (rule: import("../contracts").MountRule): string => {
+        const mode = rule.mode === "ro" ? "ro" : "rw"
+        const opts = [mode, "Z"]
+        if (rule.noExec) opts.push("noexec")
+        if (rule.noSuid) opts.push("nosuid")
+        if (rule.noDev) opts.push("nodev")
+        return `${rule.source}:${rule.target}:${opts.join(",")}`
+      }
       return {
         backend: "rootless-podman",
         argv: [podmanPath, ...compilePodmanArgv(spec, caps, {
           image,
-          volumes: spec.cache.map(c => ({ source: cacheSource(c), target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" })),
+          volumes: [
+            ...spec.filesystem.readonlyMounts.map(volumeOf),
+            ...spec.filesystem.writableMounts.map(volumeOf),
+            ...spec.cache.map(c => ({ source: cacheSource(c), target: c.target, mode: c.mode === "rw-locked" ? "rw" : "ro" })),
+            ...Object.entries(materialization?.secretFiles ?? {}).map(([target, source]) => `${source}:${target}:ro,Z`),
+          ],
           labels: { "io.orcana.run": spec.identity.runId, "io.orcana.cell": spec.identity.cellId },
           env: env.env,
           cidfile,

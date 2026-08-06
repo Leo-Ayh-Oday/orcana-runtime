@@ -222,9 +222,12 @@ export function createBubblewrapBackend(): ExecutionBackend {
       // 缓存宿主路径由 Runtime 物化（CacheManager 权威，模型不可指定）。
       const cacheSource = (c: { target: string; kind: string; key: string }) =>
         materialization?.cacheHostPaths?.[c.target] ?? `/cache/${c.kind}/${c.key}`
+      // PR-7：sealed-file secrets 真实挂载进沙盒（ro）。
+      const secretMounts = Object.entries(materialization?.secretFiles ?? {})
+        .map(([target, source]) => ({ target, source }))
       const argv = compileBwrapArgv(spec, caps, {
         worktreeRoot: spec.filesystem.worktreeRoot,
-        extraReadonly: spec.filesystem.readonlyMounts,
+        extraReadonly: [...spec.filesystem.readonlyMounts, ...secretMounts],
         extraWritable: spec.filesystem.writableMounts,
         tmpfs,
         hiddenPaths: spec.filesystem.hiddenPaths,

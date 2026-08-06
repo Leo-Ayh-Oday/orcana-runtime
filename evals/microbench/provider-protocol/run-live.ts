@@ -239,7 +239,7 @@ async function runLiveCase(def: MBELiveCase): Promise<MBECaseResult> {
   const sleepsMs: number[] = []
   const controller = new AbortController()
   const toolSchemas = buildToolSchemas(def.tools)
-  const thinking = def.thinking ? { type: "adaptive" as const, effort: "high" as const } : undefined
+  const thinking = def.thinking ? { type: "adaptive" as const, effort: "max" as const } : undefined
 
   let messages: ProviderMessage[] = [{ role: "user", content: def.prompt }]
   const start = performance.now()
@@ -343,7 +343,7 @@ export async function runLiveSuite(filterCase?: string): Promise<MBEReport> {
 
   const passed = cases.filter((c) => c.passed).length
   return {
-    header: buildHeader("ORMB-PP"),
+    header: buildHeader("ORMB-PP", "max"), // live：有 thinking 用例用 adaptive/max
     suite: "ORMB-PP-live",
     cases,
     hardGates,

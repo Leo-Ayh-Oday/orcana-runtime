@@ -50,7 +50,9 @@ import {
   epochRollover,
   formatEpochBudgetWarning,
   formatEpochStatus,
+  persistEpochArchive,
   totalMessageChars,
+  type RolloverResult,
 } from "../context-epoch"
 import { distillUserConstraints, extractUserTexts, formatConstraintContext } from "../memory/user-constraints"
 import { appendUserContext } from "../maintenance/coordinator"
@@ -206,7 +208,14 @@ export async function* runRound(
   // epoch decision is made on rawMessages alone — the exact scope that a
   // rollover would trim.
   const epochTotalChars = epochScopeChars(contextMessages, rawMessages)
-  const epochAction = classifyEpochAction(epochTotalChars, ctx.epochState.thresholds)
+  // K19: calibrate the char thresholds with the previous round's measured token
+  // density (chars per token). The default 3 is used until a provider reports
+  // actual tokens (see the usage-capture block later in this round).
+  const epochAction = classifyEpochAction(
+    epochTotalChars,
+    ctx.epochState.thresholds,
+    ctx.epochState.lastMeasuredCharsPerToken ?? 3,
+  )
   if (epochAction !== "none") {
     yield stream({ type: "status", data: formatEpochStatus(ctx.epochState, round, epochTotalChars) })
   }
@@ -226,24 +235,27 @@ export async function* runRound(
     }
     const rolloverResult = epochRollover(rawMessages, 3 /* keep 3 most recent turns */, planStateForRollover, ctx.epochState, round)
     if ("blocked" in rolloverResult) {
-      yield stream({ type: "status", data: `epoch-rollover: blocked — ${rolloverResult.reason}` })
-      // Continue without rollover; will retry next round
+      // K22: emergency recovery — if the epoch has already rolled over at least
+      // once (or this epoch has been blocked for several rounds straight) the
+      // model may be looping on an unclosed tool chain while the context keeps
+      // growing. Retry once in fallback mode to cut at the last safe boundary
+      // instead of blocking indefinitely.
+      const roundsSinceEpochStart = round - ctx.epochState.epochStartRound
+      const shouldFallback = ctx.epochState.rolloverCount > 0 || roundsSinceEpochStart >= 4
+      if (shouldFallback) {
+        const fallbackResult = epochRollover(rawMessages, 3, planStateForRollover, ctx.epochState, round, true)
+        if (!("blocked" in fallbackResult)) {
+          yield* applyRollover(ctx, fallbackResult, round, "fallback")
+        } else {
+          yield stream({ type: "status", data: `epoch-rollover: blocked — ${rolloverResult.reason} (fallback also unavailable)` })
+          // Continue without rollover; will retry next round
+        }
+      } else {
+        yield stream({ type: "status", data: `epoch-rollover: blocked — ${rolloverResult.reason}` })
+        // Continue without rollover; will retry next round
+      }
     } else {
-      // Replace rawMessages with rolled-over version
-      while (rawMessages.length > 0) rawMessages.pop()
-      for (const m of rolloverResult.messages) rawMessages.push(m)
-      ctx.epochState.currentEpochIndex++
-      ctx.epochState.epochStartRound = round
-      ctx.epochState.rolloverCount++
-      ctx.epochState.totalCharsTrimmed += rolloverResult.charsTrimmed
-      ctx.epochState.snapshots.push(rolloverResult.snapshot)
-      yield stream({ type: "status", data: `epoch-rollover: ${rolloverResult.archivedCount} messages archived (${rolloverResult.charsTrimmed} chars), ${rawMessages.length} messages retained` })
-      yield trace("epoch_rollover", {
-        epochIndex: rolloverResult.snapshot.index,
-        round,
-        archivedCount: rolloverResult.archivedCount,
-        charsTrimmed: rolloverResult.charsTrimmed,
-      })
+      yield* applyRollover(ctx, rolloverResult, round, "normal")
     }
   }
 
@@ -479,6 +491,18 @@ export async function* runRound(
     : undefined
   if (typeof providerRoundInputTokens === "number" && providerRoundInputTokens > 0) {
     yield patch({ budget: { contextInput: budget.contextInput + providerRoundInputTokens - estimatedRoundInputTokens } })
+  }
+  // K19: calibrate the epoch thresholds with the observed token density, used by
+  // the NEXT round's epoch decision. charsPerToken = total request chars /
+  // measured input tokens; when the provider reports no tokens, keep 3 (default).
+  if (typeof providerRoundInputTokens === "number" && providerRoundInputTokens > 0) {
+    const schemaChars = activeTools.length
+      ? JSON.stringify(activeTools.map(t => t.toAnthropicSchema()).slice(0, 128)).length
+      : 0
+    const measuredRequestChars = system.length + schemaChars + totalMessageChars(providerMessages)
+    if (measuredRequestChars > 0) {
+      ctx.epochState.lastMeasuredCharsPerToken = measuredRequestChars / providerRoundInputTokens
+    }
   }
 
   const estimatedOutputTokens = Math.round(finalText.length / 3 + completedToolCalls.reduce((s, tc) => s + JSON.stringify(tc.input).length / 3, 0))
@@ -734,6 +758,11 @@ export async function* runRound(
     abortSignal,
     thinkingStore: ctx.thinkingStore,
     stableMemoryContext: options.stableMemoryContext,
+    // K36 (RC-18): thinking compaction 合并后的冷记忆写穿回 K35 稳定前缀源
+    // （ctx.options.stableMemoryContext）。maintenanceCtx 的 stableMemoryContext
+    // 只是字符串拷贝，本地赋值不会传播到源指纹（round.ts stableSources），
+    // 写穿后下一轮指纹漂移 → 重建 frozen stable prefix。
+    stableMemoryWriteThrough: (merged: string) => { options.stableMemoryContext = merged },
     effectivePrompt: ctx.effectivePrompt,
     routerRoundNum: ctx.state.roundNum,
     execution,
@@ -969,6 +998,50 @@ export async function* runRound(
 function planProgressOf(ctx: RunPhaseContext): string {
   const plan = ctx.planStore.current
   return plan ? planProgress(plan) : ""
+}
+
+/** Apply a successful epoch rollover: swap in the archived result, advance the
+ *  epoch state, and persist the archived raw messages (K3).
+ *
+ *  `mode` marks the K22 fallback cut in status/trace. State mutations stay on
+ *  the run-scoped objects (rawMessages, epochState) captured by reference.
+ *  Archive persistence is best-effort: a missing/failing artifact store falls
+ *  back to the content sha256 hash and never blocks the rollover. */
+async function* applyRollover(
+  ctx: RunPhaseContext,
+  result: RolloverResult,
+  round: number,
+  mode: "normal" | "fallback",
+): AsyncGenerator<RunEffect, void, unknown> {
+  const { rawMessages } = ctx
+  while (rawMessages.length > 0) rawMessages.pop()
+  for (const m of result.messages) rawMessages.push(m)
+  ctx.epochState.currentEpochIndex++
+  ctx.epochState.epochStartRound = round
+  ctx.epochState.rolloverCount++
+  ctx.epochState.totalCharsTrimmed += result.charsTrimmed
+
+  const archive = await persistEpochArchive(ctx.artifactStore, result.archivedMessages)
+  result.snapshot.archiveRef = archive.ref
+  ctx.epochState.snapshots.push(result.snapshot)
+
+  yield stream({ type: "status", data: `epoch-rollover${mode === "fallback" ? " (fallback)" : ""}: ${result.archivedCount} messages archived (${result.charsTrimmed} chars), ${rawMessages.length} messages retained` })
+  yield trace("epoch_rollover", {
+    epochIndex: result.snapshot.index,
+    round,
+    archivedCount: result.archivedCount,
+    charsTrimmed: result.charsTrimmed,
+    mode,
+    archiveRef: archive.ref,
+    archivePersisted: archive.persisted,
+  })
+  if (archive.persisted) {
+    yield trace("epoch_archive_persisted", {
+      epochIndex: result.snapshot.index,
+      ref: archive.ref,
+      archivedCount: result.archivedMessages.length,
+    })
+  }
 }
 
 /** K20: the epoch decision scope is aligned with the rollover scope.

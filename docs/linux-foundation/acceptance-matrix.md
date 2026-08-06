@@ -10,7 +10,7 @@
 | LF-5 | CROSS_WORKTREE_SERIALIZATION: 0 / MAIN_WORKSPACE_MULTI_WRITER: 0 / RESOURCE_OVERCOMMIT: 0 / CACHE_CORRUPTION_CROSS_AGENT: 0 / AGENT_CANCEL_ISOLATION: PASS | **PASS (v0.8.12)** | scheduling.test.ts 21 项：原子预留/overcommit 拒绝/并发上限/释放/宿主保留 / 公平队列（优先级/FIFO/per-agent 上限/排水/权重）/ Isolation Lock（main 独占/worktree 并行/cache 锁/releaseAll）/ Cache 路径与锁 / PortLease（loopback/不重复/过期/run 回收/0.0.0.0 拒）/ AgentDomain（绑定/cancel 隔离/closeRun）；全量 1009 pass |
 | LF-6 | PRIVILEGED_CONTAINER: 0 / HOST_NETWORK_STRICT: 0 / CONTAINER_SOCKET_VISIBLE: 0 / FLOATING_IMAGE_ACCEPTED: 0 / STRICT_BACKEND_DEGRADED: 0 | **PASS (v0.8.13)** | podman.test.ts 13 项：digest 锁定（浮动 tag 拒）/ argv（无 --privileged/无 host network/network=none/read-only/--rm/pids/memory/标签）/ worktree volume 显式 / 缓存 ro-rw / minimum=container 拒 / 真实 Home 与 Socket 拒 / 严格禁降级 / untrusted+evolution+dependency Profile / 真容器 2 项条件运行；全量 1022 pass |
 | LF-7 | NETWORK_ALLOWLIST_BYPASS: 0 / REDIRECT_POLICY_BYPASS: 0 / RECOVERY_WRONG_PROCESS_KILL: 0 / SECRET_SURVIVES_RECOVERY: 0 / JANITOR_RESOURCE_LEAK: 0 | **PASS (v0.8.14)** | network-recovery.test.ts 13 项：egress allowlist / 重定向逐跳复查 / DNS rebinding 私有 IP 拒 / 网络模式 / Landlock 规则集按 ABI+Profile / 不可用降级原因 / seccomp 保守规则与运行时面 / 规则兼容性门 / state store 持久化 / Janitor 旧 boot 清理（同 boot 不误杀）/ boot id；全量 1035 pass |
-| LF-8 | 冻结门禁全绿（typecheck/测试/build/pack/Replay/Linux Eval/Multi-Agent Eval/Fault Injection/Perf/Security） | **PASS (v0.8.15)** | evals/linux-sandbox-eval.ts 35 场景 LX-001~LX-035：本机 34 PASS + 1 SKIP（LX-030 podman 环境依赖，策略层已验）。能力探测/fail-closed/环境与凭证可见性 0/Home 与 Socket 拒/项目与符号链接逃逸 0/网络（egress none/loopback/rebinding+重定向复查）/资源（输出/内存/pids/cpu/OOM 指标/超时）/取消（Cell/Agent/Run + 后台进程归零）/并发（worktree 并行/main 单写者/cache 锁/端口租约）/严格后端（digest 锁定/禁降级）/恢复 Janitor（旧 boot 清理、同 boot 不误杀）/seccomp+Landlock 规则与兼容门/Receipt+Evidence 绑定/单 Agent shadow 兼容；全量 3089 pass / 245 文件；typecheck/build/pack/diff-check/bench:mini 全绿 |
+| LF-8 | 冻结门禁全绿（typecheck/测试/build/pack/Replay/Linux Eval/Multi-Agent Eval/Fault Injection/Perf/Security） | **REVOKED → 修复线 v0.8.15.1+（见下方修正）** | evals/linux-sandbox-eval.ts 35 场景 LX-001~LX-035 曾标 PASS，但多场景实为单元/Mock 级验证（见「v0.8.15.1 修复线」）；生产接线审计为 FAIL，Freeze 撤销，M8 阻塞。评测重写在 PR-8（LF-8 重写）完成 |
 
 ## 性能指标（参考机记录硬件/内核/后端版本）
 
@@ -64,3 +64,19 @@ v0.8.15 保留（不删除），作为组件/契约层基线；生产接线闭�
 | R6 | 真实验收 CI Lane（真实 bwrap / 真实 rootless podman + digest 解析 / cgroup 委托探测）—— GitHub 账号解锁后生效 | **完成** (8dee0b2) |
 
 剩余待办（下一轮）：R4.2 Agent 身份统一（ParticipantAssignment → AgentPool → Linux Domain 单权威）、H11 NodeContext 消费 Cell/Receipt、长期进程（service/mcp/lsp）Service Cell 化（R1.2）、真实 cgroup/podman 机器上的端到端验收。
+
+## v0.8.15.1 修复线（独立审查后确立，2026-08-06，审计基线 v0.8.16 / db2256b9）
+
+2026-08-06 独立审查（LNXF-1.0 全量 P0 复核）确认：v0.8.15/v0.8.16 的"生产闭环"声明不成立——10 项 P0 全部为源码级确定性缺陷（digest 碰撞、Profile 可降级、bwrap/podman cwd 与 seccomp 接线错误、Receipt 推定值、取消/cgroup 未闭环、输出限制非硬限制、单一入口允许列表旁路、Janitor 空操作、评测 Mock 化）。修复按以下 PR 序列推进，每 PR 一个 commit（门禁全绿），最终与基础设施修复合流以 **0.8.17** 发布：
+
+| PR | 范围 | 状态 |
+|---|---|---|
+| PR-0 | 生产闭环声明撤销（本文档）；状态统一为 Components IMPLEMENTED / Integration INCOMPLETE / Default Safe Mode SHADOW / Freeze REVOKED / M8 BLOCKED | 并入 PR-1 |
+| PR-1 | 权威 Policy Compiler：递归 canonical JSON（digest 碰撞根因）、Spec 深冻结、CapabilityRequest 单一声明入口、Profile 最低隔离强制（只收紧）、运行时身份生成（不再共享 tool-run）、ExecutionMaterialization（seccomp/secret/cache 不再写回 Spec） | **本 commit** |
+| PR-2 | 真实 ExecutionOutcome → Receipt 只由 Outcome 构造；Receipt 保留/持久化/自摘要；Evidence 绑定 Receipt Digest | 进行中 |
+| PR-3 | Supervisor 取消与输出限制闭环（超限即杀、流式截断、队列上限、AbortController 入 Broker） | 待做 |
+| PR-4 | Bubblewrap 真实后端（宿主/内部 cwd 分离、worktreeRoot 投影、seccomp FD、去 sh -c、tmpfs size、清理验证） | 待做 |
+| PR-5 | cgroup 生命周期重建（scope/委托/subtree_control/三级层级/attach/populated=0/rmdir 协议） | 待做 |
+| PR-6 | 统一身份（ExecutionRuntimeContext、ProcessRequest 全身份字段） | 待做 |
+| PR-7 | Podman OCI seccomp/镜像审批/cidfile 恢复/Secrets 真实挂载/same-boot Janitor 真实清理 | 待做 |
+| PR-8 | LF-8 评测重写（真实攻击场景、失败即红、关键场景禁 SKIP） | 待做 |

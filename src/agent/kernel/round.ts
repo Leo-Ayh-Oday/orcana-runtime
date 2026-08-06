@@ -251,8 +251,9 @@ export async function* runRound(
 
   setRuntimeContextBudgetMode(preRoundCtx.contextBudgetMode)
   const budgetContext = preRoundCtx.budgetMessage
+  const disclosedTools = ctx.cacheStableTools ? tools : preRoundCtx.activeTools
   const { roundInputTokens, providerMessages } = estimateRoundTokens(
-    system, contextMessages, rawMessages, budgetContext,
+    system, contextMessages, rawMessages, budgetContext, disclosedTools,
   )
   const estimatedRoundInputTokens = roundInputTokens
   ctx.usage.estimatedInputTokens += roundInputTokens

@@ -14,7 +14,7 @@ describe("saveColdArchive atomicity", () => {
         ...fs,
         writeFileSync: (path: unknown, ...rest: unknown[]) => {
           writes.push(String(path))
-          return fs.writeFileSync(path as never, ...(rest as never[]))
+          return fs.writeFileSync(path as never, rest[0] as never, rest[1] as never)
         },
         fsyncSync: (fd: unknown) => {
           fsyncs++

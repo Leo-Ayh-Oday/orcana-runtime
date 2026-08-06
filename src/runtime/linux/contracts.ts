@@ -59,8 +59,18 @@ export interface LinuxCapabilities {
  *  身份字段由 Runtime 生成（编译器是唯一权威）；工具只能声明命令、Profile
  *  与显式需求。override 语义：只能收紧（更高隔离、更小资源），不能放宽。
  */
-export interface CapabilityRequest {
-  command: { executable: string; args: string[]; cwd?: string; stdin?: "closed" | "pipe" }
+/** 不可信能力声明（R2 PR-9：INV-A/INV-B）。
+ *  工具/模型只能声明能力和资源需求；身份、workspace、宿主路径
+ *  全部由 TrustedExecutionAuthority 注入。禁止出现任何身份字段
+ *  或宿主物理路径（绝对 cwd / worktreeRoot / ownerFiles）。 */
+export interface UntrustedCapabilityRequest {
+  command: {
+    executable: string
+    args: string[]
+    /** 相对 AuthorizedWorkspace 的逻辑工作目录（默认 "."）。 */
+    relativeCwd?: string
+    stdin?: "closed" | "pipe"
+  }
   profile: ExecutionProfile
   /** 网络需求：只能比 Profile 默认更严格（none ⊂ loopback ⊂ proxy-allowlist ⊂ full-approved）。 */
   network?: { mode: NetworkMode; allowedHosts?: string[]; allowedPorts?: number[] }
@@ -73,12 +83,58 @@ export interface CapabilityRequest {
   stderrMaxBytes?: number
   memoryMaxBytes?: number
   pidsMax?: number
-  worktreeRoot?: string
-  ownerFiles?: string[]
   writableMounts?: MountRule[]
   readonlyMounts?: MountRule[]
   cache?: CacheMountRequest[]
-  /** Runtime 上下文（由上层执行层注入，工具不可见）。 */
+}
+
+/** 授权工作区（R2 PR-9：INV-B）。由 WorkspaceAuthorityRegistry 注册生成，
+ *  模型不可构造。workspaceId 由 canonical physical root 稳定生成。 */
+export interface AuthorizedWorkspace {
+  workspaceId: string
+  projectId: string
+  /** realpath 后的物理根目录。 */
+  hostRoot: string
+  /** main/worktree/system。 */
+  kind: "main" | "worktree" | "system"
+  /** 是否允许写入。 */
+  access: "readonly" | "readwrite"
+  /** Runtime 分配的文件所有权。 */
+  ownerFiles: readonly string[]
+}
+
+/** 可信执行身份（R2 PR-9：INV-A）。由 Runtime 生成，请求不得覆盖。 */
+export interface TrustedExecutionIdentity {
+  runId: string
+  nodeRunId: string
+  attempt: number
+  agentId?: string
+  assignmentId?: string
+}
+
+/** 可信执行权威 —— Linux enabled 执行的唯一身份/工作区来源。 */
+export interface TrustedExecutionAuthority {
+  identity: TrustedExecutionIdentity
+  workspace: AuthorizedWorkspace
+  domainId?: string
+}
+
+/** @deprecated R2 PR-9：已拆分 —— 能力声明见 UntrustedCapabilityRequest，
+ *  身份/工作区见 TrustedExecutionAuthority。 */
+export interface CapabilityRequest {
+  command: { executable: string; args: string[]; cwd?: string; stdin?: "closed" | "pipe" }
+  profile: ExecutionProfile
+  network?: { mode: NetworkMode; allowedHosts?: string[]; allowedPorts?: number[] }
+  env?: Record<string, string>
+  allowedHostKeys?: string[]
+  timeoutMs?: number
+  stdoutMaxBytes?: number
+  stderrMaxBytes?: number
+  memoryMaxBytes?: number
+  pidsMax?: number
+  writableMounts?: MountRule[]
+  readonlyMounts?: MountRule[]
+  cache?: CacheMountRequest[]
   runId?: string
   nodeRunId?: string
   agentId?: string

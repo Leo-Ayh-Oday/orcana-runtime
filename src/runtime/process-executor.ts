@@ -13,8 +13,8 @@
 import { spawn } from "node:child_process"
 import type { LinuxExecutionBroker } from "./linux/broker"
 import { createLinuxBroker } from "./linux/broker"
-import type { CapabilityRequest, ExecutionProfile, NetworkMode, SandboxReceipt } from "./linux/contracts"
-import { getExecutionIdentity } from "./execution-context"
+import type { ExecutionProfile, NetworkMode, SandboxReceipt, TrustedExecutionAuthority, UntrustedCapabilityRequest } from "./linux/contracts"
+import { requireExecutionAuthority } from "./execution-context"
 
 export type ProcessEvent =
   | { type: "status"; state: string; at: number }
@@ -26,6 +26,8 @@ export type ProcessEvent =
 export interface ProcessRequest {
   command: string
   args: string[]
+  /** Linux 下只能是 AuthorizedWorkspace 内的相对路径（R2 PR-9 INV-B）；
+   *  Windows legacy 保留绝对 cwd 语义（与 Linux 路径显式分离）。 */
   cwd?: string
   /** 显式声明的环境变量（进入 requestedValues，受拒绝规则约束）。 */
   env?: Record<string, string>
@@ -37,15 +39,6 @@ export interface ProcessRequest {
   network?: NetworkMode
   stdoutMaxBytes?: number
   stderrMaxBytes?: number
-  // ── PR-6：执行身份（运行时注入，取消共享 tool-run 匿名身份） ──
-  runId?: string
-  nodeRunId?: string
-  agentId?: string
-  domainId?: string
-  assignmentId?: string
-  attempt?: number
-  worktreeRoot?: string
-  ownerFiles?: string[]
 }
 
 export interface ProcessOutcome {
@@ -72,35 +65,30 @@ export const AUDIT_HOST_ALLOW_KEYS = [
 const DEFAULT_STDOUT_MAX = 4 * 1024 * 1024
 const DEFAULT_STDERR_MAX = 4 * 1024 * 1024
 
-function capabilityRequestFromRequest(request: ProcessRequest): CapabilityRequest {
-  const cwd = request.cwd ?? process.cwd()
-  // PR-6：身份注入 —— 请求未声明时从运行时上下文（AgentRunScope）读取，
-  // 保证工具执行携带真实 runId/agentId（不再匿名共享 tool-run）。
-  const identity = getExecutionIdentity()
+/** R2 PR-9：ProcessRequest（不可信）→ UntrustedCapabilityRequest。
+ *  cwd 在 Linux 下只能是相对路径（解析为相对 workspace 的逻辑目录）；
+ *  身份与工作区来自 requireExecutionAuthority()（INV-A/INV-B）。 */
+function capabilityRequestFromRequest(request: ProcessRequest): { request: UntrustedCapabilityRequest; authority: TrustedExecutionAuthority } {
+  const authority = requireExecutionAuthority()
   return {
-    command: {
-      executable: request.command,
-      args: request.args,
-      cwd,
-      stdin: "closed",
+    request: {
+      command: {
+        executable: request.command,
+        args: request.args,
+        relativeCwd: request.cwd ?? ".",
+        stdin: "closed",
+      },
+      profile: request.profile ?? "build",
+      network: request.network ? { mode: request.network } : undefined,
+      env: request.env,
+      // 默认审计级宿主键集（B2 收窄在编译层按隔离执行：namespace/container
+      // 只保留安全键，NPM_CONFIG_*/YARN_* 等 registry 凭据键被裁剪）。
+      allowedHostKeys: request.allowedHostKeys ?? AUDIT_HOST_ALLOW_KEYS,
+      timeoutMs: request.timeoutMs ?? 120_000,
+      stdoutMaxBytes: request.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX,
+      stderrMaxBytes: request.stderrMaxBytes ?? DEFAULT_STDERR_MAX,
     },
-    profile: request.profile ?? "build",
-    network: request.network ? { mode: request.network } : undefined,
-    env: request.env,
-    allowedHostKeys: AUDIT_HOST_ALLOW_KEYS,
-    timeoutMs: request.timeoutMs ?? 120_000,
-    stdoutMaxBytes: request.stdoutMaxBytes ?? DEFAULT_STDOUT_MAX,
-    stderrMaxBytes: request.stderrMaxBytes ?? DEFAULT_STDERR_MAX,
-    // PR-4：worktreeRoot 自动从执行上下文投影 —— bwrap 后端把宿主 cwd 挂载为
-    // 沙盒内 /workspace（chdir 目标必须存在）；host-audit 用宿主 cwd 直连。
-    worktreeRoot: request.worktreeRoot ?? cwd,
-    ownerFiles: request.ownerFiles,
-    // PR-6：身份（请求显式值优先，否则运行时上下文）。
-    runId: request.runId ?? identity.runId,
-    nodeRunId: request.nodeRunId ?? identity.nodeRunId,
-    agentId: request.agentId ?? identity.agentId,
-    assignmentId: request.assignmentId ?? identity.assignmentId,
-    attempt: request.attempt,
+    authority,
   }
 }
 
@@ -205,19 +193,20 @@ export async function* executeProcess(request: ProcessRequest): AsyncGenerator<P
     return
   }
 
-  // P0-2/P0-1 修复：工具只声明 Capability Request；Profile/隔离/身份由
-  // Policy Compiler 权威决定（唯一 runId/cellId，不再共享 "tool-run"）。
-  const request0 = capabilityRequestFromRequest(request)
-  const spec = broker().compileRequest(request0)
+  // R2 PR-9：工具只声明能力；权威（身份/工作区/宿主路径）来自 Runtime Context。
+  // 无 Authority 时 requireExecutionAuthority 抛错（enabled 路径 fail-closed）。
+  const { request: request0, authority } = capabilityRequestFromRequest(request)
+  const spec = broker().compileRequest(request0, authority)
 
   // PR-6：domainId → Agent Domain 投影（cgroup 父层/预算绑定）。
-  const domain = request.domainId
-    ? broker().runtimeContext().domainManager.get(request.domainId)
+  const domain = authority.domainId
+    ? broker().runtimeContext().domainManager.get(authority.domainId)
     : undefined
 
   yield* fromBrokerEvents(broker().execute(spec, {
     ...(request.abortSignal ? { abortSignal: request.abortSignal } : {}),
     ...(domain ? { domain } : {}),
+    authority,
   }))
 }
 

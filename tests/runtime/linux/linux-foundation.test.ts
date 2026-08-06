@@ -13,7 +13,7 @@ import { applyProfileDefaults, profileDefaults, isStrictProfile } from "../../..
 import { selectBackend, backendAvailability } from "../../../src/runtime/linux/backend-router"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
 import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
-import type { ExecutionCellSpec } from "../../../src/runtime/linux/contracts"
+import type { ExecutionCellSpec, TrustedExecutionAuthority } from "../../../src/runtime/linux/contracts"
 
 const linuxOnly = platform() === "linux" ? test : test.skip
 
@@ -320,9 +320,15 @@ describe("PR-1: canonical JSON digests distinguish nested policies (P0-1)", () =
 })
 
 describe("PR-1: CapabilityRequest compilation (P0-1/P0-2)", () => {
+  // R2 PR-9（EA-012）：单元测试使用显式 Test Authority（身份唯一、workspace 独立）。
+  const testAuthority = (): TrustedExecutionAuthority => ({
+    identity: { runId: `run-test-${Math.random().toString(36).slice(2, 8)}`, nodeRunId: `run-test-${Math.random().toString(36).slice(2, 8)}:n1`, attempt: 1 },
+    workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+  })
+
   test("runtime generates unique identity per request (no shared tool-run)", () => {
-    const a = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" })
-    const b = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" })
+    const a = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" }, testAuthority())
+    const b = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" }, testAuthority())
     expect(a.ok && b.ok).toBe(true)
     if (a.ok && b.ok) {
       expect(a.spec.identity.runId).not.toBe("tool-run")
@@ -334,7 +340,7 @@ describe("PR-1: CapabilityRequest compilation (P0-1/P0-2)", () => {
   })
 
   test("compiled spec is deeply frozen (immutable after compile)", () => {
-    const result = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" })
+    const result = compileCapabilityRequest({ command: { executable: "/bin/true", args: [] }, profile: "build" }, testAuthority())
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(Object.isFrozen(result.spec)).toBe(true)
@@ -375,7 +381,7 @@ describe("PR-1: CapabilityRequest compilation (P0-1/P0-2)", () => {
       profile: "untrusted",
       memoryMaxBytes: 8 * 1024 * 1024 * 1024, // 8GB > untrusted ceiling 1GB
       pidsMax: 4096,                          // > untrusted ceiling 64
-    })
+    }, testAuthority())
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.spec.resources.memoryMaxBytes).toBe(1024 * 1024 * 1024)

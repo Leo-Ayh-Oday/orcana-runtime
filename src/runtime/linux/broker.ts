@@ -21,6 +21,8 @@ import type {
   ExecutionMaterialization,
   LinuxCapabilities,
   SandboxReceipt,
+  TrustedExecutionAuthority,
+  UntrustedCapabilityRequest,
 } from "./contracts"
 import type { DomainResourceBudget } from "./contracts"
 import { probeLinuxCapabilities, requireLinuxPlatform } from "./capability-probe"
@@ -95,22 +97,25 @@ export interface ExecuteOptions {
   abortSignal?: AbortSignal
   /** 指定 Agent Domain（多 Agent 执行身份投影，R4 接线）。 */
   domain?: AgentExecutionDomain
+  /** R2 PR-9: 可信执行权威（executeRequest 传入；enabled 下必填）。 */
+  authority?: TrustedExecutionAuthority
 }
 
 export interface LinuxExecutionBroker {
   probe(options?: { refresh?: boolean }): LinuxCapabilities
   /** 编译并校验一个执行 spec（Policy Compiler 唯一入口）。 */
   compileSpec(spec: ExecutionCellSpec): ExecutionCellSpec
-  /** Capability Request → 冻结 Spec（身份由 Runtime 生成；P0-1/P0-2）。 */
-  compileRequest(request: CapabilityRequest): ExecutionCellSpec
+  /** Capability Request + 可信权威 → 冻结 Spec（R2 PR-9：身份/工作区只来自
+   *  authority；enabled 模式缺 authority 即 fail-closed）。 */
+  compileRequest(request: UntrustedCapabilityRequest, authority?: TrustedExecutionAuthority): ExecutionCellSpec
   /** 选择后端（不执行）。 */
   selectBackendFor(spec: ExecutionCellSpec): BackendSelection
   /** Shadow：记录拟用 spec/后端，不执行。 */
   shadow(spec: ExecutionCellSpec): ShadowExecutionRecord
   /** 执行（R2: 完整事务）。 */
   execute(spec: ExecutionCellSpec, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
-  /** 执行 Capability Request（编译 → 执行）。 */
-  executeRequest(request: CapabilityRequest, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
+  /** 执行 Untrusted Capability Request（编译 → 执行）。 */
+  executeRequest(request: UntrustedCapabilityRequest, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
   createAgentDomain(input: { runId: string; agentId: string; worktreeRoot: string; ownerFiles: string[]; resourceBudget: DomainResourceBudget; role?: string }): AgentExecutionDomain
   cancelCell(cellId: string): Promise<void>
   cancelAgent(agentId: string): Promise<void>
@@ -154,6 +159,7 @@ function resourceRequestOf(spec: ExecutionCellSpec): ResourceRequest {
 }
 
 export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBroker {
+  const mode = options.mode
   const caps = requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
@@ -298,15 +304,20 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       return probeLinuxCapabilities(opts)
     },
     compileSpec: compileOrThrow,
-    compileRequest(request) {
-      const compiled = compileCapabilityRequest(request)
+    compileRequest(request, authority) {
+      if (mode === "enabled" && !authority) {
+        throw new LinuxExecutionError("EXECUTION_AUTHORITY_MISSING", "enabled execution requires a TrustedExecutionAuthority")
+      }
+      const compiled = authority
+        ? compileCapabilityRequest(request, authority)
+        : compileCapabilityRequest(request, testAuthorityFallback())
       if (!compiled.ok) {
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `request invalid: ${compiled.errors.join("; ")}`)
       }
       return compiled.spec
     },
     async *executeRequest(request, executeOptions) {
-      yield* this.execute(this.compileRequest(request), executeOptions)
+      yield* this.execute(this.compileRequest(request, executeOptions?.authority), executeOptions)
     },
     selectBackendFor(spec) {
       return selectBackend(spec, caps)
@@ -625,4 +636,22 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
 export function getLinuxBroker(): LinuxExecutionBroker {
   if (!shared) shared = createLinuxBroker({ mode: "shadow" })
   return shared
+}
+
+/** R2 PR-9（EA-012）：shadow/单元测试使用的显式 Test Authority。
+ *  仅允许 shadow 模式（enabled/enforced 由 compileRequest 前置拒绝）。
+ *  生产路径必须由 AgentRunScope 注入真实 authority。 */
+export function testAuthorityFallback(workspaceRoot?: string): TrustedExecutionAuthority {
+  const root = workspaceRoot ?? join(tmpdir(), "orcana-test-ws")
+  return {
+    identity: { runId: `run-test-${process.pid}`, nodeRunId: `run-test-${process.pid}:n1`, attempt: 1 },
+    workspace: {
+      workspaceId: "ws_test",
+      projectId: "test",
+      hostRoot: root,
+      kind: "system",
+      access: "readwrite",
+      ownerFiles: [],
+    },
+  }
 }

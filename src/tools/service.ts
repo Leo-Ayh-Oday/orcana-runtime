@@ -14,7 +14,7 @@
 
 import { spawnLegacy, type ChildProcess } from "../runtime/legacy-process"
 const spawn = spawnLegacy
-import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs"
+import { createWriteStream, existsSync, mkdirSync, openSync, readSync, closeSync, statSync } from "node:fs"
 import { request as httpRequest } from "node:http"
 import { request as httpsRequest } from "node:https"
 import { resolve } from "node:path"
@@ -332,19 +332,24 @@ async function statusService(params: Record<string, unknown>): Promise<ToolResul
 }
 
 const TAIL_BYTES = 64 * 1024
-const MAX_LOG_BYTES = 2 * 1024 * 1024
 
-function readLogTail(logPath: string, tailLines: number): { text: string; truncated: boolean } {
+export function readLogTail(logPath: string, tailLines: number): { text: string; truncated: boolean } {
   if (!existsSync(logPath)) return { text: "(no log file yet)", truncated: false }
   const size = statSync(logPath).size
-  if (size > MAX_LOG_BYTES) {
-    const fd = readFileSync(logPath)
-    const tail = fd.subarray(fd.length - TAIL_BYTES).toString("utf-8")
-    return { text: `(log truncated to last ${TAIL_BYTES} bytes)\n${tail}`, truncated: true }
+  const fd = openSync(logPath, "r")
+  try {
+    if (size > TAIL_BYTES) {
+      const buf = Buffer.alloc(TAIL_BYTES)
+      readSync(fd, buf, 0, TAIL_BYTES, size - TAIL_BYTES)
+      return { text: `(log truncated to last ${TAIL_BYTES} bytes)\n${buf.toString("utf-8")}`, truncated: true }
+    }
+    const buf = Buffer.alloc(size)
+    readSync(fd, buf, 0, size, 0)
+    const lines = buf.toString("utf-8").split("\n").filter(Boolean)
+    return { text: lines.slice(-tailLines).join("\n"), truncated: lines.length > tailLines }
+  } finally {
+    closeSync(fd)
   }
-  const text = readFileSync(logPath, "utf-8")
-  const lines = text.split("\n").filter(Boolean)
-  return { text: lines.slice(-tailLines).join("\n"), truncated: lines.length > tailLines }
 }
 
 async function logsService(params: Record<string, unknown>): Promise<ToolResult> {

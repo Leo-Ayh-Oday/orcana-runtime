@@ -22,6 +22,7 @@ import type { HandlerRegistry } from "../execution/handler-registry"
 import { executeNode } from "../execution/node-executor"
 import { aggregateEvidence } from "../reducers/aggregate-evidence"
 import { evaluateCriterion } from "../reducers/criterion-evaluator"
+import { validateRoleOutput } from "../coordination/role-output-validator"
 import { ResultCache, cacheKeyFor } from "../results/result-cache"
 import { evaluateReadiness } from "./dependency-policy"
 import { isHarnessNode } from "../harness/workflow-node-adapter"
@@ -248,8 +249,9 @@ export async function runScheduler(
   // workspace exists) the workspace content hash — a stale checkpoint for
   // a changed graph or workspace is rejected on restore.
   const specDigest = computeSpecDigest(spec)
-  const workspaceDigest =
-    options.checkpointDir && options.harness ? computeWorkspaceHash(options.harness.scope.projectRoot) : undefined
+  // M14: the workspace digest is computed for every harness run — cache
+  // keys bind to it so external state changes invalidate stale reads.
+  const workspaceDigest = options.harness ? computeWorkspaceHash(options.harness.scope.projectRoot) : undefined
   const store = new ResultStore(spec.specId, options.checkpointDir, { specDigest, workspaceDigest })
   const cache = options.cache
   const queue = new ReadyQueue(spec, store)
@@ -293,7 +295,7 @@ export async function runScheduler(
       const node = spec.nodes.find(n => n.id === result.nodeId)
       if (!node) continue
       const replayed = replayResult(result)
-      cache.put(cacheKeyFor(handler, node.input), replayed)
+      cache.put(cacheKeyFor(handler, node.input, workspaceDigest), replayed)
       store.put(replayed)
     }
   }
@@ -356,7 +358,7 @@ export async function runScheduler(
       // G5: read-only cache hit → replay, never re-execute. H11 harness
       // nodes are never cached (they are not deterministic reducers).
       if (!isWrite && !isHarness && cache) {
-        const hit = cache.get(cacheKeyFor(node.handler, node.input))
+        const hit = cache.get(cacheKeyFor(node.handler, node.input, workspaceDigest))
         if (hit) {
           const replayed = replayResult(hit.result)
           store.put(replayed)
@@ -408,12 +410,46 @@ export async function runScheduler(
             return denied
           }
         }
+        // M19: a node DECLARING a role (input.role) must have its output
+        // validated BEFORE it flows anywhere — invalid JSON or schema
+        // violations fail the node closed (ROLE_OUTPUT_VALIDATED_BEFORE_USE).
+        // Implicit role derivation keeps legacy behavior (no schema to
+        // enforce against for un-declared nodes).
+        if (result.status === "done" && isHarness && harnessRuntime) {
+          const declaredRole = (node.input as { role?: unknown }).role
+          if (declaredRole === "planner" || declaredRole === "coder" || declaredRole === "reviewer") {
+            const text = (result.output as { text?: unknown }).text
+            let raw: unknown = result.output
+            if (typeof text === "string") {
+              try {
+                raw = JSON.parse(text)
+              } catch {
+                raw = text // invalid JSON — schema validation rejects it
+              }
+            }
+            const verdict = validateRoleOutput({
+              role: declaredRole,
+              raw,
+              runId: harnessRuntime.scope.runId,
+              nodeRunId: `${harnessRuntime.scope.runId}:${node.id}`,
+              planVersion: spec.specId,
+              workspaceDigest: workspaceDigest ?? "",
+            })
+            if (!verdict.ok) {
+              const now = Date.now()
+              result.status = "failed"
+              result.errorKind = verdict.errorKind
+              result.error = verdict.errors.join("; ")
+              result.finishedAt = now
+            }
+          }
+        }
         if (result.status === "done") {
           if (isWrite) {
             // G5: a completed write invalidates all read results.
             cache?.invalidateAll()
           } else if (!isHarness) {
-            cache?.put(cacheKeyFor(node.handler, node.input), result)
+            cache?.put(cacheKeyFor(node.handler, node.input, workspaceDigest), result)
           }
         }
         return result
@@ -443,6 +479,13 @@ export async function runScheduler(
 
   const pendingInterrupt: { error: WIE | null } = { error: null }
 
+  // M9: when the spec declares a merge node, physically integrate per-agent
+  // worktree changes into the official workspace BEFORE dispose — otherwise
+  // successful agent changes vanish with the worktree. Runs paused at a
+  // human node never integrate (their worktrees are still isolated).
+  const mergeNode = spec.nodes.find(n => n.handler === "reduce.merge_agents")
+  let integrationBlocked: string | null = null
+  try {
   while (true) {
     while (running.size < maxParallel && queue.hasReady && !pendingInterrupt.error) {
       const node = queue.next()
@@ -494,20 +537,18 @@ export async function runScheduler(
     await Promise.race([...running.values()])
   }
 
-  // M9: when the spec declares a merge node, physically integrate per-agent
-  // worktree changes into the official workspace BEFORE dispose — otherwise
-  // successful agent changes vanish with the worktree. Runs paused at a
-  // human node never integrate (their worktrees are still isolated).
-  const mergeNode = spec.nodes.find(n => n.handler === "reduce.merge_agents")
-  let integrationBlocked: string | null = null
   if (!pendingInterrupt.error && mergeNode) {
     const outcome = await integrateMergedWorktrees(mergeNode.id, store, worktreeRegistry, options)
     integrationBlocked = outcome.blocked
   }
 
-  // MACP-M3 task 13: dispose every worktree this run created — only after
-  // merge integration has landed the changes.
-  worktreeRegistry.dispose()
+  } finally {
+    // MACP-M3 task 13 + M16: dispose EVERY worktree this run created on
+    // every exit path — normal completion (after merge integration has
+    // landed), deadlock, node exception, interrupt and cancellation all
+    // release the worktrees (no leftovers, no git metadata rot).
+    worktreeRegistry.dispose()
+  }
 
   // MACP-M4: the run paused at a human node — the process is released with
   // a persisted record + resume token (PROCESS_BOUND_WAITING: 0).

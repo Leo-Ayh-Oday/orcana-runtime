@@ -6,7 +6,7 @@
  *  checkpoint write never fails the run.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { redactForTrace } from "../../agent/secret-redactor"
 import type { WorkflowNodeResult } from "../types"
@@ -78,9 +78,15 @@ export class ResultStore {
     return new Map(this.results)
   }
 
-  /** Incremental checkpoint write (best-effort). */
+  /** Incremental checkpoint write (best-effort, atomic).
+   *  M13: the target is replaced via temp + fsync + rename — a crash or
+   *  disk error mid-write can never truncate the checkpoint; the previous
+   *  generation survives until the new one is fully on disk. Failures are
+   *  observable (warned), never silent. */
   private persist(): void {
     if (!this.checkpointFile) return
+    const target = this.checkpointFile
+    const tmp = `${target}.tmp`
     try {
       const data: CheckpointData = {
         specId: this.specId,
@@ -89,10 +95,19 @@ export class ResultStore {
         workspaceDigest: this.workspaceDigest,
         results: [...this.results.values()],
       }
-      mkdirSync(dirname(this.checkpointFile), { recursive: true })
-      writeFileSync(this.checkpointFile, `${JSON.stringify(redactForTrace(data), null, 2)}\n`, "utf-8")
-    } catch {
-      // Never fail the run over a checkpoint write.
+      mkdirSync(dirname(target), { recursive: true })
+      const fd = openSync(tmp, "w")
+      try {
+        writeSync(fd, `${JSON.stringify(redactForTrace(data), null, 2)}\n`, null, "utf-8")
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      renameSync(tmp, target)
+    } catch (error) {
+      // M13: observable — a silent checkpoint failure would later replay
+      // stale results (or re-execute committed side effects) on restore.
+      console.warn(`workflow: checkpoint write failed for "${this.specId}": ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -123,7 +138,11 @@ export class ResultStore {
         }
       }
       return this.results.size > 0
-    } catch {
+    } catch (error) {
+      // M13: a corrupted checkpoint is observable (warned) and never
+      // partially applied — the file itself is left untouched (the atomic
+      // writer never produces truncated generations).
+      console.warn(`workflow: checkpoint restore failed for "${this.specId}": ${error instanceof Error ? error.message : String(error)}`)
       return false
     }
   }

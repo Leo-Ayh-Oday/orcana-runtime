@@ -19,8 +19,12 @@ export interface CacheEntry {
   cachedAt: number
 }
 
-export function cacheKeyFor(handler: string, input: Record<string, unknown>): string {
-  return stableHash({ handler, input })
+/** M14: cache keys bind the workspace digest when the run has one — the
+ *  same handler+input after external state changed must MISS, never replay
+ *  a stale read result (the write-node superset invalidation only covers
+ *  in-run writes). Runs without a digest keep the legacy key. */
+export function cacheKeyFor(handler: string, input: Record<string, unknown>, workspaceHash?: string): string {
+  return workspaceHash ? stableHash({ handler, input, workspaceHash }) : stableHash({ handler, input })
 }
 
 export class ResultCache {

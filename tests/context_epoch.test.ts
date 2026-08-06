@@ -1,18 +1,22 @@
 /** Tests for Context Epoch (PR 4). */
 
+import { createHash } from "node:crypto"
 import { describe, it, expect } from "bun:test"
 import {
+  archiveContentHash,
+  calibrateEpochThresholds,
+  classifyEpochAction,
   createEpochState,
   DEFAULT_EPOCH_THRESHOLDS,
-  msgCharLen,
-  totalMessageChars,
-  buildPlanStateContext,
-  hasUnclosedToolChain,
-  classifyEpochAction,
-  epochThresholdsForContext,
   epochRollover,
+  epochThresholdsForContext,
   formatEpochBudgetWarning,
   formatEpochStatus,
+  hasUnclosedToolChain,
+  msgCharLen,
+  persistEpochArchive,
+  totalMessageChars,
+  buildPlanStateContext,
   type EpochThresholds,
   type PlanStateInput,
 } from "../src/agent/context-epoch"
@@ -90,6 +94,62 @@ describe("classifyEpochAction", () => {
 
   it("returns rollover above rollover threshold", () => {
     expect(classifyEpochAction(500, t)).toBe("rollover")
+  })
+})
+
+// ── K19: threshold calibration (charsPerToken) ──
+
+describe("calibrateEpochThresholds", () => {
+  const t: EpochThresholds = { compressChars: 100, forceCompressChars: 200, rolloverChars: 300 }
+
+  it("is the identity at the default charsPerToken=3", () => {
+    expect(calibrateEpochThresholds(t, 3)).toEqual(t)
+  })
+
+  it("scales char thresholds by charsPerToken/3 (denser content → later trigger)", () => {
+    const c = calibrateEpochThresholds(t, 4)
+    expect(c.compressChars).toBe(133) // 100 × 4/3
+    expect(c.forceCompressChars).toBe(267) // 200 × 4/3
+    expect(c.rolloverChars).toBe(400) // 300 × 4/3
+  })
+
+  it("scales down when content is sparse (charsPerToken < 3)", () => {
+    const c = calibrateEpochThresholds(t, 2)
+    expect(c.compressChars).toBe(67) // 100 × 2/3
+    expect(c.forceCompressChars).toBe(133)
+    expect(c.rolloverChars).toBe(200)
+  })
+
+  it("guards non-positive ratios (no measurement) and keeps thresholds", () => {
+    expect(calibrateEpochThresholds(t, 0)).toEqual(t)
+    expect(calibrateEpochThresholds(t, -1)).toEqual(t)
+  })
+})
+
+describe("classifyEpochAction with charsPerToken", () => {
+  const t: EpochThresholds = { compressChars: 100, forceCompressChars: 200, rolloverChars: 300 }
+
+  it("defaults to charsPerToken=3 (unchanged behavior)", () => {
+    expect(classifyEpochAction(300, t)).toBe("rollover")
+    expect(classifyEpochAction(300, t, 3)).toBe("rollover")
+    expect(classifyEpochAction(100, t)).toBe("compress")
+  })
+
+  it("moves the trigger point later when content is denser (charsPerToken > 3)", () => {
+    // 4 chars/token → thresholds × 4/3: rollover now at 400 chars.
+    expect(classifyEpochAction(300, t, 4)).toBe("forceCompress")
+    expect(classifyEpochAction(400, t, 4)).toBe("rollover")
+  })
+
+  it("moves the trigger point earlier when content is sparse (charsPerToken < 3)", () => {
+    // 2 chars/token → thresholds × 2/3: rollover now at 200 chars.
+    expect(classifyEpochAction(200, t, 2)).toBe("rollover")
+    expect(classifyEpochAction(150, t, 2)).toBe("forceCompress")
+  })
+
+  it("classifies the same totalChars differently across ratios", () => {
+    expect(classifyEpochAction(300, t, 3)).toBe("rollover")
+    expect(classifyEpochAction(300, t, 4)).toBe("forceCompress")
   })
 })
 
@@ -380,6 +440,150 @@ describe("epochRollover", () => {
       expect(result.snapshot.charsArchived).toBe(netTrimmed)
       state.totalCharsTrimmed += result.charsTrimmed
       expect(state.totalCharsTrimmed).toBe(netTrimmed)
+    }
+  })
+})
+
+// ── K3: archive preservation ──
+
+describe("epochRollover archive preservation (K3)", () => {
+  it("returns the archived raw messages verbatim", () => {
+    const messages = Array.from({ length: 20 }, (_, i) =>
+      i % 2 === 0
+        ? msg("user", `round ${i / 2} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+        : msg("assistant", `resp ${i / 2} xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+    )
+    const state = createEpochState()
+    const result = epochRollover(messages, 3, "plan state", state, 10)
+    if (!("blocked" in result)) {
+      expect(result.archivedMessages).toHaveLength(result.archivedCount)
+      // archived + retained tail (minus preamble) reconstruct the original
+      expect([...result.archivedMessages, ...result.messages.slice(1)]).toEqual(messages)
+    }
+  })
+
+  it("produces a deterministic sha256 content hash", () => {
+    const msgs = [msg("user", "a"), msg("assistant", "b")]
+    const h1 = archiveContentHash(msgs)
+    expect(h1).toMatch(/^[0-9a-f]{64}$/)
+    expect(archiveContentHash(msgs)).toBe(h1)
+    expect(archiveContentHash([msg("user", "a")])).not.toBe(h1)
+  })
+
+  it("persistEpochArchive falls back to the hash without an artifact store", async () => {
+    const msgs = [msg("user", "hello")]
+    const out = await persistEpochArchive(undefined, msgs)
+    expect(out.persisted).toBe(false)
+    expect(out.ref).toBe(archiveContentHash(msgs))
+  })
+
+  it("persistEpochArchive stores content and returns the artifact ref", async () => {
+    const store = { storeContent: async (c: string) => `ref:${c.length}` }
+    const msgs = [msg("user", "hello")]
+    const out = await persistEpochArchive(store, msgs)
+    expect(out.persisted).toBe(true)
+    expect(out.ref).toBe(`ref:${JSON.stringify(msgs).length}`)
+  })
+
+  it("persistEpochArchive degrades to the hash when the store throws", async () => {
+    const store = { storeContent: async () => { throw new Error("disk full") } }
+    const msgs = [msg("user", "hello")]
+    const out = await persistEpochArchive(store, msgs)
+    expect(out.persisted).toBe(false)
+    expect(out.ref).toBe(archiveContentHash(msgs))
+  })
+
+  it("records the caller-backfilled archiveRef on the snapshot", () => {
+    const messages = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? msg("user", `r${i} xxxxxxxxxx`) : msg("assistant", `a${i} xxxxxxxxxxx`)
+    )
+    const state = createEpochState()
+    const result = epochRollover(messages, 2, "ps", state, 10)
+    if (!("blocked" in result)) {
+      // round.ts backfills archiveRef after persistEpochArchive (hash fallback here)
+      result.snapshot.archiveRef = archiveContentHash(result.archivedMessages)
+      expect(result.snapshot.archiveRef).toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+})
+
+// ── K22: rollover fallback (unclosed tool chain) ──
+
+describe("epochRollover fallback (K22)", () => {
+  it("still blocks by default when an unclosed chain exists", () => {
+    const messages = [
+      msg("user", "round 0"),
+      assistantWithTools(["a"]),
+      userWithResults(["a"]),
+      msg("user", "round 1"),
+      assistantWithTools(["b", "c"]),
+      userWithResults(["b"]), // c unclosed
+    ]
+    const result = epochRollover(messages, 3, "ps", createEpochState(), 10)
+    expect("blocked" in result).toBe(true)
+    if ("blocked" in result) expect(result.reason).toContain("unclosed tool-use")
+  })
+
+  it("cuts at the last safe boundary and preserves the unclosed chain in fallback mode", () => {
+    const messages = [
+      msg("user", "round 0"),
+      assistantWithTools(["a"]),
+      userWithResults(["a"]),
+      msg("user", "round 1"),
+      assistantWithTools(["b", "c"]),
+      userWithResults(["b"]), // c unclosed — safe boundary is "round 1" (index 3)
+    ]
+    const state = createEpochState()
+    const result = epochRollover(messages, 3, "ps", state, 10, true)
+    expect("blocked" in result).toBe(false)
+    if (!("blocked" in result)) {
+      // Archived exactly the fully-closed prefix before "round 1".
+      expect(result.archivedMessages).toEqual(messages.slice(0, 3))
+      // Retained tail keeps the whole pending chain intact.
+      expect(result.messages.slice(1)).toEqual(messages.slice(3))
+      const retained = result.messages.slice(1)
+      const hasAssistantChain = retained.some(m =>
+        Array.isArray(m.content) && m.content.some(b => (b as { type?: string }).type === "tool_use")
+      )
+      expect(hasAssistantChain).toBe(true)
+      // Preamble announces the fallback.
+      const preamble = result.messages[0]!
+      expect(typeof preamble.content).toBe("string")
+      if (typeof preamble.content === "string") expect(preamble.content).toContain("FALLBACK mode")
+    }
+  })
+
+  it("still blocks in fallback mode when the whole history is inside the chain", () => {
+    const messages = [assistantWithTools(["a"])]
+    const result = epochRollover(messages, 2, "ps", createEpochState(), 10, true)
+    expect("blocked" in result).toBe(true)
+    if ("blocked" in result) expect(result.reason).toContain("fallback")
+  })
+
+  it("blocks in fallback mode when no plain-text user boundary precedes the chain", () => {
+    // A transcript that opens with a tool_result and an unclosed chain: there is
+    // no complete plain-text user turn to cut at, so no safe boundary exists.
+    const messages = [
+      userWithResults(["x"]),
+      assistantWithTools(["a"]), // unclosed
+    ]
+    const result = epochRollover(messages, 2, "ps", createEpochState(), 10, true)
+    expect("blocked" in result).toBe(true)
+  })
+})
+
+// ── K23: auditable plan-state digest ──
+
+describe("epochRollover planStateDigest (K23)", () => {
+  it("is a sha256 hash, not a content prefix", () => {
+    const messages = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? msg("user", `r${i} xxxxxxxxxxx`) : msg("assistant", `a${i} xxxxxxxxxx`)
+    )
+    const result = epochRollover(messages, 2, "plan state context", createEpochState(), 10)
+    if (!("blocked" in result)) {
+      expect(result.snapshot.planStateDigest).toMatch(/^[0-9a-f]{64}$/)
+      expect(result.snapshot.planStateDigest)
+        .toBe(createHash("sha256").update("plan state context").digest("hex"))
     }
   })
 })

@@ -22,7 +22,7 @@
 | SECRET_TEMP_RESIDUE | /tmp 临时资源残留 | C5 | TBD | 0 |
 | DUPLICATE_PROVIDER_SIDE_EFFECT | 流重试重复输出 | G3 | TBD | 0 |
 | SESSION_MESSAGE_DUPLICATION | 会话保存消息膨胀 | D1 | TBD | 0 |
-| CHECKPOINT_RESUME_UNUSED | checkpoint 恢复未接线 | D4 | TBD | 0 |
+| CHECKPOINT_RESUME_UNUSED | checkpoint 恢复未接线 | D4 | 0 | 0 |
 
 ## 状态记录
 
@@ -39,3 +39,5 @@
 | RC-13 | dd820c9 | 31 相关测试全绿 | REVISE_PLAN_NEVER_DEADLOCKS=0 |
 
 TBD 项随对应 RC（RC-07~12, RC-14~17）落地后回填。
+
+| RC-11 | 76f67ec+ef940b5+9abf498+b7cf90e+3cd8fbd | session 域 tests 全绿（基线 typescript_rc01 5 fail 除外） | CHECKPOINT_RESUME_UNUSED=0, RESUME_PRESERVES_CONSTRAINTS=0, COLD_MEMORY_SHA_VERIFIED=0, REWIND_HISTORY_DEPTH_AND_CLEANUP=0, M0_NO_PROTECTION_WINDOW=0 |

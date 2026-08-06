@@ -362,6 +362,21 @@ describe("epochRollover", () => {
       expect(result.charsTrimmed).toBeLessThan(grossTrimmed)
     }
   })
+
+  it("records net charsArchived in the epoch snapshot and accumulates state", () => {
+    const state = createEpochState()
+    const longText = "x".repeat(200)
+    const messages = Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0 ? msg("user", longText) : msg("assistant", longText)
+    )
+    const result = epochRollover(messages, 1, "ps", state, 10)
+    if (!("blocked" in result)) {
+      const netTrimmed = totalMessageChars(messages) - totalMessageChars(result.messages)
+      expect(result.snapshot.charsArchived).toBe(netTrimmed)
+      state.totalCharsTrimmed += result.charsTrimmed
+      expect(state.totalCharsTrimmed).toBe(netTrimmed)
+    }
+  })
 })
 
 // ── formatEpochBudgetWarning ──

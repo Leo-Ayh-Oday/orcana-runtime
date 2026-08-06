@@ -1,9 +1,11 @@
 /** Contribution deduplication (H10, plan §16.3 step 2).
  *
  *  Two channels: cacheKey equality and overlapping sourceRefs. The survivor
- *  is the contribution in the more stable layer, then lower priority, then
- *  earlier registration order — all three keys are part of the contribution
- *  itself, so the rule is pure and testable.
+ *  is the contribution in the more stable layer, then — when BOTH declare a
+ *  freshness stamp — the fresher one (RC-18 K31: fresh 优先), then lower
+ *  priority, then earlier registration order. Undefined freshness never
+ *  outranks a stamped duplicate: providers that do not track freshness keep
+ *  the legacy priority/order rule (byte-frozen path untouched).
  */
 
 import type { ContextContribution, ContextTrimInfo } from "../contracts/context"
@@ -17,6 +19,11 @@ function layerStability(layer: ContextContribution["layer"]): number {
 function survivor(a: ContextContribution, b: ContextContribution): ContextContribution {
   const byLayer = layerStability(a.layer) - layerStability(b.layer)
   if (byLayer !== 0) return byLayer < 0 ? a : b
+  // K31: freshness-aware tiebreak — only when both duplicates declare a
+  // freshness stamp; the newer one wins.
+  if (a.freshness !== undefined && b.freshness !== undefined && a.freshness !== b.freshness) {
+    return a.freshness > b.freshness ? a : b
+  }
   if (a.priority !== b.priority) return a.priority < b.priority ? a : b
   return a // earlier registration order (input order preserved)
 }

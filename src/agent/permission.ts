@@ -64,19 +64,41 @@ interface DenyRule {
   /** If set, only deny when param value matches this regex */
   paramKey?: string
   paramPattern?: RegExp
+  /** RC-04a: 作用于所有进程类工具（shell/run_shell_script/run_process/service）的命令文本。 */
+  processCommand?: boolean
   reason: string
+}
+
+/** RC-04a: 归一化进程意图——危险命令规则不绑定具体工具名，任何进程别名共享同一语义禁令。 */
+export function extractProcessCommandText(toolName: string, params: Record<string, unknown>): string | null {
+  switch (toolName) {
+    case "shell":
+      return String(params.command ?? "")
+    case "run_shell_script":
+      return String(params.script ?? "")
+    case "run_process": {
+      const executable = String(params.executable ?? params.command ?? "")
+      const args = Array.isArray(params.args) ? params.args.map(String).join(" ") : ""
+      return (executable + " " + args).trim()
+    }
+    case "service":
+      return String(params.command ?? params.action ?? "")
+    default:
+      return null
+  }
 }
 
 const GLOBAL_DENY_RULES: DenyRule[] = [
   {
     toolName: "shell",
-    paramKey: "command",
+    // RC-04a: processCommand 规则对 shell/run_shell_script/run_process/service 全部生效。
+    processCommand: true,
     paramPattern: /rm\s+-rf\s+\/|:\s+(){ :\|:&\s*};:|mkfs\.|dd\s+if=/i,
     reason: "高危命令被全局禁止（fork bomb / 磁盘擦除 / rm -rf /）",
   },
   {
     toolName: "shell",
-    paramKey: "command",
+    processCommand: true,
     paramPattern: /curl.*\|\s*(ba)?sh|wget.*\|\s*(ba)?sh/i,
     reason: "禁止管道执行远程脚本（curl|sh / wget|sh）",
   },
@@ -104,9 +126,22 @@ export class PermissionGate {
   private projectDenyRules: PermissionRule[] = []
   private projectAllowRules: PermissionRule[] = []
 
+  /** RC-02 B2: safe mode（配置损坏时激活）—— 高影响操作全部 ask，不得静默放行。 */
+  private safeModeReason: string | null = null
+
   /** Reset session state (call on new session) */
   reset() {
     this.overrides.clear()
+  }
+
+  /** RC-02 B2: 进入安全模式。safeModeReason 非空时 check() 强制降级。 */
+  enterSafeMode(reason: string) {
+    this.safeModeReason = reason
+  }
+
+  /** 当前是否处于安全模式。 */
+  get safeModeActive(): boolean {
+    return this.safeModeReason !== null
   }
 
   /** Promote a tool to allow for the rest of the session */
@@ -154,6 +189,15 @@ export class PermissionGate {
   check(toolName: string, params: Record<string, unknown>, tool?: { defn: ToolDef }, opts?: { riskLevel?: number }): PermissionResult {
     // 1. Global deny rules (highest priority — physics)
     for (const rule of GLOBAL_DENY_RULES) {
+      // RC-04a: processCommand 规则匹配归一化命令文本（任何进程别名），其余按 paramKey。
+      if (rule.processCommand) {
+        const command = extractProcessCommandText(toolName, params)
+        if (command === null) continue
+        if (rule.paramPattern!.test(command)) {
+          return { allowed: false, level: "deny", reason: rule.reason }
+        }
+        continue
+      }
       if (rule.toolName !== toolName) continue
       if (rule.paramKey && rule.paramPattern) {
         const value = String(params[rule.paramKey] ?? "")
@@ -166,6 +210,18 @@ export class PermissionGate {
     // 2. User Deny (config)
     const userDeny = matchFirstRule(this.userDenyRules, toolName, params)
     if (userDeny) return { allowed: false, level: "deny", reason: userDeny.reason }
+
+    // 2.5 RC-02 B2: safe mode —— 配置损坏时写入/进程/网络类一律 ask，绝不静默放行
+    if (this.safeModeReason) {
+      const category = tool?.defn.category
+      if (category === "file" || category === "network" || category === "shell") {
+        return {
+          allowed: false,
+          level: "ask",
+          reason: `[permission-safe-mode] ${this.safeModeReason}（${toolName} 每次调用均需确认）`,
+        }
+      }
+    }
 
     // 3. Project Deny (config)
     const projectDeny = matchFirstRule(this.projectDenyRules, toolName, params)

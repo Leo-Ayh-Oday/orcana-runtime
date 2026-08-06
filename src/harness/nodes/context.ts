@@ -102,7 +102,13 @@ export function createNodePolicyContextFromRunScope(
   opts: { input: Record<string, unknown>; tool?: ToolDescriptor; toolCallId?: string; name?: string },
 ): NodePolicyContext {
   const gate = new PermissionGate()
-  gate.loadRules(loadUserConfig()?.rules ?? [], loadProjectConfig(scope.projectRoot)?.rules ?? [])
+  // RC-02 B2: 三态消费——损坏配置进入 safe mode，绝不静默退回 allow。
+  const userCfg = loadUserConfig()
+  const projectCfg = loadProjectConfig(scope.projectRoot)
+  gate.loadRules(userCfg.status === "valid" ? userCfg.config.rules : [], projectCfg.status === "valid" ? projectCfg.config.rules : [])
+  if (userCfg.status === "invalid" || projectCfg.status === "invalid") {
+    gate.enterSafeMode("permission 配置损坏——写入/进程/网络一律 ask")
+  }
   return {
     permissionGate: gate,
     permissionMode: "strict",

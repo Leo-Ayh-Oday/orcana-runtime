@@ -1,9 +1,8 @@
 /** Permission config loader — user-level and project-level JSON config files.
  *
- *  Config files are read once at startup. Invalid JSON / missing files are
- *  silently ignored (graceful degradation). The priority chain in
- *  PermissionGate.check() applies: Global Deny > User Deny > Project Deny >
- *  Session Override > User Allow > Project Allow > Tool Declared > Category Default.
+ *  Config files are read once at startup. Missing files → null (defaults).
+ *  Invalid JSON → explicit "invalid" 状态（RC-02 B2），调用方必须进入
+ *  permission-safe-mode（deny/ask 默认），绝不静默退回 allow。
  */
 
 import { existsSync, readFileSync } from "node:fs"
@@ -27,38 +26,54 @@ export interface PermissionConfig {
   categoryOverrides?: Partial<Record<ToolCategory, PermissionLevel>>
 }
 
+/** RC-02 B2: 配置加载结果三态——missing / valid / invalid(损坏)。 */
+export type ConfigLoadResult =
+  | { status: "missing" }
+  | { status: "valid"; config: PermissionConfig }
+  | { status: "invalid"; error: string }
+
 // ── Loaders ──
 
 /** Load user-level config from ~/.orcana/permissions.json */
-export function loadUserConfig(): PermissionConfig | null {
+export function loadUserConfig(): ConfigLoadResult {
   const path = join(homedir(), ".orcana", "permissions.json")
   return loadConfigFile(path)
 }
 
 /** Load project-level config from <projectRoot>/.orcana/permissions.json */
-export function loadProjectConfig(projectRoot: string): PermissionConfig | null {
+export function loadProjectConfig(projectRoot: string): ConfigLoadResult {
   const path = resolve(projectRoot, ".orcana", "permissions.json")
   return loadConfigFile(path)
 }
 
-function loadConfigFile(path: string): PermissionConfig | null {
-  if (!existsSync(path)) return null
+function loadConfigFile(path: string): ConfigLoadResult {
+  if (!existsSync(path)) return { status: "missing" }
+  let raw: string
   try {
-    const raw = readFileSync(path, "utf-8")
+    raw = readFileSync(path, "utf-8")
+  } catch (e) {
+    return { status: "invalid", error: `unreadable: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  try {
     const parsed = JSON.parse(raw) as Partial<PermissionConfig>
-    if (!parsed || typeof parsed !== "object") return null
+    if (!parsed || typeof parsed !== "object") {
+      return { status: "invalid", error: "config is not an object" }
+    }
     const rules = Array.isArray(parsed.rules)
       ? parsed.rules.filter((r: unknown): r is PermissionRule =>
           typeof (r as PermissionRule).toolName === "string" &&
           ((r as PermissionRule).level === "allow" || (r as PermissionRule).level === "deny"))
       : []
     return {
-      rules,
-      categoryOverrides: parsed.categoryOverrides as PermissionConfig["categoryOverrides"],
+      status: "valid",
+      config: {
+        rules,
+        categoryOverrides: parsed.categoryOverrides as PermissionConfig["categoryOverrides"],
+      },
     }
   } catch {
-    // Invalid JSON or unreadable — silently skip
-    return null
+    // 损坏 JSON —— 显式 invalid（调用方进入 safe mode），不再静默吞掉。
+    return { status: "invalid", error: "invalid JSON" }
   }
 }
 

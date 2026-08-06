@@ -277,11 +277,7 @@ export function updateTaskTrackerAfterTools(input: {
   }
 
   const running = tracker.steps.find(step => step.status === "running")
-  if (!running || running.status === "done") {
-    const next = tracker.steps.find(step => step.status === "pending")
-    if (next) next.status = "running"
-  }
-  if (running?.status === "done") {
+  if (!running) {
     const next = tracker.steps.find(step => step.status === "pending")
     if (next) next.status = "running"
   }

@@ -431,3 +431,49 @@ describe("PR-3: output limit kills the process (hard limit)", () => {
     expect(received).toBeLessThanOrEqual(2048)
   })
 })
+
+describe("PR-6: execution identity flows into ProcessRequest", () => {
+  linuxOnly("request identity reaches the compiled spec (no shared tool-run)", async () => {
+    const { executeProcess } = await import("../../../src/runtime/process-executor")
+    const events: Array<{ type: string; [k: string]: unknown }> = []
+    for await (const e of executeProcess({
+      command: "/bin/true", args: [], timeoutMs: 10_000,
+      runId: "run-test-42", nodeRunId: "run-test-42:n3", agentId: "agent-x", attempt: 3,
+    })) events.push(e as unknown as { type: string; [k: string]: unknown })
+    const receipt = events.find(e => e.type === "receipt") as { receipt: { runId: string; nodeRunId: string; agentId?: string; attempt: number } } | undefined
+    expect(receipt).toBeDefined()
+    expect(receipt!.receipt.runId).toBe("run-test-42")
+    expect(receipt!.receipt.nodeRunId).toBe("run-test-42:n3")
+    expect(receipt!.receipt.agentId).toBe("agent-x")
+    expect(receipt!.receipt.attempt).toBe(3)
+  })
+
+  linuxOnly("runtime identity context is injected when request omits it", async () => {
+    const { executeProcess } = await import("../../../src/runtime/process-executor")
+    const { setExecutionIdentity } = await import("../../../src/runtime/execution-context")
+    setExecutionIdentity({ runId: "ctx-run-1", nodeRunId: "ctx-run-1:n1", agentId: "ctx-agent", sessionId: "s1" })
+    try {
+      const events: Array<{ type: string; [k: string]: unknown }> = []
+      for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
+        events.push(e as unknown as { type: string; [k: string]: unknown })
+      }
+      const receipt = events.find(e => e.type === "receipt") as { receipt: { runId: string; agentId?: string } } | undefined
+      expect(receipt).toBeDefined()
+      expect(receipt!.receipt.runId).toBe("ctx-run-1")
+      expect(receipt!.receipt.agentId).toBe("ctx-agent")
+    } finally {
+      setExecutionIdentity({})
+    }
+  })
+
+  linuxOnly("broker runtimeContext shares a single ledger across consumers", async () => {
+    const { createLinuxBroker } = await import("../../../src/runtime/linux/broker")
+    const broker = createLinuxBroker({ mode: "enabled" })
+    const ctx = broker.runtimeContext()
+    expect(ctx.ledger).toBe(broker.ledger())
+    expect(ctx.locks).toBeDefined()
+    expect(ctx.domainManager).toBeDefined()
+    expect(ctx.cacheManager).toBeDefined()
+    expect(ctx.stateStore).toBeDefined()
+  })
+})

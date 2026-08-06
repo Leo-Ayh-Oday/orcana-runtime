@@ -75,6 +75,16 @@ export interface LinuxBrokerOptions {
   secretValues?: Record<string, string>
 }
 
+/** PR-6：统一 ExecutionRuntimeContext —— Graph 调度 / ProcessExecutor /
+ *  Broker 共享同一套资源权威（单账本、单锁、单缓存、单状态存储）。 */
+export interface ExecutionRuntimeContext {
+  ledger: ResourceLedger
+  locks: IsolationDomainLock
+  domainManager: AgentDomainManager
+  cacheManager: CacheManager
+  stateStore: RuntimeStateStore
+}
+
 export interface ExecuteOptions {
   /** 取消信号（透传到后端 runSupervised）。 */
   abortSignal?: AbortSignal
@@ -105,6 +115,8 @@ export interface LinuxExecutionBroker {
   activeCells(): ExecutionCell[]
   /** R2: 资源账本（调度接入）。 */
   ledger(): ResourceLedger
+  /** PR-6: 统一运行时上下文（Graph 调度与 Broker 共享单一账本/锁/缓存）。 */
+  runtimeContext(): ExecutionRuntimeContext
 }
 
 /** 全进程共享的 broker 实例（能力探测缓存）。 */
@@ -512,6 +524,9 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     },
     ledger() {
       return ledger
+    },
+    runtimeContext() {
+      return { ledger, locks, domainManager, cacheManager, stateStore }
     },
   }
 }

@@ -14,6 +14,7 @@ import { spawn } from "node:child_process"
 import type { LinuxExecutionBroker } from "./linux/broker"
 import { createLinuxBroker } from "./linux/broker"
 import type { CapabilityRequest, ExecutionProfile, NetworkMode, SandboxReceipt } from "./linux/contracts"
+import { getExecutionIdentity } from "./execution-context"
 
 export type ProcessEvent =
   | { type: "status"; state: string; at: number }
@@ -36,6 +37,15 @@ export interface ProcessRequest {
   network?: NetworkMode
   stdoutMaxBytes?: number
   stderrMaxBytes?: number
+  // ── PR-6：执行身份（运行时注入，取消共享 tool-run 匿名身份） ──
+  runId?: string
+  nodeRunId?: string
+  agentId?: string
+  domainId?: string
+  assignmentId?: string
+  attempt?: number
+  worktreeRoot?: string
+  ownerFiles?: string[]
 }
 
 export interface ProcessOutcome {
@@ -64,6 +74,9 @@ const DEFAULT_STDERR_MAX = 4 * 1024 * 1024
 
 function capabilityRequestFromRequest(request: ProcessRequest): CapabilityRequest {
   const cwd = request.cwd ?? process.cwd()
+  // PR-6：身份注入 —— 请求未声明时从运行时上下文（AgentRunScope）读取，
+  // 保证工具执行携带真实 runId/agentId（不再匿名共享 tool-run）。
+  const identity = getExecutionIdentity()
   return {
     command: {
       executable: request.command,
@@ -80,7 +93,14 @@ function capabilityRequestFromRequest(request: ProcessRequest): CapabilityReques
     stderrMaxBytes: request.stderrMaxBytes ?? DEFAULT_STDERR_MAX,
     // PR-4：worktreeRoot 自动从执行上下文投影 —— bwrap 后端把宿主 cwd 挂载为
     // 沙盒内 /workspace（chdir 目标必须存在）；host-audit 用宿主 cwd 直连。
-    worktreeRoot: cwd,
+    worktreeRoot: request.worktreeRoot ?? cwd,
+    ownerFiles: request.ownerFiles,
+    // PR-6：身份（请求显式值优先，否则运行时上下文）。
+    runId: request.runId ?? identity.runId,
+    nodeRunId: request.nodeRunId ?? identity.nodeRunId,
+    agentId: request.agentId ?? identity.agentId,
+    assignmentId: request.assignmentId ?? identity.assignmentId,
+    attempt: request.attempt,
   }
 }
 
@@ -190,7 +210,15 @@ export async function* executeProcess(request: ProcessRequest): AsyncGenerator<P
   const request0 = capabilityRequestFromRequest(request)
   const spec = broker().compileRequest(request0)
 
-  yield* fromBrokerEvents(broker().execute(spec, request.abortSignal ? { abortSignal: request.abortSignal } : undefined))
+  // PR-6：domainId → Agent Domain 投影（cgroup 父层/预算绑定）。
+  const domain = request.domainId
+    ? broker().runtimeContext().domainManager.get(request.domainId)
+    : undefined
+
+  yield* fromBrokerEvents(broker().execute(spec, {
+    ...(request.abortSignal ? { abortSignal: request.abortSignal } : {}),
+    ...(domain ? { domain } : {}),
+  }))
 }
 
 /** Broker 的 ExecutionCellEvent → 平台无关 ProcessEvent。

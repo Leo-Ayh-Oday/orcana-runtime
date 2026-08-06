@@ -114,3 +114,29 @@ export function setRuntimeContextValue<T>(
   const id = typeof key === "symbol" ? key : key.id
   context.values.set(id, value)
 }
+
+// ── PR-6：执行身份（ProcessRequest 注入源，取消 tool-run 匿名执行） ──
+
+export interface ExecutionIdentity {
+  runId?: string
+  nodeRunId?: string
+  agentId?: string
+  domainId?: string
+  assignmentId?: string
+  sessionId?: string
+}
+
+const EXECUTION_IDENTITY = createRuntimeContextKey<ExecutionIdentity>(
+  "execution-identity",
+  () => ({}),
+)
+
+/** 当前运行时执行身份（AgentRunScope 设置；未设置时为空对象）。 */
+export function getExecutionIdentity(): ExecutionIdentity {
+  return getRuntimeContextValue(EXECUTION_IDENTITY)
+}
+
+/** 设置当前运行时执行身份（agentLoop 进入前；工具执行注入用）。 */
+export function setExecutionIdentity(identity: ExecutionIdentity): void {
+  setRuntimeContextValue(EXECUTION_IDENTITY, identity)
+}

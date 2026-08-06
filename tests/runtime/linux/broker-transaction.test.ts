@@ -70,6 +70,38 @@ async function collect(spec: ExecutionCellSpec, broker: ReturnType<typeof create
 }
 
 describe("R2 broker transaction", () => {
+  test("C5: sealed-file secrets leave no /tmp residue after execution", async () => {
+    const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { existsSync } = await import("node:fs")
+    const binding = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/reg", expiresAt: Date.now() + 60_000 })
+    const broker = createLinuxBroker({ mode: "enabled", secretValues: { [binding.id]: "s3cr3t" } })
+    const events = await collect(cellSpec({ secrets: [binding] }), broker)
+    expect(events.some(e => e.type === "cell.exit")).toBe(true)
+    // C5（SECRET_TEMP_RESIDUE）：执行结束 → sealed secret 宿主文件与 root
+    // 目录必须已删除（dispose 在事务 finally 触发，非"后端读取后清理"）
+    const root = join(tmpdir(), `orcana-secrets-${process.pid}`)
+    expect(existsSync(root)).toBe(false)
+  })
+
+  test("C5: failed secret binding cleans partially written files", async () => {
+    const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { existsSync } = await import("node:fs")
+    // 先写有效 binding 再遇过期 binding → 绑定失败路径也必须清理已写文件
+    const good = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/good", expiresAt: Date.now() + 60_000 })
+    const expired = newSecretBinding({ purpose: "auth", delivery: "sealed-file", target: "/run/secrets/bad", expiresAt: Date.now() - 1000 })
+    const broker = createLinuxBroker({ mode: "enabled", secretValues: { [good.id]: "g", [expired.id]: "x" } })
+    await expect((async () => {
+      for await (const _ of broker.execute(cellSpec({ secrets: [good, expired] }))) { /* drain */ }
+    })()).rejects.toThrow(LinuxExecutionError)
+    const root = join(tmpdir(), `orcana-secrets-${process.pid}`)
+    expect(existsSync(root)).toBe(false)
+  })
+
+
   test("execute reserves resources and releases them after completion", async () => {
     const ledger = new ResourceLedger({ maxConcurrentCells: 2, capacity: { cpuQuota: 1000, memoryBytes: 1024 * 1024, pids: 100, networkSlots: 1, tempBytes: 1024 * 1024, concurrentCells: 2 } })
     const broker = createLinuxBroker({ mode: "enabled", ledger })

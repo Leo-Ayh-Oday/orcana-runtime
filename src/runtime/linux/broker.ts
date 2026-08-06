@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { readFileSync, rmSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import type {
   AgentExecutionDomain,
@@ -190,6 +190,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
    *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。 */
   const materializeExecution = (spec: ExecutionCellSpec, backendId: string): ExecutionMaterialization => {
     const materialization: ExecutionMaterialization = {}
+    // C5：sealed secret 的清理回调（删文件 + 空 root 目录）；环境注入类无文件。
+    let secretCleanup: (() => void) | undefined
     if ((backendId === "bubblewrap" || backendId === "rootless-podman")
       && (spec.profile === "inspect" || spec.profile === "untrusted")) {
       try {
@@ -210,6 +212,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     if (spec.secrets.length > 0) {
       const bound = bindSecrets({ bindings: spec.secrets, values: options.secretValues ?? {} })
       if (!bound.ok) {
+        // C5：失败路径同样清理 —— 部分 binding 可能在校验失败前已写入文件。
+        bound.cleanup()
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
       }
       materialization.secretEnv = bound.envInjections
@@ -222,14 +226,22 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         }
       }
       materialization.secretFiles = secretFiles
-      // 环境注入类无宿主文件；sealed-file 在挂载路径下由后端读取后清理。
-      if (Object.keys(secretFiles).length === 0) bound.cleanup()
+      // C5：文件不在此处清理 —— 统一由 dispose（execute 事务 finally）调用，
+      // 保证执行结束（含异常/取消路径）后 /tmp 无密钥残留。
+      secretCleanup = bound.cleanup
     }
     for (const cache of spec.cache) {
       materialization.cacheHostPaths = {
         ...materialization.cacheHostPaths,
         [cache.target]: cacheManager.hostPath(cache),
       }
+    }
+    // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（seccomp/sealed secret）统一清理。
+    materialization.dispose = () => {
+      if (materialization.seccompFile) {
+        try { rmSync(materialization.seccompFile, { force: true }) } catch { /* best-effort */ }
+      }
+      secretCleanup?.()
     }
     return materialization
   }
@@ -388,9 +400,6 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `backend ${backend.id} rejects spec: ${violations.join("; ")}`)
       }
 
-      // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
-      const materialization = materializeExecution(compiled, selection.backend)
-
       const cellId = compiled.identity.cellId
       const runId = compiled.identity.runId
       const agentId = compiled.identity.agentId ?? executeOptions?.domain?.agentId
@@ -410,7 +419,13 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       let cellReceipt: SandboxReceipt | undefined
       // PR-5：attach 失败不再吞掉 —— 记入 Receipt degradation（fail-closed 审计）。
       let attachFailure: string | undefined
+      // C5：try 前声明 —— 物化本身抛错时 finally 仍可安全访问（避免 TDZ）。
+      let materialization: ExecutionMaterialization | undefined
       try {
+        // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
+        // C5：物化在事务内进行 —— finally 保证宿主文件（sealed secret/
+        // seccomp）在成功、异常、取消任何路径后都被清理。
+        materialization = materializeExecution(compiled, selection.backend)
         // Isolation Lock（PR-4）：worktreeRoot + agentId → 按 Agent 的 worktree
         // 独占；worktreeRoot 无 agentId（工具投影）→ main-workspace 独占（正式
         // 工作区单写者）；无 worktree → main-workspace 独占。
@@ -511,6 +526,13 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         cell.state = "succeeded"
       } finally {
         // 清理与释放（异常路径同 finally 事务）。
+        // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（sealed secret / seccomp）
+        // 执行结束即清理 —— /tmp 不残留密钥与策略文件。
+        materialization?.dispose?.()
+        // podman cidfile 同样属于 /tmp 临时资源 —— 执行后移除。
+        if (podmanCidfile) {
+          try { rmSync(podmanCidfile, { force: true }) } catch { /* best-effort */ }
+        }
         const record = cellRuns.get(cellId)
         if (record) {
           // Cell cgroup 真实移除（PR-2 先做 best-effort；PR-5 重建完整协议）。

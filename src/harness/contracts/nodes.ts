@@ -158,6 +158,15 @@ export interface VerificationNodeInput {
   results: VerificationResult[]
   modifiedFiles?: string[]
   workspaceHash?: string
+  /** H12: kernel round state carried across the node boundary — the write
+   *  generation the round was verified under (evidence staleness) and an
+   *  optional producedBy override (who ran the verification). Without this the
+   *  node defaults to its own id and the ambient generation, which loses the
+   *  kernel round's attribution. */
+  kernelRoundState?: {
+    generation?: number
+    producedBy?: string
+  }
 }
 
 export interface HumanNodeInput {

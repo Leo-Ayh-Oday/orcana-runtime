@@ -160,7 +160,7 @@ export const CONVERSATION_TAIL_PROVIDER: ContextProvider = {
       priority: 100,
       content: "",
       estimatedTokens: 0,
-      sourceRefs: [`epoch:${request.epochState.currentEpochIndex}`, `raw:${request.rawMessages.length}`],
+      sourceRefs: [`epoch:${request.epochState?.currentEpochIndex ?? 0}`, `raw:${request.rawMessages.length}`],
       required: false,
       group: undefined,
       // K7: harness diagnostics metadata — system authority.

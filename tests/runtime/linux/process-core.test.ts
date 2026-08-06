@@ -15,7 +15,8 @@ import { createOutputLimiter, finalizeOutput, TRUNCATION_MARKER } from "../../..
 import { buildExplicitEnvironment, hostKeyDenied, environmentLeaksHostSecrets } from "../../../src/runtime/linux/environment"
 import { bindSecrets, newSecretBinding } from "../../../src/runtime/linux/secrets"
 import { createHostAuditBackend } from "../../../src/runtime/linux/backends/host-audit"
-import { createLinuxBroker } from "../../../src/runtime/linux/broker"
+import { createLinuxBroker, testAuthorityFallback } from "../../../src/runtime/linux/broker"
+import { compileCellSpec, compileCapabilityRequest } from "../../../src/runtime/linux/policy-compiler"
 import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
 import type { ExecutionCellSpec } from "../../../src/runtime/linux/contracts"
 
@@ -327,6 +328,62 @@ describe("LF-2: broker execution", () => {
     // 编译（结构校验）通过；后端选择（执行路径）fail-closed 拒绝
     expect(broker.compileSpec(spec).policyDigest.length).toBe(16)
     expect(() => broker.selectBackendFor(spec)).toThrow(LinuxExecutionError)
+  })
+
+  linuxOnly("C1: every strict profile fails closed on degradation (no silent downgrade)", () => {
+    // 全部 strict profile（allowDegradation=false）：最小隔离不可满足时
+    // 必须抛错，绝不静默降级到 host-audit。本环境 bwrap/podman 均不可用，
+    // container minimum 无后端可满足 —— 断言确定。
+    for (const profile of ["test", "dependency", "service", "untrusted", "evolution"] as const) {
+      const broker = createLinuxBroker({ mode: "enabled" })
+      const spec = baseSpec({ profile, isolation: { minimum: "container", preferredBackend: "podman", allowDegradation: false } })
+      expect(broker.compileSpec(spec).policyDigest.length).toBe(16)
+      expect(() => broker.selectBackendFor(spec)).toThrow(LinuxExecutionError)
+    }
+  })
+
+  test("C1: strict profile rejects allowDegradation=true at compile layer", () => {
+    for (const profile of ["test", "dependency", "service", "untrusted", "evolution"] as const) {
+      const spec = baseSpec({ profile, isolation: { minimum: "container", preferredBackend: "podman", allowDegradation: true } })
+      const compiled = compileCellSpec(spec)
+      expect(compiled.ok).toBe(false)
+      if (!compiled.ok) {
+        expect(compiled.errors.some(e => e.includes("DEGRADATION_NOT_ALLOWED_BY_PROFILE"))).toBe(true)
+      }
+    }
+  })
+
+  linuxOnly("C1: capability request cannot widen strict profile isolation", () => {
+    const authority = testAuthorityFallback(process.cwd())
+    for (const profile of ["test", "dependency", "service", "untrusted", "evolution"] as const) {
+      const result = compileCapabilityRequest(
+        { command: { executable: "/bin/true", args: [], relativeCwd: ".", stdin: "closed" }, profile, network: { mode: "none" }, env: {}, allowedHostKeys: [] },
+        authority,
+      )
+      expect(result.ok).toBe(true)
+      // 不可信请求层无法覆盖 allowDegradation —— isolation 只来自 Profile 默认值
+      if (result.ok) expect(result.spec.isolation.allowDegradation).toBe(false)
+    }
+    const inspect = compileCapabilityRequest(
+      { command: { executable: "/bin/true", args: [], relativeCwd: ".", stdin: "closed" }, profile: "inspect", network: { mode: "none" }, env: {}, allowedHostKeys: [] },
+      authority,
+    )
+    expect(inspect.ok).toBe(true)
+    if (inspect.ok) expect(inspect.spec.isolation.allowDegradation).toBe(true)
+  })
+
+  linuxOnly("C1: non-strict degradation is explicit in receipt, not silent", async () => {
+    const broker = createLinuxBroker({ mode: "enabled" })
+    // build 允许降级：bwrap 不可用 → host-audit，但原因必须显式入 Receipt
+    // （STRICT_PROFILE_DEGRADED 只禁静默降级 —— 显式降级需带 degradationReasons）
+    const spec = baseSpec({ profile: "build", isolation: { minimum: "namespace", preferredBackend: "bubblewrap", allowDegradation: true } })
+    const receipts: unknown[] = []
+    for await (const event of broker.execute(spec)) {
+      if (event.type === "cell.receipt") receipts.push(event.receipt)
+    }
+    const receipt = receipts[0] as { degradationReasons?: string[] } | undefined
+    expect(receipt).toBeDefined()
+    expect(receipt!.degradationReasons?.some(r => r.includes("Host Audit"))).toBe(true)
   })
 })
 

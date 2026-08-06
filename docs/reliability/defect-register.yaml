@@ -227,13 +227,15 @@
   wave: RC-10
   invariant: SESSION_MESSAGE_DUPLICATION=0
   files: [src/ui/cli.ts, src/session/sqlite-session.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: D2
   severity: P0
   wave: RC-10
   invariant: SINGLE_SHOT_MODE_PERSISTS
   files: [src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: D3
   severity: P0
   wave: RC-11
@@ -251,19 +253,22 @@
   wave: RC-10
   invariant: EXIT_PATH_FLUSHES_SESSION
   files: [src/ui/input.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: D6
   severity: P1
   wave: RC-10
   invariant: COMMAND_CTX_READS_CURRENT_SESSION_ID
   files: [src/ui/commands/definitions.ts, src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: H5
   severity: P2
   wave: RC-10
   invariant: MESSAGE_TIMESTAMP_PRESERVED
   files: [src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: H6
   severity: P2
   wave: RC-12
@@ -276,7 +281,8 @@
   wave: RC-12
   invariant: SQLITE_DELETE_CLEANS_WAL_SHM
   files: [src/session/sqlite-session.ts, src/session/index.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: H8
   severity: P2
   wave: RC-11

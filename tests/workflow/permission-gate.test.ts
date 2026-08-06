@@ -101,7 +101,9 @@ describe("G6 permission gate", () => {
     const spec = gate.approve()
     expect(spec).not.toBeNull()
     const run = await runScheduler(spec!, buildReadWriteRegistry(tools()))
-    expect(run.status).toBe("blocked_no_evidence")
+    // M6: the verification node fails (empty files) — a failed node surfaces
+    // as run "failed", never masked as blocked_no_evidence or done.
+    expect(run.status).toBe("failed")
     expect(run.results[0]!.status).toBe("done")
     expect((run.results[0]!.output as { content: string }).content).toContain("committed")
   })

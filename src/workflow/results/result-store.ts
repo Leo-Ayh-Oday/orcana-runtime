@@ -11,19 +11,35 @@ import { dirname, join } from "node:path"
 import { redactForTrace } from "../../agent/secret-redactor"
 import type { WorkflowNodeResult } from "../types"
 
+/** M11: a checkpoint is bound to the graph digest and the workspace digest
+ *  at write time — restoring a checkpoint written for a different graph or
+ *  workspace is rejected (STALE_WORKFLOW_RESULT_RESTORED: 0). */
 export interface CheckpointData {
   specId: string
   updatedAt: number
+  /** Digest of the workflow spec (nodes/handlers/inputs/deps). */
+  specDigest?: string
+  /** Content hash of the project workspace at checkpoint time. */
+  workspaceDigest?: string
   results: WorkflowNodeResult[]
+}
+
+export interface ResultStoreFreshness {
+  specDigest?: string
+  workspaceDigest?: string
 }
 
 export class ResultStore {
   private readonly results = new Map<string, WorkflowNodeResult>()
   private readonly specId: string
   private readonly checkpointFile?: string
+  private readonly specDigest?: string
+  private readonly workspaceDigest?: string
 
-  constructor(specId: string, checkpointDir?: string) {
+  constructor(specId: string, checkpointDir?: string, freshness?: ResultStoreFreshness) {
     this.specId = specId
+    this.specDigest = freshness?.specDigest
+    this.workspaceDigest = freshness?.workspaceDigest
     if (checkpointDir) this.checkpointFile = join(checkpointDir, `${specId}.json`)
   }
 
@@ -56,6 +72,8 @@ export class ResultStore {
       const data: CheckpointData = {
         specId: this.specId,
         updatedAt: Date.now(),
+        specDigest: this.specDigest,
+        workspaceDigest: this.workspaceDigest,
         results: [...this.results.values()],
       }
       mkdirSync(dirname(this.checkpointFile), { recursive: true })
@@ -81,6 +99,11 @@ export class ResultStore {
     try {
       const parsed = JSON.parse(readFileSync(file, "utf-8")) as CheckpointData
       if (parsed.specId !== this.specId) return false
+      // M11: freshness fail-closed — a digest-bound store never accepts an
+      // unbound checkpoint, and a mismatched digest rejects the whole
+      // checkpoint (nodes re-execute instead of replaying stale results).
+      if (this.specDigest !== undefined && parsed.specDigest !== this.specDigest) return false
+      if (this.workspaceDigest !== undefined && parsed.workspaceDigest !== this.workspaceDigest) return false
       for (const result of parsed.results ?? []) {
         if (result && typeof result.nodeId === "string" && result.status) {
           this.results.set(result.nodeId, result)

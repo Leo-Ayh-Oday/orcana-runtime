@@ -153,6 +153,10 @@ export interface ExecutionMaterialization {
   secretFiles?: Record<string, string>
   /** 缓存宿主路径映射（target → 宿主源目录；Runtime 决定，模型不可指定）。 */
   cacheHostPaths?: Record<string, string>
+  /** C5（SECRET_TEMP_RESIDUE）：运行期物化宿主文件的统一清理回调
+   *  （sealed secret 文件 + secret root + seccomp 文件；执行结束后调用，
+   *  由 Broker 事务 finally 保证触发）。 */
+  dispose?: () => void
 }
 
 // ── ExecutionCellSpec (§7.2) ──

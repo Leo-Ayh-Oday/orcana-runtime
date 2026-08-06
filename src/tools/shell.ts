@@ -10,6 +10,11 @@ import { executeProcess, type ProcessEvent } from "../runtime/process-executor"
 
 const SHELL_RESULT_MAX_CHARS = 8000
 
+export function parseTimeoutSec(value: unknown, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+
 // ── Sandbox injection (set by loop.ts at startup) ──
 
 const SHELL_SANDBOX = createRuntimeContextKey<SandboxManager | null>(
@@ -62,7 +67,7 @@ async function shell(
   context?: ToolExecutionContext,
 ): Promise<ToolResult> {
   const command = String(params.command ?? "")
-  const timeoutSec = Number(params.timeout ?? 120)
+  const timeoutSec = parseTimeoutSec(params.timeout, 120)
 
   if (!command.trim()) return Result.fail("Empty command")
 
@@ -164,7 +169,7 @@ export async function* shellStream(
   context?: ToolExecutionContext,
 ): AsyncGenerator<{ type: "progress"; data: string } | { type: "done"; data: ToolResult }> {
   const command = String(params.command ?? "")
-  const timeoutSec = Number(params.timeout ?? 120)
+  const timeoutSec = parseTimeoutSec(params.timeout, 120)
 
   // Non-interactive mode: caller already signalled intent via prompt arg. Skip confirm.
   if (params.confirm !== true && !isNonInteractive()) {

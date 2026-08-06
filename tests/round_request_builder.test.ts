@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildRoundProviderRequest, cacheStableProviderTools } from "../src/agent/round/request-builder"
+import { buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../src/agent/round/request-builder"
 import { CacheTracker } from "../src/provider/cache-tracker"
 import { buildTools, Result } from "../src/tools/registry"
 
@@ -69,5 +69,14 @@ describe("Round request builder", () => {
 
     expect(request.providerToolSchemas).toHaveLength(128)
     expect(request.providerToolSchemas.at(-1)?.name).toBe("tool_127")
+  })
+
+  test("tool schemas are counted in the round token budget", () => {
+    const system = "system prompt"
+    const messages: Array<{ role: "user"; content: string }> = [{ role: "user", content: "hello" }]
+    const withoutTools = estimateRoundTokens(system, [], messages, null)
+    const withTools = estimateRoundTokens(system, [], messages, null, makeTools(10))
+
+    expect(withTools.roundInputTokens).toBeGreaterThan(withoutTools.roundInputTokens)
   })
 })

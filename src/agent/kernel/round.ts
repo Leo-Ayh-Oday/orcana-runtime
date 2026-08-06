@@ -222,7 +222,7 @@ export async function* runRound(
   ctx.usage.apiCalls++
 
   // ── Pre-round gate chain: context budget → tool disclosure → readonly/plan → ripple filter ──
-  const preTokens = estimateRoundTokens(system, contextMessages, rawMessages, null)
+  const preTokens = estimateRoundTokens(system, contextMessages, rawMessages, null, tools)
   const contextText = preTokens.providerMessages.map(m => typeof m.content === "string" ? m.content : JSON.stringify(m.content)).join("\n").slice(-4000) + "\n" + system
   const preRoundCtx = {
     round,

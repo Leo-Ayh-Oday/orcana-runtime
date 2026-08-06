@@ -43,6 +43,8 @@ export interface AgentOptions {
   autoApprovePlan?: boolean
   modelRouter?: import("../provider/router").ModelRouter
   sessionId?: string
+  /** D4 (CHECKPOINT_RESUME_USED): checkpoint 快照，buildRunContext 消费
+   *  （恢复提示 system 消息注入 + masterPlan/taskTracker 水合）。 */
   resumeFromCheckpoint?: SessionCheckpoint
   /** Optional: gate telemetry collector for the 3-step validation plan. */
   gateTelemetry?: import("./gates/telemetry").GateTelemetry

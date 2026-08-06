@@ -28,7 +28,7 @@ describe("OpenAI provider retry side-effect guard (RC-14 G3)", () => {
         },
       })
       return new Response(stream, { status: 200 })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const provider = new OpenAIProvider("test-key", {
       maxRetries: 2,
@@ -72,7 +72,7 @@ describe("OpenAI provider retry side-effect guard (RC-14 G3)", () => {
         },
       })
       return new Response(stream, { status: 200 })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const provider = new OpenAIProvider("test-key", {
       maxRetries: 2,
@@ -104,7 +104,7 @@ describe("OpenAI provider retry side-effect guard (RC-14 G3)", () => {
         })
       }
       return new Response(`data: ${firstChunk("second")}\n\ndata: [DONE]\n\n`, { status: 200 })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const provider = new OpenAIProvider("test-key", {
       maxRetries: 2,

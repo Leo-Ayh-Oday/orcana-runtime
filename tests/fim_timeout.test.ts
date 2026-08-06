@@ -17,7 +17,7 @@ describe("FimEditor timeout (RC-14 G9)", () => {
         signal.addEventListener("abort", () => reject(signal.reason), { once: true })
       })
       throw new Error("fetch should have been aborted")
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     try {
       const editor = new FimEditor("test-key", "https://example.test/beta", "test-model", 60)
@@ -39,7 +39,7 @@ describe("FimEditor timeout (RC-14 G9)", () => {
       return new Response(JSON.stringify({
         choices: [{ text: "replacement" }],
       }), { status: 200 })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     try {
       const editor = new FimEditor("test-key", "https://example.test/beta", "test-model", 5_000)

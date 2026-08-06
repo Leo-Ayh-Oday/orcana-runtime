@@ -252,11 +252,10 @@ export class DeepSeekProvider implements LLMProvider {
     for (const tb of toolBlocks) {
       yield { type: "tool_call", data: { id: tb.id, name: tb.name, input: tb.input } }
     }
-    if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
     if (cthink?.thinking) {
       thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
-      yield { type: "thinking_blocks", data: thinkingBlocks }
     }
+    if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
     const finalText = textChunks.join("")
     if (finalText && toolBlocks.length === 0) yield { type: "done", data: finalText }
   }

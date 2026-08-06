@@ -8,7 +8,8 @@
  *   - Zero LLM dependency. Checkpoints are pure filesystem + SHA snapshots.
  *   - SQLite-backed (per-session database), 3 most recent retained.
  *   - File recovery: revert changed files to SHA captured at checkpoint boundary.
- *   - Cold memory recovery: verify SHA integrity after restore.
+ *   - Cold memory recovery: verify SHA integrity after restore (H8: 16-hex
+ *     记录格式才可验证，外部格式/未记录跳过——见 isColdMemorySHARecorded)。
  */
 
 import { readFileSync } from "node:fs"
@@ -322,6 +323,13 @@ export function recordCheckpointTaken(round: number): void {
 // Integrity check (unchanged — uses fileSHA which reads disk)
 // ═══════════════════════════════════════════════════════════
 
+/** H8 (COLD_MEMORY_SHA_VERIFIED): 冷内存 SHA 是否处于可验证格式（16-hex）。
+ *  外部格式（如协调器记录的 64-hex stable-prefix 指纹）在 resume 侧不可复现，
+ *  不构成可验证声明——校验时跳过而非误判。 */
+export function isColdMemorySHARecorded(sha: string): boolean {
+  return /^[0-9a-f]{16}$/.test(sha)
+}
+
 export function verifyCheckpoint(cp: SessionCheckpoint, currentColdMemorySHA?: string): IntegrityReport {
   const mismatched: string[] = []
   for (const [path, expectedSHA] of Object.entries(cp.fileSHAs)) {
@@ -329,7 +337,8 @@ export function verifyCheckpoint(cp: SessionCheckpoint, currentColdMemorySHA?: s
     if (current !== expectedSHA) mismatched.push(path)
   }
 
-  const coldMemoryMatch = currentColdMemorySHA
+  // H8: 仅当 cp.coldMemorySHA 处于可验证格式时才比较（无声明/外部格式 → 跳过）。
+  const coldMemoryMatch = currentColdMemorySHA && isColdMemorySHARecorded(cp.coldMemorySHA)
     ? cp.coldMemorySHA === currentColdMemorySHA
     : true
 

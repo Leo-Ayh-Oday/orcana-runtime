@@ -18,7 +18,7 @@ import { ModelRouter } from "../provider/router"
 import type { ToolDescriptor } from "../tools/registry"
 import { StagedContextManager } from "../context/staged"
 import { SessionManager, SessionCorruptedError, searchAllSessions, type Session } from "../session"
-import { lastCheckpoint, verifyCheckpoint } from "../session/checkpoint"
+import { lastCheckpoint, sha256, verifyCheckpoint } from "../session/checkpoint"
 import type { SessionCheckpoint } from "../session/checkpoint"
 import { saveRewindPoint } from "../agent/rewind"
 import { buildResumeMessages, buildResumeContext, resumeMessages } from "../session/summarizer"
@@ -148,6 +148,12 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
 
   let resumeFromCheckpoint: SessionCheckpoint | null = null
 
+  // H8 (COLD_MEMORY_SHA_VERIFIED): compactor 恢复提前到 resume 块之前——
+  // checkpoint 冷内存 SHA 校验需要恢复后的锚上下文（restoreCompactorState 滞后
+  // 会令 verify 拿不到 anchor，冷内存声明无法验证）。
+  const compactor = runtime.compactor
+  if (resumeId) restoreCompactorState(compactor, resumeId)
+
   // K6 (RESUME_PRESERVES_CONSTRAINTS): resume 时以权威状态重建约束——flash 蒸馏
   // （≥3 条用户输入且 provider 可用），失败/不足降级确定性摘要，两者都保留 2+4 尾部。
   const distillResumeConstraints = async (userTexts: string[]): Promise<string | null> => {
@@ -172,17 +178,22 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
         // ── Checkpoint recovery: if checkpoint exists, verify and load ──
         const cp = lastCheckpoint(resumeId)
         if (cp) {
-          const integrity = verifyCheckpoint(cp)
+          // H8 (COLD_MEMORY_SHA_VERIFIED): 用恢复后的 compactor 锚上下文 SHA 校验冷内存
+          // （无锚/无声明时 currentColdMemorySHA 为 undefined → 跳过，不做假校验）。
+          const currentColdMemorySHA = compactor.anchor ? sha256(buildStableAnchorContext(compactor)) : undefined
+          const integrity = verifyCheckpoint(cp, currentColdMemorySHA)
           if (integrity.valid) {
             resumeFromCheckpoint = cp
             const stepsDone = cp.taskSteps.filter(s => s.status === "done").length
             console.log(green(
               `从检查点恢复 (round ${cp.round}, ${stepsDone}/${cp.taskSteps.length} 步骤, ${cp.changedFiles.length} 文件)`
             ))
-          } else {
+          } else if (!integrity.filesMatch) {
             console.log(yellow(
               `检查点文件已变更 (${integrity.filesMismatched.length} 个不匹配)，从对话历史恢复`
             ))
+          } else {
+            console.log(yellow("检查点冷记忆已变更（锚上下文 SHA 校验失败），从对话历史恢复"))
           }
         }
         sessionId = resumeId
@@ -207,10 +218,6 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
   }
   const usedInkStartup = await playInkStartupScreen(startupOptions).catch(() => false)
   if (!usedInkStartup) await playStartupScreen(startupOptions)
-
-  // Use runtime's compactor but restore resume state if needed
-  const compactor = runtime.compactor
-  if (resumeId) restoreCompactorState(compactor, resumeId)
 
   if (cliPrompt) {
     process.stdout.write(`${dim(">")}  ${cliPrompt}\n\n`)
@@ -319,6 +326,8 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
         summary: input.slice(0, 200),
         changedFiles: undoStack.map(s => s.path),
         fileSHAs: {},
+        // H8: 记录锚上下文 SHA（16-hex），resume 时冷内存完整性可验证
+        coldMemorySHA: compactor.anchor ? sha256(buildStableAnchorContext(compactor)) : "",
         conversationTokens: history.reduce((sum, h) => sum + h.content.length, 0),
       })
     } catch {

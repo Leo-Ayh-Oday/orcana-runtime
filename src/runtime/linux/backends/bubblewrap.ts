@@ -25,6 +25,9 @@ import { buildExplicitEnvironment } from "../environment"
 import { buildReceipt } from "../receipt"
 import { validateCellSpec } from "../policy-compiler"
 import { SYSTEM_READONLY_PATHS } from "../policy-compiler"
+import { snapshotWorkspace, pathGuardDiff, classifyUnexpectedWrites } from "./pathguard"
+import { existsSync } from "node:fs"
+import { LinuxExecutionError } from "../errors"
 
 /** 默认根布局（plan §10.2）—— ro 系统路径。 */
 export const DEFAULT_ROOT_LAYOUT: MountRule[] = SYSTEM_READONLY_PATHS.map(source => ({
@@ -87,9 +90,13 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
     "--clearenv",
     "--proc", "/proc",
     "--dev", "/dev",
-    "--tmpfs", "/tmp",
-    "--tmpfs", "/run",
   ]
+
+  // PR-4：tmpfs 大小必须生效 —— bwrap 用 `--size N` 约束下一个挂载点。
+  const tmpfs = opts.tmpfs ?? defaultTmpfs()
+  for (const t of tmpfs) {
+    argv.push("--size", String(t.sizeBytes), "--tmpfs", t.target)
+  }
 
   // 只读系统根。
   for (const mount of [...DEFAULT_ROOT_LAYOUT, ...(opts.extraReadonly ?? [])]) {
@@ -99,7 +106,7 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
   // 空 Home。
   argv.push("--dir", "/home/orcana")
 
-  // Worktree rw 挂载。
+  // Worktree rw 挂载（PR-4：/workspace 必须存在 —— 编译期已强制 worktreeRoot）。
   const worktree = opts.worktreeRoot ?? spec.filesystem.worktreeRoot
   if (worktree) {
     argv.push("--bind", worktree, "/workspace")
@@ -123,22 +130,26 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
     argv.push("--setenv", key, value)
   }
 
-  // seccomp 可选（R3：真实 BPF 文件）。
+  // seccomp（PR-4）：bwrap --seccomp 协议要求已打开的文件描述符数字。
+  // FD 3 为 supervisor 与后端约定的 seccomp 专用槽位（文件经 stdio[3] 继承）。
   if (opts.seccompFile) {
-    argv.push("--seccomp", opts.seccompFile)
+    argv.push("--seccomp", "3")
   }
 
-  // 工作目录。
+  // 工作目录：沙盒内部 /workspace（宿主 spawn cwd 在 CompiledExecution.cwd）。
   argv.push("--chdir", "/workspace")
 
   return argv
 }
 
-/** loopback 模式命令包装：netns 内先拉起 lo 再执行目标（P1-2 修复）。 */
+/** loopback 模式命令包装：netns 内先拉起 lo 再执行目标。
+ *  PR-4：参数绝不拼接进 shell 字符串 —— 固定脚本 `exec "$@"` 通过位置参数
+ *  传递 target/args，模型/仓库参数无法进入 shell 解释层（消除注入面）。 */
 export function loopbackWrapper(caps: LinuxCapabilities, target: string, args: string[]): { executable: string; args: string[] } {
-  // bwrap --unshare-net 创建的新 netns 中 lo 默认 down；绑定 127.0.0.1 需要 lo up。
-  const inner = ["ip", "link", "set", "lo", "up", "2>/dev/null;", "exec", JSON.stringify(target), ...args.map(a => JSON.stringify(a))]
-  return { executable: "/bin/sh", args: ["-c", inner.join(" "), "sh", target, ...args] }
+  return {
+    executable: "/bin/sh",
+    args: ["-c", 'ip link set lo up 2>/dev/null; exec "$@"', "sh", target, ...args],
+  }
 }
 
 export function createBubblewrapBackend(): ExecutionBackend {
@@ -166,6 +177,11 @@ export function createBubblewrapBackend(): ExecutionBackend {
       if (spec.network.mode !== "none" && spec.network.mode !== "loopback") {
         errors.push(`NETWORK_POLICY_UNAVAILABLE: bubblewrap (LF-3) supports none/loopback only, got "${spec.network.mode}"`)
       }
+      // PR-4：/workspace 必须存在 —— worktreeRoot 缺失时无法保证 chdir 目标，
+      // fail-closed（不允许静默产生启动即失败的坏 argv）。
+      if (!spec.filesystem.worktreeRoot) {
+        errors.push("WORKSPACE_MISSING: bubblewrap requires filesystem.worktreeRoot (mounted at /workspace)")
+      }
       for (const rule of [...spec.filesystem.readonlyMounts, ...spec.filesystem.writableMounts]) {
         if (BWRAP_FORBIDDEN_MOUNTS.some(p => rule.source === p || rule.source.startsWith(p + "/"))) {
           errors.push(`MOUNT_POLICY_INVALID: forbidden mount ${rule.source}`)
@@ -173,11 +189,19 @@ export function createBubblewrapBackend(): ExecutionBackend {
         if (rule.source.startsWith("/home/") || rule.source === "/home") {
           errors.push(`MOUNT_POLICY_INVALID: real home mount ${rule.source} forbidden`)
         }
+        // PR-4：bwrap 无法施加 noexec/nosuid 挂载语义（无对应参数）→ 显式拒绝。
+        if (rule.noExec || rule.noSuid || rule.noDev) {
+          errors.push(`MOUNT_SEMANTICS_UNSUPPORTED: bubblewrap cannot enforce noExec/noSuid/noDev on ${rule.source}`)
+        }
       }
       return errors
     },
 
     compile(spec, caps, materialization) {
+      // PR-4：宿主 spawn cwd 与沙盒内部 cwd 分离 —— 宿主侧必须是真实存在的目录。
+      if (!existsSync(spec.command.cwd)) {
+        throw new LinuxExecutionError("PROCESS_START_FAILED", `host cwd does not exist: ${spec.command.cwd}`)
+      }
       const env = buildExplicitEnvironment({
         policy: {
           baseProfile: "minimal",
@@ -221,33 +245,41 @@ export function createBubblewrapBackend(): ExecutionBackend {
         backend: "bubblewrap",
         argv: [bwrapPath, ...argv, entry.executable, ...entry.args],
         env: env.env,
-        cwd: "/workspace",
+        // PR-4：宿主 spawn cwd（真实存在）；沙盒内部 cwd 由 --chdir /workspace 决定。
+        cwd: spec.command.cwd,
+        seccompFdPath: materialization?.seccompFile,
       }
     },
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
+      // PR-4：PathGuard —— worktree 内容快照 diff + ownerFiles 之外 → unexpectedWrites。
+      const worktreeRoot = spec.filesystem.worktreeRoot
+      const before = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
       yield* streamBackendRun("bubblewrap", spec, ctx,
         () => this.compile(spec, ctx.capabilities, ctx.materialization),
-        (result, evidence) => this.buildReceipt(spec, ctx.capabilities, {
-          startedAt: evidence.startedAt,
-          finishedAt: evidence.finishedAt,
-          exitCode: result.exitCode,
-          signal: result.signal,
-          timedOut: result.timedOut,
-          cancelled: result.cancelled,
-          oomKilled: false,
-          pidLimitHit: false,
-          outputLimitHit: result.outputLimitHit,
-          tempLimitHit: false,
-          observedWrites: [],
-          observedDeletes: [],
-          unexpectedWrites: [],
-          violations: [],
-          degradationReasons: [],
-          backendVersion: ctx.capabilities.bubblewrap.version,
-          metrics: evidence.metrics,
-          cleanup: evidence.cleanup,
-        }),
+        (result, evidence) => {
+          const diff = before && worktreeRoot ? pathGuardDiff(before, snapshotWorkspace(worktreeRoot)) : undefined
+          return this.buildReceipt(spec, ctx.capabilities, {
+            startedAt: evidence.startedAt,
+            finishedAt: evidence.finishedAt,
+            exitCode: result.exitCode,
+            signal: result.signal,
+            timedOut: result.timedOut,
+            cancelled: result.cancelled,
+            oomKilled: false,
+            pidLimitHit: false,
+            outputLimitHit: result.outputLimitHit,
+            tempLimitHit: false,
+            observedWrites: diff ? [...diff.created, ...diff.changed] : [],
+            observedDeletes: diff ? diff.deleted : [],
+            unexpectedWrites: diff ? classifyUnexpectedWrites(diff, spec.filesystem.ownerFiles) : [],
+            violations: [],
+            degradationReasons: [],
+            backendVersion: ctx.capabilities.bubblewrap.version,
+            metrics: evidence.metrics,
+            cleanup: evidence.cleanup,
+          })
+        },
       )
     },
 

@@ -15,13 +15,10 @@ import type {
 import type { BackendOutcome, ExecutionBackend } from "./backend"
 import { streamBackendRun } from "./backend"
 import type { CompiledExecution } from "../contracts"
-import { existsSync, readdirSync, statSync, readFileSync } from "node:fs"
-import { join, relative } from "node:path"
-import { createHash } from "node:crypto"
-import { runSupervised, streamSupervised, type SupervisorResult } from "../process/supervisor"
 import { buildExplicitEnvironment } from "../environment"
 import { buildReceipt } from "../receipt"
 import { validateCellSpec } from "../policy-compiler"
+import { snapshotWorkspace, pathGuardDiff, classifyUnexpectedWrites } from "./pathguard"
 
 const HOST_AUDIT_DEGRADATION = "Host Audit 不是安全边界（无网络/文件系统拦截），仅限低风险显式允许场景"
 
@@ -42,6 +39,12 @@ export function createHostAuditBackend(): ExecutionBackend {
       }
       if (!spec.isolation.allowDegradation && spec.profile !== "inspect" && spec.profile !== "build") {
         errors.push(`DEGRADATION_NOT_ALLOWED: profile "${spec.profile}" cannot use host-audit`)
+      }
+      // PR-4：host-audit 无法施加 noexec/nosuid 挂载语义 —— 无法保证则拒绝。
+      for (const rule of [...spec.filesystem.readonlyMounts, ...spec.filesystem.writableMounts]) {
+        if (rule.noExec || rule.noSuid || rule.noDev) {
+          errors.push(`MOUNT_SEMANTICS_UNSUPPORTED: host-audit cannot enforce noExec/noSuid/noDev on ${rule.source}`)
+        }
       }
       return errors
     },
@@ -88,7 +91,7 @@ export function createHostAuditBackend(): ExecutionBackend {
             tempLimitHit: false,
             observedWrites: diff ? [...diff.created, ...diff.changed] : [],
             observedDeletes: diff ? diff.deleted : [],
-            unexpectedWrites: [],
+            unexpectedWrites: diff ? classifyUnexpectedWrites(diff, spec.filesystem.ownerFiles) : [],
             violations: [],
             degradationReasons: [HOST_AUDIT_DEGRADATION],
             metrics: evidence.metrics,
@@ -133,45 +136,5 @@ export function createHostAuditBackend(): ExecutionBackend {
   }
 }
 
-/** 工作区快照（统计指纹：size:mtime，避免全量内容哈希开销）。 */
-export function snapshotWorkspace(root: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  const walk = (dir: string): void => {
-    let entries: import("node:fs").Dirent[]
-    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
-    for (const entry of entries) {
-      const full = join(dir, entry.name)
-      if (entry.name === ".git" || entry.name === "node_modules") continue
-      try {
-        const st = statSync(full)
-        if (entry.isDirectory()) walk(full)
-        else {
-          // 内容指纹（时间戳在粗粒度 fs 上不可靠）。
-          const content = readFileSync(full)
-          out[relative(root, full).replace(/\\/g, "/")] = createHash("sha256").update(content).digest("hex").slice(0, 16)
-        }
-      } catch { /* 不可读跳过 */ }
-    }
-  }
-  walk(root)
-  return out
-}
-
-/** PathGuard 迁移（事后审计）：记录执行前后项目工作区的文件变化。 */
-export function pathGuardDiff(before: Record<string, string>, after: Record<string, string>): {
-  changed: string[]
-  created: string[]
-  deleted: string[]
-} {
-  const changed: string[] = []
-  const created: string[] = []
-  const deleted: string[] = []
-  for (const [path, hash] of Object.entries(after)) {
-    if (!(path in before)) created.push(path)
-    else if (before[path] !== hash) changed.push(path)
-  }
-  for (const path of Object.keys(before)) {
-    if (!(path in after)) deleted.push(path)
-  }
-  return { changed, created, deleted }
-}
+/** 工作区快照与 diff 已迁移至 backends/pathguard.ts（bwrap 后端共用）。 */
+export { snapshotWorkspace, pathGuardDiff, classifyUnexpectedWrites } from "./pathguard"

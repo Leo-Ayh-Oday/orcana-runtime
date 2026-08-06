@@ -10,6 +10,7 @@
 
 import { spawn } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
+import { openSync, closeSync } from "node:fs"
 import { createOutputLimiter, finalizeOutput, type OutputLimits } from "./output-limiter"
 import { countProcessGroup, terminateTree } from "./termination"
 
@@ -25,10 +26,13 @@ export interface SupervisorOptions {
   abortSignal?: AbortSignal
   /** 退出后扫描进程组，统计逃逸后代（后台 daemon / double-fork）。 */
   detectDaemon?: boolean
-  /** 实时输出回调（流式消费者用；数据到达即调用）。 */
+  /** 实时输出回调（流式消费者用；数据到达即调用，已截断）。 */
   onOutput?: (stream: "stdout" | "stderr", data: Buffer) => void
   /** spawn 完成回调（cgroup attach 用）。 */
   onSpawn?: (pid: number) => void
+  /** bwrap seccomp BPF 文件：以 FD 3 打开传给子进程（bwrap --seccomp 3）。
+   *  PR-4：bwrap --seccomp 协议要求 FD 数字，不是文件路径。 */
+  seccompFdPath?: string
 }
 
 export interface SupervisorResult {
@@ -52,13 +56,22 @@ export interface SpawnedProcess {
 export function spawnSupervised(options: SupervisorOptions): SpawnedProcess {
   const detached = process.platform !== "win32"
   const stdinMode = options.stdin === "pipe" ? "pipe" : "ignore"
+  // PR-4：bwrap --seccomp 需要已打开的文件描述符（数字 FD）。
+  // 约定 FD 3 为 seccomp 专用槽位：父进程打开 BPF 文件 → stdio[3] 继承。
+  let seccompFd: number | undefined
+  const stdio: Array<string | number> = [stdinMode, "pipe", "pipe"]
+  if (options.seccompFdPath) {
+    seccompFd = openSync(options.seccompFdPath, "r")
+    stdio[3] = seccompFd
+  }
   const proc = spawn(options.executable, options.args, {
     cwd: options.cwd,
     env: options.env,
-    stdio: [stdinMode, "pipe", "pipe"] as const,
+    stdio: stdio as import("node:child_process").StdioOptions,
     detached,
     windowsHide: true,
   })
+  if (seccompFd !== undefined) closeSync(seccompFd)
   return { proc, pid: proc.pid ?? 0 }
 }
 

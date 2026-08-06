@@ -13,7 +13,8 @@
   wave: RC-01
   invariant: VERIFICATION_NONZERO_EXIT_CANNOT_PASS
   files: [src/tools/typescript.ts]
-  status: fixed  fixedBy: 13ff6f2
+  status: fixed
+  fixedBy: 13ff6f2
   verifiedAtCommit: 13ff6f2
 
 - id: A2
@@ -21,7 +22,8 @@
   wave: RC-01
   invariant: UNAVAILABLE_VERIFICATION_ACCEPTED=0
   files: [src/agent/verification/coordinator.ts, src/agent/tool-execution/batch-executor.ts]
-  status: fixed  fixedBy: 13ff6f2
+  status: fixed
+  fixedBy: 13ff6f2
   verifiedAtCommit: 13ff6f2
 
 - id: A3
@@ -29,7 +31,8 @@
   wave: RC-02
   invariant: FUTURE_TENSE_SKIPS_VERIFICATION=0
   files: [src/agent/completion-orchestrator.ts]
-  status: fixed  fixedBy: 80d2245
+  status: fixed
+  fixedBy: 80d2245
   verifiedAtCommit: 80d2245
 
 - id: A4
@@ -37,7 +40,8 @@
   wave: RC-02
   invariant: BUDGET_EXHAUSTED_COMPLETED=0
   files: [src/agent/gates/sync-completion-chain.ts]
-  status: fixed  fixedBy: 80d2245
+  status: fixed
+  fixedBy: 80d2245
   verifiedAtCommit: 80d2245
 
 - id: A5
@@ -45,7 +49,8 @@
   wave: RC-02
   invariant: STATE_MACHINE_MATCHES_TERMINAL_STATE
   files: [src/agent/kernel/round.ts]
-  status: fixed  fixedBy: 80d2245
+  status: fixed
+  fixedBy: 80d2245
   verifiedAtCommit: 80d2245
 
 - id: A6
@@ -53,7 +58,8 @@
   wave: RC-02
   invariant: JUDGE_TIMEOUT_COMPLETED=0
   files: [src/agent/flash-judge.ts]
-  status: fixed  fixedBy: 80d2245
+  status: fixed
+  fixedBy: 80d2245
   verifiedAtCommit: 80d2245
 
 - id: A7
@@ -67,7 +73,8 @@
   wave: RC-03
   invariant: LSP_DIAGNOSTICS_FRESH_BEFORE_VERDICT
   files: [src/agent/round/post-loop.ts]
-  status: fixed  fixedBy: d122ee2
+  status: fixed
+  fixedBy: d122ee2
   verifiedAtCommit: d122ee2
 
 
@@ -78,7 +85,8 @@
   wave: RC-04a
   invariant: PERMISSION_ALIAS_BYPASS=0
   files: [src/agent/permission.ts]
-  status: fixed  fixedBy: 5f52dba
+  status: fixed
+  fixedBy: 5f52dba
   verifiedAtCommit: 5f52dba
 
 - id: B2
@@ -86,7 +94,8 @@
   wave: RC-04a
   invariant: INVALID_CONFIG_ALLOW_ALL=0
   files: [src/agent/permission-config.ts]
-  status: fixed  fixedBy: 5f52dba
+  status: fixed
+  fixedBy: 5f52dba
   verifiedAtCommit: 5f52dba
 
 - id: B3
@@ -94,7 +103,8 @@
   wave: RC-04b
   invariant: PATH_NORMALIZED_BEFORE_MATCH
   files: [src/agent/permission-config.ts]
-  status: fixed  fixedBy: 083ed83
+  status: fixed
+  fixedBy: 083ed83
   verifiedAtCommit: 083ed83
 
 - id: B4
@@ -102,7 +112,8 @@
   wave: RC-05
   invariant: RIPPLE_GATE_INDEPENDENT_OF_CACHE
   files: [src/agent/kernel/context.ts, src/agent/gates/pre-round.ts]
-  status: fixed  fixedBy: 898f5f7
+  status: fixed
+  fixedBy: 898f5f7
   verifiedAtCommit: 898f5f7
 
 - id: B5
@@ -110,7 +121,8 @@
   wave: RC-05
   invariant: UNKNOWN_MCP_CAPABILITY_NOT_CONCURRENT_SAFE
   files: [src/tools/mcp.ts]
-  status: fixed  fixedBy: 898f5f7
+  status: fixed
+  fixedBy: 898f5f7
   verifiedAtCommit: 898f5f7
 
 - id: B6
@@ -118,7 +130,8 @@
   wave: RC-06
   invariant: SECCOMP_DENY_BY_DEFAULT
   files: [src/runtime/linux/seccomp-bpf.ts]
-  status: fixed  fixedBy: fe9bff8
+  status: fixed
+  fixedBy: fe9bff8
   verifiedAtCommit: fe9bff8
 
 
@@ -282,7 +295,8 @@
   wave: RC-13
   invariant: REVISE_PLAN_NEVER_DEADLOCKS
   files: [src/agent/task-tracker.ts]
-  status: fixed  fixedBy: dd820c9
+  status: fixed
+  fixedBy: dd820c9
   verifiedAtCommit: dd820c9
 
 - id: E2
@@ -299,7 +313,8 @@
   wave: RC-13
   invariant: NO_ADJACENT_USER_MESSAGES
   files: [src/agent/kernel/round.ts, src/agent/maintenance/coordinator.ts]
-  status: fixed  fixedBy: dd820c9
+  status: fixed
+  fixedBy: dd820c9
   verifiedAtCommit: dd820c9
 
 - id: E4
@@ -328,7 +343,8 @@
   wave: RC-16
   invariant: PATCH_FALSE_SUCCESS=0
   files: [src/tools/apply-patch.ts]
-  status: fixed  fixedBy: d122ee2
+  status: fixed
+  fixedBy: d122ee2
   verifiedAtCommit: d122ee2
 
 - id: G2
@@ -429,7 +445,8 @@
   wave: RC-17
   invariant: CONFIG_OVERRIDES_WIRED_OR_REMOVED
   files: [src/agent/permission-config.ts]
-  status: fixed  fixedBy: 083ed83
+  status: fixed
+  fixedBy: 083ed83
   verifiedAtCommit: 083ed83
 
 - id: H12
@@ -446,7 +463,8 @@
   wave: RC-02.5
   invariant: USER_CONSTRAINTS_SURVIVE_EVICTION
   files: [src/agent/memory/user-constraints.ts(新), src/agent/kernel/round.ts]
-  status: fixed  fixedBy: dd820c9
+  status: fixed
+  fixedBy: dd820c9
   verifiedAtCommit: dd820c9
 
 - id: X2
@@ -454,7 +472,8 @@
   wave: RC-02.5
   invariant: MICROCOMPACT_PRESERVES_ERROR_LINES
   files: [src/agent/round/post-loop.ts]
-  status: fixed  fixedBy: 0874f8c
+  status: fixed
+  fixedBy: 0874f8c
   verifiedAtCommit: 0874f8c
 
 

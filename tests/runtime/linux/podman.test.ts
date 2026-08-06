@@ -172,3 +172,71 @@ describe("LF-6: true container (runs only when rootless podman ready)", () => {
     expect(receiptSeen).toBe(true)
   })
 })
+
+describe("PR-7: podman production wiring", () => {
+  test("volumes include validated MountRules with noexec/nosuid semantics", () => {
+    const backend = createPodmanBackend()
+    const spec = baseSpec({
+      filesystem: {
+        ...baseSpec().filesystem,
+        readonlyMounts: [{ source: "/usr", target: "/usr", mode: "ro", required: true, recursive: true, noExec: true, noSuid: true }],
+        writableMounts: [{ source: "/tmp/wt", target: "/data", mode: "rw", required: true, recursive: true }],
+      },
+    })
+    const compiled = backend.compile(spec, caps, {})
+    const argv = compiled.argv.join(" ")
+    // 只读 + noexec/nosuid；读写无附加选项
+    expect(argv).toContain("--volume")
+    expect(argv).toContain("/usr:/usr:ro,Z,noexec,nosuid")
+    expect(argv).toContain("/tmp/wt:/data:rw,Z")
+  })
+
+  test("sealed-file secrets mount into the container (ro)", () => {
+    const backend = createPodmanBackend()
+    const spec = baseSpec()
+    const compiled = backend.compile(spec, caps, {
+      secretFiles: { "/run/secrets/sb_1": "/tmp/orcana-secret-1/secret" },
+    })
+    expect(compiled.argv.join(" ")).toContain("/tmp/orcana-secret-1/secret:/run/secrets/sb_1:ro,Z")
+  })
+
+  test("OCI seccomp profile is produced as JSON (not raw BPF)", async () => {
+    const { compileOciSeccomp } = await import("../../../src/runtime/linux/seccomp-oci")
+    const { compileSeccompProfile } = await import("../../../src/runtime/linux/landlock-seccomp")
+    const profile = compileOciSeccomp(compileSeccompProfile("untrusted"))
+    expect(profile.defaultAction).toBe("SCMP_ACT_ALLOW")
+    expect(profile.archMap?.[0]?.architecture).toBe("SCMP_ARCH_X86_64")
+    const deny = profile.syscalls.find(s => s.action === "SCMP_ACT_ERRNO")
+    expect(deny).toBeDefined()
+    expect(deny!.names.length).toBeGreaterThan(0)
+    // JSON 可序列化（OCI 格式要求）
+    const json = JSON.stringify(profile)
+    expect(json).toContain("SCMP_ACT_ERRNO")
+    expect(json).not.toContain("BPF")
+  })
+
+  test("broker rejects podman image not in approved policy (IMAGE_NOT_APPROVED)", async () => {
+    const { createLinuxBroker } = await import("../../../src/runtime/linux/broker")
+    const broker = createLinuxBroker({ mode: "enabled", approvedImages: ["docker.io/library/alpine@"] })
+    const spec = baseSpec()
+    await expect((async () => {
+      for await (const _ of broker.execute(spec)) { /* drain */ }
+    })()).rejects.toThrow(/IMAGE_NOT_APPROVED/)
+  })
+
+  test("broker accepts digest-locked image inside approved policy", async () => {
+    const { createLinuxBroker } = await import("../../../src/runtime/linux/broker")
+    const broker = createLinuxBroker({ mode: "enabled", approvedImages: ["registry.example.com/orcana-base@"] })
+    const spec = baseSpec()
+    // 后端不可用时会先抛 DEGRADATION/UNMET —— 若 podman 可用则执行路径到镜像校验通过
+    // （本机无 podman 时，镜像审批必须先于后端可用性检查前通过 —— 这里验证顺序）。
+    try {
+      for await (const _ of broker.execute(spec)) { /* drain */ }
+      expect(true).toBe(true)
+    } catch (error) {
+      // 本机无 podman → DEGRADATION_NOT_ALLOWED 或 ISOLATION_REQUIREMENT_UNMET；
+      // 但绝不能是 IMAGE_NOT_APPROVED（审批已通过）。
+      expect(String(error)).not.toContain("IMAGE_NOT_APPROVED")
+    }
+  })
+})

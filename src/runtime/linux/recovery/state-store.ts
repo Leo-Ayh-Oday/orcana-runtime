@@ -89,6 +89,33 @@ export function readBootId(): string {
   }
 }
 
+/** PR-7：读取 /proc/<pid>/stat 的进程启动时钟 tick（第 22 字段）。
+ *  PID 复用安全：同 boot 内 PID 被回收后，新进程的 starttime 必然不同。
+ *  comm 可能含空格/括号 —— 从最后一个 ')' 后按空白切分再计数。 */
+export function procStartTicksOf(pid: number): number {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8")
+    const closeParen = stat.lastIndexOf(")")
+    if (closeParen < 0) return 0
+    const fields = stat.slice(closeParen + 1).trim().split(/\s+/)
+    // 字段 1=pid 2=comm 3=state 4=ppid ... 22=starttime
+    // fields[0]=state（字段3）→ starttime = fields[19]
+    return Number(fields[19] ?? 0)
+  } catch {
+    return 0
+  }
+}
+
+/** 判断 run 的 owner 进程是否存活（PID + starttime 双重校验）。 */
+export function runOwnedByLiveProcess(run: Record<string, unknown>): boolean {
+  const pid = Number(run.ownerPid ?? 0)
+  const startTicks = Number(run.ownerProcStartTicks ?? 0)
+  if (!pid || pid <= 0) return false
+  if (!startTicks) return false
+  const current = procStartTicksOf(pid)
+  return current > 0 && current === startTicks
+}
+
 export class BootIdentityStore {
   private readonly root: string
   constructor(store: RuntimeStateStore) {
@@ -109,15 +136,21 @@ export class BootIdentityStore {
       return undefined
     }
   }
+}
 
-  /** 进程启动时清理：仅清理 lastBoot ≠ 当前 bootId 的 run 状态。 */
-  staleRunsForCleanup(currentBootId: string): string[] {
-    const last = this.lastBoot()
-    if (last === currentBootId) return []
-    const runsDir = join(this.root, "runs")
-    if (!existsSync(runsDir)) return []
-    return readdirSync(runsDir).filter(name => existsSync(join(runsDir, name, "run.json")))
-  }
+/** 进程启动时清理：清理 lastBoot ≠ 当前 bootId 的 run 状态；
+ *  PR-7：同 boot 内通过 owner PID + starttime 识别已崩溃进程的 run（PID 复用安全）。 */
+export function staleRunsForCleanup(store: RuntimeStateStore, currentBootId: string): string[] {
+  const last = new BootIdentityStore(store).lastBoot()
+  const runsDir = store.runDir(".")
+  if (!existsSync(runsDir)) return []
+  const names = readdirSync(runsDir).filter(name => existsSync(join(runsDir, name, "run.json")))
+  if (last !== currentBootId) return names
+  // 同 boot：只有 owner 进程已死的 run 才算 stale（存活 owner 的 run 不误杀）。
+  return names.filter(name => {
+    const run = store.readRun(name)
+    return run ? !runOwnedByLiveProcess(run) : true
+  })
 }
 
 export interface RecoveryReceipt {
@@ -133,14 +166,14 @@ export interface RecoveryReceipt {
   at: number
 }
 
-/** 启动 Janitor：清理属于旧 boot 的残留（不按 PID 猜）。 */
+/** 启动 Janitor：清理 stale run（跨 boot 全部 + 同 boot 仅 owner 已死；PR-7）。 */
 export async function startupJanitor(options: {
   store: RuntimeStateStore
   currentBootId: string
   cleanupRun?: (runId: string) => Promise<RecoveryReceipt["cleaned"]>
 }): Promise<RecoveryReceipt[]> {
   const bootStore = new BootIdentityStore(options.store)
-  const stale = bootStore.staleRunsForCleanup(options.currentBootId)
+  const stale = staleRunsForCleanup(options.store, options.currentBootId)
   const receipts: RecoveryReceipt[] = []
   for (const runId of stale) {
     const cleaned = options.cleanupRun

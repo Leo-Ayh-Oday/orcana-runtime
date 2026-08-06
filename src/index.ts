@@ -89,12 +89,28 @@ async function printDoctor() {
 }
 
 async function main() {
-  // R4: Linux 启动 Janitor —— 清理旧 boot 遗留 run 状态（崩溃恢复闭环）。
+  // R4/PR-7: Linux 启动 Janitor —— 真实 cleanup（cgroup/podman label/ledger），
+  // 跨 boot 全部 + 同 boot 仅 owner 进程已死（PID+starttime 双重校验）。
   if (process.platform === "linux") {
     try {
       const { RuntimeStateStore, startupJanitor, readBootId } = await import("./runtime/linux/recovery/state-store")
+      const { createLinuxBroker } = await import("./runtime/linux/broker")
       const store = new RuntimeStateStore()
-      await startupJanitor({ store, currentBootId: readBootId() })
+      const broker = createLinuxBroker({ mode: "shadow", stateStore: store })
+      await startupJanitor({
+        store,
+        currentBootId: readBootId(),
+        cleanupRun: async runId => {
+          const removed = await broker.cleanupRun(runId)
+          return {
+            cgroups: [],
+            worktrees: [],
+            ports: removed,
+            containers: removed,
+            stateRemoved: removed > 0,
+          }
+        },
+      })
     } catch {
       // best-effort：Janitor 失败不阻断启动。
     }

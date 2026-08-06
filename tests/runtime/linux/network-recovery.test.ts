@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { buildEgressPolicy, checkEgressHop, checkEgressRedirect, dnsRebindingGuard, validateNetworkMode } from "../../../src/runtime/linux/network-policy"
 import { compileLandlockRuleset, landlockUsable, compileSeccompProfile, seccompBackwardCompatible } from "../../../src/runtime/linux/landlock-seccomp"
-import { RuntimeStateStore, BootIdentityStore, startupJanitor, readBootId } from "../../../src/runtime/linux/recovery/state-store"
+import { RuntimeStateStore, BootIdentityStore, startupJanitor, readBootId, procStartTicksOf } from "../../../src/runtime/linux/recovery/state-store"
 import { probeLinuxCapabilities } from "../../../src/runtime/linux/capability-probe"
 
 describe("LF-7: egress policy", () => {
@@ -139,15 +139,22 @@ describe("LF-7: recovery", () => {
     }
   })
 
-  test("same-boot restart does not clean live runs", async () => {
+  test("same-boot restart cleans only runs whose owner process is dead (PR-7)", async () => {
     const root = mkdtempSync(join(tmpdir(), "lnxf-janitor2-"))
     try {
       const store = new RuntimeStateStore({ root })
       const boot = new BootIdentityStore(store)
       boot.recordBoot("boot-X")
-      store.writeRun("live", { status: "running" })
+      // live：owner 是本进程（存活）→ 同 boot 保留
+      store.writeRun("live", { status: "running", ownerPid: process.pid, ownerProcStartTicks: procStartTicksOf(process.pid) })
+      // dead-owner：owner 进程不存在 → 同 boot 清理（崩溃恢复）
+      store.writeRun("crashed", { status: "running", ownerPid: 999999, ownerProcStartTicks: 1 })
+      // no-owner：无 token（旧格式/无法判定）→ 保守清理
+      store.writeRun("unknown", { status: "running" })
       const receipts = await startupJanitor({ store, currentBootId: "boot-X" })
-      expect(receipts).toEqual([])
+      const cleaned = receipts.map(r => r.runId).sort()
+      expect(cleaned).toEqual(["crashed", "unknown"])
+      expect(store.readRun("live")).toBeDefined()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -2,7 +2,30 @@
 
 All notable changes to Orcana Runtime.
 
-## [0.8.16] — 2026-08-05
+## [0.8.17] — in progress (reliability-freeze)
+
+### Added (RC-00 基线)
+
+- docs/reliability/：defect-register（76 项）、invariants（37 条）、execution-plan（19 波次）、gate-matrix
+- evals/reliability/verify-fail-closed.ts：故障注入汇总入口
+
+### Fixed (RC-01..RC-06, RC-13)
+
+- **RC-01 验证真实性** — VerificationStatus 六态契约；tsc 非零退出不再报通过；unavailable/timed_out/cancelled 三处入账点 fail-closed（batch tsc / 工具结果推导 / ripple 跳过）
+- **RC-02 完成语义** — GateResult.incomplete；末轮无通过证据 = incomplete 而非放行；truthfulness 按句判定（未来时态不再整段跳过）；StateMachine isDone 真实信号；FlashJudge 30s 硬超时
+- **RC-02.5 ContextGuard** — 用户约束滚动蒸馏三触发点（epoch rollover / 入口窗口截断 / M0 创建）；microcompact 保留错误特征行 + is_error
+- **RC-03** — LSP 无诊断回退 tsc；apply_patch 阶段 2 未应用报失败（不再谎报已提交）
+- **RC-04a/b** — 进程别名统一禁令（shell/run_shell_script/run_process/service）；配置损坏进入 permission-safe-mode；路径段级规范化；categoryOverrides 接线
+- **RC-05** — ripple 写阻断独立于 cache 开关；MCP 工具能力默认不安全（readonly/concurrencySafe 需声明）
+- **RC-06** — seccomp deny-by-default（白名单模式生效，补全 x86_64 白名单表）
+- **RC-13（部分）** — revisePlan 恢复链（cancelled 语义防死锁）；连续 user 消息合并；节点切换 flush 缓冲文本；知识蒸馏同步异常防护；死分支清理
+
+### Gate 结果
+
+- 全量测试：3109 → 3162（+53 故障注入测试），0 失败
+- P0 Gate：FALSE_VERIFICATION_PASS=0 / UNAVAILABLE_EVIDENCE_ACCEPTED=0 / BUDGET_EXHAUSTED_COMPLETED=0 / FUTURE_TENSE_SKIPS_VERIFICATION=0 / PATCH_FALSE_SUCCESS=0 / PERMISSION_ALIAS_BYPASS=0 / INVALID_CONFIG_ALLOW_ALL=0
+
+
 
 ### Changed (LPIC — Linux Production Integration Closure，独立审计修复)
 

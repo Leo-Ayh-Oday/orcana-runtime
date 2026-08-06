@@ -185,23 +185,34 @@ export async function* runAdaptiveCheckpoint(
  * Fire-and-forget: failures never block the next round.
  */
 export function runKnowledgeDistillation(ctx: MaintenanceContext): void {
-  if (!ctx.knowledgeBase || ctx.learnPrompts.length === 0) return
-  for (const tc of ctx.completedToolCalls) {
-    if (tc.name !== "web_search") continue
-    const query = (tc.input as Record<string, unknown>).query as string | undefined
-    if (!query || !shouldDistill(query, "error")) continue
-    const resultEntry = ctx.resultsContent.find(r => r.tool_use_id === tc.id)
-    if (!resultEntry) continue
-    const resultText = String(resultEntry.content ?? "")
-    if (!resultText.includes("[SearXNG]") && !resultText.includes("[DuckDuckGo]")) continue
-    // Fire distillation (best-effort, don't block next round if it fails)
-    distillAndStore(
-      { query, results: resultText, trigger: "error" },
-      ctx.provider,
-      ctx.knowledgeBase,
-      ctx.modelRouter?.selectForPurpose("knowledge_distill") ?? "deepseek-v4-flash",
-    ).catch(() => {})
+  try {
+    if (!ctx.knowledgeBase || ctx.learnPrompts.length === 0) return
+    for (const tc of ctx.completedToolCalls) {
+      // RC-13 E4: tc.input 可能缺失——guard 防御，同步异常不得打穿整个 round。
+      if (!tc.input) continue
+      if (tc.name !== "web_search") continue
+      const query = (tc.input as Record<string, unknown>).query as string | undefined
+      if (!query || !shouldDistill(query, "error")) continue
+      const resultEntry = ctx.resultsContent.find(r => r.tool_use_id === tc.id)
+      if (!resultEntry) continue
+      const resultText = String(resultEntry.content ?? "")
+      if (!resultText.includes("[SearXNG]") && !resultText.includes("[DuckDuckGo]")) continue
+      // Fire distillation (best-effort, don't block next round if it fails)
+      distillAndStore(
+        { query, results: resultText, trigger: "error" },
+        ctx.provider,
+        ctx.knowledgeBase,
+        ctx.modelRouter?.selectForPurpose("knowledge_distill") ?? "deepseek-v4-flash",
+      ).catch(() => {})
+    }
+  } catch (e) {
+    ctx.runTrace?.record("maintenance_error", {
+      component: "knowledge_distillation",
+      recoverable: true,
+      message: e instanceof Error ? e.message : String(e),
+    })
   }
+}
 }
 
 // ── Memory reconcile (periodic prune + FTS5 rebuild) ──

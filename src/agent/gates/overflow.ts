@@ -57,7 +57,6 @@ export function processGateOverflow(input: GateOverflowInput): GateOverflowOutpu
         gate === "policy:ripple" ? "→ 停止逐文件编辑，立即用 multi_edit 级联修复所有调用方。" : "",
         gate === "semantic:ripple_obligations" ? "→ 读取被影响的调用方文件并级联修复，不要再次触发写盘。" : "",
         gate === "semantic:planning" ? "→ 缩小任务范围，列出最小可交付单元，不要追求完美方案。" : "",
-        gate === "semantic:completion" ? "→ 检查是否缺少外部验证证据（typecheck/test/build）。不要声称完成但不验证。" : "",
         gate === "semantic:required_files" ? "→ 立即创建缺失的必需文件，停止分析已经存在的文件。" : "",
         "</system-reminder>",
       ].filter(Boolean).join("\n"))

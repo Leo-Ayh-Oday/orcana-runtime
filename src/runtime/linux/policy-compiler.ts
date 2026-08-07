@@ -10,7 +10,7 @@
  *  policy). LF-3 adds the backend argv compiler.
  */
 
-import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
 import { existsSync, realpathSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import type { ExecutionCellSpec, ExecutionProfile, IsolationMinimum, MountRule, NetworkMode, RequestedMount, TrustedExecutionAuthority, UntrustedCapabilityRequest } from "./contracts"
@@ -375,7 +375,9 @@ export function compileCapabilityRequest(
       allowedHostKeys,
       inheritHost: false,
       locale: "C.UTF-8",
-      pathEntries: ["/usr/local/bin"],
+      // Runtime 显式构造的 Cell PATH（宿主 PATH 永不进入）：安全基 +
+      // 运行时自身工具链目录（进程执行器所在 bin —— 宿主工具链依赖）。
+      pathEntries: ["/usr/local/bin", dirname(process.execPath)],
     },
     secrets: [],
     cache: request.cache ?? [],

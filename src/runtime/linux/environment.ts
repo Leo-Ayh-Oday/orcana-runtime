@@ -115,9 +115,12 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
     env[key] = value
   }
 
-  // 3. 宿主键白名单（显式允许才复制）。
+  // 3. 宿主键白名单（显式允许才复制）。PATH 除外：执行环境由 Runtime 显式
+  //    构造（step 1 固定安全基 + pathEntries），宿主 PATH 永不继承 —— 否则
+  //    宿主 PATH 首位恶意同名命令可直达 Cell（ORCANA-E2E-001 canary）。
+  //    显式 PATH 请求（step 4 requestedValues）仍被允许（调用方明确意图）。
   for (const key of input.policy.allowedHostKeys) {
-    if (hostKeyDenied(key, input.extraDenied) || isRuntimeReservedKey(key)) {
+    if (key === "PATH" || hostKeyDenied(key, input.extraDenied) || isRuntimeReservedKey(key)) {
       rejectedHostKeys.push(key)
       continue
     }

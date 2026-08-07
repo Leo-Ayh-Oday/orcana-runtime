@@ -107,7 +107,10 @@ async function shell(
   for await (const event of executeProcess({
     command: shellExecutable(),
     args: shellArgs(command),
-    env: sandboxed && verdict.injectedEnv ? (verdict.injectedEnv as Record<string, string>) : undefined,
+    // shell 工具契约：宿主工具链显式请求（ORCANA-E2E-001 后宿主 PATH 不再隐式继承）
+    env: sandboxed && verdict.injectedEnv
+      ? (verdict.injectedEnv as Record<string, string>)
+      : { PATH: process.env.PATH ?? "/usr/bin:/bin" },
     timeoutMs: effectiveTimeout * 1000,
     abortSignal: context?.abortSignal,
   })) {
@@ -204,9 +207,11 @@ export async function* shellStream(
     return
   }
   const sandboxed = sandbox?.needsSandbox(command) ?? false
+  // shell 工具契约：跑宿主 shell 命令需宿主工具链 —— PATH 显式请求
+  // （ORCANA-E2E-001 后宿主 PATH 不再隐式继承；显式请求仍被允许）。
   const childEnv = sandboxed && verdict.injectedEnv
     ? (verdict.injectedEnv as Record<string, string>)
-    : undefined
+    : { PATH: process.env.PATH ?? "/usr/bin:/bin" }
   sandbox?.snapshotWorkspace()
 
   const stdoutChunks: string[] = []

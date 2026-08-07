@@ -18,6 +18,12 @@ export interface ProfileDefaults {
   memoryHighBytes: number
   pidsMax: number
   emptyHome: boolean
+  /** LNXF-R2 10.2：默认 CPU 记账（1000 = 1 核）与 cgroup 物化配额
+   *  （100ms 周期满配额 = 1 核）。缺省 cpuQuotaMicros 曾导致 cpu.max
+   *  静默不写（period 缺失）。 */
+  cpuMillis: number
+  cpuQuotaMicros: number
+  cpuPeriodMicros: number
 }
 
 const MB = 1024 * 1024
@@ -34,6 +40,9 @@ export const PROFILE_DEFAULTS: Record<ExecutionProfile, ProfileDefaults> = {
     memoryHighBytes: 256 * MB,
     pidsMax: 32,
     emptyHome: true,
+    cpuMillis: 1000,
+    cpuQuotaMicros: 100_000,
+    cpuPeriodMicros: 100_000,
   },
   build: {
     profile: "build",
@@ -45,6 +54,9 @@ export const PROFILE_DEFAULTS: Record<ExecutionProfile, ProfileDefaults> = {
     memoryHighBytes: GB,
     pidsMax: 128,
     emptyHome: true,
+    cpuMillis: 1000,
+    cpuQuotaMicros: 100_000,
+    cpuPeriodMicros: 100_000,
   },
   test: {
     profile: "test",
@@ -56,6 +68,9 @@ export const PROFILE_DEFAULTS: Record<ExecutionProfile, ProfileDefaults> = {
     memoryHighBytes: GB,
     pidsMax: 256,
     emptyHome: true,
+    cpuMillis: 1000,
+    cpuQuotaMicros: 100_000,
+    cpuPeriodMicros: 100_000,
   },
   dependency: {
     profile: "dependency",
@@ -67,6 +82,9 @@ export const PROFILE_DEFAULTS: Record<ExecutionProfile, ProfileDefaults> = {
     memoryHighBytes: GB,
     pidsMax: 256,
     emptyHome: true,
+    cpuMillis: 1000,
+    cpuQuotaMicros: 100_000,
+    cpuPeriodMicros: 100_000,
   },
   service: {
     profile: "service",
@@ -78,6 +96,9 @@ export const PROFILE_DEFAULTS: Record<ExecutionProfile, ProfileDefaults> = {
     memoryHighBytes: GB,
     pidsMax: 128,
     emptyHome: true,
+    cpuMillis: 1000,
+    cpuQuotaMicros: 100_000,
+    cpuPeriodMicros: 100_000,
   },
   untrusted: {
     profile: "untrusted",
@@ -89,6 +110,9 @@ export const PROFILE_DEFAULTS: Record<ExecutionProfile, ProfileDefaults> = {
     memoryHighBytes: 512 * MB,
     pidsMax: 64,
     emptyHome: true,
+    cpuMillis: 1000,
+    cpuQuotaMicros: 100_000,
+    cpuPeriodMicros: 100_000,
   },
   evolution: {
     profile: "evolution",
@@ -100,6 +124,9 @@ export const PROFILE_DEFAULTS: Record<ExecutionProfile, ProfileDefaults> = {
     memoryHighBytes: 512 * MB,
     pidsMax: 64,
     emptyHome: true,
+    cpuMillis: 1000,
+    cpuQuotaMicros: 100_000,
+    cpuPeriodMicros: 100_000,
   },
 }
 
@@ -146,6 +173,9 @@ export function applyProfileDefaults(
       memoryMaxBytes: defaults.memoryMaxBytes,
       memoryHighBytes: defaults.memoryHighBytes,
       pidsMax: defaults.pidsMax,
+      cpuMillis: defaults.cpuMillis,
+      cpuQuotaMicros: defaults.cpuQuotaMicros,
+      cpuPeriodMicros: defaults.cpuPeriodMicros,
       wallTimeMs: 60_000,
       stdoutMaxBytes: 16 * MB,
       stderrMaxBytes: 16 * MB,

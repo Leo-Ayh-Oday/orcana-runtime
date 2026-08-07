@@ -201,6 +201,22 @@ export function validateCellSpec(spec: ExecutionCellSpec): ValidateSpecResult {
   if (spec.resources.memoryMaxBytes <= 0) errors.push("resources.memoryMaxBytes must be positive")
   if (spec.resources.pidsMax <= 0) errors.push("resources.pidsMax must be positive")
   if (spec.resources.wallTimeMs <= 0) errors.push("resources.wallTimeMs must be positive")
+  // LNXF-R2 10.3（INV-R）：声明但无生产执行权威的字段 → 编译期拒绝，
+  // 禁止"字段存在、Compiler 接受、Backend 忽略"。
+  if (spec.resources.readBpsMax !== undefined) {
+    errors.push("RESOURCE_DECLARED_BUT_NOT_ENFORCED: readBpsMax not yet enforced by any backend")
+  }
+  if (spec.resources.writeBpsMax !== undefined) {
+    errors.push("RESOURCE_DECLARED_BUT_NOT_ENFORCED: writeBpsMax not yet enforced by any backend")
+  }
+  if (spec.resources.maxOpenFiles !== undefined) {
+    errors.push("RESOURCE_DECLARED_BUT_NOT_ENFORCED: maxOpenFiles not yet enforced by any backend")
+  }
+  if (spec.resources.ioWeight !== undefined && spec.resources.ioWeight !== 0) {
+    // io 控制器不在委托验证集（cpu/memory/pids）——cell 层 io.weight 属性
+    // 在真实内核下缺失，writeAttr 必失败；拒绝而非假装支持。
+    errors.push("RESOURCE_DECLARED_BUT_NOT_ENFORCED: ioWeight requires io controller which is not in the verified delegation set")
+  }
   if (spec.network.mode === "proxy-allowlist" && !spec.network.allowedHosts?.length) {
     errors.push("network proxy-allowlist requires allowedHosts")
   }
@@ -250,6 +266,16 @@ export function clampResources(spec: ExecutionCellSpec): ExecutionCellSpec {
         ? undefined
         : Math.min(spec.resources.memoryHighBytes, p.memoryHighBytes),
       pidsMax: Math.min(spec.resources.pidsMax, p.pidsMax),
+      // LNXF-R2 10.2：cpuMillis 只收紧（Profile 上限 = 默认 1 核）
+      cpuMillis: spec.resources.cpuMillis === undefined
+        ? p.cpuMillis
+        : Math.min(spec.resources.cpuMillis, p.cpuMillis),
+      cpuQuotaMicros: spec.resources.cpuQuotaMicros === undefined
+        ? p.cpuQuotaMicros
+        : Math.min(spec.resources.cpuQuotaMicros, p.cpuQuotaMicros),
+      cpuPeriodMicros: spec.resources.cpuPeriodMicros === undefined
+        ? p.cpuPeriodMicros
+        : spec.resources.cpuPeriodMicros,
     },
   }
 }
@@ -357,6 +383,10 @@ export function compileCapabilityRequest(
       memoryMaxBytes: request.memoryMaxBytes ?? PROFILE_DEFAULTS[request.profile].memoryMaxBytes,
       memoryHighBytes: PROFILE_DEFAULTS[request.profile].memoryHighBytes,
       pidsMax: request.pidsMax ?? PROFILE_DEFAULTS[request.profile].pidsMax,
+      // LNXF-R2 10.2：cpuMillis 记账 + cgroup 物化配额（Profile 默认 = 1 核）
+      cpuMillis: PROFILE_DEFAULTS[request.profile].cpuMillis,
+      cpuQuotaMicros: PROFILE_DEFAULTS[request.profile].cpuQuotaMicros,
+      cpuPeriodMicros: PROFILE_DEFAULTS[request.profile].cpuPeriodMicros,
       wallTimeMs: request.timeoutMs ?? 120_000,
       stdoutMaxBytes: request.stdoutMaxBytes ?? 4 * 1024 * 1024,
       stderrMaxBytes: request.stderrMaxBytes ?? 4 * 1024 * 1024,

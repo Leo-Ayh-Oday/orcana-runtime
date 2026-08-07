@@ -107,13 +107,22 @@ export class CgroupManager {
     this.ensureScope()
   }
 
-  /** 委托点创建 orcana.scope + 启用 base 的 subtree_control（v2 授权）。 */
+  /** LNXF-R2 10.4：scope 授权失败的降级标记（真实委托下不应发生；
+   *  createRun 等会 fail loudly）。 */
+  private delegationBroken = false
+
+  /** 委托点创建 orcana.scope + 启用 base 的 subtree_control（v2 授权）。
+   *  LNXF-R2 10.4：base/scope 授权失败不抛（构造器不可抛，避免 broker
+   *  整体起不来）—— 标记降级，后续 createRun 等经 requireControllers
+   *  fail loudly。 */
   private ensureScope(): void {
     const scope = join(this.base, "orcana.scope")
-    this.enableControllers(this.base, ["cpu", "memory", "pids"])
+    const baseResult = this.enableControllers(this.base, ["cpu", "memory", "pids"])
     this.ensure(scope)
-    // scope 内部再授权，供 run 层启用子控制器。
-    this.enableControllers(scope, ["cpu", "memory", "pids"])
+    const scopeResult = this.enableControllers(scope, ["cpu", "memory", "pids"])
+    if (baseResult.failed.length > 0 || scopeResult.failed.length > 0) {
+      this.delegationBroken = true
+    }
   }
 
   private ensure(path: string): void {
@@ -131,10 +140,13 @@ export class CgroupManager {
 
   /** 创建 Run 层（全局取消点 + 树级取消；聚合预算由上层 AgentDomain 提供）。 */
   createRun(runId: string, limits: Partial<CellLimits> = {}): string {
+    if (this.delegationBroken) {
+      throw new Error("CGROUP_DELEGATION_UNAVAILABLE: scope delegation failed at construction")
+    }
     const { run } = hierarchyPaths(this.base, runId, undefined, "x")
     this.ensure(run)
     // PR-5：controller 在父层（scope）授权后，run 层再授权给 agent 层。
-    this.enableControllers(run, ["cpu", "memory", "pids"])
+    this.requireControllers(run, ["cpu", "memory", "pids"], "run")
     if (limits.memoryMaxBytes) this.writeAttr(run, "memory.max", String(limits.memoryMaxBytes))
     if (limits.pidsMax) this.writeAttr(run, "pids.max", String(limits.pidsMax))
     if (limits.cpuQuotaMicros && limits.cpuPeriodMicros) {
@@ -145,10 +157,13 @@ export class CgroupManager {
 
   /** 创建 Agent 层（Domain 聚合预算；无预算时不设限）。 */
   createAgent(runId: string, agentId: string, limits: Partial<CellLimits> = {}): string {
+    if (this.delegationBroken) {
+      throw new Error("CGROUP_DELEGATION_UNAVAILABLE: scope delegation failed at construction")
+    }
     const { agent } = hierarchyPaths(this.base, runId, agentId, "x")
     this.ensure(agent)
     // PR-5：agent 层授权 cell 层使用 controller。
-    this.enableControllers(agent, ["cpu", "memory", "pids"])
+    this.requireControllers(agent, ["cpu", "memory", "pids"], "agent")
     if (limits.memoryMaxBytes) this.writeAttr(agent, "memory.max", String(limits.memoryMaxBytes))
     if (limits.pidsMax) this.writeAttr(agent, "pids.max", String(limits.pidsMax))
     if (limits.cpuWeight) this.writeAttr(agent, "cpu.weight", String(limits.cpuWeight))
@@ -163,7 +178,10 @@ export class CgroupManager {
   createCell(runId: string, agentId: string | undefined, cellId: string, limits: CellLimits): string {
     const paths = hierarchyPaths(this.base, runId, agentId, cellId)
     this.ensure(paths.agent)
-    this.enableControllers(paths.agent, ["cpu", "memory", "pids"])
+    // LNXF-R2 10.4：授权失败立即暴露（独立调用 createCell 而未先
+    // createRun/createAgent 时，agent 层 enable 因父层未授权 EINVAL
+    // → CGROUP_CONTROLLER_UNAVAILABLE，不再静默吞错）。
+    this.requireControllers(paths.agent, ["cpu", "memory", "pids"], "cell.agent")
     this.ensure(paths.cell)
     const cell = paths.cell
     if (limits.cpuQuotaMicros && limits.cpuPeriodMicros) {
@@ -185,23 +203,46 @@ export class CgroupManager {
     return cell
   }
 
-  /** 在父目录启用 controller 授权（v2：子目录使用某 controller 需父目录授权）。 */
-  private enableControllers(path: string, controllers: string[]): void {
+  /** 在父目录启用 controller 授权（v2：子目录使用某 controller 需父目录授权）。
+   *  LNXF-R2 10.4：不再静默吞错 —— 返回每个控制器的启用结果，调用方
+   *  fail loudly（此前 EINVAL 被 catch 吞掉，cell 层 memory.max 属性缺失
+   *  只报误导性的 "attribute missing"；token 精确匹配消除 cpuset 误判）。 */
+  private enableControllers(path: string, controllers: string[]): { enabled: string[]; failed: string[] } {
     const controlFile = join(path, "cgroup.subtree_control")
-    if (!this.fs.exists(controlFile)) return
+    if (!this.fs.exists(controlFile)) {
+      // 非真实 cgroupfs（mock/未委托）—— 调用方按上下文处理
+      return { enabled: [], failed: [] }
+    }
     let current = ""
     try {
       current = this.fs.read(controlFile)
     } catch {
-      return
+      return { enabled: [], failed: [...controllers] }
     }
+    const tokens = current.split(/\s+/).filter(Boolean)
+    const enabled: string[] = []
+    const failed: string[] = []
     for (const controller of controllers) {
-      if (current.includes(controller)) continue
+      if (tokens.includes(controller)) {
+        enabled.push(controller)
+        continue
+      }
       try {
         this.fs.write(controlFile, `+${controller}`)
+        enabled.push(controller)
       } catch {
-        // controller 不可用 —— 降级（调用方按需 fail-closed）
+        failed.push(controller)
       }
+    }
+    return { enabled, failed }
+  }
+
+  /** 授权失败即抛（LNXF-R2 10.4 fail-loud：中间层未授权/控制器不可用
+   *  立即暴露，不再等 cell 属性缺失才报错）。 */
+  private requireControllers(path: string, controllers: string[], stage: string): void {
+    const result = this.enableControllers(path, controllers)
+    if (result.failed.length > 0) {
+      throw new Error(`CGROUP_CONTROLLER_UNAVAILABLE: ${stage} enable failed on ${path}: ${result.failed.join(",")}`)
     }
   }
 

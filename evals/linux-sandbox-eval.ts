@@ -31,7 +31,8 @@ import { readCgroupMetrics } from "../src/runtime/linux/cgroup/metrics"
 import { buildEgressPolicy, checkEgressHop, checkEgressRedirect, dnsRebindingGuard } from "../src/runtime/linux/network-policy"
 import { compileLandlockRuleset, compileSeccompProfile, seccompBackwardCompatible, landlockUsable } from "../src/runtime/linux/landlock-seccomp"
 import { RuntimeStateStore, BootIdentityStore, startupJanitor, procStartTicksOf } from "../src/runtime/linux/recovery/state-store"
-import type { ExecutionCellSpec, ResourceRequest } from "../src/runtime/linux/contracts"
+import { createRuntimeExecutionContext, runWithRuntimeExecutionContext, setExecutionAuthority } from "../src/runtime/execution-context"
+import type { ExecutionCellSpec, ResourceRequest, TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
 
 export interface ScenarioResult {
   id: string
@@ -681,12 +682,36 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   await add("LX-036", "Receipt → Evidence → Completion Gate 端到端（真实执行链）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
     const { createEvidenceLedger, ingestSandboxReceipt, hasEvidence } = await import("../src/agent/evidence-ledger")
-    const { executeProcess } = await import("../src/runtime/process-executor")
-    const ledger = createEvidenceLedger()
-    // 真实执行：collectProcessRun 携带真实 Receipt
     const { collectProcessRun } = await import("../src/runtime/process-executor")
-    const outcome = await collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 15_000, runId: "lx036-run" })
-    if (!outcome.receipt) return { pass: false, reason: "执行链未产出 Receipt" }
+    const ledger = createEvidenceLedger()
+    // 真实执行：collectProcessRun 携带真实 Receipt。PR-9 后 Linux enabled 执行
+    // 必须处于可信执行权威下（AgentRunScope 注册工作区）——真实 mkdtemp
+    // 工作区 + setExecutionAuthority 模拟生产信任链入口（agentLoop/AgentHarness
+    // 同款，git_rt8/typescript_rc01 同模式）。
+    const ws = mkdtempSync(join(tmpdir(), "lx036-"))
+    let outcome: Awaited<ReturnType<typeof collectProcessRun>> | undefined
+    try {
+      const ctx = createRuntimeExecutionContext()
+      outcome = await runWithRuntimeExecutionContext(ctx, async () => {
+        const authority: TrustedExecutionAuthority = {
+          identity: { runId: "lx036-run", nodeRunId: "lx036:n", attempt: 1 },
+          workspace: {
+            workspaceId: "lx036-ws",
+            projectId: "lx036-proj",
+            hostRoot: ws,
+            kind: "main",
+            access: "readwrite",
+            physicalWorkspaceKey: `wp_${process.pid}_lx036`,
+            ownerFiles: [],
+          },
+        }
+        setExecutionAuthority(authority)
+        return collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 15_000, runId: "lx036-run" })
+      })
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+    if (!outcome?.receipt) return { pass: false, reason: "执行链未产出 Receipt" }
     // Receipt 自摘要与 Evidence 绑定
     if (outcome.receipt.runId !== "lx036-run") return { pass: false, reason: `身份未透传: ${outcome.receipt.runId}` }
     const entry = ingestSandboxReceipt(ledger, outcome.receipt)

@@ -72,12 +72,14 @@ export function createHostAuditBackend(): ExecutionBackend {
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
       // R3 PathGuard：执行前快照（仅 worktreeRoot），结束后真实 diff。
+      // 快照有界（OTS-004 修复）：超大文件跳过 + 总预算封顶，证据入 receipt.snapshotGuard。
       const worktreeRoot = spec.filesystem.worktreeRoot
       const before = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
       yield* streamBackendRun("host-audit", spec, ctx,
         () => this.compile(spec, ctx.capabilities),
         (result, evidence) => {
-          const diff = before && worktreeRoot ? pathGuardDiff(before, snapshotWorkspace(worktreeRoot)) : undefined
+          const after = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
+          const diff = before && after ? pathGuardDiff(before, after) : undefined
           return this.buildReceipt(spec, ctx.capabilities, {
             startedAt: evidence.startedAt,
             finishedAt: evidence.finishedAt,
@@ -95,6 +97,9 @@ export function createHostAuditBackend(): ExecutionBackend {
             violations: [],
             degradationReasons: [HOST_AUDIT_DEGRADATION],
             metrics: evidence.metrics,
+            snapshotGuard: after
+              ? { skippedLargeFiles: after.skippedLargeFiles, budgetExceeded: after.budgetExceeded, bytesHashed: after.bytesHashed }
+              : undefined,
             cleanup: evidence.cleanup,
           })
         },
@@ -123,6 +128,7 @@ export function createHostAuditBackend(): ExecutionBackend {
         unexpectedWrites: outcome.unexpectedWrites,
         violations: outcome.violations,
         degradationReasons: [HOST_AUDIT_DEGRADATION, ...outcome.degradationReasons],
+        snapshotGuard: outcome.snapshotGuard,
         // PR-2：进程残留来自真实测量（countProcessGroup）；host-audit 无挂载/
         // 无 cgroup —— 不创建即无需移除（事实值），进程组实测为 0 才算干净。
         cleanup: {

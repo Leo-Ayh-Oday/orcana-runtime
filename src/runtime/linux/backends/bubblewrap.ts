@@ -256,12 +256,14 @@ export function createBubblewrapBackend(): ExecutionBackend {
 
     async *run(spec, ctx): AsyncGenerator<ExecutionCellEvent> {
       // PR-4：PathGuard —— worktree 内容快照 diff + ownerFiles 之外 → unexpectedWrites。
+      // 快照有界（OTS-004 修复）：超大文件跳过 + 总预算封顶，证据入 receipt.snapshotGuard。
       const worktreeRoot = spec.filesystem.worktreeRoot
       const before = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
       yield* streamBackendRun("bubblewrap", spec, ctx,
         () => this.compile(spec, ctx.capabilities, ctx.materialization),
         (result, evidence) => {
-          const diff = before && worktreeRoot ? pathGuardDiff(before, snapshotWorkspace(worktreeRoot)) : undefined
+          const after = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
+          const diff = before && after ? pathGuardDiff(before, after) : undefined
           return this.buildReceipt(spec, ctx.capabilities, {
             startedAt: evidence.startedAt,
             finishedAt: evidence.finishedAt,
@@ -280,6 +282,9 @@ export function createBubblewrapBackend(): ExecutionBackend {
             degradationReasons: [],
             backendVersion: ctx.capabilities.bubblewrap.version,
             metrics: evidence.metrics,
+            snapshotGuard: after
+              ? { skippedLargeFiles: after.skippedLargeFiles, budgetExceeded: after.budgetExceeded, bytesHashed: after.bytesHashed }
+              : undefined,
             cleanup: evidence.cleanup,
           })
         },
@@ -308,6 +313,7 @@ export function createBubblewrapBackend(): ExecutionBackend {
         unexpectedWrites: outcome.unexpectedWrites,
         violations: outcome.violations,
         degradationReasons: outcome.degradationReasons,
+        snapshotGuard: outcome.snapshotGuard,
         // PR-2：无默认成功值 —— 进程残留/移除来自实测；mountsReleased 是
         // bwrap 进程退出即销毁 mount 命名空间的内核事实。
         cleanup: {

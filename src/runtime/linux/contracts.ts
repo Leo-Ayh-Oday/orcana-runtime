@@ -354,6 +354,14 @@ export interface SandboxReceipt {
   secretBindingIds: string[]
   violations: SandboxViolation[]
   degradationReasons: string[]
+  /** PathGuard 快照有界性证据（OTS-004 事故后加）：跳过的大文件/预算超限/
+   *  实际哈希字节数 —— 证明本 cell 的 PathGuard 未把超大文件全量读入
+   *  Runtime 进程内存。只有 after 快照（对本 cell 写入内容负责的那份）。 */
+  snapshotGuard?: {
+    skippedLargeFiles: string[]
+    budgetExceeded: boolean
+    bytesHashed: number
+  }
   cleanup: {
     processesRemaining: number
     mountsReleased: boolean

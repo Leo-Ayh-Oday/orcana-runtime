@@ -77,6 +77,7 @@ export interface ReceiptInput {
   unexpectedWrites?: string[]
   violations?: SandboxReceipt["violations"]
   degradationReasons?: string[]
+  snapshotGuard?: SandboxReceipt["snapshotGuard"]
   /** 清理结果 —— 必须来自真实测量（PR-2：无默认成功值；
    *  未测量时 processesRemaining=-1 / cgroupRemoved=false，绝不假装 0/true）。 */
   cleanup: Partial<SandboxReceipt["cleanup"]>
@@ -125,6 +126,7 @@ export function buildReceipt(input: ReceiptInput): SandboxReceipt {
     secretBindingIds: spec.secrets.map(s => s.id),
     violations: input.violations ?? [],
     degradationReasons: input.degradationReasons ?? [],
+    snapshotGuard: input.snapshotGuard,
     // PR-2：只保留输入中的真实值；缺失 → -1/false（未验证 ≠ 干净）。
     cleanup: {
       processesRemaining: input.cleanup.processesRemaining ?? -1,

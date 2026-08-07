@@ -27,11 +27,11 @@ export async function* finalizeRun(
     if (decision.reason === "prompt_blocked") {
       yield { type: "error", data: `Prompt blocked by hook: ${decision.blockReason ?? "unknown"}` }
     }
-    if (ctx && (decision.reason === "clarification" || decision.reason === "gate_overflow")) {
+    if (ctx && decision.reason === "clarification") {
       await flushTelemetry(ctx)
     }
     lifecycle.stopReason =
-      decision.reason === "prompt_blocked" || decision.reason === "gate_overflow"
+      decision.reason === "prompt_blocked"
         ? "blocked"
         : "aborted"
     return

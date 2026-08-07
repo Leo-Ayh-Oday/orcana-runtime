@@ -234,15 +234,14 @@ export class QualityGate implements Gate<CompletionContext> {
       contractResult.fatal.length > 0 ||
       Boolean(ctx.lastTypecheck && !ctx.lastTypecheck.passed)
 
-    if (!shouldContinue) return pass(ctx), { pass: true }
-
-    const assistantMsg = compactAssistantContext(ctx.finalText)
-    const userMsg = formatQualityGatePrompt({ confidence, contractMessages, signals })
-    continue_(ctx, "semantic:quality", assistantMsg, userMsg,
-      `quality-gate: ${confidence.recommendation} ${Math.round(confidence.confidence * 100)}%`,
-      { confidence: confidence.recommendation })
-    ctx.completionBlockMessage = userMsg
-    return { pass: false, reason: "semantic:quality" }
+    // GATE-05 (GS-07): QualityGate 降级为 advisory——confidence 推荐、契约
+    // 违反、typecheck 失败都不再阻断完成（那是 EvidenceGate/验证门的职责，
+    // 此处重复裁决同一事实）。只记录 advisory 状态，永不让"质量启发式"拥有
+    // 阻止结束的权力。
+    if (shouldContinue) {
+      ctx.statusMessage = `quality-advisory: ${confidence.recommendation} ${Math.round(confidence.confidence * 100)}%${contractMessages.length > 0 ? ` · ${contractMessages[0]}` : ""}`
+    }
+    return pass(ctx), { pass: true }
   }
 }
 

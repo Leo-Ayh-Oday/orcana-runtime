@@ -68,6 +68,8 @@ export interface BackendOutcome {
   degradationReasons: string[]
   backendVersion?: string
   metrics?: import("../contracts").SandboxReceipt["metrics"]
+  /** PathGuard 快照有界性证据（host-audit/bubblewrap 在 run() 注入）。 */
+  snapshotGuard?: import("../contracts").SandboxReceipt["snapshotGuard"]
   /** 清理实测结果（由 streamBackendRun 注入；后端只覆写自身事实）。 */
   cleanup?: Partial<import("../contracts").SandboxReceipt["cleanup"]>
 }

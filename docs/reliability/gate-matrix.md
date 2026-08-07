@@ -15,11 +15,11 @@
 | PATCH_FALSE_SUCCESS | apply_patch 阶段2 未应用报成功 | G1 | 0 | 0 |
 | PERMISSION_ALIAS_BYPASS | 危险命令经工具别名绕过禁令 | B1 | 0 | 0 |
 | INVALID_CONFIG_ALLOW_ALL | 配置损坏静默放行 | B2 | 0 | 0 |
-| STRICT_PROFILE_DEGRADED | strict profile 静默降级 | C1 | TBD | 0 |
-| ORPHAN_PROCESS | 清理后进程残留 | F4 | TBD | 0 |
-| WRONG_PROCESS_KILL | pid<=0 信号操作 | F7 | TBD | 0 |
-| ABORT_IGNORED | 取消后进程继续运行 | F2 | TBD | 0 |
-| SECRET_TEMP_RESIDUE | /tmp 临时资源残留 | C5 | TBD | 0 |
+| STRICT_PROFILE_DEGRADED | strict profile 静默降级 | C1 | 0 | 0 |
+| ORPHAN_PROCESS | 清理后进程残留 | F4 | 0 | 0 |
+| WRONG_PROCESS_KILL | pid<=0 信号操作 | F7 | 0 | 0 |
+| ABORT_IGNORED | 取消后进程继续运行 | F2 | 0 | 0 |
+| SECRET_TEMP_RESIDUE | /tmp 临时资源残留 | C5 | 0 | 0 |
 | DUPLICATE_PROVIDER_SIDE_EFFECT | 流重试重复输出 | G3 | TBD | 0 |
 | SESSION_MESSAGE_DUPLICATION | 会话保存消息膨胀 | D1 | TBD | 0 |
 | CHECKPOINT_RESUME_UNUSED | checkpoint 恢复未接线 | D4 | 0 | 0 |
@@ -37,6 +37,7 @@
 | RC-05 | 898f5f7 | 同基线 | — |
 | RC-06 | fe9bff8 | runtime/linux 组 162 全绿 | SECCOMP_DENY_BY_DEFAULT=0 |
 | RC-13 | dd820c9 | 31 相关测试全绿 | REVISE_PLAN_NEVER_DEADLOCKS=0 |
+| PR-10 (RC-07~09 遗留) | 38c86aa+9f8f4fc+d7c8fb9+d5fc7d8+04c35b8 | tests/runtime 208 (200 pass/8 skip) | STRICT_PROFILE_DEGRADED=0, ORPHAN_PROCESS=0, WRONG_PROCESS_KILL=0, ABORT_IGNORED=0, SECRET_TEMP_RESIDUE=0 |
 
 TBD 项随对应 RC（RC-07~12, RC-14~17）落地后回填。
 

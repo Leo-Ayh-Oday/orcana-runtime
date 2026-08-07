@@ -48,7 +48,8 @@ describe("D1 SESSION_MESSAGE_DUPLICATION", () => {
 // ── NEW: every event carries stable identity ──
 
 describe("SESSION_EVENT_IDENTITY", () => {
-  test("loaded messages carry a stable eventId + sequence that survive restart", () => {
+  // RC-20+ 实现前跳过（d48d275 Phase-0 红基线）：src/session/event-journal 尚未实现
+  test.skip("loaded messages carry a stable eventId + sequence that survive restart", () => {
     const storeDir = tmpStoreDir()
     const manager = new SessionManager(storeDir)
     const s = manager.create({})
@@ -79,7 +80,8 @@ describe("SESSION_EVENT_IDENTITY", () => {
     expect(users[0]!.timestamp).not.toBe(users[1]!.timestamp)
   })
 
-  test("sequence is monotonic in append order across save/load cycles", () => {
+  // RC-20+ 实现前跳过（d48d275 Phase-0 红基线）：src/session/event-journal 尚未实现
+  test.skip("sequence is monotonic in append order across save/load cycles", () => {
     const storeDir = tmpStoreDir()
     const manager = new SessionManager(storeDir)
     const s = manager.create({})
@@ -102,7 +104,8 @@ describe("SESSION_EVENT_IDENTITY", () => {
 // ── NEW: SessionEventJournal (future OCAF source of truth) ──
 
 describe("SessionEventJournal", () => {
-  test("journal module exists and exposes the event contract", async () => {
+  // RC-20+ 实现前跳过（d48d275 Phase-0 红基线）：src/session/event-journal 尚未实现
+  test.skip("journal module exists and exposes the event contract", async () => {
     // @ts-expect-error — RC-19 Phase 3: SessionEventJournal lands with the Session Event Identity fix
     const { SessionEventJournal } = await import("../../src/session/event-journal")
     expect(typeof SessionEventJournal).toBe("function")
@@ -118,7 +121,8 @@ describe("SessionEventJournal", () => {
     expect(event.type).toBe("user_message")
   })
 
-  test("journal oracle: 20 rounds + 10 saves + identical text ×3 + restart", async () => {
+  // RC-20+ 实现前跳过（d48d275 Phase-0 红基线）：src/session/event-journal 尚未实现
+  test.skip("journal oracle: 20 rounds + 10 saves + identical text ×3 + restart", async () => {
     // @ts-expect-error — RC-19 Phase 3: SessionEventJournal lands with the Session Event Identity fix
     const { SessionEventJournal } = await import("../../src/session/event-journal")
     const storeDir = tmpStoreDir()

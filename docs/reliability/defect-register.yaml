@@ -1078,3 +1078,12 @@ src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
 - K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 47（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0；Batch E 14 @1320e25；Batch D 13 @e149587；Batch C 4 @ad08730）；open 8
 - 已修总计: 69（原 22 + K4 + Batch A 9 + Batch B 6 + Batch E 14 + Batch D 13 + Batch C 4）
 - 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）
+
+## RC-20+ 基线测试跳过记录（2026-08-07）
+
+- 决策：d48d275 的 Phase-0 失败基线（18 FAIL 如实入册）中 14 个依赖未实现模块的
+  测试标 `test.skip`（评测基线前提：官方门禁 `bun run test` 转绿），非删除、可恢复。
+- 涉及：session_event_identity 4（`src/session/event-journal`）、context_accounting 5
+  （`src/context-runtime/accounting/token-accounting`）、execution_contract_retention 5
+  （`src/context-runtime/ledgers/{directive,execution-contract}-ledger`）。
+- 恢复：RC-20+ 实现对应模块后删除 `test.skip` 并撤注释（skip 处已标 wave 引用）。

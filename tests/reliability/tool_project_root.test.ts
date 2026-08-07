@@ -47,20 +47,26 @@ afterAll(() => {
   rmSync(EVAL_ROOT, { recursive: true, force: true })
 })
 
-function makeContext(overrides: Partial<ToolExecutionContext> = {}): ToolExecutionContext {
+// The harness ToolExecutionContext (projectRoot etc.) is the RT-2 target; the
+// registry's execute() signature still consumes the legacy {abortSignal}
+// context. The intersection keeps the harness identity while satisfying the
+// legacy param type — Phase 2 unifies the two under resolveToolPath().
+function makeContext(overrides: Partial<ToolExecutionContext> = {}): ToolExecutionContext & { abortSignal: AbortSignal } {
   return {
     runId: "run-1",
     sessionId: "sess-1",
     projectRoot: PROJECT_A,
     signal: new AbortController().signal,
+    abortSignal: new AbortController().signal,
     ...overrides,
-  } as ToolExecutionContext
+  } as ToolExecutionContext & { abortSignal: AbortSignal }
 }
 
-const [read, write] = buildTools(READ_FILE, WRITE_FILE)
+const read = buildTools(READ_FILE, WRITE_FILE)[0]!
+const write = buildTools(READ_FILE, WRITE_FILE)[1]!
 
 describe("D7 TOOL_PATH_BASE_BOUND — relative paths bind to projectRoot, not cwd", () => {
-  test("read_file with cwd=project-B reads project-A content when projectRoot=project-A", () => {
+  test("read_file with cwd=project-B reads project-A content when projectRoot=project-A", async () => {
     process.chdir(PROJECT_B) // decoy cwd
     const result = await read.execute({ path: "src/a.txt" }, makeContext())
     expect(result.success).toBe(true)
@@ -69,7 +75,7 @@ describe("D7 TOOL_PATH_BASE_BOUND — relative paths bind to projectRoot, not cw
     expect(result.content).toContain("CONTENT-FROM-A")
   })
 
-  test("write_file with cwd=project-B lands inside project-A, not project-B", () => {
+  test("write_file with cwd=project-B lands inside project-A, not project-B", async () => {
     process.chdir(PROJECT_B)
     const result = await write.execute(
       { path: "src/out.txt", content: "written-into-A", confirm: true },
@@ -91,13 +97,13 @@ describe("D7 TOOL_PATH_BASE_BOUND — relative paths bind to projectRoot, not cw
 })
 
 describe("NEW CROSS_PROJECT_READ — projectRoot is the read boundary", () => {
-  test("relative ..\\ traversal above projectRoot is rejected", () => {
+  test("relative ..\\ traversal above projectRoot is rejected", async () => {
     process.chdir(PROJECT_B)
     const result = await read.execute({ path: "../outside/marker.txt" }, makeContext())
     expect(result.success).toBe(false)
   })
 
-  test("absolute path outside projectRoot (inside cwd) is rejected", () => {
+  test("absolute path outside projectRoot (inside cwd) is rejected", async () => {
     process.chdir(PROJECT_B)
     const result = await read.execute({ path: join(PROJECT_B, "marker.txt") }, makeContext())
     // marker.txt exists on disk at that absolute path — but it is outside the
@@ -105,7 +111,7 @@ describe("NEW CROSS_PROJECT_READ — projectRoot is the read boundary", () => {
     expect(result.success).toBe(false)
   })
 
-  test("absolute path inside projectRoot is allowed", () => {
+  test("absolute path inside projectRoot is allowed", async () => {
     process.chdir(PROJECT_B)
     const result = await read.execute({ path: join(PROJECT_A, "src", "a.txt") }, makeContext())
     expect(result.success).toBe(true)
@@ -114,7 +120,7 @@ describe("NEW CROSS_PROJECT_READ — projectRoot is the read boundary", () => {
 })
 
 describe("NEW CROSS_PROJECT_WRITE — projectRoot is the write boundary", () => {
-  test("write via relative ..\\ escape above projectRoot is rejected", () => {
+  test("write via relative ..\\ escape above projectRoot is rejected", async () => {
     process.chdir(PROJECT_B)
     const result = await write.execute(
       { path: "../outside/evil.txt", content: "escape", confirm: true },
@@ -124,7 +130,7 @@ describe("NEW CROSS_PROJECT_WRITE — projectRoot is the write boundary", () => 
     expect(existsSync(join(OUTSIDE, "evil.txt"))).toBe(false)
   })
 
-  test("absolute write outside projectRoot but inside cwd is rejected", () => {
+  test("absolute write outside projectRoot but inside cwd is rejected", async () => {
     process.chdir(PROJECT_B)
     const result = await write.execute(
       { path: join(PROJECT_B, "evil.txt"), content: "cross-project", confirm: true },
@@ -136,7 +142,7 @@ describe("NEW CROSS_PROJECT_WRITE — projectRoot is the write boundary", () => 
 })
 
 describe("NEW SYMLINK_PROJECT_ESCAPE — symlinks cannot walk out of projectRoot", () => {
-  test("read through a symlink pointing outside projectRoot is rejected", () => {
+  test("read through a symlink pointing outside projectRoot is rejected", async () => {
     process.chdir(PROJECT_A)
     const link = join(PROJECT_A, "src", "escape-link.txt")
     try { symlinkSync(join(OUTSIDE, "symlink-target.txt"), link) } catch { /* exists */ }
@@ -145,7 +151,7 @@ describe("NEW SYMLINK_PROJECT_ESCAPE — symlinks cannot walk out of projectRoot
     expect(result.success).toBe(false)
   })
 
-  test("non-existing target still reports a clean not-found inside the project", () => {
+  test("non-existing target still reports a clean not-found inside the project", async () => {
     process.chdir(PROJECT_A)
     const result = await read.execute({ path: "src/does-not-exist.ts" }, makeContext())
     expect(result.success).toBe(false)

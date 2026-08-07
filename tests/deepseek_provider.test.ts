@@ -65,7 +65,7 @@ describe("DeepSeekProvider stop_reason handling", () => {
     expect(events.some(event => event.type === "done")).toBe(false)
   })
 
-  test("emits a recoverable error when the provider stops at max_tokens", async () => {
+  test("reports a max-token response as TRUNCATED, not an error (GATE-02 GS-03)", async () => {
     const events = await collect([
       { type: "content_block_delta", delta: { type: "text_delta", text: "partial table" } },
       { type: "message_delta", delta: { stop_reason: "max_tokens" } },
@@ -73,9 +73,24 @@ describe("DeepSeekProvider stop_reason handling", () => {
 
     expect(events.some(ev => ev.type === "text" && ev.data === "partial table")).toBe(true)
     expect(events.some(ev => ev.type === "status" && String(ev.data).includes("provider-stop: max_tokens"))).toBe(true)
-    expect(events.some(ev => ev.type === "error" && String(ev.data).includes("max_tokens"))).toBe(true)
-    // 关键断言：max_tokens 不是正常结束，不得 emit done
+    // TRUNCATED：不再报 error（无差别重试同一 doomed 请求正是 OTS-013 死循环），
+    // 也不得 emit done（不是正常结束）。
+    expect(events.some(ev => ev.type === "error")).toBe(false)
+    expect(events.some(ev => ev.type === "truncated")).toBe(true)
     expect(events.some(ev => ev.type === "done")).toBe(false)
+  })
+
+  test("emits already-closed tool blocks from a truncated response (GATE-02 GS-05)", async () => {
+    const events = await collect([
+      { type: "content_block_start", content_block: { type: "tool_use", id: "t1", name: "write_file", input: {} } },
+      { type: "content_block_stop" },
+      { type: "message_delta", delta: { stop_reason: "max_tokens" } },
+    ])
+
+    // 截断前已闭合的 tool block 是完整副作用，必须到达执行器而非陪葬。
+    expect(events.some(ev => ev.type === "tool_call" && (ev.data as { id?: string }).id === "t1")).toBe(true)
+    expect(events.some(ev => ev.type === "truncated")).toBe(true)
+    expect(events.some(ev => ev.type === "error")).toBe(false)
   })
 
   test("normal end_turn remains a status-only stop reason", async () => {

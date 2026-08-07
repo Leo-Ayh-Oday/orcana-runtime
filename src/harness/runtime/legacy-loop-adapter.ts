@@ -291,5 +291,11 @@ function translateStreamEvent(
       // Legacy "done" marker has no UI payload; the flow ends when the
       // generator completes. Dropped by design.
       return null
+    case "truncated":
+      // GATE-02: TRUNCATED is a flow marker, not a UI event — the round's
+      // tool calls already streamed as tool_call events. Dropped here.
+      return null
+    default:
+      return null
   }
 }

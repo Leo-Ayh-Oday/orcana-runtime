@@ -53,7 +53,7 @@ describe("AnthropicProvider stop reason handling", () => {
     expect(events.some(event => event.type === "done")).toBe(false)
   })
 
-  test("does not report a max-token response as normal completion", async () => {
+  test("reports a max-token response as TRUNCATED, not an error (GATE-02 GS-03)", async () => {
     const provider = new AnthropicProvider("test", {
       maxRetries: 0,
       client: {
@@ -71,8 +71,37 @@ describe("AnthropicProvider stop reason handling", () => {
       model: "claude-test", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 10,
     })) events.push(event)
 
-    expect(events.some(event => event.type === "error" && String(event.data).includes("max_tokens"))).toBe(true)
+    // TRUNCATED: no error (a blind generic retry of the same doomed request
+    // was the OTS-013 loop), no done (it is not a normal completion).
+    expect(events.some(event => event.type === "error")).toBe(false)
+    expect(events.some(event => event.type === "truncated")).toBe(true)
     expect(events.some(event => event.type === "done")).toBe(false)
+  })
+
+  test("emits already-closed tool blocks from a truncated response (GATE-02 GS-05)", async () => {
+    const provider = new AnthropicProvider("test", {
+      maxRetries: 0,
+      client: {
+        messages: {
+          async *stream() {
+            yield { type: "content_block_start", content_block: { type: "tool_use", id: "t1", name: "write_file", input: {} } }
+            yield { type: "content_block_stop" }
+            yield { type: "message_delta", delta: { stop_reason: "max_tokens" } }
+          },
+        },
+      },
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "claude-test", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 10,
+    })) events.push(event)
+
+    // The tool block closed before the cut — it is a complete side effect and
+    // must reach the executor, not be discarded with the truncation.
+    expect(events.some(event => event.type === "tool_call" && (event.data as { id?: string }).id === "t1")).toBe(true)
+    expect(events.some(event => event.type === "truncated")).toBe(true)
+    expect(events.some(event => event.type === "error")).toBe(false)
   })
 
   test("treats model context-window exhaustion as recoverable interruption", async () => {

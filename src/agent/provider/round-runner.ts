@@ -177,6 +177,12 @@ export async function* runProviderRound(
         const message = String(event.data ?? "")
         result.failure = failureFromProviderEvent(message)
         yield event
+      } else if (event.type === "truncated") {
+        // GATE-02 (GS-03): max_tokens is TRUNCATED, not a failure — tool
+        // calls from the truncated response were already emitted and must
+        // execute; the round continues as a fresh round, never a blind retry.
+        result.stopReason = "truncated"
+        yield event
       }
     }
   } catch (error) {

@@ -136,18 +136,21 @@ export class ModelRouter {
     const capability = spec.thinking
 
     if (capability.mode === "adaptive") {
+      // GATE-02: error cascades must NOT force max thinking (OTS-013
+      // amplifier) — only broad edits justify the upgrade.
       const forceMax =
         profile?.intentMode !== "readonly" &&
         profile?.autoMaxSignals &&
-        (profile.autoMaxSignals.consecutiveErrors >= 3 || profile.autoMaxSignals.modifiedFiles >= 5)
+        profile.autoMaxSignals.modifiedFiles >= 5
       return { type: "adaptive", effort: forceMax ? "max" : baseThinking.effort ?? "high" }
     }
 
-    // Force max thinking on error cascades or broad edits
+    // GATE-02: force max thinking on broad edits only; error cascades are
+    // handled by the recovery stage (reasoning down, action reserve up).
     const forceMax =
       profile?.intentMode !== "readonly" &&
       profile?.autoMaxSignals &&
-      (profile.autoMaxSignals.consecutiveErrors >= 3 || profile.autoMaxSignals.modifiedFiles >= 5)
+      profile.autoMaxSignals.modifiedFiles >= 5
 
     let budget = baseThinking.budget_tokens ?? capability.defaultBudget ?? 16384
     if (forceMax) {

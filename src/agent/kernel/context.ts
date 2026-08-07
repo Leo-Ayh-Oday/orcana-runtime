@@ -45,6 +45,7 @@ import { SandboxManager } from "../../sandbox/sandbox"
 import { setShellSandbox } from "../../tools/shell"
 import { setActiveMode } from "../mode-contract"
 import { ToolExecutionLedger } from "../tool-ledger"
+import { ProgressGovernor } from "./progress-governor"
 import { StateMachine, AgentState } from "../state-machine"
 import { createEpochState, epochThresholdsForContext } from "../context-epoch"
 import type { LoopDecision, RunPhaseContext } from "./types"
@@ -368,6 +369,8 @@ export async function buildRunContext(
   const toolLedger = new ToolExecutionLedger()
   const gateBlockCounts = new Map<string, { count: number; lastSeen: number }>()
   const deferredGateMessages: string[] = []
+  // GATE-03: run-scoped liveness ledger — one governor per run.
+  const progressGovernor = new ProgressGovernor()
   options.runTrace?.record("agent_loop_started", { maxRounds, toolCount: tools.length })
 
   // L1 ownership: Router State remains the legacy behavior driver.
@@ -435,6 +438,7 @@ export async function buildRunContext(
     gateBlockCounts,
     deferredGateMessages,
     sm,
+    progressGovernor,
     contextMap: {
       runtimeContextMap: null,
       contextMapContext: "",

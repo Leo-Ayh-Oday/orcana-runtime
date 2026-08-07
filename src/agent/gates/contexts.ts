@@ -100,6 +100,11 @@ export interface CompletionContext {
   priorTools: string[]
   priorFiles: Set<string>
   confidenceEvaluator: ConfidenceEvaluator
+  /**
+   * GATE-04 (GS-06): orchestrator 每轮构造一次的 obligation 快照。
+   * TaskTracker/Quality gate 读取它，不得自行重新推导同一事实。
+   */
+  missingTaskRequirements?: string[]
 
   // ── Outputs (set by gates) ──
   /** Non-null when a gate blocks completion; loop.ts injects this as a user message. */

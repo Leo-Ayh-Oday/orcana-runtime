@@ -241,10 +241,23 @@ export class AnthropicProvider implements LLMProvider {
     }
     yield { type: "status", data: `provider-stop: ${stopReason}` }
     if (!NORMAL_STOP_REASONS.has(stopReason)) {
-      const detail = stopReason === "max_tokens"
-        ? "response hit the output token limit before completion"
-        : "response ended before normal completion"
-      yield { type: "error", data: `provider stop_reason=${stopReason}: ${detail}` }
+      if (stopReason === "max_tokens") {
+        // GATE-02 (GS-03/GS-05): TRUNCATED is not an error. Tool blocks that
+        // closed before the cut are complete side effects — emit them so the
+        // round executes them instead of discarding (OTS-013 lost every tool
+        // block this way and retried the same doomed request forever). The
+        // kernel continues as a fresh round; no blind generic retry.
+        for (const tb of toolBlocks) {
+          yield { type: "tool_call", data: { id: tb.id, name: tb.name, input: tb.input } }
+        }
+        if (cthink?.thinking) {
+          thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
+        }
+        if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
+        yield { type: "truncated", data: { stopReason: "max_tokens", toolCalls: toolBlocks.length } }
+        return
+      }
+      yield { type: "error", data: `provider stop_reason=${stopReason}: response ended before normal completion` }
       return
     }
 

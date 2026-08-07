@@ -133,6 +133,13 @@ export async function* runRound(
     prompt: ctx.effectivePrompt,
     intentMode: intentPolicy.mode,
     planningPhase: planning.taskTracker?.phase === "planning",
+    // GATE-02: error-rich runs enter the recovery stage — reasoning shrinks,
+    // action reserve grows. Never the reverse (that was the OTS-013 loop).
+    stage: planning.taskTracker?.phase === "planning"
+      ? "planning"
+      : execution.consecutiveErrors > 0
+        ? "recovery"
+        : "execution",
     autoMaxSignals: { consecutiveErrors: execution.consecutiveErrors, modifiedFiles: execution.modifiedFileCount },
   })
   const thinking = thinkingDecision.thinking

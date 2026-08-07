@@ -16,8 +16,7 @@
  * cost when unused — availability is checked once and cached.
  */
 
-import { execShellLegacy } from "../runtime/legacy-process"
-const execSync = execShellLegacy
+import { spawnSyncLegacy, minimalHostEnv } from "../runtime/legacy-process"
 import { resolve, relative } from "node:path"
 import type { RippleCaller } from "./types"
 import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
@@ -96,7 +95,7 @@ export class AstGrepProvider {
   isAvailable(): boolean {
     if (this._available !== null) return this._available
     try {
-      const result = this._exec("sg --version").trim()
+      const result = this._exec("sg", ["--version"]).trim()
       // sg --version outputs something like "sg 0.19.0"
       const match = result.match(/(\d+\.\d+\.\d+)/)
       this._version = (match?.[1]) ?? result.slice(0, 20)
@@ -184,16 +183,27 @@ export class AstGrepProvider {
   // ── Internal: Shell execution ────────────────────────────────────
 
   /**
-   * Execute a shell command. Uses _execFn in test mode, execSync otherwise.
+   * Execute a command via argv array（E1.5：消除 shell 字符串拼接与
+   * 命令替换注入面）。测试模式经 _execFn 注入（拼成 cmd 字符串兼容
+   * 既有测试 mock）；生产走 spawnSyncLegacy 参数数组（无 shell 解释层）。
    */
-  private _exec(cmd: string): string {
-    if (this._execFn) return this._execFn(cmd)
-    return execSync(cmd, {
+  private _exec(executable: string, args: string[]): string {
+    if (this._execFn) {
+      return this._execFn([executable, ...args].join(" "))
+    }
+    const res = spawnSyncLegacy(executable, args, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
-      timeout: 30000,
+      timeout: 30_000,
       maxBuffer: 10 * 1024 * 1024,
-    }) as string
+      env: minimalHostEnv(),
+    })
+    if (res.status !== 0) {
+      const err = new Error(`command failed: ${executable} (exit ${res.status ?? "unknown"})`) as Error & { status?: number }
+      err.status = res.status ?? -1
+      throw err
+    }
+    return res.stdout as string
   }
 
   /**
@@ -204,12 +214,12 @@ export class AstGrepProvider {
    */
   private runQuery(pattern: string, excludeFile: string): AstGrepMatch[] {
     const root = this.projectRoot
-    // Quote the pattern for shell safety
-    const cmd = `sg scan --json --no-ignore "${pattern.replace(/"/g, '\\"')}" "${root}"`
+    // E1.5：参数数组直达 sg —— pattern/root 不再进入 shell 解释层
+    // （原拼接在双引号内仍执行 $(...) / `...` 命令替换）。
 
     let stdout = ""
     try {
-      stdout = this._exec(cmd).trim()
+      stdout = this._exec("sg", ["scan", "--json", "--no-ignore", pattern, root]).trim()
     } catch (e: unknown) {
       // Exit code 1 = no matches (sg convention), other codes = real errors
       const code = (e as { status?: number })?.status

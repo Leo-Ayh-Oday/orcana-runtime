@@ -73,8 +73,13 @@ export function compileSeccompBpf(profile: SeccompProfile): Uint8Array {
   }
   const insns: BpfInsn[] = []
   // 1. load arch → 非 x86_64 一律 KILL（跨架构 syscall 号不可信）。
+  //    经典 BPF：条件真 → pc += 1 + jt；假 → pc += 1 + jf。
+  //    jt=1：x86_64 匹配 → 跳过紧随的 RET_KILL，进入 deny/allow 判定；
+  //    jf=0：不匹配 → 落入 RET_KILL（LNXF-R2 12.1：原 jt=0/jf=1 写反，
+  //    x86_64 命中即被 SIGSYS，非 x86_64 反而存活 —— 语义测试见
+  //    tests/runtime/linux/seccomp-bpf.test.ts）。
   insns.push(insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 4))
-  const archCheck = insn(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, AUDIT_ARCH_X86_64)
+  const archCheck = insn(BPF_JMP | BPF_JEQ | BPF_K, 1, 0, AUDIT_ARCH_X86_64)
   insns.push(archCheck)
   insns.push(insn(BPF_RET | BPF_K, 0, 0, RET_KILL))
 

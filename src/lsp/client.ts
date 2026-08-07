@@ -13,7 +13,7 @@
  *    - Does not touch loop.ts gate logic — diagnostics flow through existing VerificationResult path
  */
 
-import { spawnLegacy, ChildProcess } from "../runtime/legacy-process"
+import { spawnLegacy, minimalHostEnv, ChildProcess } from "../runtime/legacy-process"
 const spawn = spawnLegacy
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
@@ -121,7 +121,8 @@ export class LSPClient {
         this.proc = spawn(this.serverPath!, ["--stdio"], {
           cwd: this.cwd,
           stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env },
+          // E1.4：最小宿主环境 —— LSP server 不读取宿主密钥/代理配置。
+          env: minimalHostEnv(),
         })
 
         this.proc.stdout?.on("data", (chunk: Buffer) => {

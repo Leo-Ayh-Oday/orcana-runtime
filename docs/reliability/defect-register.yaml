@@ -372,6 +372,8 @@
   files: [src/provider/openai.ts, src/provider/retry.ts]
   status: fixed
   fixedBy: 948dd1d
+  reverifiedAtCommit: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
 - id: G4
   severity: P1
   wave: RC-16
@@ -435,6 +437,45 @@
   files: [src/tools/shell.ts, src/tools/process.ts, src/tools/service.ts]
   status: fixed
   fixedBy: cb9fc58
+
+## RC-19 基准关键收敛（Wave 8 · Phase 1 — Provider Side-Effect Safety）
+
+- id: RC19-1
+  severity: P0
+  wave: RC-19
+  invariant: ABORT_RETRIED=0
+  files: [src/provider/openai.ts, src/provider/deepseek.ts, src/provider/anthropic.ts, src/provider/retry.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: abort 在 attempt 顶部与 backoff 期间都检查；providerBackoffWait 与 abort 竞争，信号触发后不再发起新 fetch
+- id: RC19-2
+  severity: P0
+  wave: RC-19
+  invariant: STREAM_REPLAY_SIDE_EFFECT=0
+  files: [src/provider/deepseek.ts, src/provider/anthropic.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: thinking block start 即标记 unsafeToRetry —— 思考流不可重放
+- id: RC19-3
+  severity: P0
+  wave: RC-19
+  invariant: RETRY_AFTER_SIDE_EFFECT=0
+  files: [src/agent/provider/round-runner.ts, src/agent/provider/round-retry-state.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: ProviderRoundRetryState 跟踪 requestId/emittedThinking/emittedText/toolCallStarted/completedToolCallIds/sideEffectBoundaryCrossed/aborted；完整 tool_call 交付即越过边界，NO_BLIND_RETRY
+- id: RC19-4
+  severity: P0
+  wave: RC-19
+  invariant: DUPLICATE_TOOL_CALL_EXECUTED=0
+  files: [src/agent/tool-execution/batch-executor.ts, src/agent/tool-ledger.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: ToolExecutionLedger.findById 作为 run 级 dedup 键；重发的 tool call id 不再执行，返回结构化 DUPLICATE_TOOL_CALL 结果（串行与并行路径都拦截）
 
 ## 卫生与长期（Wave 7）
 

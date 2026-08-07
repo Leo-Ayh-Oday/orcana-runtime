@@ -201,6 +201,18 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
   if (parallelReadonly) {
     yield { type: "status", data: `greedy-tools: ${completedToolCalls.length} readonly calls` }
     const results = await Promise.all(completedToolCalls.map(async tc => {
+      // RC-19 DUPLICATE_TOOL_CALL_EXECUTED: never execute a re-issued id in
+      // the parallel path either — the serial loop surfaces the duplicate.
+      const priorExecution = toolLedger.findById(tc.id)
+      if (priorExecution) {
+        return {
+          id: tc.id,
+          content: `[DUPLICATE_TOOL_CALL] already executed in round ${priorExecution.round}`,
+          success: priorExecution.success,
+          metadata: { duplicateToolCall: true, originalRound: priorExecution.round },
+          startedAt: Date.now(),
+        }
+      }
       const tool = tools.find(t => t.defn.name === tc.name)!
       const startedAt = Date.now()
       try {
@@ -246,6 +258,22 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
     let resultObj: { success: boolean; content: string; metadata?: Record<string, unknown> } = { success: false, content: "" }
     let toolStartedAt = Date.now()
     const transactionBindingBeforeTool = currentTransactionEvidenceBinding()
+
+    // ── RC-19 DUPLICATE_TOOL_CALL_EXECUTED (§5.3): a call id already recorded
+    // in the run ledger is a re-issue of a previous round's request (provider
+    // or client replay). It must NEVER execute again — surface the recorded
+    // outcome as a structured DUPLICATE_TOOL_CALL result instead. ──
+    const priorExecution = toolLedger.findById(tc.id)
+    if (priorExecution) {
+      const duplicateContent =
+        `[DUPLICATE_TOOL_CALL] ${tc.name}(${tc.id}) was already executed in round ${priorExecution.round}`
+        + ` (${priorExecution.success ? "success" : "failed"}) — not executing again (RC-19 §5.3).`
+      runTrace?.record("tool_result", { ...priorExecution, duplicateToolCall: true })
+      yield { type: "tool_result", data: { id: tc.id, name: tc.name, content: duplicateContent.slice(0, 500), success: priorExecution.success } }
+      yield { type: "status", data: `tool-ledger: duplicate call ${tc.name}(${tc.id}) skipped — executed in round ${priorExecution.round} (DUPLICATE_TOOL_CALL_EXECUTED)` }
+      resultsContent.push({ type: "tool_result", tool_use_id: tc.id, content: clipProviderContext(duplicateContent, 4000) })
+      continue
+    }
 
     if (preRoundCtx.taskPlanning && round > 0) {
       resultContent = `任务追踪已阻止：当前是计划专用回合，只允许输出计划，不允许调用 ${tc.name}。下一轮将进入执行阶段。`

@@ -473,6 +473,17 @@ export async function* runRound(
     return { kind: "return", reason: "aborted" }
   }
 
+  // RC-19 Phase 1: provider round identity + side-effect boundary for
+  // observability — a round that crossed the boundary is never replayed.
+  yield trace("provider_round", {
+    round,
+    requestId: providerRoundResult.requestId,
+    sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed,
+    emittedText: providerRoundResult.textChunks.length > 0,
+    emittedThinking: (providerRoundResult.thinkingBlocks?.length ?? 0) > 0,
+    toolCalls: providerRoundResult.toolCalls.length,
+  })
+
   const roundMs = Date.now() - roundState.startedAt
 
   const textChunks = roundState.textChunks

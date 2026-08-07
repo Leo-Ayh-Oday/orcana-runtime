@@ -2,13 +2,36 @@ import { describe, expect, test } from "bun:test"
 import { buildVerificationResult, detectVerificationKind, hasServiceTestFailure, parseVerificationResult } from "../src/verification/result"
 import { shellStream } from "../src/tools/shell"
 import type { VerificationResult } from "../src/verification/result"
+import {
+  createRuntimeExecutionContext,
+  runWithRuntimeExecutionContext,
+  setExecutionAuthority,
+} from "../src/runtime/execution-context"
+import type { TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
 
+/** shellStream 走 managed Linux executor —— 无 trusted authority fail-closed
+ *  （R2 PR-9，git_rt8/typescript_rc01 同款）。 */
 async function shellDone(command: string) {
-  let done
-  for await (const event of shellStream({ command, confirm: true, timeout: 5 })) {
-    if (event.type === "done") done = event.data
-  }
-  return done
+  const context = createRuntimeExecutionContext()
+  return runWithRuntimeExecutionContext(context, async () => {
+    const authority: TrustedExecutionAuthority = {
+      identity: { runId: "verif-test", nodeRunId: "verif-test-0", attempt: 1 },
+      workspace: {
+        workspaceId: "verif-ws",
+        projectId: "verif-proj",
+        hostRoot: process.cwd(),
+        kind: "main",
+        access: "readwrite",
+        ownerFiles: [],
+      },
+    }
+    setExecutionAuthority(authority)
+    let done
+    for await (const event of shellStream({ command, confirm: true, timeout: 5 })) {
+      if (event.type === "done") done = event.data
+    }
+    return done
+  })
 }
 
 describe("VerificationResult", () => {

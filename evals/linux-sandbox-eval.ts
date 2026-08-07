@@ -113,6 +113,23 @@ function resourceRequest(overrides: Partial<ResourceRequest> = {}): ResourceRequ
   return { cpuQuota: 100, memoryBytes: 100, pids: 5, ioWeight: 0, networkSlots: 0, tempBytes: 100, ...overrides }
 }
 
+/** 炸弹进程树清理：直接 SIGKILL + 进程组树杀（依赖 detached 组）+ 归零验证。
+ *
+ *  WSL2 下进程迁移 EACCES（源 /init.scope root 属主不可写）时若只杀直接
+ *  进程（proc.kill），炸弹子进程（`while true; do :; done` 子 shell、
+ *  `head|tr` 管道）会逃逸成孤儿持续烧 CPU —— eval 连跑会累积成进程爆炸
+ *  （曾致 WSL 过载崩溃）。detached spawn 使炸弹成为独立进程组领导，
+ *  terminateTree 的 -pid 组杀才能命中整树并归零验证。 */
+function killBombTree(pid: number | undefined): void {
+  if (!pid || pid <= 0) return
+  try {
+    process.kill(pid, "SIGKILL")
+  } catch {
+    /* already gone */
+  }
+  terminateTree(pid, { graceMs: 150, attempts: 3 })
+}
+
 export async function runLinuxSandboxEval(): Promise<EvalReport> {
   const caps = probeLinuxCapabilities()
   const isLinux = platform() === "linux"
@@ -311,11 +328,22 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实内存炸弹无法执行" }
     }
     const manager = new CgroupManager({ base: delegated.base })
+    manager.createRun("lx") // LNXF-R2 10.4：完整授权链（run→agent→cell），
+    manager.createAgent("lx", "a") // 独立 createCell 会因父层未授权 fail-loud
     const cell = manager.createCell("lx", "a", "mem", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 8, oomGroup: true })
     try {
       const { spawn } = await import("node:child_process")
-      const proc = spawn("/bin/sh", ["-c", "head -c 1073741824 /dev/zero | tr '\\0' 'x' > /dev/null; sleep 0.1"], { stdio: "ignore" })
-      manager.attach(proc.pid ?? 0, cell)
+      // LNXF-R2 10.1：WSL2 控制台进程挂 root 属主 /init.scope —— 迁移
+      // EACCES（源 cgroup 不可写，45eba78 已知场景）；真机 lane 验收。
+      // detached：炸弹须为独立进程组领导，EACCES fallback 的组杀才能命中整树。
+      const proc = spawn("/bin/sh", ["-c", "head -c 1073741824 /dev/zero | tr '\\0' 'x' > /dev/null; sleep 0.1"], { detached: true, stdio: "ignore" })
+      try {
+        manager.attach(proc.pid ?? 0, cell)
+      } catch {
+        // 只杀直接进程会让炸弹子进程逃逸成孤儿持续烧 CPU —— 树杀归零。
+        killBombTree(proc.pid)
+        return { skip: true, reason: "进程迁移 EACCES（源 cgroup /init.scope root 属主不可写）—— 真机 lane 验收" }
+      }
       const events = manager.memoryEvents(cell)
       const killed = await new Promise<boolean>(resolve => {
         proc.on("exit", () => resolve(true))
@@ -336,11 +364,22 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实 fork bomb 无法执行" }
     }
     const manager = new CgroupManager({ base: delegated.base })
+    manager.createRun("lx")
+    manager.createAgent("lx", "a")
     const cell = manager.createCell("lx", "a", "fork", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 16 })
     try {
       const { spawn } = await import("node:child_process")
-      const proc = spawn("/bin/sh", ["-c", "while true; do ( while true; do :; done & ); done"], { stdio: "ignore" })
-      manager.attach(proc.pid ?? 0, cell)
+      // LNXF-R2 10.1：WSL2 控制台进程挂 root 属主 /init.scope —— 迁移
+      // EACCES（源 cgroup 不可写，45eba78 已知场景）；真机 lane 验收。
+      // detached：炸弹须为独立进程组领导，EACCES fallback 的组杀才能命中整树。
+      const proc = spawn("/bin/sh", ["-c", "while true; do ( while true; do :; done & ); done"], { detached: true, stdio: "ignore" })
+      try {
+        manager.attach(proc.pid ?? 0, cell)
+      } catch {
+        // 只杀直接进程会让 fork 炸弹子 shell 逃逸成孤儿持续烧 CPU —— 树杀归零。
+        killBombTree(proc.pid)
+        return { skip: true, reason: "进程迁移 EACCES（源 cgroup /init.scope root 属主不可写）—— 真机 lane 验收" }
+      }
       const start = Date.now()
       await new Promise(r => setTimeout(r, 1500))
       const current = manager.pidsCurrent(cell)
@@ -362,11 +401,22 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实 CPU hog 无法执行" }
     }
     const manager = new CgroupManager({ base: delegated.base })
+    manager.createRun("lx")
+    manager.createAgent("lx", "a")
     const cell = manager.createCell("lx", "a", "cpu", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 8, cpuQuotaMicros: 50_000, cpuPeriodMicros: 100_000 })
     try {
       const { spawn } = await import("node:child_process")
-      const proc = spawn("/bin/sh", ["-c", "while true; do :; done"], { stdio: "ignore" })
-      manager.attach(proc.pid ?? 0, cell)
+      // LNXF-R2 10.1：WSL2 控制台进程挂 root 属主 /init.scope —— 迁移
+      // EACCES（源 cgroup 不可写，45eba78 已知场景）；真机 lane 验收。
+      // detached：炸弹须为独立进程组领导，EACCES fallback 的组杀才能命中整树。
+      const proc = spawn("/bin/sh", ["-c", "while true; do :; done"], { detached: true, stdio: "ignore" })
+      try {
+        manager.attach(proc.pid ?? 0, cell)
+      } catch {
+        // 只杀直接进程会让 CPU hog 子 shell 逃逸成孤儿持续烧 CPU —— 树杀归零。
+        killBombTree(proc.pid)
+        return { skip: true, reason: "进程迁移 EACCES（源 cgroup /init.scope root 属主不可写）—— 真机 lane 验收" }
+      }
       await new Promise(r => setTimeout(r, 2500))
       const metrics = readCgroupMetrics(cell, manager.fs)
       manager.kill(cell)
@@ -386,6 +436,8 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       return { pass: false, reason: "CGROUP_DELEGATION_REQUIRED: 无委托 cgroup，真实 metrics 无法读取" }
     }
     const manager = new CgroupManager({ base: delegated.base })
+    manager.createRun("lx")
+    manager.createAgent("lx", "a")
     const cell = manager.createCell("lx", "a", "tmp", { memoryMaxBytes: 16 * 1024 * 1024, pidsMax: 8 })
     try {
       const metrics = readCgroupMetrics(cell, manager.fs)

@@ -302,8 +302,10 @@ export function missingTaskRequirements(tracker: TaskTracker | null, cwd = proce
   for (const kind of tracker.requiredVerificationKinds) {
     if (!tracker.verificationEvidence[kind]) missing.push(`缺少验证证据: ${verificationKindLabel(kind)}`)
   }
-  missing.push(...frontendDesignFindings(tracker, cwd))
-  missing.push(...backendQualityFindings(tracker, cwd))
+  // GATE-05 (GS-07): frontend/backend 质量启发式（CSS 量级、@media、flex、
+  // hero 结构、测试结构等）不得作为通用 Runtime completion blocker——
+  // "我认为你的 CSS 不够丰富，所以你不能结束任务" 不是 Runtime correctness。
+  // 函数保留导出，供 Skill Requirement / Quality Advisory / Benchmark 层使用。
   return missing
 }
 

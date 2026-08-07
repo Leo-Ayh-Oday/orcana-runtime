@@ -367,7 +367,8 @@ export async function buildRunContext(
   setActiveMode(options.activeMode ?? "coder")
   const pmode: "full" | "strict" = process.env.ORCANA_PERMISSION_MODE === "strict" ? "strict" : "full"
   const toolLedger = new ToolExecutionLedger()
-  const gateBlockCounts = new Map<string, { count: number; lastSeen: number }>()
+  // GATE-05: GateOverflow 已删除（断环职责并入 ProgressGovernor）——
+  // deferredGateMessages 保留给 revise-plan 等通用延迟消息。
   const deferredGateMessages: string[] = []
   // GATE-03: run-scoped liveness ledger — one governor per run.
   const progressGovernor = new ProgressGovernor()
@@ -435,7 +436,6 @@ export async function buildRunContext(
     sandbox,
     pmode,
     toolLedger,
-    gateBlockCounts,
     deferredGateMessages,
     sm,
     progressGovernor,

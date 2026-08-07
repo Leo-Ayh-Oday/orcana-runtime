@@ -40,11 +40,9 @@ import { CompletionOrchestrator } from "../completion-orchestrator"
 import { AgentState } from "../state-machine"
 import { executeToolBatch } from "../tool-execution/batch-executor"
 import { setRuntimeContextBudgetMode } from "../runtime-context"
-import { getBlockingObligations } from "../../ripple/obligations"
 import { currentTransactionEvidenceBinding } from "../patch-transaction"
 import { buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../round/request-builder"
 import { createPreRoundChain } from "../gates/pre-round"
-import { processGateOverflow } from "../gates/overflow"
 import {
   classifyEpochAction,
   epochRollover,
@@ -840,28 +838,10 @@ export async function* runRound(
   const ripplePhase = yield* wrapEvents(runRippleVerificationPhase(verificationCtx))
   postToolRequiredFilesPrompt = ripplePhase.postToolRequiredFilesPrompt
 
-  // ── Gate overflow: track cumulative blocks, force strategy switch at 3, BLOCKED at 5 ──
+  // GATE-05: GateOverflow 已删除——"连续 N 次 block"的断环职责由
+  // ProgressGovernor（GATE-03）承担（无进展 → ACTION_FIRST → REPLAN →
+  // STALLED）。工具执行后清 blocked files 记录。
   ctx.sandbox.clearBlockedFiles()
-
-  const overflowResult = processGateOverflow({
-    round,
-    rippleBlockActive: execution.rippleBlockActive,
-    pendingRippleObligationsLength: getBlockingObligations(verificationState.rippleObligations).length,
-    postToolPlanningPrompt,
-    postToolRequiredFilesPrompt,
-    gateBlockCounts: ctx.gateBlockCounts,
-  })
-  for (const msg of overflowResult.deferredMessages) ctx.deferredGateMessages.push(msg)
-  for (const ev of overflowResult.statusEvents) yield stream({ type: "status", data: ev })
-
-  if (overflowResult.blocked) {
-    const reason = `${overflowResult.blockedGate} 累积阻断 ${overflowResult.blockedCount} 次，请求人工介入。`
-    ctx.sm.transition(AgentState.BLOCKED, reason)
-    ctx.lifecycle.stopReason = "blocked"
-    yield stream({ type: "status", data: `gate-overflow: ${overflowResult.blockedGate} blocked ${overflowResult.blockedCount} times — BLOCKED` })
-    yield trace("agent_loop_blocked", { reason, gate: overflowResult.blockedGate, blockCount: overflowResult.blockedCount })
-    return { kind: "return", reason: "gate_overflow" }
-  }
 
   // ── Revise plan: stuck detection → push back to planning ──
   if (

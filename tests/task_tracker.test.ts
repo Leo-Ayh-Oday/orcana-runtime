@@ -4,8 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { addEvidence, createEvidenceLedger, latestEvidence } from "../src/agent/evidence-ledger"
 import {
+  backendQualityFindings,
   createTaskTracker,
   formatTaskTrackerPrompt,
+  frontendDesignFindings,
   markPlanAccepted,
   missingTaskRequirements,
   taskTrackerComplete,
@@ -171,7 +173,10 @@ describe("TaskTracker", () => {
       })
 
       const missing = missingTaskRequirements(tracker, dir)
-      expect(missing.some(item => item.includes("前端设计不足"))).toBe(true)
+      // GATE-05 (GS-07): quality 启发式不再是 completion blocker —— missing
+      // 不包含设计发现；advisory 层（frontendDesignFindings）仍独立保留。
+      expect(missing.some(item => item.includes("前端设计不足"))).toBe(false)
+      expect(frontendDesignFindings(tracker, dir).some(item => item.includes("前端设计不足"))).toBe(true)
     })
   })
 
@@ -203,6 +208,7 @@ describe("TaskTracker", () => {
 
       const missing = missingTaskRequirements(tracker, dir)
       expect(missing.some(item => item.includes("前端设计不足"))).toBe(false)
+      expect(frontendDesignFindings(tracker, dir)).toHaveLength(0)
     })
   })
 
@@ -224,7 +230,9 @@ describe("TaskTracker", () => {
       })
 
       const missing = missingTaskRequirements(tracker, dir)
-      expect(missing.some(item => item.includes("后端质量不足"))).toBe(true)
+      // GATE-05 (GS-07): 同上 —— 质量发现移出 blocking path，advisory 保留。
+      expect(missing.some(item => item.includes("后端质量不足"))).toBe(false)
+      expect(backendQualityFindings(tracker, dir).some(item => item.includes("后端质量不足"))).toBe(true)
     })
   })
 
@@ -247,6 +255,7 @@ describe("TaskTracker", () => {
 
       const missing = missingTaskRequirements(tracker, dir)
       expect(missing.some(item => item.includes("后端质量不足"))).toBe(false)
+      expect(backendQualityFindings(tracker, dir)).toHaveLength(0)
     })
   })
 

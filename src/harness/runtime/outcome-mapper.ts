@@ -50,6 +50,8 @@ export function mapDecisionToOutcome(
           return blocked("context_budget", "Context budget hard block")
         case "orchestrator_blocked":
           return blocked("completion", "Completion gate blocked")
+        case "progress_stalled":
+          return blocked("progress_stalled", "No progress for 4 consecutive rounds")
         case "empty_round":
           return blocked("empty_round", "No tool calls and no final text")
         case "provider_failure":
@@ -70,8 +72,6 @@ export function mapDecisionToOutcome(
             status: "waiting",
             outcome: { kind: "waiting", interruptId: "clarification", checkpointId: "" },
           }
-        case "gate_overflow":
-          return blocked("gate_overflow", "Cumulative gate blocks exceeded")
         case "prompt_blocked":
           return blocked("prompt_blocked", decision.blockReason ?? "Prompt blocked by hook")
         case "aborted":

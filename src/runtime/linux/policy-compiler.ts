@@ -13,7 +13,7 @@
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
 import { existsSync, realpathSync } from "node:fs"
 import { randomUUID } from "node:crypto"
-import type { ExecutionCellSpec, ExecutionProfile, IsolationMinimum, MountRule, NetworkMode, TrustedExecutionAuthority, UntrustedCapabilityRequest } from "./contracts"
+import type { ExecutionCellSpec, ExecutionProfile, IsolationMinimum, MountRule, NetworkMode, RequestedMount, TrustedExecutionAuthority, UntrustedCapabilityRequest } from "./contracts"
 import { LinuxExecutionError } from "./errors"
 import { hostKeyDenied } from "./environment"
 import { applyProfileDefaults, profileDefaults, PROFILE_DEFAULTS } from "./profiles"
@@ -43,6 +43,11 @@ export const SYSTEM_READONLY_PATHS = [
 export const FORBIDDEN_MOUNT_PATHS = [
   "/root", "/home", "/run/user",
 ]
+
+/** realpath 是否落在系统只读白名单内。 */
+function isSystemPath(real: string): boolean {
+  return SYSTEM_READONLY_PATHS.some(p => real === p || real.startsWith(p + sep))
+}
 
 export const FORBIDDEN_MOUNT_SUFFIXES = [
   "/.ssh", "/.gnupg", "/.aws", "/.config/gcloud", "/.kube",
@@ -75,12 +80,14 @@ export function validateMountRule(
   if (existsSync(source)) {
     try {
       const real = realpathSync(source)
-      const projReal = projectRoot ? realpathSafe(projectRoot) : null
-      if (projReal && !(real === projReal || real.startsWith(projReal + sep))) {
-        // 允许系统路径；禁止指向项目外的其他路径
-        if (!SYSTEM_READONLY_PATHS.some(p => real === p || real.startsWith(p + sep))) {
+      if (projectRoot) {
+        const projReal = realpathSafe(projectRoot)
+        if (!(real === projReal || real.startsWith(projReal + sep)) && !isSystemPath(real)) {
           return { ok: false, error: `mount source escapes project via symlink: ${rule.source}` }
         }
+      } else if (!(real === source) && !isSystemPath(real)) {
+        // LNXF-R2 9.8：无 worktree 上下文时逃逸检查不得跳过（fail-closed）
+        return { ok: false, error: `mount source escapes via symlink (no workspace context): ${rule.source}` }
       }
     } catch {
       // source 不存在 —— required 时在编译期拒绝
@@ -113,6 +120,25 @@ function realpathSafe(p: string): string {
     return realpathSync(p)
   } catch {
     return resolve(p)
+  }
+}
+
+/** 沿路径向根回溯，返回最近存在路径的 realpath（不存在时返回 null）。
+ *  LNXF-R2 9.1：cwd 候选目录不存在时，其父级可能是逃逸 symlink ——
+ *  必须解析存在的最近前缀而非直接信任 resolve()。 */
+function realpathOfNearestExisting(path: string): string | null {
+  let p = path
+  for (;;) {
+    if (existsSync(p)) {
+      try {
+        return realpathSync(p)
+      } catch {
+        return null
+      }
+    }
+    const parent = p.slice(0, p.lastIndexOf(sep))
+    if (parent === "" || parent === p) return null
+    p = parent
   }
 }
 
@@ -285,11 +311,28 @@ export function compileCapabilityRequest(
     ? (request.allowedHostKeys ?? [])
     : (request.allowedHostKeys ?? []).filter(k => SAFE_SANDBOX_HOST_KEYS.includes(k))
 
+  // LNXF-R2 9.3：请求挂载 → 权威 MountRule（workspace-relative 解析 +
+  // reserved target 策略；runtime-grant 未开放前编译期拒绝）。
+  const mountErrors: string[] = []
+  const readonlyMounts: MountRule[] = []
+  for (const m of request.readonlyMounts ?? []) {
+    const r = resolveRequestedMount(m, workspace, "ro")
+    if (r.ok) readonlyMounts.push(r.rule)
+    else mountErrors.push(r.error)
+  }
+  const writableMounts: MountRule[] = []
+  for (const m of request.writableMounts ?? []) {
+    const r = resolveRequestedMount(m, workspace, "rw")
+    if (r.ok) writableMounts.push(r.rule)
+    else mountErrors.push(r.error)
+  }
+  if (mountErrors.length > 0) return { ok: false, errors: mountErrors }
+
   const overrides: Partial<ExecutionCellSpec> = {
     isolation,
     filesystem: {
-      readonlyMounts: request.readonlyMounts ?? [],
-      writableMounts: request.writableMounts ?? [],
+      readonlyMounts,
+      writableMounts,
       tmpfsMounts: [],
       hiddenPaths: [],
       emptyHome: PROFILE_DEFAULTS[request.profile].emptyHome,
@@ -334,6 +377,50 @@ export function compileCapabilityRequest(
   return compileCellSpec(spec)
 }
 
+/** LNXF-R2 9.3：reserved mount target 策略 —— 挂载请求只能落在工作区/
+ *  缓存/secret 例外前缀；根与系统路径不可被请求覆盖（/workspaceX 等
+ *  前缀混淆经精确段匹配排除）。 */
+const RESERVED_MOUNT_TARGETS = ["/proc", "/dev", "/sys", "/usr", "/bin", "/lib", "/lib64", "/etc", "/run", "/var", "/tmp"]
+const ALLOWED_MOUNT_TARGET_PREFIXES = ["/workspace", "/cache", "/run/secrets"]
+
+function reservedMountTargetViolation(target: string): string | null {
+  const t = normalize(target)
+  if (!isAbsolute(t)) return `mount target must be absolute: ${target}`
+  if (ALLOWED_MOUNT_TARGET_PREFIXES.some(p => t === p || t.startsWith(p + "/"))) return null
+  if (t === "/") return `reserved mount target: ${target}`
+  for (const r of RESERVED_MOUNT_TARGETS) {
+    if (t === r || t.startsWith(r + "/")) return `reserved mount target: ${target}`
+  }
+  return null
+}
+
+/** 请求挂载 → 权威 MountRule（宿主路径由编译器解析；模型不可指定绝对
+ *  source）。mode 由声明通道强制（readonlyMounts → ro、writableMounts
+ *  → rw），编译器不可放宽。 */
+function resolveRequestedMount(
+  mount: RequestedMount,
+  workspace: import("./contracts").AuthorizedWorkspace,
+  modeForced: "ro" | "rw",
+): { ok: true; rule: MountRule } | { ok: false; error: string } {
+  const targetErr = reservedMountTargetViolation(mount.target)
+  if (targetErr) return { ok: false, error: targetErr }
+  if (mount.source.type === "runtime-grant") {
+    return { ok: false, error: `RUNTIME_GRANT_UNAVAILABLE: runtime-grant mounts not yet supported (grantId=${mount.source.grantId})` }
+  }
+  const requested = mount.source.path
+  if (requested.includes("\0")) return { ok: false, error: "mount path contains NUL byte" }
+  if (isAbsolute(requested)) return { ok: false, error: `mount path must be workspace-relative: ${requested}` }
+  if (requested.split(sep).includes("..")) return { ok: false, error: `mount path must stay inside workspace: ${requested}` }
+  const source = resolve(workspace.hostRoot, normalize(requested))
+  if (source !== workspace.hostRoot && !source.startsWith(workspace.hostRoot + sep)) {
+    return { ok: false, error: `mount path escapes workspace: ${requested}` }
+  }
+  return {
+    ok: true,
+    rule: { source, target: normalize(mount.target), mode: modeForced, required: true, recursive: true },
+  }
+}
+
 /** 相对逻辑 cwd → canonical host cwd（无 Registry 时的直接解析；同
  *  WorkspaceAuthorityRegistry.resolveCwd 语义）。 */
 export function resolveAuthorizedCwd(
@@ -354,7 +441,10 @@ export function resolveAuthorizedCwd(
   if (candidate !== workspace.hostRoot && !candidate.startsWith(workspace.hostRoot + sep)) {
     throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `cwd escapes workspace: ${relative}`)
   }
-  const realProbe = existsSync(candidate) ? realpathSafe(candidate) : resolve(workspace.hostRoot)
+  // LNXF-R2 9.1：candidate 不存在时必须沿父目录链检查最近的已存在前缀 ——
+  // worktree/link/child 中 link→/etc 时 child 不存在，旧实现回退到 hostRoot
+  // 的 realpath 直接放行（父级 symlink 逃逸）。
+  const realProbe = realpathOfNearestExisting(candidate) ?? resolve(workspace.hostRoot)
   if (realProbe !== workspace.hostRoot && !realProbe.startsWith(workspace.hostRoot + sep)) {
     throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `cwd escapes workspace via symlink: ${candidate}`)
   }

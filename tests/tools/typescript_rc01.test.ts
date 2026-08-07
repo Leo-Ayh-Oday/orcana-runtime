@@ -25,6 +25,7 @@ function withTestAuthority<T>(hostRoot: string, fn: () => T | Promise<T>): Promi
         hostRoot,
         kind: "main",
         access: "readwrite",
+        physicalWorkspaceKey: "wp_test",
         ownerFiles: [],
       },
     }

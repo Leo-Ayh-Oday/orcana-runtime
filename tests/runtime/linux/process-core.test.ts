@@ -589,7 +589,7 @@ describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", 
     const run = () => runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
       setExecutionAuthority({
         identity: { runId: `run-rc-${process.pid}`, nodeRunId: `run-rc-${process.pid}:n1`, attempt: 1 },
-        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] },
       })
       return collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 10_000 })
     })
@@ -606,7 +606,7 @@ describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", 
     await runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
       setExecutionAuthority({
         identity: { runId: `run-rc2-${process.pid}`, nodeRunId: `run-rc2-${process.pid}:n1`, attempt: 1 },
-        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] },
       })
       for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
         events.push(e as unknown as { type: string; [k: string]: unknown })
@@ -664,7 +664,7 @@ describe("R2 PR-9: execution identity only from authority", () => {
     const run = () => runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
       setExecutionAuthority({
         identity: { runId: "run-test-42", nodeRunId: "run-test-42:n3", attempt: 3, agentId: "agent-x" },
-        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] },
       })
       for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
         events.push(e as unknown as { type: string; [k: string]: unknown })
@@ -703,7 +703,7 @@ describe("R2 PR-9: execution identity only from authority", () => {
     await runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
       setExecutionAuthority({
         identity: { runId: "ctx-run-1", nodeRunId: "ctx-run-1:n1", attempt: 1, agentId: "ctx-agent" },
-        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+        workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] },
       })
       for await (const e of executeProcess({ command: "/bin/true", args: [], timeoutMs: 10_000 })) {
         events.push(e as unknown as { type: string; [k: string]: unknown })

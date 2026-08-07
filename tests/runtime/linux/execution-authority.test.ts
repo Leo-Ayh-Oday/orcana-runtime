@@ -15,7 +15,7 @@ import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
 function testAuthority(overrides: Partial<TrustedExecutionAuthority> = {}): TrustedExecutionAuthority {
   return {
     identity: { runId: "run-auth-1", nodeRunId: "run-auth-1:n1", attempt: 2, agentId: "agent-auth" },
-    workspace: { workspaceId: "ws_auth", projectId: "p", hostRoot: process.cwd(), kind: "main", access: "readwrite", ownerFiles: [] },
+    workspace: { workspaceId: "ws_auth", projectId: "p", hostRoot: process.cwd(), kind: "main", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] },
     ...overrides,
   }
 }
@@ -52,7 +52,7 @@ describe("Execution Authority (R2 PR-9)", () => {
     try {
       const result = compileCapabilityRequest(
         { command: { executable: "/bin/true", args: [], relativeCwd: "." }, profile: "build" },
-        testAuthority({ workspace: { workspaceId: "ws_auth", projectId: "p", hostRoot: root, kind: "main", access: "readwrite", ownerFiles: [] } }),
+        testAuthority({ workspace: { workspaceId: "ws_auth", projectId: "p", hostRoot: root, kind: "main", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] } }),
       )
       expect(result.ok).toBe(true)
       if (result.ok) expect(result.spec.command.cwd).toBe(root)

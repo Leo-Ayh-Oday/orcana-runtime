@@ -11,7 +11,13 @@ import { missingTaskRequirements, type TaskTracker } from "../task-tracker"
 import type { ProviderFailure } from "../run/types"
 
 export function isNonRetryableProviderStreamError(error: string): boolean {
-  return /^(auth|client|quota)(?:\s|:)/i.test(error)
+  // GATE-02 (GS-03): max_tokens is TRUNCATED — never a generic retryable
+  // provider error. The main path (deepseek/anthropic providers) already
+  // emits `truncated` events instead of errors; this is the backstop for any
+  // path that still surfaces it as an error: re-issuing the same doomed
+  // request was the OTS-013 loop.
+  return /stop_reason=max_tokens/i.test(error)
+    || /^(auth|client|quota)(?:\s|:)/i.test(error)
     || /insufficient[_\s-]*quota|quota[_\s-]*(?:exceeded|insufficient)|(?:exceeded|insufficient)[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|额度|余额|欠费|账户余额|资源包|套餐/i.test(error)
 }
 

@@ -4,6 +4,9 @@
  *  including double-forked descendants that escaped the direct parent
  *  chain but stayed in the group. `killOnParentExit` uses the parent-death
  *  signal (prctl PR_SET_PDEATHSIG) — implemented at the backend level.
+ *
+ *  PR-11（ORCANA-E2E-001）：恢复路径需要处理 detached 后代（独立进程组、
+ *  脱离父子关系）——组杀前先快照递归后代，组杀后对快照成员逐组补杀。
  */
 
 import { spawnSync } from "node:child_process"
@@ -13,6 +16,80 @@ export interface TerminationReport {
   /** 终止后仍然存活的进程数（0 = 干净）。 */
   processesRemaining: number
   signalSent: "SIGTERM" | "SIGKILL"
+}
+
+/** 递归后代收集（/proc ppid 扫描一次建表，从根 pid 向下遍历）。
+ *  必须在根进程被杀**之前**调用——根死后 detached 后代被 init 收养，
+ *  ancestry 不可再追踪。返回不含根自身。 */
+export function collectDescendants(pid: number): number[] {
+  if (!Number.isInteger(pid) || pid <= 0) return []
+  const children = new Map<number, number[]>()
+  let entries: string[]
+  try {
+    entries = readdirSync("/proc")
+  } catch {
+    return []
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue
+    const child = Number(entry)
+    if (child === process.pid) continue
+    try {
+      const stat = readFileSync(`/proc/${entry}/stat`, "utf8")
+      const match = /^(\d+) \(.+\) \w (\d+) (\d+)/.exec(stat)
+      if (!match) continue
+      const ppid = Number(match[2])
+      const list = children.get(ppid)
+      if (list) list.push(child)
+      else children.set(ppid, [child])
+    } catch {
+      // process may have exited mid-scan
+    }
+  }
+  const out: number[] = []
+  const stack = [pid]
+  const seen = new Set<number>([pid])
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    for (const child of children.get(current) ?? []) {
+      if (seen.has(child)) continue
+      seen.add(child)
+      out.push(child)
+      stack.push(child)
+    }
+  }
+  return out
+}
+
+/** 树杀：组杀（含同组后代）+ detached 后代（独立组）逐组补杀。
+ *  detached 后代无法经根进程组命中，必须用快照单独收尾 —— 恢复路径
+ *  （ORCANA-E2E-001 阶段 3）与取消路径共用。 */
+export function terminateTreeWithDescendants(
+  pid: number,
+  options: { graceMs?: number; attempts?: number } = {},
+): TerminationReport {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return { processesRemaining: 0, signalSent: "SIGTERM" }
+  }
+  // 1. 快照 detached 后代（根存活时）
+  const descendants = collectDescendants(pid)
+  // 2. 标准组杀（SIGTERM → 升级 SIGKILL）
+  const report = terminateTree(pid, options)
+  // 3. detached 后代逐组补杀（它们各自是组领导）
+  for (const d of descendants) {
+    if (d === pid) continue
+    killProcessGroup(d, "SIGKILL")
+  }
+  // 4. 归零验证：组 + 后代中仍存活的
+  let remaining = countProcessGroup(pid)
+  if (remaining === 0) {
+    for (const d of descendants) {
+      if (d === pid) continue
+      const alive = countProcessGroup(d)
+      if (alive > 0) remaining += alive
+    }
+  }
+  return { processesRemaining: remaining, signalSent: report.signalSent }
 }
 
 export function killProcessGroup(pid: number, signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): TerminationReport {

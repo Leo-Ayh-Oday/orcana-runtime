@@ -8,9 +8,29 @@
  *  run of a previous boot.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, renameSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
+
+/** PR-11：Cell Journal 条目 —— 同 boot 崩溃恢复的进程所有权证据。
+ *  pid + starttime（procStartTicksOf）组合使 PID 复用安全；pgid 即
+ *  detached 组领导 pid（组杀目标）；cgroupPath 存在时 cgroup.kill 优先
+ *  （整树命中，含 detached 后代）。 */
+export interface CellJournalEntry {
+  cellId: string
+  runId: string
+  agentId?: string
+  pid: number
+  starttime: number
+  pgid: number
+  cgroupPath?: string
+  backend: string
+  status: "running" | "exited" | "cancelled" | "failed"
+  exitCode?: number | null
+  signal?: string | null
+  startedAt: number
+  finishedAt?: number
+}
 
 export interface RuntimeStateStoreOptions {
   root?: string
@@ -49,6 +69,50 @@ export class RuntimeStateStore {
     const runsDir = join(this.root, "runs")
     if (!existsSync(runsDir)) return []
     return readdirSync(runsDir).filter(name => existsSync(join(runsDir, name, "run.json")))
+  }
+
+  // ── PR-11：Cell Journal（同 boot 恢复的进程所有权证据） ──
+
+  cellDir(runId: string): string {
+    return join(this.runDir(runId), "cells")
+  }
+
+  /** 原子写 Cell Journal 条目（temp+rename）。 */
+  writeCellJournal(runId: string, entry: CellJournalEntry): void {
+    const dir = this.cellDir(runId)
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, `${entry.cellId}.json`)
+    const tmp = `${path}.tmp`
+    writeFileSync(tmp, JSON.stringify(entry, null, 2), "utf8")
+    renameSync(tmp, path)
+  }
+
+  /** 就地更新条目（status/exitCode 等；不存在则忽略）。 */
+  updateCellJournal(runId: string, cellId: string, patch: Partial<CellJournalEntry>): void {
+    const path = join(this.cellDir(runId), `${cellId}.json`)
+    if (!existsSync(path)) return
+    try {
+      const current = JSON.parse(readFileSync(path, "utf8")) as CellJournalEntry
+      this.writeCellJournal(runId, { ...current, ...patch })
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** 读取 run 的全部 Cell Journal 条目（损坏/缺失的跳过）。 */
+  readCellJournal(runId: string): CellJournalEntry[] {
+    const dir = this.cellDir(runId)
+    if (!existsSync(dir)) return []
+    const out: CellJournalEntry[] = []
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".json") || name.endsWith(".tmp")) continue
+      try {
+        out.push(JSON.parse(readFileSync(join(dir, name), "utf8")) as CellJournalEntry)
+      } catch {
+        /* corrupted entry — skip */
+      }
+    }
+    return out
   }
 
   appendReceipt(runId: string, receipt: unknown): void {
@@ -187,6 +251,12 @@ export async function startupJanitor(options: {
     }
     receipts.push(receipt)
     options.store.writeCleanup(runId, receipt)
+    // PR-11：运行状态从 running 收敛到明确终态（recovered —— 区别于
+    // 正常 cancelled；RUNNING_STATE_AFTER_RECOVERY 门禁判据）。
+    const run = options.store.readRun(runId)
+    if (run && run.status === "running") {
+      options.store.writeRun(runId, { ...run, status: "recovered", cleanedAt: receipt.at })
+    }
   }
   bootStore.recordBoot(options.currentBootId)
   return receipts

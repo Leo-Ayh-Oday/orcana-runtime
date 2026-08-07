@@ -42,7 +42,7 @@ import { AgentDomainManager } from "./workspace/agent-domain"
 import { CgroupManager, hierarchyPaths } from "./cgroup/manager"
 import { detectDelegatedRoot } from "./cgroup/delegation"
 import { readCgroupMetrics as readMetrics } from "./cgroup/metrics"
-import { RuntimeStateStore } from "./recovery/state-store"
+import { RuntimeStateStore, procStartTicksOf, type CellJournalEntry } from "./recovery/state-store"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { writeSeccompBpfFile } from "./seccomp-bpf"
@@ -50,7 +50,7 @@ import { writeOciSeccompFile } from "./seccomp-oci"
 import { compileSeccompProfile } from "./landlock-seccomp"
 import { bindSecrets } from "./secrets"
 import { CacheManager } from "./workspace/cache-port"
-import { countProcessGroup } from "./process/termination"
+import { countProcessGroup, terminateTreeWithDescendants } from "./process/termination"
 import { computeReceiptDigest } from "./receipt"
 
 export interface ShadowExecutionRecord {
@@ -170,7 +170,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   const caps = requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
-  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string }>()
+  const cellRuns = new Map<string, { cellId: string; runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string }>()
 
   const ledger = options.ledger ?? new ResourceLedger()
   const stateStore = options.stateStore ?? new RuntimeStateStore()
@@ -493,8 +493,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             executeOptions.abortSignal.addEventListener("abort", () => controller.abort(), { once: true })
           }
         }
-        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile })
-        stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId), backend: selection.backend, ownerPid: process.pid, ownerProcStartTicks: readProcStartTicks() })
+        cellRuns.set(cellId, { cellId, runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile })
+        stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.cellId), backend: selection.backend, ownerPid: process.pid, ownerProcStartTicks: readProcStartTicks() })
 
         // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
         let spawnedPid = 0
@@ -506,6 +506,25 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             materialization,
             attachCell: pid => {
               spawnedPid = pid
+              // PR-11：Cell Journal —— 同 boot 崩溃恢复的进程所有权证据
+              // （pid+starttime 组合防 PID 复用；pgid=detached 组领导）。
+              try {
+                const entry: CellJournalEntry = {
+                  cellId,
+                  runId,
+                  agentId,
+                  pid,
+                  starttime: procStartTicksOf(pid),
+                  pgid: pid,
+                  cgroupPath: cgroupCellPath,
+                  backend: selection.backend,
+                  status: "running",
+                  startedAt: Date.now(),
+                }
+                stateStore.writeCellJournal(runId, entry)
+              } catch {
+                // journal 写失败不阻断执行（Receipt 仍为执行真相）
+              }
               if (cgroup && cgroupCellPath) {
                 try {
                   cgroup.attach(pid, cgroupCellPath)
@@ -590,6 +609,17 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             } catch {
               // 持久化失败不阻断执行（Receipt 仍在事件流中）
             }
+            // PR-11：Cell Journal 收敛为终态（恢复路径据此跳过已结束 cell）
+            try {
+              stateStore.updateCellJournal(runId, cellId, {
+                status: final.cancelled ? "cancelled" : final.timedOut ? "failed" : final.exitCode === 0 ? "exited" : "failed",
+                exitCode: final.exitCode,
+                signal: final.signal,
+                finishedAt: Date.now(),
+              })
+            } catch {
+              /* best-effort */
+            }
           }
           for (const key of record.lockKeys) locks.release(key, cellId)
           ledger.release(record.reservationId)
@@ -643,10 +673,58 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     },
     async cleanupRun(runId) {
       let removed = 0
+      const recoveredCells: string[] = []
       for (const [cellId, record] of cellRuns) {
         if (record.runId === runId) {
           await this.cancelCell(cellId)
           removed += 1
+        }
+      }
+      // PR-11：恢复路径 —— 控制器崩溃后重启（同 boot），本进程无内存 cell，
+      // 按持久化 Cell Journal 终止孤儿进程树。PID 复用安全：/proc 实测
+      // starttime 必须与 journal 记录一致才杀。cgroup 优先（整树含 detached
+      // 后代），否则树杀（组杀 + detached 后代快照补杀）。
+      const journalCells = stateStore.readCellJournal(runId)
+      for (const jc of journalCells) {
+        if (jc.status !== "running") continue
+        if (jc.pid > 0 && procStartTicksOf(jc.pid) !== jc.starttime) continue // PID 复用 → 不杀
+        let killed = false
+        if (jc.cgroupPath && cgroup) {
+          try {
+            // 前置检查：WSL2 迁移 EACCES 时进程从未进入 cgroup（pidsCurrent=0），
+            // 此时 cgroup.kill 是空操作 —— 必须落到树杀；只有 cgroup 内确有
+            // 进程时才用 cgroup.kill 并验证归零。
+            const before = cgroup.pidsCurrent(jc.cgroupPath)
+            if (before > 0) {
+              cgroup.kill(jc.cgroupPath)
+              killed = cgroup.pidsCurrent(jc.cgroupPath) === 0
+            }
+          } catch {
+            killed = false
+          }
+        }
+        if (!killed && jc.pid > 0) {
+          // 树杀（组杀 + detached 后代快照补杀）。进程可能处于 SIGTERM 延迟
+          // 退出窗口（如 stubborn-tree 3s）——settle 后重数再判。
+          let report = terminateTreeWithDescendants(jc.pid, { graceMs: 300, attempts: 2 })
+          if (report.processesRemaining > 0) {
+            await new Promise(r => setTimeout(r, 600))
+            report = terminateTreeWithDescendants(jc.pid, { graceMs: 200, attempts: 1 })
+          }
+          killed = report.processesRemaining === 0
+        }
+        if (killed) {
+          removed += 1
+          recoveredCells.push(jc.cellId)
+        }
+        // journal 只记真实结局：杀成功才标 cancelled（失败的保持 running，
+        // 下次恢复重试；避免记账撒谎）
+        if (killed) {
+          try {
+            stateStore.updateCellJournal(runId, jc.cellId, { status: "cancelled", finishedAt: Date.now() })
+          } catch {
+            /* best-effort */
+          }
         }
       }
       // PR-7：podman label 级兜底清理（run 级残留容器）。
@@ -662,7 +740,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           // best-effort
         }
       }
-      stateStore.writeCleanup(runId, { removed, at: Date.now() })
+      stateStore.writeCleanup(runId, { removed, recoveredCells, at: Date.now() })
       return { removed }
     },
     activeCells() {

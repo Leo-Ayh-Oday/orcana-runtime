@@ -5,19 +5,17 @@
  *  else in the codebase that needs Linux execution must consume these.
  */
 
+// LNXF-R2 9.7：导出面收窄 —— 后端工厂 / spawn 原语 / applyProfileDefaults /
+// selectBackend 不再公开导出（ADR-L1 单入口：进程执行只能经 broker）。
+// 后端由 broker 内部注册；policy 编译唯一入口 compileCellSpec / compileRequest。
 export { createLinuxBroker, getLinuxBroker, registerBackend } from "./broker"
 export type { LinuxExecutionBroker, ShadowExecutionRecord, LinuxBrokerOptions } from "./broker"
 export { probeLinuxCapabilities, capabilitiesDigest, requireLinuxPlatform } from "./capability-probe"
-export { createHostAuditBackend } from "./backends/host-audit"
-export { createBubblewrapBackend } from "./backends/bubblewrap"
-export { createPodmanBackend, validateImageRef, DIGEST_PATTERN } from "./backends/podman"
-export { runSupervised, spawnSupervised } from "./process/supervisor"
 export { buildExplicitEnvironment, hostKeyDenied, DEFAULT_DENIED_KEYS, DEFAULT_ENV_VARS } from "./environment"
 export { bindSecrets, newSecretBinding } from "./secrets"
 export { buildReceipt, receiptComplete, cellSpecDigest, computePolicyDigest } from "./receipt"
 export { validateCellSpec, compileCellSpec, validateMountSet } from "./policy-compiler"
-export { selectBackend, backendAvailability } from "./backend-router"
-export { PROFILE_DEFAULTS, profileDefaults, isStrictProfile, applyProfileDefaults } from "./profiles"
+export { PROFILE_DEFAULTS, profileDefaults, isStrictProfile } from "./profiles"
 export { ResourceLedger, defaultHostReserve, cpuQuotaFromCores } from "./scheduler/resource-ledger"
 export { FairQueue, PRIORITY_WEIGHT } from "./scheduler/queue"
 export type { QueuePriority, QueueItem } from "./scheduler/queue"

@@ -19,6 +19,16 @@ export const DEFAULT_ENV_VARS: Record<string, string> = {
 export const DEFAULT_DENIED_KEYS = [
   "*_API_KEY",
   "*_TOKEN",
+  // LNXF-R2 9.6：补全凭据类模式（AZURE_CLIENT_SECRET / PGPASSWORD /
+  // STRIPE_SECRET_KEY / GOOGLE_APPLICATION_CREDENTIALS 等）。
+  // matchesPattern 仅支持 "*_" 前缀通配（后缀匹配）——无分隔符拼写
+  // （PGPASSWORD）必须精确列出（9.6 测试暴露）。
+  "*_SECRET",
+  "*_PASSWORD",
+  "PGPASSWORD",
+  "*_PWD",
+  "*_KEY",
+  "*_CREDENTIALS",
   "AWS_*",
   "GITHUB_TOKEN",
   "SSH_AUTH_SOCK",
@@ -29,8 +39,20 @@ export const DEFAULT_DENIED_KEYS = [
   "HTTPS_PROXY",
   "http_proxy",
   "https_proxy",
+  "all_proxy",
   "ALL_PROXY",
 ]
+
+/** LNXF-R2 9.4：Runtime 保留环境键 —— requestedValues / allowedHostKeys /
+ *  secretEnv 一律不得覆盖；由构造链末步强制写回（防子进程伪造身份）。 */
+export const RUNTIME_RESERVED_ENV_KEYS = [
+  "ORCANA_RUN_ID",
+  "ORCANA_NODE_RUN_ID",
+  "ORCANA_AGENT_ID",
+  "ORCANA_CELL_ID",
+  "ORCANA_SANDBOX",
+  "ORCANA_WORKSPACE_ID",
+] as const
 
 export interface BuildEnvironmentInput {
   policy: EnvironmentPolicy
@@ -63,6 +85,11 @@ export function hostKeyDenied(key: string, extraDenied: string[] = []): boolean 
   return [...DEFAULT_DENIED_KEYS, ...extraDenied].some(p => matchesPattern(key, p))
 }
 
+/** LNXF-R2 9.4：键是否属于 Runtime 保留集（请求/secret/宿主继承均不得写入）。 */
+export function isRuntimeReservedKey(key: string): boolean {
+  return (RUNTIME_RESERVED_ENV_KEYS as readonly string[]).includes(key)
+}
+
 /** 显式环境构造（唯一入口）。 */
 export function buildExplicitEnvironment(input: BuildEnvironmentInput): EnvironmentBuildResult {
   const env: Record<string, string> = { ...DEFAULT_ENV_VARS }
@@ -79,9 +106,9 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
     env.TERM = "xterm"
   }
 
-  // 2. Profile 允许变量（fixedValues 覆盖默认）。
+  // 2. Profile 允许变量（fixedValues 覆盖默认；保留键由末步强制写回）。
   for (const [key, value] of Object.entries(input.policy.fixedValues)) {
-    if (hostKeyDenied(key, extraDenied)) {
+    if (hostKeyDenied(key, extraDenied) || isRuntimeReservedKey(key)) {
       rejectedHostKeys.push(key)
       continue
     }
@@ -90,7 +117,7 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
 
   // 3. 宿主键白名单（显式允许才复制）。
   for (const key of input.policy.allowedHostKeys) {
-    if (hostKeyDenied(key, input.extraDenied)) {
+    if (hostKeyDenied(key, input.extraDenied) || isRuntimeReservedKey(key)) {
       rejectedHostKeys.push(key)
       continue
     }
@@ -100,16 +127,20 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
 
   // 4. Tool 显式申请。
   for (const [key, value] of Object.entries(input.policy.requestedValues)) {
-    if (hostKeyDenied(key, extraDenied)) {
+    if (hostKeyDenied(key, extraDenied) || isRuntimeReservedKey(key)) {
       rejectedHostKeys.push(key)
       continue
     }
     env[key] = value
   }
 
-  // 5. Secret 注入。
+  // 5. Secret 注入（同样不得覆盖保留键）。
   if (input.secrets) {
     for (const [key, value] of Object.entries(input.secrets)) {
+      if (isRuntimeReservedKey(key)) {
+        rejectedHostKeys.push(key)
+        continue
+      }
       env[key] = value
     }
   }
@@ -121,6 +152,12 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
       delete env[key]
     }
   }
+
+  // 7. LNXF-R2 9.4：Runtime 保留身份键最后强制写回 —— 请求/secret/宿主
+  //    继承不得伪造 ORCANA_RUN_ID 等身份（子进程 trace/工具不被误导）。
+  env.ORCANA_RUN_ID = input.runId
+  env.ORCANA_NODE_RUN_ID = input.nodeRunId
+  if (env.ORCANA_SANDBOX === undefined) env.ORCANA_SANDBOX = "1"
 
   return { ok: true, env, rejectedHostKeys }
 }

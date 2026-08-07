@@ -14,6 +14,9 @@ export interface ProviderRoundResult {
   failure?: ProviderFailure
   bufferedTextEmitted: boolean
   aborted: boolean
+  /** RC-19 Phase 1: provider round identity + side-effect boundary. */
+  requestId?: string
+  sideEffectBoundaryCrossed?: boolean
 }
 
 export function createProviderRoundResult(): ProviderRoundResult {

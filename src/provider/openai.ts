@@ -12,7 +12,7 @@
  */
 
 import type { StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage } from "./types"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt } from "./retry"
+import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt, providerBackoffWait } from "./retry"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
 
@@ -86,11 +86,21 @@ export class OpenAIProvider implements LLMProvider {
     const body = this.buildRequestBody(options)
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // RC-19 ABORT_RETRIED: an aborted request is never issued, and never
+      // retried once the signal fires — including an abort landing in backoff.
+      if (options.abortSignal?.aborted) {
+        yield { type: "error", data: "provider request aborted" }
+        return
+      }
       let unsafeToRetry = false
       try {
         yield* this.streamOnce(body, value => { unsafeToRetry = value }, options)
         return
       } catch (e) {
+        if (options.abortSignal?.aborted) {
+          yield { type: "error", data: "provider request aborted" }
+          return
+        }
         const info = classifyProviderError(e)
         const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry)
         if (!canRetry) {
@@ -99,7 +109,11 @@ export class OpenAIProvider implements LLMProvider {
         }
         const delayMs = providerRetryDelayMs(info, attempt)
         yield { type: "status", data: formatProviderRetryStatus(info, delayMs, attempt, this.maxRetries) }
-        await this.sleep(delayMs)
+        const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
+        if (!waited) {
+          yield { type: "error", data: "provider request aborted during retry backoff" }
+          return
+        }
       }
     }
   }

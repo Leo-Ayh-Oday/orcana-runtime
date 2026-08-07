@@ -84,6 +84,32 @@ export function canRetryProviderAttempt(
   return info.retryable && !unsafeToRetry && attempt < maxRetries
 }
 
+/**
+ * Abort-aware retry backoff (RC-19 ABORT_RETRIED). Resolves false when the
+ * abort signal fires before the delay elapsed — the caller must NOT issue
+ * another request. The injected sleep keeps test seams working (tests abort
+ * inside the sleep and assert no further fetch).
+ */
+export function providerBackoffWait(
+  delayMs: number,
+  signal: AbortSignal | undefined,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false)
+  return new Promise(resolve => {
+    let settled = false
+    const onAbort = () => finish(false)
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener("abort", onAbort)
+      resolve(ok)
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+    void sleep(delayMs).then(() => finish(true), () => finish(true))
+  })
+}
+
 export function formatProviderRetryStatus(info: ProviderErrorInfo, delayMs: number, attempt: number, maxRetries: number): string {
   const label = info.status ? `${info.kind} ${info.status}` : info.kind
   const seconds = Math.ceil(delayMs / 1000)

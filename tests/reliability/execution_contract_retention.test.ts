@@ -52,10 +52,10 @@ describe("EXECUTION_CONTRACT_LOST (A4 reproduction)", () => {
       msg("assistant", "I will implement the sort."),
       msg("user", "go ahead"),
     ]
-    const state = createEpochState({ round: 1, totalMessages: messages.length })
+    const state = createEpochState()
     const result = epochRollover(messages, 1, planStateContext, state, 3)
 
-    expect(result.blocked).not.toBe(true)
+    if ("blocked" in result) throw new Error(`epoch rollover blocked: ${result.reason}`)
     const preamble = (result as { messages: ProviderMessage[] }).messages[0]!
     const preambleText = typeof preamble.content === "string"
       ? preamble.content
@@ -74,10 +74,10 @@ describe("EXECUTION_CONTRACT_LOST (A4 reproduction)", () => {
       msg("assistant", "ok"),
       msg("user", "go"),
     ]
-    const state = createEpochState({ round: 1, totalMessages: messages.length })
+    const state = createEpochState()
     const result = epochRollover(messages, 1, planStateContext, state, 3)
 
-    expect(result.blocked).not.toBe(true)
+    if ("blocked" in result) throw new Error(`epoch rollover blocked: ${result.reason}`)
     const preamble = (result as { messages: ProviderMessage[] }).messages[0]!
     const preambleText = typeof preamble.content === "string"
       ? preamble.content
@@ -90,7 +90,9 @@ describe("EXECUTION_CONTRACT_LOST (A4 reproduction)", () => {
 
 describe("DirectiveLedger / ExecutionContractLedger", () => {
   test("ledgers are importable and expose the contract shape", async () => {
+    // @ts-expect-error — RC-19 Phase 5: DirectiveLedger lands with the Instruction Authority fix
     const { DirectiveLedger } = await import("../../src/context-runtime/ledgers/directive-ledger")
+    // @ts-expect-error — RC-19 Phase 5: ExecutionContractLedger lands with the Instruction Authority fix
     const { ExecutionContractLedger } = await import("../../src/context-runtime/ledgers/execution-contract-ledger")
     expect(typeof DirectiveLedger).toBe("function")
     expect(typeof ExecutionContractLedger).toBe("function")
@@ -107,6 +109,7 @@ describe("DirectiveLedger / ExecutionContractLedger", () => {
   })
 
   test("a superseded contract never reactivates", async () => {
+    // @ts-expect-error — RC-19 Phase 5: ExecutionContractLedger lands with the Instruction Authority fix
     const { ExecutionContractLedger } = await import("../../src/context-runtime/ledgers/execution-contract-ledger")
     const ledger = new ExecutionContractLedger()
     const first = ledger.commit({
@@ -124,7 +127,7 @@ describe("DirectiveLedger / ExecutionContractLedger", () => {
     })
     expect(first.status).toBe("superseded")
     expect(second.status).toBe("active")
-    expect(ledger.activeContracts().some(c => c.contractId === first.contractId)).toBe(false)
+    expect(ledger.activeContracts().some((c: { contractId: string }) => c.contractId === first.contractId)).toBe(false)
   })
 })
 
@@ -132,7 +135,9 @@ describe("DirectiveLedger / ExecutionContractLedger", () => {
 
 describe("EXECUTION_CONTRACT_RECALL across eviction/rollover/compaction", () => {
   test("contract from round 1 is recalled after >60 messages, >30 rounds, rollover and compaction", async () => {
+    // @ts-expect-error — RC-19 Phase 5: ExecutionContractLedger lands with the Instruction Authority fix
     const { ExecutionContractLedger } = await import("../../src/context-runtime/ledgers/execution-contract-ledger")
+    // @ts-expect-error — RC-19 Phase 5: DirectiveLedger lands with the Instruction Authority fix
     const { DirectiveLedger } = await import("../../src/context-runtime/ledgers/directive-ledger")
     const ledger = new ExecutionContractLedger()
     const directives = new DirectiveLedger()
@@ -149,7 +154,7 @@ describe("EXECUTION_CONTRACT_RECALL across eviction/rollover/compaction", () => 
     // Simulate the long run: 30+ rounds, 60+ messages, rollovers and
     // compactions happen along the way. The ledgers are the memory — they
     // must recall the contract verbatim at the end.
-    const recall = ledger.activeContracts().find(c => c.contractId === contract.contractId)
+    const recall = ledger.activeContracts().find((c: { contractId: string }) => c.contractId === contract.contractId)
     expect(recall?.exactQuote).toContain("PROBE_PRESENT")
     expect(directives).toBeDefined()
   })

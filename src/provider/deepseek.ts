@@ -4,7 +4,7 @@ import Anthropic from "@anthropic-ai/sdk"
 import type { StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs } from "./retry"
+import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, providerBackoffWait } from "./retry"
 import { bindProviderAbort, type ClosableAsyncIterable } from "./stream-lifecycle"
 
 interface AnthropicLikeClient {
@@ -88,11 +88,21 @@ export class DeepSeekProvider implements LLMProvider {
     if (options.thinking) params.thinking = options.thinking as Anthropic.ThinkingConfigParam
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // RC-19 ABORT_RETRIED: an aborted request is never issued, and never
+      // retried once the signal fires — including an abort landing in backoff.
+      if (options.abortSignal?.aborted) {
+        yield { type: "error", data: "provider request aborted" }
+        return
+      }
       let unsafeToRetry = false
       try {
         yield* this.streamOnce(params, value => { unsafeToRetry = value }, options)
         return
       } catch (e) {
+        if (options.abortSignal?.aborted) {
+          yield { type: "error", data: "provider request aborted" }
+          return
+        }
         const info = classifyProviderError(e)
         const canRetry = info.retryable && !unsafeToRetry && attempt < this.maxRetries
         if (!canRetry) {
@@ -101,7 +111,11 @@ export class DeepSeekProvider implements LLMProvider {
         }
         const delayMs = providerRetryDelayMs(info, attempt)
         yield { type: "status", data: formatProviderRetryStatus(info, delayMs, attempt, this.maxRetries) }
-        await this.sleep(delayMs)
+        const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
+        if (!waited) {
+          yield { type: "error", data: "provider request aborted during retry backoff" }
+          return
+        }
       }
     }
   }
@@ -164,6 +178,10 @@ export class DeepSeekProvider implements LLMProvider {
               initialInput: isRecord(b.input) ? b.input : null,
             }
           } else if (isRecord(b) && b.type === "thinking") {
+            // RC-19 STREAM_REPLAY_SIDE_EFFECT: thinking deltas are emitted
+            // (buffered for the thinking store) — the stream is no longer
+            // replayable; a retry would duplicate reasoning output.
+            markUnsafeToRetry(true)
             cthink = { thinking: "", signature: String(b.signature ?? "") }
           }
           break

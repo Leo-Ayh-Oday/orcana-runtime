@@ -14,6 +14,10 @@ import {
   createProviderRoundResult,
   type ProviderRoundResult,
 } from "./round-result"
+import {
+  createProviderRoundRetryState,
+  type ProviderRoundRetryState,
+} from "./round-retry-state"
 
 export interface ProviderStreamInput {
   provider: LLMProvider
@@ -133,13 +137,18 @@ export async function* runProviderRound(
 ): AsyncGenerator<StreamEvent, ProviderRoundResult> {
   const result = createProviderRoundResult()
   const parentSignal = input.abortSignal ?? input.request.abortSignal
+  // RC-19 Phase 1: per-round retry state — the runner is the observer of what
+  // this round emitted; the provider enforces its own unsafeToRetry.
+  const retryState: ProviderRoundRetryState = createProviderRoundRetryState()
 
   try {
     for await (const event of streamProviderRoundEvents(input)) {
       if (event.type === "text" && event.data) {
+        retryState.emittedText = true
         result.textChunks.push(String(event.data))
         if (!input.bufferText) yield event
       } else if (event.type === "thinking_blocks" && event.data) {
+        retryState.emittedThinking = true
         result.thinkingBlocks = event.data as ThinkingBlock[]
       } else if (event.type === "token_usage" && event.data) {
         result.usage = mergeProviderTokenUsage(
@@ -157,6 +166,11 @@ export async function* runProviderRound(
           yield { type: "text", data: result.textChunks.join("") }
           result.bufferedTextEmitted = true
         }
+        // A complete tool call handed to the executor is the side-effect
+        // boundary: this round must never be blindly replayed.
+        retryState.toolCallStarted = true
+        retryState.completedToolCallIds.add(String((event.data as RoundToolCall).id))
+        retryState.sideEffectBoundaryCrossed = true
         result.toolCalls.push(event.data as RoundToolCall)
         yield event
       } else if (event.type === "error") {
@@ -174,5 +188,8 @@ export async function* runProviderRound(
 
   result.finalText = result.textChunks.join("")
   result.aborted = parentSignal?.aborted ?? false
+  retryState.aborted = result.aborted
+  result.requestId = retryState.requestId
+  result.sideEffectBoundaryCrossed = retryState.sideEffectBoundaryCrossed
   return result
 }

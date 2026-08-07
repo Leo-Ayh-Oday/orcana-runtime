@@ -64,13 +64,17 @@ describe("SESSION_EVENT_IDENTITY", () => {
 
     // The oracle requires per-event identity — no content dedup, no collapse:
     for (const m of loaded.messages) {
+      // @ts-expect-error — RC-19 Phase 3: eventId lands with the Session Event Identity fix
       expect(typeof m.eventId).toBe("string")
+      // @ts-expect-error — RC-19 Phase 3: sequence lands with the Session Event Identity fix
       expect(typeof m.sequence).toBe("number")
     }
     // Three identical user texts are three DISTINCT events.
     const users = loaded.messages.filter(m => m.role === "user")
     expect(users.length).toBe(2)
+    // @ts-expect-error — RC-19 Phase 3: eventId lands with the Session Event Identity fix
     expect(users[0]!.eventId).not.toBe(users[1]!.eventId)
+    // @ts-expect-error — RC-19 Phase 3: sequence lands with the Session Event Identity fix
     expect(users[0]!.sequence).not.toBe(users[1]!.sequence)
     expect(users[0]!.timestamp).not.toBe(users[1]!.timestamp)
   })
@@ -89,6 +93,7 @@ describe("SESSION_EVENT_IDENTITY", () => {
     const manager2 = new SessionManager(storeDir) // restart
     const loaded = manager2.load(s.id)!
     expect(loaded.messages.length).toBe(40)
+    // @ts-expect-error — RC-19 Phase 3: sequence lands with the Session Event Identity fix
     const seqs = loaded.messages.map(m => m.sequence as number)
     for (let i = 1; i < seqs.length; i++) expect(seqs[i]!).toBeGreaterThan(seqs[i - 1]!)
   })
@@ -98,6 +103,7 @@ describe("SESSION_EVENT_IDENTITY", () => {
 
 describe("SessionEventJournal", () => {
   test("journal module exists and exposes the event contract", async () => {
+    // @ts-expect-error — RC-19 Phase 3: SessionEventJournal lands with the Session Event Identity fix
     const { SessionEventJournal } = await import("../../src/session/event-journal")
     expect(typeof SessionEventJournal).toBe("function")
     const event = {
@@ -113,6 +119,7 @@ describe("SessionEventJournal", () => {
   })
 
   test("journal oracle: 20 rounds + 10 saves + identical text ×3 + restart", async () => {
+    // @ts-expect-error — RC-19 Phase 3: SessionEventJournal lands with the Session Event Identity fix
     const { SessionEventJournal } = await import("../../src/session/event-journal")
     const storeDir = tmpStoreDir()
     const journal = new SessionEventJournal(storeDir)
@@ -131,7 +138,7 @@ describe("SessionEventJournal", () => {
 
     // Restart: fresh journal over the same store — the oracle must match exactly.
     const journal2 = new SessionEventJournal(storeDir)
-    const events = journal2.load(sessionId)
+    const events: Array<{ eventId: string; sequence: number; content: string; createdAt: number }> = journal2.load(sessionId)
 
     expect(events.length).toBe(43)
     for (let i = 0; i < events.length; i++) {

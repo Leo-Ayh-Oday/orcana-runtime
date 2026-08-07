@@ -24,6 +24,7 @@ describe("K49 TOOL_SCHEMA_IN_BUDGET (regression lock)", () => {
     const tools = buildTools({
       name: "schema_heavy_tool",
       description: "a tool with a verbose schema description that takes many characters",
+      isReadonly: true,
       inputSchema: {
         type: "object",
         properties: {
@@ -43,11 +44,13 @@ describe("K49 TOOL_SCHEMA_IN_BUDGET (regression lock)", () => {
 
 describe("K48 TOKEN_ESTIMATE_UNIFIED", () => {
   test("TokenAccountingService is importable from the accounting module", async () => {
+    // @ts-expect-error — RC-19 Phase 4: TokenAccountingService lands with the Measurement Authority fix
     const { TokenAccountingService } = await import("../../src/context-runtime/accounting/token-accounting")
     expect(typeof TokenAccountingService).toBe("function")
   })
 
   test("estimateRequest reports the full budget split (text/message/schema/system/total)", async () => {
+    // @ts-expect-error — RC-19 Phase 4: TokenAccountingService lands with the Measurement Authority fix
     const { TokenAccountingService } = await import("../../src/context-runtime/accounting/token-accounting")
     const service = new TokenAccountingService()
     const estimate = service.estimateRequest({
@@ -62,8 +65,10 @@ describe("K48 TOKEN_ESTIMATE_UNIFIED", () => {
   })
 
   test("request-builder estimate delegates to the unified service (no local /3)", async () => {
+    // @ts-expect-error — RC-19 Phase 4: TokenAccountingService lands with the Measurement Authority fix
     const { TokenAccountingService } = await import("../../src/context-runtime/accounting/token-accounting")
     const service = new TokenAccountingService()
+    // @ts-expect-error — RC-19 Phase 4: estimate-delegates lands with the Measurement Authority fix
     const { estimateRoundTokens } = await import("../../src/context-runtime/accounting/estimate-delegates")
     // The production entry must be the service-backed delegate — a module that
     // re-implements /3 on its own is a K48 violation.
@@ -79,6 +84,7 @@ describe("K48 TOKEN_ESTIMATE_UNIFIED", () => {
   })
 
   test("calibration: observeActualUsage drives the EMA factor and error stays bounded", async () => {
+    // @ts-expect-error — RC-19 Phase 4: TokenAccountingService lands with the Measurement Authority fix
     const { TokenAccountingService } = await import("../../src/context-runtime/accounting/token-accounting")
     const service = new TokenAccountingService()
     // Feed observations of a provider whose real density is 2.5 chars/token:

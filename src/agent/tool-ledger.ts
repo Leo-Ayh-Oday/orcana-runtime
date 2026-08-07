@@ -54,6 +54,11 @@ export class ToolExecutionLedger {
     return this.entries.map(entry => ({ ...entry, changedFiles: [...entry.changedFiles] }))
   }
 
+  /** RC-19 Phase 1: run-wide dedup key — the first entry for a call id wins. */
+  findById(id: string): ToolLedgerEntry | undefined {
+    return this.entries.find(entry => entry.id === id)
+  }
+
   failedCount(): number {
     return this.entries.filter(entry => !entry.success).length
   }

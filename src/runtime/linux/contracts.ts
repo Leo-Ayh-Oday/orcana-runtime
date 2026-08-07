@@ -258,6 +258,9 @@ export interface ExecutionCellSpec {
   }
   secrets: SecretBinding[]
   resources: {
+    /** LNXF-R2 10.2：CPU 资源记账单位（1000 = 1 核；ResourceLedger 唯一
+     *  权威）。cgroup 物化由 cpuQuotaMicros/cpuPeriodMicros 表达。 */
+    cpuMillis?: number
     cpuQuotaMicros?: number
     cpuPeriodMicros?: number
     cpuWeight?: number

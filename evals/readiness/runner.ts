@@ -28,7 +28,11 @@ function parseArgs(argv: string[]): RunOptions {
     switch (a) {
       case "--scenario": opts.scenario = argv[++i]; break
       case "--suite": opts.suite = argv[++i] as RunOptions["suite"]; break
-      case "--lane": opts.lanes = argv[++i]!.split(",") as Lane[]; break
+      case "--lane": {
+        const raw = argv[++i]!
+        opts.lanes = raw === "all" ? ["oracle", "scripted", "ceiling", "production"] : raw.split(",") as Lane[]
+        break
+      }
       case "--seed": opts.seed = Number(argv[++i]); break
       case "--repeats": opts.repeats = Number(argv[++i]); break
       case "--strict": opts.strict = true; break

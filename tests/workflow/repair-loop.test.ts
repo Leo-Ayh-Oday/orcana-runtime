@@ -40,8 +40,8 @@ function tools(): ContractToolDescriptor[] {
   ]
 }
 
-const BAD_DIFF = "--- a/tmp-g4-repair/a.ts\n+++ b/tmp-g4-repair/a.ts\n@@ -99 +99 @@\n-export const a = 999\n+export const a = 2\n"
-const GOOD_DIFF = "--- a/tmp-g4-repair/a.ts\n+++ b/tmp-g4-repair/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+export const a = 2\n"
+const BAD_DIFF = "--- a/a.ts\n+++ b/a.ts\n@@ -99 +99 @@\n-export const a = 999\n+export const a = 2\n"
+const GOOD_DIFF = "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+export const a = 2\n"
 
 function repairSpec(round: number, diff: string): WorkflowSpec {
   return {
@@ -60,6 +60,7 @@ describe("G4 convergent repair loop", () => {
     const registry = buildReadWriteRegistry(tools())
     const loop = new RepairLoop({
       registry,
+      projectRoot: PROJECT,
       maxAttempts: 3,
       maxDryRounds: 99,
       specFactory: ({ round }) => (round === 1 ? repairSpec(1, BAD_DIFF) : null),
@@ -74,6 +75,7 @@ describe("G4 convergent repair loop", () => {
     const registry = buildReadWriteRegistry(tools())
     const loop = new RepairLoop({
       registry,
+      projectRoot: PROJECT,
       maxAttempts: 3,
       maxDryRounds: 99,
       specFactory: ({ round }) => (round === 1 ? repairSpec(1, BAD_DIFF) : null),
@@ -88,6 +90,7 @@ describe("G4 convergent repair loop", () => {
     const registry = buildReadWriteRegistry(tools())
     const loop = new RepairLoop({
       registry,
+      projectRoot: PROJECT,
       maxDryRounds: 2,
       specFactory: ({ round }) => (round === 1 ? repairSpec(1, BAD_DIFF) : null),
     })
@@ -111,6 +114,7 @@ describe("G4 convergent repair loop", () => {
     let round = 0
     const loop = new RepairLoop({
       registry,
+      projectRoot: PROJECT,
       maxAttempts: 4,
       specFactory: () => {
         round++
@@ -129,6 +133,7 @@ describe("G4 convergent repair loop", () => {
     const registry = buildReadWriteRegistry(tools())
     const loop = new RepairLoop({
       registry,
+      projectRoot: PROJECT,
       budget: 1,
       specFactory: () => repairSpec(1, BAD_DIFF),
     })
@@ -145,6 +150,7 @@ describe("G4 convergent repair loop", () => {
     const registry = buildReadWriteRegistry(tools())
     const loop = new RepairLoop({
       registry,
+      projectRoot: PROJECT,
       maxDryRounds: 2,
       specFactory: ({ round }) => (round <= 2 ? repairSpec(round, BAD_DIFF) : null),
     })

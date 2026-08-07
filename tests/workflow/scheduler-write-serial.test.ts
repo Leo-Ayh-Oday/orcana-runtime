@@ -41,7 +41,8 @@ function tools(): ContractToolDescriptor[] {
 }
 
 function makePatchDiff(content: string): string {
-  return `--- a/tmp-g3-serial/a.ts\n+++ b/tmp-g3-serial/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+${content}\n`
+  // D7：diff 路径是 projectRoot 相对 —— 不再内嵌 cwd 前缀
+  return `--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+${content}\n`
 }
 
 describe("G3 single-writer scheduling", () => {
@@ -55,10 +56,11 @@ describe("G3 single-writer scheduling", () => {
       maxParallel: 4,
       nodes: [
         { id: "w1", handler: "tool.apply_patch", input: { patches: [{ diff: makePatchDiff("export const a = 2") }] }, dependsOn: [] },
-        { id: "w2", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/tmp-g3-serial/a.ts\n+++ b/tmp-g3-serial/a.ts\n@@ -1 +1 @@\n-export const a = 2\n+export const a = 3\n" }] }, dependsOn: [] },
+        { id: "w2", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-export const a = 2\n+export const a = 3\n" }] }, dependsOn: [] },
       ],
     }
     const run = await runScheduler(spec, registry, {
+      projectRoot: PROJECT,
       onNodeFinished: r => overlaps.push([r.startedAt, r.finishedAt]),
     })
     expect(run.results).toHaveLength(2)
@@ -78,7 +80,7 @@ describe("G3 single-writer scheduling", () => {
         { id: "w1", handler: "tool.apply_patch", input: { patches: [{ diff: "x" }] }, dependsOn: [] },
       ],
     }
-    const run = await runScheduler(spec, registry)
+    const run = await runScheduler(spec, registry, { projectRoot: PROJECT })
     expect(run.results[0]!.status).toBe("failed")
     expect(run.results[0]!.error).toContain("rejected in readonly mode")
   })
@@ -97,7 +99,7 @@ describe("G3 single-writer scheduling", () => {
         { id: "r4", handler: "tool.read_file", input: { path: A }, dependsOn: [] },
       ],
     }
-    const run = await runScheduler(spec, registry)
+    const run = await runScheduler(spec, registry, { projectRoot: PROJECT })
     expect(run.results.filter(r => r.status === "done")).toHaveLength(4)
   })
 })

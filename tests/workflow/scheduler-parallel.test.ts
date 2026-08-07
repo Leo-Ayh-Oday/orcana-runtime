@@ -52,6 +52,7 @@ function withTestAuthority<T>(projectRoot: string, fn: () => T | Promise<T>): Pr
         hostRoot: projectRoot,
         kind: "main",
         access: "readwrite",
+        physicalWorkspaceKey: "wp_test",
         ownerFiles: [],
       },
     }
@@ -74,7 +75,7 @@ describe("G1 parallel scheduler", () => {
       ],
     }
     const started = Date.now()
-    const run = await runScheduler(spec, buildReadonlyRegistry(tools()))
+    const run = await runScheduler(spec, buildReadonlyRegistry(tools()), { projectRoot: dir })
     const wall = Date.now() - started
 
     expect(run.results).toHaveLength(4)
@@ -102,7 +103,7 @@ describe("G1 parallel scheduler", () => {
         { id: "tool:gs1", handler: "tool.git_status", input: { path: dir }, dependsOn: [] },
       ],
     }
-    const run = await withTestAuthority(dir, () => runScheduler(spec, buildReadonlyRegistry(tools())))
+    const run = await withTestAuthority(dir, () => runScheduler(spec, buildReadonlyRegistry(tools()), { projectRoot: dir }))
     expect(run.results.filter(r => r.status === "done")).toHaveLength(3)
   })
 
@@ -115,7 +116,7 @@ describe("G1 parallel scheduler", () => {
         { id: "tool:s1", handler: "tool.find_symbol", input: { query: "a", path: dir }, dependsOn: [] },
       ],
     }
-    const run = await runScheduler(spec, buildReadonlyRegistry(tools()))
+    const run = await runScheduler(spec, buildReadonlyRegistry(tools()), { projectRoot: dir })
     expect(run.results[0]!.status).toBe("done")
   })
 })

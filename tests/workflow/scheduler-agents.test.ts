@@ -57,10 +57,10 @@ function twoAgentSpec(round: number): WorkflowSpec {
     mode: "read-write",
     maxParallel: 4,
     nodes: [
-      { id: "a1:r:read", handler: "tool.read_file", input: { path: "tmp-g7-sched/a.ts" }, dependsOn: [] },
-      { id: "a2:r:read", handler: "tool.read_file", input: { path: "tmp-g7-sched/b.ts" }, dependsOn: [] },
-      { id: "a1:w:patch", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/tmp-g7-sched/a.ts\n+++ b/tmp-g7-sched/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+export const a = 2\n" }] }, dependsOn: ["a1:r:read"] },
-      { id: "a2:w:patch", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/tmp-g7-sched/b.ts\n+++ b/tmp-g7-sched/b.ts\n@@ -1 +1 @@\n-export const b = 1\n+export const b = 2\n" }] }, dependsOn: ["a2:r:read"] },
+      { id: "a1:r:read", handler: "tool.read_file", input: { path: "a.ts" }, dependsOn: [] },
+      { id: "a2:r:read", handler: "tool.read_file", input: { path: "b.ts" }, dependsOn: [] },
+      { id: "a1:w:patch", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+export const a = 2\n" }] }, dependsOn: ["a1:r:read"] },
+      { id: "a2:w:patch", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-export const b = 1\n+export const b = 2\n" }] }, dependsOn: ["a2:r:read"] },
     ],
   }
 }
@@ -70,7 +70,7 @@ describe("G7 multi-agent through the scheduler", () => {
     const pool = new AgentPool()
     expect(pool.register({ id: "a1", ownerFiles: ["a.ts"], worktree: "/tmp/wt-a1" }).ok).toBe(true)
     expect(pool.register({ id: "a2", ownerFiles: ["b.ts"], worktree: "/tmp/wt-a2" }).ok).toBe(true)
-    const run = await runScheduler(twoAgentSpec(1), buildReadWriteRegistry(tools()), { pool })
+    const run = await runScheduler(twoAgentSpec(1), buildReadWriteRegistry(tools()), { pool, projectRoot: PROJECT })
     expect(run.results.every(r => r.status === "done")).toBe(true)
     expect(run.status).toBe("blocked_no_evidence") // no verification nodes bound
     const read = require("node:fs").readFileSync(A, "utf-8")
@@ -84,7 +84,7 @@ describe("G7 multi-agent through the scheduler", () => {
     pool.register({ id: "a1", ownerFiles: ["a.ts"], worktree: "/tmp/wt-a1" })
     pool.register({ id: "a2", ownerFiles: ["b.ts"], worktree: "/tmp/wt-a2" })
     pool.cancel("a1")
-    const run = await runScheduler(twoAgentSpec(2), buildReadWriteRegistry(tools()), { pool })
+    const run = await runScheduler(twoAgentSpec(2), buildReadWriteRegistry(tools()), { pool, projectRoot: PROJECT })
     const a1Nodes = run.results.filter(r => r.nodeId.startsWith("a1:"))
     const a2Nodes = run.results.filter(r => r.nodeId.startsWith("a2:"))
     expect(a1Nodes.every(r => r.status === "failed" && r.error?.includes("cancelled"))).toBe(true)
@@ -95,7 +95,7 @@ describe("G7 multi-agent through the scheduler", () => {
     const pool = new AgentPool()
     pool.register({ id: "a1", ownerFiles: ["a.ts"], worktree: "/tmp/wt-a1", budget: { maxNodes: 1 } })
     pool.register({ id: "a2", ownerFiles: ["b.ts"], worktree: "/tmp/wt-a2" })
-    const run = await runScheduler(twoAgentSpec(3), buildReadWriteRegistry(tools()), { pool })
+    const run = await runScheduler(twoAgentSpec(3), buildReadWriteRegistry(tools()), { pool, projectRoot: PROJECT })
     const a1Nodes = run.results.filter(r => r.nodeId.startsWith("a1:"))
     const a2Nodes = run.results.filter(r => r.nodeId.startsWith("a2:"))
     expect(a1Nodes.some(r => r.status === "failed" && r.error?.includes("budget"))).toBe(true)

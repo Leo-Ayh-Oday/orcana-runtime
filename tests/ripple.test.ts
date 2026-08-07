@@ -41,10 +41,10 @@ function project(files: Record<string, string>): string {
   return root
 }
 
-async function recordFullBaselines(...paths: string[]): Promise<void> {
+async function recordFullBaselines(root: string, ...paths: string[]): Promise<void> {
   const read = buildTool(READ_FILE)
   for (const path of paths) {
-    expect((await read.execute({ path })).success).toBe(true)
+    expect((await read.execute({ path }, { projectRoot: root })).success).toBe(true)
   }
 }
 
@@ -135,13 +135,13 @@ describe("Ripple Engine", () => {
     const before = readFileSync(full, "utf-8")
     const tool = buildTool(EDIT_FILE)
 
-    await recordFullBaselines(full)
+    await recordFullBaselines(root, full)
     const result = await tool.execute({
       path: full,
       old_string: "add(a: number, b: number)",
       new_string: "add(values: number[])",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.content).toContain("Ripple blocked")
@@ -157,7 +157,7 @@ describe("Ripple Engine", () => {
     })
     const tool = buildTool(MULTI_EDIT)
 
-    await recordFullBaselines(join(root, "math.ts"), join(root, "cart.ts"))
+    await recordFullBaselines(root, join(root, "math.ts"), join(root, "cart.ts"))
     const result = await tool.execute({
       confirm: true,
       edits: [
@@ -172,7 +172,7 @@ describe("Ripple Engine", () => {
           new_string: "add([1, 2])",
         },
       ],
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(true)
     expect(readFileSync(join(root, "math.ts"), "utf-8")).toContain("add(values: number[])")
@@ -188,18 +188,18 @@ describe("Ripple Engine", () => {
     const write = buildTool(WRITE_FILE)
     const edit = buildTool(EDIT_FILE)
 
-    await recordFullBaselines(join(root, "note.txt"))
+    await recordFullBaselines(root, join(root, "note.txt"))
     const writeResult = await write.execute({
       path: join(root, "created.txt"),
       content: "new\n",
       confirm: true,
-    })
+    }, { projectRoot: root })
     const editResult = await edit.execute({
       path: join(root, "note.txt"),
       old_string: "before",
       new_string: "after",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(writeResult.success).toBe(true)
     expect(writeResult.metadata?.checkpoint).toMatchObject({ existedBefore: false, previousBytes: 0, previousHash: null })
@@ -217,20 +217,20 @@ describe("Ripple Engine", () => {
     const edit = buildTool(EDIT_FILE)
     const rollback = buildTool(ROLLBACK_TRANSACTION)
 
-    await recordFullBaselines(join(root, "note.txt"))
+    await recordFullBaselines(root, join(root, "note.txt"))
     const editResult = await edit.execute({
       path: join(root, "note.txt"),
       old_string: "before",
       new_string: "after",
       confirm: true,
-    })
+    }, { projectRoot: root })
     expect(editResult.success).toBe(true)
     expect(readFileSync(join(root, "note.txt"), "utf-8")).toBe("after\n")
 
     const rollbackResult = await rollback.execute({
       transactionId: String(editResult.metadata?.transactionId),
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(rollbackResult.success).toBe(true)
     expect(readFileSync(join(root, "note.txt"), "utf-8")).toBe("before\n")
@@ -247,14 +247,14 @@ describe("Ripple Engine", () => {
       path,
       content: "new\n",
       confirm: true,
-    })
+    }, { projectRoot: root })
     expect(writeResult.success).toBe(true)
     expect(existsSync(path)).toBe(true)
 
     const rollbackResult = await rollback.execute({
       transactionId: String(writeResult.metadata?.transactionId),
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(rollbackResult.success).toBe(true)
     expect(existsSync(path)).toBe(false)
@@ -269,14 +269,14 @@ describe("Ripple Engine", () => {
     const multi = buildTool(MULTI_EDIT)
     const rollback = buildTool(ROLLBACK_TRANSACTION)
 
-    await recordFullBaselines(join(root, "a.ts"), join(root, "b.ts"))
+    await recordFullBaselines(root, join(root, "a.ts"), join(root, "b.ts"))
     const editResult = await multi.execute({
       confirm: true,
       edits: [
         { path: join(root, "a.ts"), old_string: "a = 1", new_string: "a = 10" },
         { path: join(root, "b.ts"), old_string: "b = 2", new_string: "b = 20" },
       ],
-    })
+    }, { projectRoot: root })
     expect(editResult.success).toBe(true)
     expect(readFileSync(join(root, "a.ts"), "utf-8")).toContain("a = 10")
     expect(readFileSync(join(root, "b.ts"), "utf-8")).toContain("b = 20")
@@ -284,7 +284,7 @@ describe("Ripple Engine", () => {
     const rollbackResult = await rollback.execute({
       transactionId: String(editResult.metadata?.transactionId),
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(rollbackResult.success).toBe(true)
     expect(readFileSync(join(root, "a.ts"), "utf-8")).toContain("a = 1")
@@ -305,14 +305,14 @@ describe("Ripple Engine", () => {
     const beforeB = readFileSync(join(root, "b.ts"), "utf-8")
     const tool = buildTool(MULTI_EDIT)
 
-    await recordFullBaselines(join(root, "a.ts"), join(root, "b.ts"))
+    await recordFullBaselines(root, join(root, "a.ts"), join(root, "b.ts"))
     const result = await tool.execute({
       confirm: true,
       edits: [
         { path: join(root, "a.ts"), old_string: "a = 1", new_string: "a = 10" },
         { path: join(root, "b.ts"), old_string: "missing", new_string: "b = 20" },
       ],
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(readFileSync(join(root, "a.ts"), "utf-8")).toBe(beforeA)

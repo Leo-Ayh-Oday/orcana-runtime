@@ -250,8 +250,10 @@ const APPLY_PATCH_SCHEMA = {
   required: ["diff"],
 } as const
 
-/** Executable core (projectRoot injectable for tests; tools default to cwd). */
-export function executeApplyPatch(params: Record<string, unknown>, projectRoot = process.cwd()): ToolResult {
+/** Executable core (projectRoot injectable for tests). RC-19 Phase 2 (D7):
+ *  no cwd fallback — an absent root fails closed. */
+export function executeApplyPatch(params: Record<string, unknown>, projectRoot?: string): ToolResult {
+  if (!projectRoot) return Result.blocked("apply_patch requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
   const diff = String(params["diff"] ?? "")
   const baseHash = typeof params["baseHash"] === "string" ? params["baseHash"] : undefined
   const dryRun = params["dryRun"] === true
@@ -277,7 +279,7 @@ export const APPLY_PATCH_TOOL: ToolDef = {
   category: "file",
   requiresConfirmation: true,
   inputSchema: APPLY_PATCH_SCHEMA as unknown as Record<string, unknown>,
-  execute: (params) => executeApplyPatch(params),
+  execute: (params, _onProgress, context) => executeApplyPatch(params, context?.projectRoot),
 }
 
 const APPLY_PATCH_TRANSACTION_SCHEMA = {
@@ -300,8 +302,10 @@ const APPLY_PATCH_TRANSACTION_SCHEMA = {
   required: ["patches"],
 } as const
 
-/** Executable core (projectRoot injectable for tests). */
-export function executeApplyPatchTransaction(params: Record<string, unknown>, projectRoot = process.cwd()): ToolResult {
+/** Executable core (projectRoot injectable for tests). RC-19 Phase 2 (D7):
+ *  no cwd fallback — an absent root fails closed. */
+export function executeApplyPatchTransaction(params: Record<string, unknown>, projectRoot?: string): ToolResult {
+  if (!projectRoot) return Result.blocked("apply_patch_transaction requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
   const patches = params["patches"] as Array<{ diff: string; baseHash?: string }>
   const idempotencyKey = typeof params["idempotencyKey"] === "string" ? params["idempotencyKey"] : undefined
   const dryRun = params["dryRun"] === true
@@ -372,5 +376,5 @@ export const APPLY_PATCH_TRANSACTION_TOOL: ToolDef = {
   category: "file",
   requiresConfirmation: true,
   inputSchema: APPLY_PATCH_TRANSACTION_SCHEMA as unknown as Record<string, unknown>,
-  execute: (params) => executeApplyPatchTransaction(params),
+  execute: (params, _onProgress, context) => executeApplyPatchTransaction(params, context?.projectRoot),
 }

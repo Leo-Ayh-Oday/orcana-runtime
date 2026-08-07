@@ -49,7 +49,7 @@ describe("file tools runtime FileState observation", () => {
     const root = project({ "src/a.ts": "export const value = 1\n" })
     const tool = buildTool(READ_FILE)
 
-    const result = await tool.execute({ path: "src/a.ts" })
+    const result = await tool.execute({ path: "src/a.ts" }, { projectRoot: root })
     const record = getRuntimeFileStateLedger().get(resolve(root, "src/a.ts"))
 
     expect(result.success).toBe(true)
@@ -63,7 +63,7 @@ describe("file tools runtime FileState observation", () => {
     const root = project({ "src/a.ts": "one\ntwo\nthree\n" })
     const tool = buildTool(READ_FILE)
 
-    const result = await tool.execute({ path: "src/a.ts", offset: 1, limit: 1 })
+    const result = await tool.execute({ path: "src/a.ts", offset: 1, limit: 1 }, { projectRoot: root })
     const record = getRuntimeFileStateLedger().get(resolve(root, "src/a.ts"))
 
     expect(result.success).toBe(true)
@@ -76,7 +76,7 @@ describe("file tools runtime FileState observation", () => {
     const root = project({ "src/large.ts": Array.from({ length: 410 }, (_, i) => `export const v${i} = ${i}`).join("\n") })
     const tool = buildTool(READ_FILE)
 
-    const result = await tool.execute({ path: "src/large.ts" })
+    const result = await tool.execute({ path: "src/large.ts" }, { projectRoot: root })
     const record = getRuntimeFileStateLedger().get(resolve(root, "src/large.ts"))
 
     expect(result.success).toBe(true)
@@ -90,7 +90,7 @@ describe("file tools runtime FileState observation", () => {
     const root = project({})
     const tool = buildTool(WRITE_FILE)
 
-    const result = await tool.execute({ path: "src/a.ts", content: "export const value = 2\n", confirm: true })
+    const result = await tool.execute({ path: "src/a.ts", content: "export const value = 2\n", confirm: true }, { projectRoot: root })
     const fullPath = resolve(root, "src/a.ts")
     const record = getRuntimeFileStateLedger().get(fullPath)
 
@@ -117,7 +117,7 @@ describe("file tools runtime FileState observation", () => {
       path: "src/a.ts",
       content: "export const value = 2\n",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({
@@ -134,12 +134,12 @@ describe("file tools runtime FileState observation", () => {
     const write = buildTool(WRITE_FILE)
     const fullPath = resolve(root, "src/a.ts")
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
     const result = await write.execute({
       path: "src/a.ts",
       content: "export const value = 2\n",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(true)
     expect(readFileSync(fullPath, "utf-8")).toBe("export const value = 2\n")
@@ -151,13 +151,13 @@ describe("file tools runtime FileState observation", () => {
     const write = buildTool(WRITE_FILE)
     const fullPath = resolve(root, "src/a.ts")
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
     rmSync(fullPath)
     const result = await write.execute({
       path: "src/a.ts",
       content: "export const value = 2\n",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({
@@ -173,13 +173,13 @@ describe("file tools runtime FileState observation", () => {
     const read = buildTool(READ_FILE)
     const tool = buildTool(EDIT_FILE)
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
     const result = await tool.execute({
       path: "src/a.ts",
       old_string: "value = 1",
       new_string: "value = 2",
       confirm: true,
-    })
+    }, { projectRoot: root })
     const record = getRuntimeFileStateLedger().get(resolve(root, "src/a.ts"))
 
     expect(result.success).toBe(true)
@@ -198,7 +198,7 @@ describe("file tools runtime FileState observation", () => {
       old_string: "value = 1",
       new_string: "value = 2",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({
@@ -219,7 +219,7 @@ describe("file tools runtime FileState observation", () => {
       old_string: "value = 1",
       new_string: "value = 2",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.content).not.toContain(root)
@@ -238,7 +238,7 @@ describe("file tools runtime FileState observation", () => {
       old_string: "external",
       new_string: "agent",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({
@@ -255,12 +255,12 @@ describe("file tools runtime FileState observation", () => {
     const write = buildTool(WRITE_FILE)
     const fullPath = resolve(root, "src/a.ts")
 
-    expect((await read.execute({ path: "src/a.ts", offset: 0, limit: 1 })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts", offset: 0, limit: 1 }, { projectRoot: root })).success).toBe(true)
     const result = await write.execute({
       path: "src/a.ts",
       content: "changed\n",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({
@@ -278,12 +278,12 @@ describe("file tools runtime FileState observation", () => {
     const write = buildTool(WRITE_FILE)
     const fullPath = resolve(root, "src/large.ts")
 
-    expect((await read.execute({ path: "src/large.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/large.ts" }, { projectRoot: root })).success).toBe(true)
     const result = await write.execute({
       path: "src/large.ts",
       content: "export const replacement = true\n",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({
@@ -302,15 +302,15 @@ describe("file tools runtime FileState observation", () => {
     const read = buildTool(READ_FILE)
     const tool = buildTool(MULTI_EDIT)
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
-    expect((await read.execute({ path: "src/b.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
+    expect((await read.execute({ path: "src/b.ts" }, { projectRoot: root })).success).toBe(true)
     const result = await tool.execute({
       confirm: true,
       edits: [
         { path: "src/a.ts", old_string: "a = 1", new_string: "a = 2" },
         { path: "src/b.ts", old_string: "b = 1", new_string: "b = 2" },
       ],
-    })
+    }, { projectRoot: root })
     const ledger = getRuntimeFileStateLedger()
 
     expect(result.success).toBe(true)
@@ -329,7 +329,7 @@ describe("file tools runtime FileState observation", () => {
     const edit = buildTool(EDIT_FILE)
     const fullPath = resolve(root, "src/a.ts")
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
     writeFileSync(fullPath, "// external change\nexport const value = 1\n", "utf-8")
 
     const result = await edit.execute({
@@ -337,7 +337,7 @@ describe("file tools runtime FileState observation", () => {
       old_string: "value = 1",
       new_string: "value = 2",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.content).toContain("FreshnessGate")
@@ -356,22 +356,22 @@ describe("file tools runtime FileState observation", () => {
     const edit = buildTool(EDIT_FILE)
     const fullPath = resolve(root, "src/a.ts")
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
     writeFileSync(fullPath, "// external change\nexport const value = 1\n", "utf-8")
     expect((await edit.execute({
       path: "src/a.ts",
       old_string: "value = 1",
       new_string: "value = 2",
       confirm: true,
-    })).success).toBe(false)
+    }, { projectRoot: root })).success).toBe(false)
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
     const result = await edit.execute({
       path: "src/a.ts",
       old_string: "value = 1",
       new_string: "value = 2",
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(true)
     expect(readFileSync(fullPath, "utf-8")).toContain("value = 2")
@@ -388,7 +388,7 @@ describe("file tools runtime FileState observation", () => {
       start_line: 1,
       end_line: 1,
       confirm: true,
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({
@@ -400,14 +400,14 @@ describe("file tools runtime FileState observation", () => {
   })
 
   test("edit_fim rejects forbidden paths before calling the remote model", async () => {
-    project({ ".git/config": "[core]\nrepositoryformatversion = 0\n" })
+    const root = project({ ".git/config": "[core]\nrepositoryformatversion = 0\n" })
     const read = buildTool(READ_FILE)
     const fim = buildTool(EDIT_FIM)
     const previousFetch = globalThis.fetch
     const previousKey = process.env.DEEPSEEK_API_KEY
     let fetchCalls = 0
 
-    expect((await read.execute({ path: ".git/config" })).success).toBe(true)
+    expect((await read.execute({ path: ".git/config" }, { projectRoot: root })).success).toBe(true)
     process.env.DEEPSEEK_API_KEY = "test-key"
     globalThis.fetch = (async () => {
       fetchCalls++
@@ -421,7 +421,7 @@ describe("file tools runtime FileState observation", () => {
         start_line: 1,
         end_line: 1,
         confirm: true,
-      })
+      }, { projectRoot: root })
 
       expect(result.success).toBe(false)
       expect(result.metadata).toMatchObject({ blocked: true, gate: "path_policy" })
@@ -441,7 +441,7 @@ describe("file tools runtime FileState observation", () => {
     const previousFetch = globalThis.fetch
     const previousKey = process.env.DEEPSEEK_API_KEY
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
     process.env.DEEPSEEK_API_KEY = "test-key"
     globalThis.fetch = (async () => {
       writeFileSync(fullPath, "// external change\nexport const value = 1\n", "utf-8")
@@ -458,7 +458,7 @@ describe("file tools runtime FileState observation", () => {
         start_line: 1,
         end_line: 1,
         confirm: true,
-      })
+      }, { projectRoot: root })
 
       expect(result.success).toBe(false)
       expect(result.metadata).toMatchObject({
@@ -484,8 +484,8 @@ describe("file tools runtime FileState observation", () => {
     const pathA = resolve(root, "src/a.ts")
     const pathB = resolve(root, "src/b.ts")
 
-    expect((await read.execute({ path: "src/a.ts" })).success).toBe(true)
-    expect((await read.execute({ path: "src/b.ts" })).success).toBe(true)
+    expect((await read.execute({ path: "src/a.ts" }, { projectRoot: root })).success).toBe(true)
+    expect((await read.execute({ path: "src/b.ts" }, { projectRoot: root })).success).toBe(true)
     writeFileSync(pathB, "// external change\nexport const b = 1\n", "utf-8")
 
     const result = await multi.execute({
@@ -494,7 +494,7 @@ describe("file tools runtime FileState observation", () => {
         { path: "src/a.ts", old_string: "a = 1", new_string: "a = 2" },
         { path: "src/b.ts", old_string: "b = 1", new_string: "b = 2" },
       ],
-    })
+    }, { projectRoot: root })
 
     expect(result.success).toBe(false)
     expect(result.metadata).toMatchObject({

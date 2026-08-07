@@ -12,6 +12,8 @@ export async function executeNode(
   node: WorkflowNodeSpec,
   registry: HandlerRegistry,
   store: ResultStore,
+  /** RC-19 D7: run-scoped tool path authority root (fail-closed when absent). */
+  projectRoot?: string,
 ): Promise<WorkflowNodeResult> {
   const startedAt = Date.now()
   const handler = registry.get(node.handler)
@@ -29,7 +31,7 @@ export async function executeNode(
     return result
   }
   try {
-    const output = await handler.run(node.input)
+    const output = await handler.run(node.input, projectRoot)
     const result: WorkflowNodeResult = {
       nodeId: node.id,
       status: "done",

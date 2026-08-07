@@ -73,6 +73,11 @@ export interface CapabilityExecuteInput {
   /** RT-3: explicit run-scoped execution context (node mode wires it from
    *  the run scope; loop mode keeps the legacy loose parameters). */
   context?: ToolExecutionContext
+  /** RC-19 Phase 2 (D7): authoritative project root for this execution.
+   *  Threaded into the tool context — relative paths resolve against it,
+   *  never process.cwd(). Fail-closed: absent root yields an empty authority
+   *  (tools then reject path work rather than guess a cwd). */
+  projectRoot?: string
 }
 
 export interface CapabilityExecutionResult {
@@ -196,6 +201,10 @@ export async function executeCapability(
         params: effectiveParams,
         abortSignal: input.abortSignal,
         parallelResult: input.parallelResult,
+        // RC-19 Phase 2 (D7): projectRoot from the batch/run scope; node-mode
+        // callers may carry it on the execution context. Absent → empty
+        // (fail-closed — never process.cwd()).
+        projectRoot: input.projectRoot ?? input.context?.projectRoot ?? "",
       })
       result = output.result
     } else {

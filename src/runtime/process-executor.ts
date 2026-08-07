@@ -11,6 +11,7 @@
  */
 
 import { spawn } from "node:child_process"
+import { isAbsolute, relative } from "node:path"
 import type { LinuxExecutionBroker } from "./linux/broker"
 import { createLinuxBroker } from "./linux/broker"
 import type { ExecutionProfile, NetworkMode, SandboxReceipt, TrustedExecutionAuthority, UntrustedCapabilityRequest } from "./linux/contracts"
@@ -67,15 +68,22 @@ const DEFAULT_STDERR_MAX = 4 * 1024 * 1024
 
 /** R2 PR-9：ProcessRequest（不可信）→ UntrustedCapabilityRequest。
  *  cwd 在 Linux 下只能是相对路径（解析为相对 workspace 的逻辑目录）；
- *  身份与工作区来自 requireExecutionAuthority()（INV-A/INV-B）。 */
+ *  身份与工作区来自 requireExecutionAuthority()（INV-A/INV-B）。
+ *  绝对 cwd 容错：typecheck 工具等传 process.cwd()（绝对）——在 workspace
+ *  内则相对化，在 workspace 外相对化后含 .. 由 resolveAuthorizedCwd 的
+ *  WORKSPACE_PATH_ESCAPE 拒绝（安全边界不破）。 */
 function capabilityRequestFromRequest(request: ProcessRequest): { request: UntrustedCapabilityRequest; authority: TrustedExecutionAuthority } {
   const authority = requireExecutionAuthority()
+  const rawCwd = request.cwd ?? "."
+  const relativeCwd = isAbsolute(rawCwd)
+    ? relative(authority.workspace.hostRoot, rawCwd)
+    : rawCwd
   return {
     request: {
       command: {
         executable: request.command,
         args: request.args,
-        relativeCwd: request.cwd ?? ".",
+        relativeCwd,
         stdin: "closed",
       },
       profile: request.profile ?? "build",

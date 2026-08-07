@@ -5,6 +5,33 @@ import { mkdtempSync, writeFileSync, mkdirSync, chmodSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { runTypeScriptNoEmit, isPassingEvidence, getTscCommand } from "../../src/tools/typescript"
+import {
+  createRuntimeExecutionContext,
+  runWithRuntimeExecutionContext,
+  setExecutionAuthority,
+} from "../../src/runtime/execution-context"
+import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contracts"
+
+/** runTypeScriptNoEmit 走 managed Linux executor —— 无 trusted authority
+ *  fail-closed（R2 PR-9）。hostRoot 传执行目录（fixture），与工具 cwd 对齐。 */
+function withTestAuthority<T>(hostRoot: string, fn: () => T | Promise<T>): Promise<T> {
+  const context = createRuntimeExecutionContext()
+  return runWithRuntimeExecutionContext(context, async () => {
+    const authority: TrustedExecutionAuthority = {
+      identity: { runId: "rc01-test", nodeRunId: "rc01-test-0", attempt: 1 },
+      workspace: {
+        workspaceId: "rc01-ws",
+        projectId: "rc01-proj",
+        hostRoot,
+        kind: "main",
+        access: "readwrite",
+        ownerFiles: [],
+      },
+    }
+    setExecutionAuthority(authority)
+    return await fn()
+  })
+}
 
 function fixtureDir(): string {
   return mkdtempSync(join(tmpdir(), "rc01-"))
@@ -36,7 +63,7 @@ describe("RC-01 typecheck six-state contract", () => {
       "node_modules/.bin/tsc": TSC_OK_CMD,
       "a.ts": "export const x: number = 1",
     })
-    const r = await runTypeScriptNoEmit(dir)
+    const r = await withTestAuthority(dir, () => runTypeScriptNoEmit(dir))
     expect(r.status).toBe("passed")
     expect(r.passed).toBe(true)
     expect(r.exitCode).toBe(0)
@@ -48,7 +75,7 @@ describe("RC-01 typecheck six-state contract", () => {
       "node_modules/.bin/tsc": TSC_FAIL_CMD,
       "a.ts": "export const x: number = 1",
     })
-    const r = await runTypeScriptNoEmit(dir)
+    const r = await withTestAuthority(dir, () => runTypeScriptNoEmit(dir))
     expect(r.status).toBe("failed")
     expect(r.passed).toBe(false)
     expect(r.exitCode).toBe(1)
@@ -58,7 +85,7 @@ describe("RC-01 typecheck six-state contract", () => {
   test("tsc not installed → never passes (unavailable or failed, env-dependent)", async () => {
     const dir = fixtureDir()
     mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true })
-    const r = await runTypeScriptNoEmit(dir)
+    const r = await withTestAuthority(dir, () => runTypeScriptNoEmit(dir))
     // fail-closed 核心：无论 unavailable 还是 failed，绝不构成通过证据。
     expect(r.passed).toBe(false)
     expect(isPassingEvidence(r)).toBe(false)
@@ -73,7 +100,7 @@ exit 0
 `,
       "a.ts": "",
     })
-    const r = await runTypeScriptNoEmit(dir)
+    const r = await withTestAuthority(dir, () => runTypeScriptNoEmit(dir))
     expect(r.status).toBe("passed")
     expect(r.output).toContain("warning")
   })
@@ -85,7 +112,7 @@ exit 1
 `,
       "a.ts": "",
     })
-    const r = await runTypeScriptNoEmit(dir)
+    const r = await withTestAuthority(dir, () => runTypeScriptNoEmit(dir))
     expect(r.status).toBe("failed")
     expect(r.issues).toBeGreaterThan(0)
   })
@@ -99,7 +126,7 @@ exit 2
 `,
       "a.ts": "",
     })
-    const r = await runTypeScriptNoEmit(dir)
+    const r = await withTestAuthority(dir, () => runTypeScriptNoEmit(dir))
     expect(r.status).toBe("failed")
     expect(r.issues).toBe(2)
   })

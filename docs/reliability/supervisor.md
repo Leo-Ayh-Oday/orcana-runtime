@@ -61,12 +61,13 @@ W4 K 系列(46) ──► RC-18 完成 ──► P3 解锁 ───────
   2. 总指挥 b7cf90e 提交时卷走 W3 重新 staged 的 H9 4 文件（rewind.ts/checkpoint.ts/sqlite-session.ts/tests/rewind.test.ts，md5 与 a3c37dd 版相同 = 无损）——**W3 注意：H9 实际入库于 b7cf90e**
   教训：窗口 reset/rebase 与总指挥 add/commit 均构成竞态；总指挥提交改为 add 后立即 commit，窗口 reset 前先通报。
 
-## 当前动作（2026-08-07 08:5x）
+## 当前动作（2026-08-07 09:2x）
 
-1. W3：✅ K11 已提交（3cd8fbd M0 保护空窗关闭）——RC-11 余项清。checkpoint typecheck 红已自愈（bunx tsc 全量零错 ✅）
-2. W4：✅ **H12 技术债清偿完成**（fecc426，21 文件 483+/43-，仅 H12 文件）：BudgetGuard cacheMiss 跨轮累计真 bug 修正（kernel/round.ts + 2 新测试）、LlmAgentNode 证据链 8/8、Node Context 富化（Golden 字节不变 + 6 新测试 + 52/52 回归）、VerificationNode kernelRoundState 全量接线。门禁 build/pack/diff-check 绿
-3. 总指挥：✅ P3 收尾（17f5372）+ 11 题放行（40a9f4f）。**汇合门禁核查中**：typecheck ✅；rc01 5 fail 确认（G1 同类：PR-9 fail-closed 后 executor 测试未适配 authority）
-4. **汇合前待办（用户裁决）**：
-   - **rc01 适配**：tests/tools/typescript_rc01.test.ts 5 fail（executor fail-closed 要求 setExecutionAuthority）——G1 先例裁决测试适配 via withTestAuthority；建议派 W3（0f5a310 同款）或汇合时统一适配
-   - **git_rt8 适配未提交**：tests/tools/git_rt8.test.ts withTestAuthority 完整（已核验）但从未入库——阻塞汇合红线"工作区干净"；归 W1/W2 遗留，建议确认后提交
-5. 汇合点：W3/W4 批次齐（fecc426+3cd8fbd+探针集）→ rc01/git_rt8 清 → 全量门禁 → 0.8.26.2
+1. W3：✅ RC-11 线 5/5 完成（76f67ec/ef940b5/9abf498/b7cf90e/3cd8fbd + e2c6491 收尾）
+2. W4：✅ H12 技术债清偿完成（fecc426，21 文件 483+/43-）
+3. 总指挥：✅ **汇合完成，0.8.26.2 发布基线 fe913ed**
+   - P3 探针（17f5372）+ 11 题放行（40a9f4f）
+   - **清场修复 4 commits**：4e22a80（typecheck 工具 PR-9/R2 cwd 语义回归真修复——W4 归因 authority 不完整，第二层是绝对 cwd 被 resolveAuthorizedCwd 拒绝，生产 typecheck 工具恒 error；executor 层容错相对化 + escape 兜底）、40a3663（gate-matrix PR-10 回填补交 + git_rt8 适配入库）、208e8ad（verification_result shellStream authority 适配——全量暴露第 3 个 G1 同类文件）
+   - **汇合门禁全绿**：typecheck ✅ / test 全量 ✅（exit 0）/ build ✅ / pack ✅ / diff-check ✅
+4. 遗留：工作区未跟踪杂项（.rt6-prof-*、a.txt、calc.ts、demo/、gui-demo.html、new1.txt、x.ts、scratch_test.ts、_debug-cum.test.ts、P2 报告 JSON）——红线不 add，不动
+5. 后续：11 专项题（其他窗口执行中，放行 40a9f4f）；push 按计划线等待点名

@@ -1,5 +1,5 @@
-import { describe, expect, test, mock } from "bun:test"
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
+import { describe, expect, test } from "bun:test"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -321,26 +321,26 @@ describe("K18 COMPACTOR_SEES_RUN_TRAJECTORY — optional trajectory input", () =
   })
 })
 
-// Kept last: mock.module("node:fs") applies for the rest of this file.
+// K16：真实失败注入（archives 目录 chmod 只读 → temp 写入 EACCES）。
+// 不能用 mock.module("node:fs")：bun 多文件复用 worker 进程，模块级 mock
+// 一经注册即永久毒化同 worker 内后续文件的 rename/checkpoint 写（全量测试
+// 证据门/事务/复放集体误失败）；mock.restore() 与重注册均不解除（消费者
+// 绑定在 import 时固化）。失败路径清理逻辑与 rename 失败同支（temp 清理），
+// 半写文件不残留的不变量仍被真实验证。注意：root 会绕过权限位（本测试
+// 需非 root 运行，与本地开发一致）。
 describe("K16 atomicity — failure cleanup", () => {
   test("failed archive write leaves no half-written temp file", async () => {
-    mock.module("node:fs", () => {
-      const fs = require("node:fs") as typeof import("node:fs")
-      return {
-        ...fs,
-        renameSync: (_from: unknown, _to: unknown) => {
-          throw new Error("simulated rename failure")
-        },
-      }
-    })
     const { createCompactor, saveColdArchive } = await import("../src/memory/compactor")
     const dir = mkdtempSync(join(tmpdir(), "orcana-archive-fail-"))
     try {
       const state = createCompactor(dir)
       state.hotTurns = [{ role: "user", content: "content that must never be half-written" }]
       state.estimatedTokens = 10
-      expect(() => saveColdArchive(state, "sess")).toThrow("simulated rename failure")
-      expect(readdirSync(join(dir, "archives"))).toEqual([])
+      const archives = join(dir, "archives")
+      mkdirSync(archives, { recursive: true })
+      chmodSync(archives, 0o500)
+      expect(() => saveColdArchive(state, "sess")).toThrow()
+      expect(readdirSync(archives)).toEqual([])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

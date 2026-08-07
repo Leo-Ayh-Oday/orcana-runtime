@@ -393,7 +393,8 @@ describe("TL-015 — stale LSP-style diagnostics are rejected via freshness", ()
     const staleHash = createHash("sha256").update("let a = 1\n").digest("hex")
     writeFileSync(file, "let a = 2\n") // changed after hash taken
     const tool = buildTool(READ_FILE)
-    const result = await tool.execute({ path: file, expectedHash: staleHash })
+    // RC-19 D7：工具路径解析绑定 projectRoot（fail-closed 拒 cwd 兜底）
+    const result = await tool.execute({ path: file, expectedHash: staleHash }, { projectRoot: root })
     expect(result.success).toBe(false)
     const errText = "error" in result && result.error ? result.error : result.content
     expect(errText).toMatch(/STALE_FILE|stale|hash mismatch/i)

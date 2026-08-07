@@ -63,7 +63,7 @@ export interface PostToolUseInput {
 }
 
 export interface StopInput {
-  reason: "completed" | "aborted" | "error" | "blocked"
+  reason: "completed" | "aborted" | "error" | "blocked" | "stalled"
   totalRounds: number
   sessionDurationMs: number
   exitCode?: number

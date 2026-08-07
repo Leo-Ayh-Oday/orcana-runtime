@@ -65,6 +65,14 @@ import {
   stableMessageOf,
 } from "../../harness/context"
 import { createRoundState } from "../run/state"
+import type { RoundToolCall } from "../run/types"
+import {
+  actionFirstPrompt,
+  isWriteClassTool,
+  obligationDigest,
+  replanOncePrompt,
+} from "./progress-governor"
+import type { ProgressSnapshot, GovernorDecision } from "./progress-governor"
 import { runProviderRound } from "../provider/round-runner"
 import { createProviderRoundResult, type ProviderRoundResult } from "../provider/round-result"
 import { decideProviderFailureRecovery } from "../provider/failure-policy"
@@ -140,6 +148,8 @@ export async function* runRound(
       : execution.consecutiveErrors > 0
         ? "recovery"
         : "execution",
+    // GATE-03: 无进展 streak >= 2 → ACTION_FIRST（思考压到 2K，本轮必须动工具）。
+    actionFirst: ctx.progressGovernor.consecutiveNoProgress >= 2,
     autoMaxSignals: { consecutiveErrors: execution.consecutiveErrors, modifiedFiles: execution.modifiedFileCount },
   })
   const thinking = thinkingDecision.thinking
@@ -694,7 +704,9 @@ export async function* runRound(
   for (const tb of roundState.thinkingBlocks) assistantContent.push({ type: "thinking", thinking: tb.thinking, signature: tb.signature })
   if (finalText) assistantContent.push({ type: "text", text: finalText })
   for (const tc of completedToolCalls) assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input })
-  rawMessages.push({ role: "assistant", content: assistantContent })
+  // GATE-02：truncated 空轮（无 thinking/text/tool）也可能走到这里——空
+  // assistant 消息会被真实 provider 拒收，必须跳过。
+  if (assistantContent.length > 0) rawMessages.push({ role: "assistant", content: assistantContent })
 
   // ── Persist thinking chain ──
   if (ctx.thinkingStore && roundState.thinkingBlocks.length > 0) {
@@ -1027,8 +1039,56 @@ export async function* runRound(
   // L6: periodic memory reconcile (prune + FTS5 rebuild)
   yield* wrapEvents(runKnowledgeReconcile(maintenanceCtx))
 
+  // ── GATE-03: ProgressGovernor —— 无进展断环（GS-01/GS-02） ──
+  // OTS-013 的循环没有任何 liveness 语义：每轮都是"重试同一 doomed 请求"。
+  // 这里在每轮结束、决定 continue 之前问：这一轮比上一轮多完成了什么？
+  const progressSnapshot = buildProgressSnapshot(round, completedToolCalls, ctx)
+  const governorDecision = ctx.progressGovernor.evaluate(progressSnapshot)
+  if (governorDecision.action === "action_first") {
+    rawMessages.push(actionFirstPrompt())
+    yield stream({ type: "status", data: `progress-governor: 连续 2 轮无进展 → ACTION_FIRST（思考降级，必须发出工具调用）` })
+    yield trace("gate_decision", { gate: "progress_governor", decision: "action_first", streak: ctx.progressGovernor.consecutiveNoProgress })
+  } else if (governorDecision.action === "replan_once") {
+    rawMessages.push(replanOncePrompt())
+    yield stream({ type: "status", data: `progress-governor: 连续 3 轮无进展 → REPLAN_ONCE（不重复注入相同提示）` })
+    yield trace("gate_decision", { gate: "progress_governor", decision: "replan_once", streak: ctx.progressGovernor.consecutiveNoProgress })
+  } else if (governorDecision.action === "stalled") {
+    // GS-01：连续 4 轮无进展 → STALLED 终止 + 完整诊断。
+    ctx.sm.transition(AgentState.STALLED, governorDecision.report)
+    ctx.lifecycle.stopReason = "stalled"
+    yield stream({ type: "status", data: "progress-governor: STALLED —— 连续 4 轮无任何进展，终止运行" })
+    yield stream({ type: "error", data: governorDecision.report })
+    yield trace("agent_loop_stalled", { round, streak: ctx.progressGovernor.consecutiveNoProgress })
+    return { kind: "break", reason: "progress_stalled" }
+  } else if (ctx.progressGovernor.consecutiveNoProgress === 1) {
+    yield trace("progress_no_progress", { round, streak: 1, digest: progressSnapshot.pendingObligationDigest })
+  }
+
   if (round + 1 >= ctx.maxRounds) ctx.lifecycle.reachedRoundBudget = true
   return { kind: "continue" }
+}
+
+/** GATE-03: 从本轮可达状态构造 ProgressSnapshot（只读、纯函数）。 */
+function buildProgressSnapshot(
+  round: number,
+  completedToolCalls: RoundToolCall[],
+  ctx: RunPhaseContext,
+): ProgressSnapshot {
+  const steps = ctx.planning.taskTracker?.steps ?? []
+  const nodes = ctx.planStore.current?.nodes ?? []
+  const pendingSteps = steps.filter(s => s.status !== "done").map(s => s.title)
+  const pendingNodes = nodes.filter(n => n.status !== "done").map(n => n.title)
+  return {
+    round,
+    toolCallsCommitted: completedToolCalls.length,
+    writeToolsCommitted: completedToolCalls.filter(tc => isWriteClassTool(tc.name)).length,
+    fileCount: ctx.taskFiles.size,
+    completedNodes: nodes.filter(n => n.status === "done").length,
+    completedSteps: steps.filter(s => s.status === "done").length,
+    evidenceEntries: ctx.evidenceLedger.entries.length,
+    currentNode: ctx.planStore.current?.current ?? "",
+    pendingObligationDigest: obligationDigest(pendingSteps, pendingNodes),
+  }
 }
 
 // ── Local helper ──

@@ -35,6 +35,11 @@ export interface ThinkingProfile {
    * the OTS-013 feedback amplifier).
    */
   stage?: ThinkingStage
+  /**
+   * GATE-03: ProgressGovernor ACTION_FIRST mode — reasoning is cut to a
+   * small budget so the round has room to emit an actual tool call.
+   */
+  actionFirst?: boolean
 }
 
 export type ThinkingStage = "planning" | "execution" | "recovery" | "verification"
@@ -247,7 +252,10 @@ function applyResponseBudget(
   const maxTokens = decideMaxTokens(thinking, state)
   const stage = profile?.stage ?? (state.hadError ? "recovery" : "execution")
   const reserve = STAGE_ACTION_RESERVE[stage]
-  const reasoningCap = Math.floor(maxTokens * (1 - reserve))
+  let reasoningCap = Math.floor(maxTokens * (1 - reserve))
+  // GATE-03: ACTION_FIRST 模式下思考预算压到 2K——本轮必须发出工具调用，
+  // 深度思考不是进展。
+  if (profile?.actionFirst) reasoningCap = Math.min(reasoningCap, 2048)
   if (thinking.budget_tokens && thinking.budget_tokens > reasoningCap) {
     return { thinking: { ...thinking, budget_tokens: reasoningCap }, maxTokens }
   }

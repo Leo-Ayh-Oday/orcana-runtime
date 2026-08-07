@@ -12,7 +12,7 @@ import { spawn } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
 import { openSync, closeSync } from "node:fs"
 import { createOutputLimiter, finalizeOutput, type OutputLimits } from "./output-limiter"
-import { countProcessGroup, terminateTree } from "./termination"
+import { countProcessGroup, terminateTreeWithDescendants } from "./termination"
 
 export interface SupervisorOptions {
   executable: string
@@ -92,7 +92,8 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
     options.onOutput?.(stream, sliced)
     if (!killedForOutput && limiter.exceeded()) {
       killedForOutput = true
-      terminateTree(pid)
+      // 树杀（含 detached 后代）：取消/超时/限流必须覆盖完整进程树
+      terminateTreeWithDescendants(pid)
     }
   }
   proc.stdout?.on("data", (chunk: Buffer) => onData("stdout", chunk))
@@ -129,8 +130,8 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
     const onAbort = () => {
       cancelled = true
       // F4（ORPHAN_PROCESS）：取消后残留必须真实上报 —— 不硬编码 0。
-      // terminateTree 返回 SIGTERM→SIGKILL 后的实测扫描值，残留如实入 Receipt。
-      const report = terminateTree(pid)
+      // 树杀（含 detached 后代）返回 SIGTERM→SIGKILL 后的实测扫描值。
+      const report = terminateTreeWithDescendants(pid)
       finish(null, "aborted", report.processesRemaining)
     }
     options.abortSignal?.addEventListener("abort", onAbort, { once: true })
@@ -157,8 +158,8 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
 
     timer = setTimeout(() => {
       timedOut = true
-      // F4：超时终止后的残留同样如实上报（不再硬编码 0）。
-      const report = terminateTree(pid)
+      // F4：超时终止后的残留同样如实上报（不再硬编码 0）；树杀覆盖 detached 后代。
+      const report = terminateTreeWithDescendants(pid)
       finish(null, "timeout", report.processesRemaining)
     }, options.wallTimeMs)
   })

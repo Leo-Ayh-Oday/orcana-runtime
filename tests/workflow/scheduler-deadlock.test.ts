@@ -53,11 +53,11 @@ describe("G1 deadlock guard", () => {
     }
     // Run once with checkpointing…
     const checkpointDir = mkdtempSync(join(tmpdir(), "wflow-g1-cp-"))
-    const first = await runScheduler(spec, registry(), { checkpointDir })
+    const first = await runScheduler(spec, registry(), { checkpointDir, projectRoot: dir })
     expect(first.results).toHaveLength(2)
 
     // …then re-run: restored results must be honored without re-execution or hangs.
-    const second = await runScheduler(spec, registry(), { checkpointDir })
+    const second = await runScheduler(spec, registry(), { checkpointDir, projectRoot: dir })
     expect(second.results).toHaveLength(2)
     expect(second.results.every(r => r.status === "done")).toBe(true)
   })

@@ -44,18 +44,24 @@ describe("edit_symbol transaction (RC-16 G8)", () => {
   test("symbol edit is transactional — rollback restores the original file", async () => {
     const p = writeSource("a.ts", ORIGINAL)
 
-    const result = await EDIT_SYMBOL_TOOL.execute({
-      path: p,
-      symbol: "foo",
-      newText: "export function foo(): number {\n  return 2\n}",
-    })
+    // RC-19 D7: tools resolve against projectRoot — never process.cwd().
+    // (chdir 是 D7 前规避，已无作用但保留无害)
+    const result = await EDIT_SYMBOL_TOOL.execute(
+      {
+        path: p,
+        symbol: "foo",
+        newText: "export function foo(): number {\n  return 2\n}",
+      },
+      undefined,
+      { projectRoot: tempDir },
+    )
     expect(result.success).toBe(true)
     expect(readFileSync(p, "utf-8")).toContain("return 2")
 
     const transactionId = (result as { metadata?: { transactionId?: string } }).metadata?.transactionId
     expect(typeof transactionId).toBe("string")
 
-    const rollback = await ROLLBACK_TRANSACTION.execute({ transactionId })
+    const rollback = await ROLLBACK_TRANSACTION.execute({ transactionId }, undefined, { projectRoot: tempDir })
     expect(rollback.success).toBe(true)
     expect(readFileSync(p, "utf-8")).toContain("return 1")
   })
@@ -72,6 +78,7 @@ describe("edit_symbol transaction (RC-16 G8)", () => {
         expectedBaseHashes: { [resolve(p)]: staleHash },
         approvedContents: { [resolve(p)]: originalContent },
       },
+      projectRoot: process.cwd(),
     }
     const result = await EDIT_SYMBOL_TOOL.execute(
       { path: p, symbol: "foo", newText: "export function foo(): number {\n  return 3\n}" },

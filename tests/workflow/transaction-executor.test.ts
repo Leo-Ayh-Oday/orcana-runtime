@@ -26,7 +26,8 @@ afterAll(() => {
 })
 
 function relDiff(from: string, to: string): string {
-  const rel = `tmp-g3-fixture/calc.ts`
+  // D7：diff 路径是 projectRoot 相对 —— 不再内嵌 cwd 前缀
+  const rel = `calc.ts`
   return `--- a/${rel}\n+++ b/${rel}\n@@ -1 +1 @@\n-${from}\n+${to}\n`
 }
 
@@ -70,6 +71,7 @@ describe("G3 transaction executor", () => {
       buildTool(APPLY_PATCH_TRANSACTION_TOOL),
       { patches: [{ diff }] },
       lock,
+      PROJECT,
     )
     expect(result.status).toBe("done")
     expect(readFileSync(CALC, "utf-8")).toContain("a + b + 0")
@@ -88,6 +90,7 @@ describe("G3 transaction executor", () => {
       buildTool(APPLY_PATCH_TRANSACTION_TOOL),
       { patches: [{ diff: badDiff }] },
       lock,
+      PROJECT,
     )
     expect(result.status).toBe("failed")
     expect(result.error).toContain("rolled back")

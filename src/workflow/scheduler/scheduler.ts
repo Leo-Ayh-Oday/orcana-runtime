@@ -59,6 +59,11 @@ export interface SchedulerOptions {
    *  kind run through the Unified Node Runtime under this environment's
    *  scope/ledger/capabilities; without it such nodes fail closed. */
   harness?: import("../harness/environment").WorkflowHarnessEnvironment
+  /** RC-19 D7: tool path authority root for the legacy node path. Tools
+   *  resolve relative paths against this — never process.cwd(). Absent =
+   *  fail-closed (tools reject path work). Harness runs use
+   *  harness.scope.projectRoot; legacy callers must pass it explicitly. */
+  projectRoot?: string
   /** MACP-M4: persistent interrupts. When present, human nodes with no
    *  answer pause the run (persisted record + waiting result + resume
    *  token) instead of blocking the process; `resumeAnswer` resumes a
@@ -427,7 +432,7 @@ export async function runScheduler(
         }
         const result = isHarness && harnessRuntime
           ? await executeHarnessNode(node, nodeRuntime ?? harnessRuntime, store, enforcement.projectRoot !== harnessRuntime.scope.projectRoot ? enforcement.projectRoot : undefined, interruptRuntime)
-          : await executeNode(node, registry, store)
+          : await executeNode(node, registry, store, options.projectRoot)
         // MACP-M3 task 8/9: actual written paths vs declared ownership —
         // only for assigned write nodes (no pool → legacy, unchanged).
         if (result.status === "done" && isWrite && enforcement.assignment) {

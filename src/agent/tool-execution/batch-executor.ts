@@ -85,6 +85,9 @@ export interface ToolBatchContext {
   artifactStore?: ArtifactStore
   /** H9: run id stamped on artifacts produced by write executions. */
   runId?: string
+  /** RC-19 Phase 2 (D7): the run scope root — threaded into every tool's
+   *  execution context; tools resolve relative paths against it, never cwd. */
+  projectRoot?: string
 
   /** Trusted-verification extraction from a tool result (runtime built-in verifiers). */
   trustedVerification: (
@@ -131,7 +134,7 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
     permissionGate, permissionMode, preRoundCtx, contextReadinessBlocked,
     contextReadinessBlockers, finalText,
     toolLedger, gateTelemetry, errorTracker, stagedContext, prompt, resultsContent,
-    trustedVerification,
+    trustedVerification, projectRoot,
   } = ctx
 
   const taskTracker = planning.taskTracker
@@ -223,6 +226,7 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
           hooks,
           abortSignal,
           policyDecision: parallelPolicies.get(tc.id),
+          projectRoot,
         })
         return { id: tc.id, content: result.result.content, success: result.result.success, metadata: result.result.metadata, startedAt: result.startedAt }
       } catch (e) {
@@ -352,6 +356,7 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
           parallelResult,
           policyDecision: policyResult.allowed ? policyResult : undefined,
           artifactTracker,
+          projectRoot,
         })
         resultContent = executed.result.content
         resultObj = { success: executed.result.success, content: executed.result.content, metadata: executed.result.metadata }

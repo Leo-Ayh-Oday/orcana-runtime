@@ -19,7 +19,7 @@ describe("project_structure dependency policy (RC-16 G5)", () => {
       writeFileSync(join(dir, "node_modules", "pkg", "index.ts"), "export const dep = true\n", "utf-8")
       writeFileSync(join(dir, ".cache", "junk.ts"), "export const junk = true\n", "utf-8")
 
-      const result = await PROJECT_STRUCTURE.execute({ path: dir, max_depth: 3 })
+      const result = await PROJECT_STRUCTURE.execute({ path: dir, max_depth: 3 }, undefined, { projectRoot: dir })
       expect(result.success).toBe(true)
 
       expect(result.content).toContain("src/")

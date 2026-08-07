@@ -26,7 +26,7 @@ describe("G1 failure isolation", () => {
         { id: "tool:missing", handler: "tool.read_file", input: { path: join(dir, "does-not-exist.ts") }, dependsOn: [] },
       ],
     }
-    const run = await runScheduler(spec, buildTools(), { maxParallel: 2 })
+    const run = await runScheduler(spec, buildTools(), { maxParallel: 2, projectRoot: dir })
     expect(run.results).toHaveLength(2)
     const good = run.results.find(r => r.nodeId === "tool:good")
     const missing = run.results.find(r => r.nodeId === "tool:missing")
@@ -45,7 +45,7 @@ describe("G1 failure isolation", () => {
         { id: "tool:child", handler: "tool.read_file", input: { path: join(dir, "base.ts") }, dependsOn: ["tool:parent"] },
       ],
     }
-    const run = await runScheduler(spec, buildTools(), { maxParallel: 1 })
+    const run = await runScheduler(spec, buildTools(), { maxParallel: 1, projectRoot: dir })
     expect(run.results.find(r => r.nodeId === "tool:parent")!.status).toBe("failed")
     expect(run.results.find(r => r.nodeId === "tool:child")!.status).toBe("done")
   })

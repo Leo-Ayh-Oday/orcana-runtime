@@ -443,8 +443,13 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         // 工作区单写者，LNXF-R2 9.2：同物理目录别名同键）；无 worktree →
         // main-workspace 独占兜底。
         const physicalKey = executeOptions?.authority?.workspace.physicalWorkspaceKey
-        const lockTarget = agentId
-          ? IsolationDomainLock.worktreeKey(agentId)
+        // ORCANA-E2E-001 缺口③：隔离锁按**实际 worktree 根**而非 agentId ——
+        // 单写者语义属于目录（同一 worktree 的并发写仍被拒，LX-026/027/037），
+        // 同一 agent 在不同 worktree 上的并发 cell 应被允许（cancelAgent 仍
+        // 按 agentId 一次性取消全部）。
+        const worktreeRoot = compiled.filesystem.worktreeRoot
+        const lockTarget = worktreeRoot
+          ? IsolationDomainLock.worktreeKey(worktreeRoot)
           : (physicalKey
               ? IsolationDomainLock.physicalKey(physicalKey)
               : IsolationDomainLock.mainWorkspaceKey())

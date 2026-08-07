@@ -62,7 +62,7 @@ describe("LF-5: resource ledger", () => {
     const stats = ledger.stats()
     expect(stats.capacity.cpuQuota).toBeGreaterThan(0)
     expect(stats.capacity.memoryBytes).toBeGreaterThan(0)
-    expect(cpuQuotaFromCores(8)).toBe(80_000)
+    expect(cpuQuotaFromCores(8)).toBe(8_000) // LNXF-R2 10.2：单位统一为 cpuMillis（1000=1 核）
   })
 })
 

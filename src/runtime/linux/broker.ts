@@ -29,6 +29,7 @@ import { probeLinuxCapabilities, requireLinuxPlatform } from "./capability-probe
 import { compileCapabilityRequest, compileCellSpec } from "./policy-compiler"
 import { selectBackend } from "./backend-router"
 import type { BackendSelection } from "./backend-router"
+import { isStrictProfile } from "./profiles"
 import { LinuxExecutionError } from "./errors"
 import { createHostAuditBackend } from "./backends/host-audit"
 import { createBubblewrapBackend } from "./backends/bubblewrap"
@@ -152,7 +153,10 @@ function backendOf(id: string): ExecutionBackend | undefined {
 
 function resourceRequestOf(spec: ExecutionCellSpec): ResourceRequest {
   return {
-    cpuQuota: spec.resources.cpuQuotaMicros ? Math.max(1, Math.round(spec.resources.cpuQuotaMicros / 10_000)) : 1,
+    // LNXF-R2 10.2：CPU 记账统一 cpuMillis（1000 = 1 核）——
+    // 旧换算（quotaMicros/10000 vs ledger cores×10000）相差 1000 倍，
+    // 使 CPU 维度 overcommit 拒绝形同虚设。
+    cpuQuota: spec.resources.cpuMillis ?? 1000,
     memoryBytes: spec.resources.memoryMaxBytes,
     pids: spec.resources.pidsMax,
     ioWeight: spec.resources.ioWeight ?? 0,
@@ -507,6 +511,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
                   cgroup.attach(pid, cgroupCellPath)
                 } catch (error) {
                   attachFailure = `CGROUP_ATTACH_FAILED: ${error instanceof Error ? error.message : String(error)}`
+                  // LNXF-R2 10.5：严格 Profile attach 失败 → 立即取消
+                  // （fail-fast：资源限额不被绕过到执行结束）；非严格
+                  // 保留 degradation 声明。
+                  if (isStrictProfile(compiled.profile)) {
+                    controller.abort()
+                  }
                 }
               }
             },

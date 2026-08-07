@@ -155,10 +155,17 @@ export class CgroupManager {
     return agent
   }
 
-  /** 创建 Cell 层（完整限制；叶子目录无需 subtree_control）。 */
+  /** 创建 Cell 层（完整限制；叶子目录无需 subtree_control）。
+   *  agentId=undefined 时 cell 挂在 system 层 —— 必须先授权 system 的
+   *  subtree_control，真实内核下 cell 才会带 memory/pids 属性
+   *  （mock fs 自动补全掩盖此路径；2026-08-07 委托根修复后实测暴露）。
+   *  agentId 已由 createAgent 授权时此处幂等。 */
   createCell(runId: string, agentId: string | undefined, cellId: string, limits: CellLimits): string {
-    const { cell } = hierarchyPaths(this.base, runId, agentId, cellId)
-    this.ensure(cell)
+    const paths = hierarchyPaths(this.base, runId, agentId, cellId)
+    this.ensure(paths.agent)
+    this.enableControllers(paths.agent, ["cpu", "memory", "pids"])
+    this.ensure(paths.cell)
+    const cell = paths.cell
     if (limits.cpuQuotaMicros && limits.cpuPeriodMicros) {
       this.writeAttr(cell, "cpu.max", `${limits.cpuQuotaMicros} ${limits.cpuPeriodMicros}`)
     }

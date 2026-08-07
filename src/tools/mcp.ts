@@ -1,6 +1,6 @@
 /** MCP client — JSON-RPC lifecycle. Ported from orcana/core/mcp_client.py */
 
-import { spawnLegacy, ChildProcess } from "../runtime/legacy-process"
+import { spawnLegacy, minimalHostEnv, ChildProcess } from "../runtime/legacy-process"
 const spawn = spawnLegacy
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
@@ -23,7 +23,9 @@ export class MCPClientV2 {
       try {
         const proc = spawn(command, args, {
           stdio: ["pipe", "pipe", "pipe"],
-          env: env ? { ...process.env, ...env } : process.env,
+          // E1.3：最小宿主环境 —— 配置 env 经拒绝集过滤（*.API_KEY/TOKEN/
+          // SSH_AUTH_SOCK 等不进入 MCP server 进程），不再全量继承宿主。
+          env: minimalHostEnv(env),
         })
         const state: ServerState = { proc, tools: [], resources: [], buffer: "", pending: new Map(), connected: false }
         this.servers.set(name, state)

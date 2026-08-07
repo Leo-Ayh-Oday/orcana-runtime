@@ -501,6 +501,87 @@ describe("LF-2: static gate — DIRECT_LINUX_PROCESS_BYPASS (AST)", () => {
   })
 })
 
+describe("LNXF-R2 E1.8: static gate — HOST_PROCESS_BYPASS via legacy-process (AST)", () => {
+  // E1：legacy 包装层（spawnLegacy/spawnSyncLegacy/execShellLegacy 及本地别名）
+  // 的调用点必须显式登记暂存区；未登记 = HOST_PROCESS_BYPASS（绕过统一
+  // 入口的宿主执行）。登记项各带收紧措施与迁移 deadline（PR-13/14）。
+  const LEGACY_STAGING: Record<string, string> = {
+    "src/agent/journal.ts": "E1.1: command 规则默认禁用 + opt-in 最小 env（迁 Executor）",
+    "src/ripple/astgrep-provider.ts": "E1.5: 参数数组 + 最小 env（迁 Executor）",
+    "src/tools/service.ts": "E1.2: 参数数组 + 最小 env（Service Cell PR-14）",
+    "src/tools/mcp.ts": "E1.3: 最小 env 过滤拒绝键（Service Cell PR-14）",
+    "src/lsp/client.ts": "E1.4: 最小 env（Service Cell PR-14）",
+    "src/workflow/agents/worktree.ts": "E1.6: args 数组无注入（git Broker 化 PR-13）",
+    "src/verification/collector.ts": "E1.7: 死代码（无生产调用方，待删除/迁移）",
+  }
+
+  interface LegacySite { file: string; line: number; kind: string }
+
+  function scanLegacyProcessCalls(): LegacySite[] {
+    const sites: LegacySite[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+          const rel = full.slice(process.cwd().length + 1).split("\\").join("/")
+          const source = readFileSync(full, "utf8")
+          const sf = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+          const legacyNames = new Set<string>() // 直接导入的 legacy 函数名
+          const aliases = new Map<string, string>() // 本地别名 const spawn = spawnLegacy
+          for (const statement of sf.statements) {
+            if (ts.isImportDeclaration(statement) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
+              const mod = statement.moduleSpecifier.text
+              if (!mod.endsWith("/legacy-process") && mod !== "legacy-process") continue
+              const clause = statement.importClause
+              if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+                for (const el of clause.namedBindings.elements) legacyNames.add(el.name.text)
+              }
+            }
+            if (ts.isVariableStatement(statement)) {
+              for (const decl of statement.declarationList.declarations) {
+                if (ts.isIdentifier(decl.name) && decl.initializer && ts.isIdentifier(decl.initializer)) {
+                  if (legacyNames.has(decl.initializer.text)) aliases.set(decl.name.text, decl.initializer.text)
+                }
+              }
+            }
+          }
+          if (legacyNames.size === 0) continue
+          const fileHits: LegacySite[] = []
+          const visit = (node: ts.Node): void => {
+            if (ts.isCallExpression(node)) {
+              const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf))
+              if (ts.isIdentifier(node.expression)) {
+                const name = node.expression.text
+                if (legacyNames.has(name)) fileHits.push({ file: rel, line: line + 1, kind: name })
+                else if (aliases.has(name)) fileHits.push({ file: rel, line: line + 1, kind: `${name}(=${aliases.get(name)})` })
+              }
+            }
+            ts.forEachChild(node, visit)
+          }
+          visit(sf)
+          sites.push(...fileHits)
+        }
+      }
+    }
+    walk(join(process.cwd(), "src"))
+    return sites
+  }
+
+  test("legacy-process 调用点全部显式登记（HOST_PROCESS_BYPASS = 0）", () => {
+    const sites = scanLegacyProcessCalls()
+    const unregistered = sites.filter(s => !(s.file in LEGACY_STAGING))
+    expect(unregistered).toEqual([])
+  })
+
+  test("暂存登记保持有效（防删入口式假绿）", () => {
+    const sites = scanLegacyProcessCalls()
+    for (const file of Object.keys(LEGACY_STAGING)) {
+      expect(sites.some(s => s.file === file), `staging entry missing: ${file}`).toBe(true)
+    }
+  })
+})
+
 describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", () => {
   linuxOnly("collectProcessRun carries a real receipt with self digest", async () => {
     const { collectProcessRun, executeProcess } = await import("../../../src/runtime/process-executor")

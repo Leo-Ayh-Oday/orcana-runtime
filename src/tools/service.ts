@@ -12,7 +12,7 @@
  *  The legacy start_service tool is kept as a compatibility forwarder.
  */
 
-import { spawnLegacy, type ChildProcess } from "../runtime/legacy-process"
+import { spawnLegacy, minimalHostEnv, type ChildProcess } from "../runtime/legacy-process"
 const spawn = spawnLegacy
 import { createWriteStream, existsSync, mkdirSync, openSync, readSync, closeSync, statSync } from "node:fs"
 import { request as httpRequest } from "node:http"
@@ -225,6 +225,9 @@ export async function startServiceInternal(params: Record<string, unknown>, deps
     shell: false,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
+    // E1.2：最小宿主环境 —— 不再继承 process.env（模型参数控制的命令
+    // 不得读取宿主 API key/代理/SSH 凭据）；完整 Service Cell 化列 PR-14。
+    env: minimalHostEnv(),
     windowsHide: true,
   })
   proc.stdout?.pipe(logStream)

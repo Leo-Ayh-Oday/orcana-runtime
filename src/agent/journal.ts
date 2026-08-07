@@ -15,8 +15,24 @@
 
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { execShellLegacy } from "../runtime/legacy-process"
-const execSync = execShellLegacy
+import { spawnSyncLegacy } from "../runtime/legacy-process"
+
+/** LNXF-R2 E1.1：.codejournal command 规则 —— 默认禁用（恶意仓库不得
+ *  获得宿主执行面），仅显式 opt-in（ORCANA_JOURNAL_ALLOW_COMMAND=1）启用；
+ *  即使启用也使用最小安全环境（不继承宿主 env，密钥/代理/SSH 零泄露），
+ *  并以参数数组 spawn（/bin/sh -c 仅承载 command 自身语义）。
+ *  后续计划：迁移到 LinuxExecutionBroker（profile=build + Receipt）。 */
+export const JOURNAL_MINIMAL_ENV: Record<string, string> = {
+  PATH: "/usr/local/bin:/usr/bin:/bin",
+  HOME: process.env.HOME ?? "/tmp",
+  TMPDIR: "/tmp",
+  LANG: "C.UTF-8",
+  LC_ALL: "C.UTF-8",
+}
+
+export function commandRulesEnabled(): boolean {
+  return process.env.ORCANA_JOURNAL_ALLOW_COMMAND === "1"
+}
 
 // ── 铁律定义 ──
 
@@ -227,9 +243,17 @@ function codeJournalToRules(entries: CodeJournalEntry[], projectRoot: string): J
         }
         case "command": {
           if (!e.command) return null
+          if (!commandRulesEnabled()) return null // 默认禁用（E1.1 fail-closed）
           try {
-            execSync(e.command, { cwd: projectRoot, timeout: 10_000 })
-            return null
+            const res = spawnSyncLegacy("/bin/sh", ["-c", e.command], {
+              cwd: projectRoot,
+              timeout: 10_000,
+              env: JOURNAL_MINIMAL_ENV,
+              encoding: "utf8",
+            })
+            return res.status === 0
+              ? null
+              : `${e.message}: 命令 "${e.command}" 执行失败（exit ${res.status}）`
           } catch {
             return `${e.message}: 命令 "${e.command}" 执行失败`
           }
@@ -260,7 +284,13 @@ export class JournalEngine {
     const journalPath = join(this.projectRoot, ".codejournal")
     const parsed = parseCodeJournal(journalPath) as { rules: CodeJournalEntry[] } | null
     if (parsed?.rules) {
-      const custom = codeJournalToRules(parsed.rules, this.projectRoot)
+      // E1.1：command 类型默认剔除（仓库级输入 → 宿主执行的 RCE 面），
+      // 显式 opt-in 才保留；regex_content/file_exists/banned_import 纯
+      // 只读检查不受影响。
+      const allowed = commandRulesEnabled()
+        ? parsed.rules
+        : parsed.rules.filter(r => r.check_type !== "command")
+      const custom = codeJournalToRules(allowed, this.projectRoot)
       this.rules.push(...custom)
     }
   }

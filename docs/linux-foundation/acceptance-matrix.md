@@ -82,3 +82,29 @@ v0.8.15 保留（不删除），作为组件/契约层基线；生产接线闭�
 | PR-8 | LF-8 评测重写（真实攻击场景、无委托如实 FAIL、--strict 禁 SKIP、Receipt→Evidence→Gate 端到端） | **完成** (0f644c2) |
 
 **修复线状态（2026-08-06）**：PR-1~PR-8 全部落地。本机评测 32 pass / 4 fail（CGROUP_DELEGATION_REQUIRED，无委托机器如实红）/ 1 skip（podman 未装）。真机 lane 需以 `bun run eval:linux --strict` 跑通（bwrap + rootless podman + cgroup 委托）。全量门禁：typecheck/build/pack/diff-check 全绿；仅剩另一窗口 RC-13 的 revisePlan 语义问题。与基础设施修复合流后以 **0.8.17** 发布。
+
+## Linux Execution Authority Closure（LNXF R2.1，2026-08-07）
+
+> 计划：`docs/linux-foundation/production-closure-r2-plan.md`（三源审计合并：远端两轮独立审计 A + 本地全库审计 B + 交叉裁决实证 C）。
+
+**归因修正（2026-08-07 本机实测）**：
+- 此前"本机 4 fail = CGROUP_DELEGATION_REQUIRED（无委托机器如实红）"归因修正：
+  - 45eba78 前：委托探测漏检 `user@UID.service`（旧判据依赖 `~/.config/systemd/user` 目录存在性）—— 属实；
+  - 45eba78 后实测：`detectDelegatedRoot()` 正确返回 systemd-user 委托（LX-002 PASS），但 **LX-016~019 新 fail**（`cgroup attribute missing: cell/memory.max`）—— 根因为 `createCell` 独立调用时授权链断口（agent 层 `subtree_control` EINVAL 被 `enableControllers` catch 静默吞掉；生产 broker 路径先 createRun/createAgent 不受影响）。`probeWritable` 恒假判断经实测（cgroupfs 含控制文件可 rmdir）**撤回**，保留真实缺陷：委托探测不充分 + `CAPABILITY_PROBE_OVERCLAIMS`。
+  - 2026-08-07 本机评测：**31 pass / 5 fail / 1 skip**（LX-016~019 授权链 + LX-036 authority 环境；LX-030 podman 未装 skip）。
+
+**0.8.26.3 阶段（R2-0 + PR-E1 + 12.1 seccomp）**：
+
+| 项 | 状态 | 依据 |
+|---|---|---|
+| R2-0 缺陷登记与归因修正 | 本表 | 本小节 |
+| E1.1 `.codejournal` command 规则 | **完成** | 默认禁用（`ORCANA_JOURNAL_ALLOW_COMMAND=1` opt-in）+ 最小 env + 参数数组（src/agent/journal.ts） |
+| E1.2 service_start env 收紧 | **完成** | minimalHostEnv（src/tools/service.ts） |
+| E1.3 MCP server env 过滤 | **完成** | minimalHostEnv(env) 拒绝键过滤（src/tools/mcp.ts） |
+| E1.4 LSP env 收紧 | **完成** | minimalHostEnv（src/lsp/client.ts） |
+| E1.5 astgrep 参数数组化 | **完成** | spawnSyncLegacy 参数数组 + 最小 env（src/ripple/astgrep-provider.ts，22 测试全过） |
+| E1.6 worktree git 暂存登记 | **完成** | args 数组无注入；git Broker 化 PR-13 |
+| E1.7 verification collector 死代码登记 | **完成** | 无生产调用方，待删除/迁移 |
+| E1.8 门禁扩展（HOST_PROCESS_BYPASS） | **完成** | AST 门禁追踪 legacy 包装层 + 暂存 allowlist（process-core.test.ts 40 pass） |
+| E1.9 Job Object 声明撤回 | **完成** | track() 零调用 → tier full→partial + note（src/sandbox/capability.ts） |
+| 12.1 seccomp BPF jt/jf 反转 | **完成** | TDD：新增 seccomp-bpf.test.ts（BPF 解码+模拟，修复前 7 fail → 修复后 7 pass） |

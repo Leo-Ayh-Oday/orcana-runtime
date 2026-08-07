@@ -165,7 +165,9 @@ export class TaskTrackerCompletionGate implements Gate<CompletionContext> {
   readonly name = "semantic:task_tracker"
 
   evaluate(ctx: CompletionContext) {
-    const missing = missingTaskRequirements(ctx.taskTracker)
+    // GATE-04 (GS-06)：同一 obligation 每轮只由一个 authority 裁决——
+    // 使用 orchestrator 构造的快照，不再自行重新推导。
+    const missing = ctx.missingTaskRequirements ?? missingTaskRequirements(ctx.taskTracker)
     if (!ctx.taskTracker || taskTrackerComplete(ctx.taskTracker) || missing.length === 0) return pass(ctx), { pass: true }
     if (ctx.round + 1 >= ctx.maxRounds) return finalRoundNoEvidence(ctx)
 

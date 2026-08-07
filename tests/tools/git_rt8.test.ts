@@ -4,7 +4,35 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parsePorcelainV2 } from "../../src/tools/git"
-import { GIT_STATUS, GIT_ADD, GIT_COMMIT } from "../../src/tools/git"
+import { GIT_STATUS, GIT_ADD, GIT_COMMIT, GIT_DIFF } from "../../src/tools/git"
+import {
+  createRuntimeExecutionContext,
+  runWithRuntimeExecutionContext,
+  setExecutionAuthority,
+} from "../../src/runtime/execution-context"
+import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contracts"
+
+/** Git tools run through the managed Linux executor — fail-closed without
+ *  a trusted execution authority (R2 PR-9). Registered against the current
+ *  cwd (tests chdir into the repo before tool calls). */
+function withTestAuthority<T>(fn: () => T | Promise<T>): Promise<T> {
+  const context = createRuntimeExecutionContext()
+  return runWithRuntimeExecutionContext(context, async () => {
+    const authority: TrustedExecutionAuthority = {
+      identity: { runId: "rt8-test", nodeRunId: "rt8-test-0", attempt: 1 },
+      workspace: {
+        workspaceId: "rt8-ws",
+        projectId: "rt8-proj",
+        hostRoot: process.cwd(),
+        kind: "main",
+        access: "readwrite",
+        ownerFiles: [],
+      },
+    }
+    setExecutionAuthority(authority)
+    return await fn()
+  })
+}
 
 // RT-8: git 2.0 — porcelain=v2 structured status, risk-separated writers.
 
@@ -62,7 +90,7 @@ describe("RT-8 git tools", () => {
       writeFileSync(join(dir, "base.txt"), "v2\n")
       writeFileSync(join(dir, "new.txt"), "n\n")
 
-      const result = await GIT_STATUS.execute!({})
+      const result = await withTestAuthority(() => GIT_STATUS.execute!({}))
       expect(result.success).toBe(true)
       const state = (result.metadata as { state: { branch: string; staged: string[]; unstaged: string[]; untracked: string[]; conflicts: string[]; dirty: boolean } }).state
       expect(state.branch).toBe("main")
@@ -85,7 +113,7 @@ describe("RT-8 git tools", () => {
       execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: dir })
       writeFileSync(join(dir, "f.ts"), "line1\nline2 modified\nline3\nline4\n")
 
-      const result = await GIT_DIFF.execute!({})
+      const result = await withTestAuthority(() => GIT_DIFF.execute!({}))
       expect(result.success).toBe(true)
       const stat = (result.metadata as { stat: Array<{ path: string; additions: number; deletions: number }> }).stat
       expect(stat.length).toBe(1)
@@ -107,6 +135,3 @@ describe("RT-8 git tools", () => {
     expect(GIT_COMMIT.requiresConfirmation).toBe(true)
   })
 })
-
-// Imported here to keep the tool under test in scope.
-import { GIT_DIFF } from "../../src/tools/git"

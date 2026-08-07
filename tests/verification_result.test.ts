@@ -63,6 +63,10 @@ describe("VerificationResult", () => {
     expect(detectVerificationKind("bun test || true")).toBe("unknown")
     expect(detectVerificationKind("bun test; exit 0")).toBe("unknown")
     expect(detectVerificationKind("bun test | cat")).toBe("unknown")
+    // OTS-012：长驻 watch 参数不得作为验证证据（永不"完成"）
+    expect(detectVerificationKind("bun test --watch")).toBe("unknown")
+    expect(detectVerificationKind("bun test -w")).toBe("unknown")
+    expect(detectVerificationKind("tsc -w")).toBe("unknown")
   })
 
   test("builds failed verification result with issue count", () => {

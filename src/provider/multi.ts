@@ -140,6 +140,15 @@ export class MultiProvider implements LLMProvider {
     const resolved = this.registry.resolve(options.model) ?? this.selectModel(options.purpose)
     const provider = resolved.provider
 
+    // GATE-02: the output envelope must never exceed the model's
+    // maxOutputTokens — an oversized max_tokens is rejected by the provider
+    // API as a client error, which the loop retries → a new truncation-style
+    // retry loop for models with small caps (e.g. 8K custom models).
+    const specMax = resolved.spec.maxOutputTokens
+    const maxTokens = typeof specMax === "number" && typeof options.maxTokens === "number"
+      ? Math.min(options.maxTokens, specMax)
+      : options.maxTokens
+
     // Adapt tools if this provider needs schema conversion
     let adaptedTools = options.tools
     if (resolved.toolAdapter?.needsConversion && options.tools) {
@@ -147,7 +156,7 @@ export class MultiProvider implements LLMProvider {
     }
 
     // Adapt thinking to model capability
-    const adaptedThinking = this.thinkingFor(resolved, options.thinking, options.maxTokens)
+    const adaptedThinking = this.thinkingFor(resolved, options.thinking, maxTokens)
 
     // Route to the selected provider
     yield* provider.streamChat({
@@ -155,6 +164,7 @@ export class MultiProvider implements LLMProvider {
       model: resolved.modelId,
       tools: adaptedTools,
       thinking: adaptedThinking,
+      maxTokens,
     })
   }
 

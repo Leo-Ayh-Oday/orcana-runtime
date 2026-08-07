@@ -18,7 +18,10 @@ import {
   isNonRetryableProviderStreamError,
 } from "../src/agent/provider/failure-policy"
 import { runProviderRound } from "../src/agent/provider/round-runner"
-import type { LLMProvider, StreamEvent } from "../src/provider/types"
+import type { ProviderRoundResult } from "../src/agent/provider/round-result"
+import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
+import { ProviderRegistry } from "../src/provider/registry"
+import { MultiProvider } from "../src/provider/multi"
 
 const ARCHITECTURE_PROMPT = `
 我们要重构这个 runtime 的 router/provider/agent 层：评估架构影响、缓存与上下文管理、
@@ -115,6 +118,38 @@ describe("error 不再驱动 auto-max（OTS-013 放大器拆除）", () => {
   })
 })
 
+describe("envelope 不超模型 spec（审核修复）", () => {
+  test("multi clamps maxTokens to the model's maxOutputTokens", async () => {
+    const seen: Array<number | undefined> = []
+    const provider: LLMProvider = {
+      async *streamChat(opts: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        seen.push(opts.maxTokens)
+        yield { type: "done", data: "ok" }
+      },
+    }
+    const registry = new ProviderRegistry()
+    registry.register({ id: "test", provider, defaultModel: "tiny" })
+    registry.registerModel({
+      id: "tiny",
+      providerId: "test",
+      displayName: "Tiny",
+      contextWindow: 8_000,
+      maxOutputTokens: 8_192,
+      pricingTier: "cheap",
+      thinking: { supported: false, mode: "manual", maxBudgetTokens: 0, effortLevels: [] },
+      capabilities: { thinking: false, fim: false, contextCaching: false, vision: false, structuredOutput: false, toolUse: true, streaming: true, maxContextWindow: 8_000 },
+      tags: ["fast"],
+    })
+    const multi = new MultiProvider({ registry, defaultModel: "tiny" })
+    // 超限 → 钳到 spec 上限（超限 max_tokens 会被 provider API 以校验错误
+    // 拒绝 → retryable → 无限重试，即新 OTS-013 形状）
+    for await (const _e of multi.streamChat({ model: "tiny", system: "", messages: [], maxTokens: 20_000 })) {}
+    // 未超限 → 原样透传
+    for await (const _e of multi.streamChat({ model: "tiny", system: "", messages: [], maxTokens: 4_096 })) {}
+    expect(seen).toEqual([8_192, 4_096])
+  })
+})
+
 describe("max_tokens 不进 generic retry（GS-03）", () => {
   test("failure-policy 将 stop_reason=max_tokens 判为 non-retryable", () => {
     expect(isNonRetryableProviderStreamError("provider stop_reason=max_tokens: response hit the output token limit before completion")).toBe(true)
@@ -125,6 +160,11 @@ describe("max_tokens 不进 generic retry（GS-03）", () => {
   test("普通 provider 错误仍可重试", () => {
     expect(isNonRetryableProviderStreamError("transport: connection reset")).toBe(false)
     expect(isNonRetryableProviderStreamError("quota exceeded: balance")).toBe(true)
+  })
+
+  test("openai finish_reason 截断格式也进 non-retryable 兜底", () => {
+    expect(isNonRetryableProviderStreamError("provider finish_reason=length: response hit the output token limit before completion")).toBe(true)
+    expect(isNonRetryableProviderStreamError("provider finish_reason=max_tokens: response hit the output token limit before completion")).toBe(true)
   })
 
   test("truncated 事件经 round-runner 记入账本而非 failure（GS-03/GS-05）", async () => {
@@ -140,7 +180,7 @@ describe("max_tokens 不进 generic retry（GS-03）", () => {
       request: { model: "test", purpose: "agent_main", system: "s", messages: [], maxTokens: 10 },
       bufferText: true,
     })
-    let result: Awaited<ReturnType<typeof runProviderRound>> | undefined
+    let result: ProviderRoundResult | undefined
     while (true) {
       const next = await iterator.next()
       if (next.done) {

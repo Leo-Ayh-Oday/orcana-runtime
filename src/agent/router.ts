@@ -194,7 +194,7 @@ export function decideThinkingPlan(
       score: Math.max(score, 11),
       reason: `auto-max: ${autoMax!.modifiedFiles} files`,
       factors: [...factors, "auto-max"],
-      visibleStatus: `深度思考：最高 32K · auto-max · ${autoMax!.modifiedFiles} files`,
+      visibleStatus: `深度思考：最高 ${Math.round((bounded.thinking.budget_tokens ?? 0) / 1024)}K · auto-max · ${autoMax!.modifiedFiles} files`,
     }
   }
 
@@ -294,7 +294,6 @@ export function decideMaxTokens(thinking: ThinkingConfig | undefined, state: Rou
   if (state.hadFim) return 8192
   if (state.priorTools.includes("write_file")) return 16384
   if (thinking?.budget_tokens && thinking.budget_tokens >= 16384) return 16384
-  if (state.priorFiles.size >= 3 && thinking) return 12288
   if (thinking) return 12288
   return 4096
 }

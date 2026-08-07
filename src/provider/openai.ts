@@ -347,15 +347,13 @@ export class OpenAIProvider implements LLMProvider {
       yield { type: "error", data: "provider returned a malformed SSE data chunk; response may be incomplete" }
       return
     }
-    if (finishReason === "length") {
-      yield { type: "error", data: "provider finish_reason=length: response hit the output token limit before completion" }
-      return
-    }
     if (finishReason === "content_filter") {
       yield { type: "error", data: "provider finish_reason=content_filter: response was interrupted by the provider content filter" }
       return
     }
-    if (finishReason && !NORMAL_OPENAI_FINISH_REASONS.has(finishReason)) {
+    // GATE-02: finish_reason=length (OpenAI native) and max_tokens (compat
+    // relays) are TRUNCATED — handled after tool-call validation below.
+    if (finishReason && !NORMAL_OPENAI_FINISH_REASONS.has(finishReason) && finishReason !== "length" && finishReason !== "max_tokens") {
       yield { type: "error", data: `provider finish_reason=${finishReason}: response ended before normal completion` }
       return
     }
@@ -381,6 +379,19 @@ export class OpenAIProvider implements LLMProvider {
       }
       parsedToolCalls.push({ id: tc.id, name: tc.name, input })
     }
+    // GATE-02 (GS-03/GS-05): TRUNCATED is not an error. Tool calls that
+    // parsed before the cut are complete side effects — emit them so the
+    // round executes them instead of discarding (OTS-013 lost every tool
+    // block this way and retried the same doomed request forever). The
+    // kernel continues as a fresh round; no blind generic retry.
+    if (finishReason === "length" || finishReason === "max_tokens") {
+      for (const toolCall of parsedToolCalls) {
+        yield { type: "tool_call", data: toolCall }
+      }
+      yield { type: "truncated", data: { stopReason: finishReason, toolCalls: parsedToolCalls.length } }
+      return
+    }
+
     for (const toolCall of parsedToolCalls) {
       yield { type: "tool_call", data: toolCall }
     }

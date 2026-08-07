@@ -489,6 +489,8 @@ export async function* runRound(
     emittedText: providerRoundResult.textChunks.length > 0,
     emittedThinking: (providerRoundResult.thinkingBlocks?.length ?? 0) > 0,
     toolCalls: providerRoundResult.toolCalls.length,
+    // GATE-02：截断轮在 trace 中可见（观测性——截断频率是 OTS 类问题主信号）
+    stopReason: providerRoundResult.stopReason,
   })
 
   const roundMs = Date.now() - roundState.startedAt
@@ -676,8 +678,16 @@ export async function* runRound(
     }
   }
   if (completedToolCalls.length === 0) {
-    yield stream({ type: "status", data: "empty-round: no tool calls or final text" })
-    return { kind: "break", reason: "empty_round" }
+    if (providerRoundResult.stopReason === "truncated") {
+      // GATE-02：纯截断轮（thinking/文本烧光 envelope 且无工具产出）不得
+      // 静默终止——thinking 链保留入账，轮次以新 request 继续。连续空转由
+      // GATE-03 ProgressGovernor 在轮次上限内终止为 STALLED。
+      yield stream({ type: "status", data: "truncated-round: envelope exhausted before any tool call, continuing" })
+      yield trace("provider_round_truncated", { round, thinkingBlocks: roundState.thinkingBlocks.length })
+    } else {
+      yield stream({ type: "status", data: "empty-round: no tool calls or final text" })
+      return { kind: "break", reason: "empty_round" }
+    }
   }
 
   const assistantContent: Array<Record<string, unknown>> = []

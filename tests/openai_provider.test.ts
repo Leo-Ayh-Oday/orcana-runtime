@@ -330,11 +330,13 @@ describe("OpenAIProvider stop reason handling", () => {
     }
 
     expect(events.some(event => event.type === "text" && event.data === "partial answer")).toBe(true)
-    expect(events.some(event => event.type === "error" && String(event.data).includes("length"))).toBe(true)
+    // GATE-02：finish_reason=length 是 TRUNCATED，不再是 error
+    expect(events.some(event => event.type === "error")).toBe(false)
+    expect(events.some(event => event.type === "truncated")).toBe(true)
     expect(events.some(event => event.type === "done")).toBe(false)
   })
 
-  test("rejects an unknown relay finish reason instead of completing partial text", async () => {
+  test("reports a compat relay max_tokens stop as TRUNCATED (GATE-02 GS-03)", async () => {
     const chunk = JSON.stringify({
       id: "chunk_unknown_stop",
       object: "chat.completion.chunk",
@@ -352,7 +354,41 @@ describe("OpenAIProvider stop reason handling", () => {
       model: "test-model", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 32,
     })) events.push(event)
 
-    expect(events.some(event => event.type === "error" && String(event.data).includes("max_tokens"))).toBe(true)
+    expect(events.some(event => event.type === "truncated")).toBe(true)
+    expect(events.some(event => event.type === "error")).toBe(false)
     expect(events.some(event => event.type === "done")).toBe(false)
+  })
+
+  test("emits already-parsed tool calls from a truncated response (GATE-02 GS-05)", async () => {
+    const chunk = JSON.stringify({
+      id: "chunk_truncated_tool",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: 0, id: "call-1", type: "function",
+            function: { name: "write_file", arguments: JSON.stringify({ path: "a.ts" }) },
+          }],
+        },
+        finish_reason: "length",
+      }],
+    })
+    const provider = new OpenAIProvider("test-key", {
+      maxRetries: 0,
+      fetch: (async () => new Response(`data: ${chunk}\n\ndata: [DONE]\n\n`, { status: 200 })) as unknown as typeof fetch,
+    })
+
+    const events = []
+    for await (const event of provider.streamChat({
+      model: "test-model", system: "", messages: [{ role: "user", content: "hello" }], maxTokens: 32,
+    })) events.push(event)
+
+    // 截断前已解析的 tool call 是完整副作用，必须到达执行器而非陪葬
+    expect(events.some(event => event.type === "tool_call" && (event.data as { id?: string }).id === "call-1")).toBe(true)
+    expect(events.some(event => event.type === "truncated")).toBe(true)
+    expect(events.some(event => event.type === "error")).toBe(false)
   })
 })

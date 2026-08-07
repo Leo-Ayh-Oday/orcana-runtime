@@ -95,7 +95,8 @@ export function createHostAuditBackend(): ExecutionBackend {
             observedDeletes: diff ? diff.deleted : [],
             unexpectedWrites: diff ? classifyUnexpectedWrites(diff, spec.filesystem.ownerFiles) : [],
             violations: [],
-            degradationReasons: [HOST_AUDIT_DEGRADATION],
+            // 降级声明由 buildReceipt 统一 prepend —— 这里传空避免重复。
+            degradationReasons: [],
             metrics: evidence.metrics,
             snapshotGuard: after
               ? { skippedLargeFiles: after.skippedLargeFiles, budgetExceeded: after.budgetExceeded, bytesHashed: after.bytesHashed }

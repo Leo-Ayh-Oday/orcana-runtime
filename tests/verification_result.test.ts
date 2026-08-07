@@ -22,6 +22,7 @@ async function shellDone(command: string) {
         hostRoot: process.cwd(),
         kind: "main",
         access: "readwrite",
+        physicalWorkspaceKey: "wp_test",
         ownerFiles: [],
       },
     }

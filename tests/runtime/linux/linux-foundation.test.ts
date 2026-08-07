@@ -6,6 +6,9 @@
 
 import { describe, expect, test } from "bun:test"
 import { platform } from "node:os"
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, existsSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { probeLinuxCapabilities, capabilitiesDigest } from "../../../src/runtime/linux/capability-probe"
 import { validateCellSpec, compileCellSpec, compileCapabilityRequest, validateMountSet, validateMountRule, deepFreeze } from "../../../src/runtime/linux/policy-compiler"
 import { buildReceipt, cellSpecDigest, computePolicyDigest, canonicalJson, receiptComplete } from "../../../src/runtime/linux/receipt"
@@ -13,6 +16,7 @@ import { applyProfileDefaults, profileDefaults, isStrictProfile } from "../../..
 import { selectBackend, backendAvailability } from "../../../src/runtime/linux/backend-router"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
 import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
+import { buildExplicitEnvironment, isRuntimeReservedKey, RUNTIME_RESERVED_ENV_KEYS } from "../../../src/runtime/linux/environment"
 import type { ExecutionCellSpec, TrustedExecutionAuthority } from "../../../src/runtime/linux/contracts"
 
 const linuxOnly = platform() === "linux" ? test : test.skip
@@ -323,7 +327,7 @@ describe("PR-1: CapabilityRequest compilation (P0-1/P0-2)", () => {
   // R2 PR-9（EA-012）：单元测试使用显式 Test Authority（身份唯一、workspace 独立）。
   const testAuthority = (): TrustedExecutionAuthority => ({
     identity: { runId: `run-test-${Math.random().toString(36).slice(2, 8)}`, nodeRunId: `run-test-${Math.random().toString(36).slice(2, 8)}:n1`, attempt: 1 },
-    workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", ownerFiles: [] },
+    workspace: { workspaceId: "ws_test", projectId: "test", hostRoot: process.cwd(), kind: "system", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] },
   })
 
   test("runtime generates unique identity per request (no shared tool-run)", () => {
@@ -404,5 +408,129 @@ describe("PR-1: CapabilityRequest compilation (P0-1/P0-2)", () => {
     expect(Object.isFrozen(obj)).toBe(true)
     expect(Object.isFrozen(obj.a)).toBe(true)
     expect(Object.isFrozen(obj.a.b)).toBe(true)
+  })
+})
+
+describe("LNXF-R2 PR-9: Execution Authority closure", () => {
+  // 本地 Authority（独立于 PR-1 describe 内的 testAuthority —— 作用域隔离）
+  const testAuthority = (): TrustedExecutionAuthority => ({
+    identity: { runId: "run-r2-9", nodeRunId: "run-r2-9:n1", attempt: 1 },
+    workspace: { workspaceId: "ws_r2", physicalWorkspaceKey: "wp_r2", projectId: "p", hostRoot: process.cwd(), kind: "main", access: "readwrite", ownerFiles: [] },
+  })
+
+  // 9.1 cwd 父目录 symlink 逃逸（candidate 不存在时检查最近已存在前缀）
+  test("9.1 cwd escapes workspace via parent symlink (missing leaf)", () => {
+    if (process.platform === "win32") return
+    const root = mkdtempSync(join(tmpdir(), "lnxf-cwd-"))
+    try {
+      const outside = mkdtempSync(join(tmpdir(), "lnxf-out-"))
+      symlinkSync(outside, join(root, "link"))
+      const ws = testAuthority().workspace
+      // link/child 不存在：link → outside，必须拒绝（旧实现回退 hostRoot 放行）
+      const r = compileCapabilityRequest(
+        { command: { executable: "/bin/true", args: [], relativeCwd: "link/child" }, profile: "inspect" },
+        { ...testAuthority(), workspace: { ...ws, hostRoot: root } },
+      )
+      expect(r.ok).toBe(false)
+      expect((r as { errors: string[] }).errors.some(e => e.includes("WORKSPACE_PATH_ESCAPE"))).toBe(true)
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch { /* best-effort */ }
+    }
+  })
+
+  test("9.1 cwd inside workspace still resolves", () => {
+    const root = mkdtempSync(join(tmpdir(), "lnxf-cwd-ok-"))
+    try {
+      const r = compileCapabilityRequest(
+        { command: { executable: "/bin/true", args: [], relativeCwd: "." }, profile: "inspect" },
+        { ...testAuthority(), workspace: { ...testAuthority().workspace, hostRoot: root } },
+      )
+      expect(r.ok).toBe(true)
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch { /* best-effort */ }
+    }
+  })
+
+  // 9.3 RequestedMount 两态 + reserved target
+  test("9.3 host absolute mount source rejected", () => {
+    const r = compileCapabilityRequest(
+      { command: { executable: "/bin/true", args: [] }, profile: "inspect", writableMounts: [{ source: { type: "workspace-relative", path: "../etc" }, target: "/x", mode: "rw" }] },
+      testAuthority(),
+    )
+    expect(r.ok).toBe(false)
+    expect((r as { errors: string[] }).errors.some(e => e.includes("workspace"))).toBe(true)
+  })
+
+  test("9.3 runtime-grant rejected as unsupported", () => {
+    const r = compileCapabilityRequest(
+      { command: { executable: "/bin/true", args: [] }, profile: "inspect", readonlyMounts: [{ source: { type: "runtime-grant", grantId: "g1" }, target: "/cache/x", mode: "ro" }] },
+      testAuthority(),
+    )
+    expect(r.ok).toBe(false)
+    expect((r as { errors: string[] }).errors.some(e => e.includes("RUNTIME_GRANT_UNAVAILABLE"))).toBe(true)
+  })
+
+  test("9.3 reserved mount target rejected", () => {
+    const r = compileCapabilityRequest(
+      { command: { executable: "/bin/true", args: [] }, profile: "inspect", readonlyMounts: [{ source: { type: "workspace-relative", path: "sub" }, target: "/etc/hosts", mode: "ro" }] },
+      testAuthority(),
+    )
+    expect(r.ok).toBe(false)
+    expect((r as { errors: string[] }).errors.some(e => e.includes("reserved mount target"))).toBe(true)
+  })
+
+  test("9.3 workspace-relative mount resolves inside workspace", () => {
+    const root = mkdtempSync(join(tmpdir(), "lnxf-mnt-"))
+    try {
+      mkdirSync(join(root, "sub")) // required mount source 必须存在
+      const r = compileCapabilityRequest(
+        { command: { executable: "/bin/true", args: [] }, profile: "inspect", readonlyMounts: [{ source: { type: "workspace-relative", path: "sub" }, target: "/workspace/vendor", mode: "ro" }] },
+        { ...testAuthority(), workspace: { ...testAuthority().workspace, hostRoot: root } },
+      )
+      expect(r.ok).toBe(true)
+      if (r.ok) {
+        const mount = r.spec.filesystem.readonlyMounts[0]
+        expect(mount?.source.startsWith(root + "/")).toBe(true)
+        expect(mount?.mode).toBe("ro")
+      }
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch { /* best-effort */ }
+    }
+  })
+
+  // 9.4 Reserved Env Authority
+  test("9.4 requested env cannot forge ORCANA_RUN_ID", () => {
+    const out = buildExplicitEnvironment({
+      policy: { baseProfile: "minimal", allowedHostKeys: [], fixedValues: {}, requestedValues: { ORCANA_RUN_ID: "fake-run", ORCANA_NODE_RUN_ID: "fake-node", FOO: "bar" }, deniedKeys: [] },
+      runId: "real-run",
+      nodeRunId: "real-node",
+    })
+    expect(out.env.ORCANA_RUN_ID).toBe("real-run")
+    expect(out.env.ORCANA_NODE_RUN_ID).toBe("real-node")
+    expect(out.env.FOO).toBe("bar")
+    expect(out.rejectedHostKeys.some(k => k === "ORCANA_RUN_ID")).toBe(true)
+  })
+
+  test("9.4 secret env cannot forge reserved keys", () => {
+    const out = buildExplicitEnvironment({
+      policy: { baseProfile: "minimal", allowedHostKeys: [], fixedValues: {}, requestedValues: {}, deniedKeys: [] },
+      runId: "r1",
+      nodeRunId: "n1",
+      secrets: { ORCANA_SANDBOX: "0", GITHUB_TOKEN: "x" },
+    })
+    expect(out.env.ORCANA_SANDBOX).toBe("1") // 保留键写回
+    expect(out.env.GITHUB_TOKEN).toBeUndefined() // 拒绝键过滤
+    expect(isRuntimeReservedKey("ORCANA_RUN_ID")).toBe(true)
+    expect(RUNTIME_RESERVED_ENV_KEYS.length).toBeGreaterThan(0)
+  })
+
+  // 9.6 拒绝集补全
+  test("9.6 credential-pattern env keys denied (new patterns)", () => {
+    const { hostKeyDenied } = require("../../../src/runtime/linux/environment") as { hostKeyDenied: (k: string) => boolean }
+    const denied: string[] = []
+    for (const key of ["AZURE_CLIENT_SECRET", "PGPASSWORD", "STRIPE_SECRET_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "all_proxy"]) {
+      if (!hostKeyDenied(key)) denied.push(key)
+    }
+    expect(denied).toEqual([])
   })
 })

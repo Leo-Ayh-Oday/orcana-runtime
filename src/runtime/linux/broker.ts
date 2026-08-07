@@ -99,6 +99,9 @@ export interface ExecuteOptions {
   domain?: AgentExecutionDomain
   /** R2 PR-9: 可信执行权威（executeRequest 传入；enabled 下必填）。 */
   authority?: TrustedExecutionAuthority
+  /** LNXF-R2 9.5: full-approved 网络的人工批准凭证 —— 由调用方（UI/
+   *  人工确认路径）显式授予，Receipt 记录批准事实。缺省拒绝。 */
+  approvedNetwork?: boolean
 }
 
 export interface LinuxExecutionBroker {
@@ -374,6 +377,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           throw new LinuxExecutionError("IMAGE_NOT_APPROVED", `image "${image}" is not in the approved image policy`)
         }
       }
+      // LNXF-R2 9.5：full-approved 网络必须经人工批准（ADR-L7 承诺的
+      // 运行时门，此前只有注释）；未批准即 fail-closed。
+      if (compiled.network.mode === "full-approved" && !executeOptions?.approvedNetwork) {
+        throw new LinuxExecutionError("NETWORK_APPROVAL_REQUIRED", "network mode full-approved requires explicit human approval (approvedNetwork)")
+      }
       // P0-2：隔离后端不可用时的显式降级通道 —— 只有非严格 Profile
       // （allowDegradation=true）允许经编译器重编译到 minimum=audit；
       // 严格 Profile 在 selectBackend 直接抛 DEGRADATION_NOT_ALLOWED。
@@ -427,11 +435,15 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         // seccomp）在成功、异常、取消任何路径后都被清理。
         materialization = materializeExecution(compiled, selection.backend)
         // Isolation Lock（PR-4）：worktreeRoot + agentId → 按 Agent 的 worktree
-        // 独占；worktreeRoot 无 agentId（工具投影）→ main-workspace 独占（正式
-        // 工作区单写者）；无 worktree → main-workspace 独占。
-        const lockTarget = compiled.filesystem.worktreeRoot
-          ? (agentId ? IsolationDomainLock.worktreeKey(agentId) : IsolationDomainLock.mainWorkspaceKey())
-          : IsolationDomainLock.mainWorkspaceKey()
+        // 独占；worktreeRoot 无 agentId（工具投影）→ 物理冲突域独占（正式
+        // 工作区单写者，LNXF-R2 9.2：同物理目录别名同键）；无 worktree →
+        // main-workspace 独占兜底。
+        const physicalKey = executeOptions?.authority?.workspace.physicalWorkspaceKey
+        const lockTarget = agentId
+          ? IsolationDomainLock.worktreeKey(agentId)
+          : (physicalKey
+              ? IsolationDomainLock.physicalKey(physicalKey)
+              : IsolationDomainLock.mainWorkspaceKey())
         if (!locks.acquire(lockTarget, "exclusive", cellId)) {
           throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `isolation lock held: ${lockTarget}`, { lockTarget })
         }
@@ -669,6 +681,7 @@ export function testAuthorityFallback(workspaceRoot?: string): TrustedExecutionA
     identity: { runId: `run-test-${process.pid}`, nodeRunId: `run-test-${process.pid}:n1`, attempt: 1 },
     workspace: {
       workspaceId: "ws_test",
+      physicalWorkspaceKey: `wp_test_${process.pid}`,
       projectId: "test",
       hostRoot: root,
       kind: "system",

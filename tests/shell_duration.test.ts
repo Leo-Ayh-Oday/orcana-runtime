@@ -30,6 +30,7 @@ function withTestAuthority<T>(fn: () => T | Promise<T>): Promise<T> {
         hostRoot: process.cwd(),
         kind: "main",
         access: "readwrite",
+        physicalWorkspaceKey: "wp_test",
         ownerFiles: [],
       },
     }

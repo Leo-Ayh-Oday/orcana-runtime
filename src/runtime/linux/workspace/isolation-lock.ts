@@ -17,6 +17,11 @@ export class IsolationDomainLock {
     return "main-workspace"
   }
 
+  /** LNXF-R2 9.2：物理冲突域锁键（同物理目录别名 → 同键 → 单写者）。 */
+  static physicalKey(physicalWorkspaceKey: string): string {
+    return `workspace-physical:${physicalWorkspaceKey}`
+  }
+
   static worktreeKey(agentId: string): string {
     return `worktree:${agentId}`
   }

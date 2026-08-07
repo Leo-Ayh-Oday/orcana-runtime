@@ -15,7 +15,7 @@
 
 import { createHash } from "node:crypto"
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path"
-import { existsSync, realpathSync } from "node:fs"
+import { existsSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import type { AuthorizedWorkspace } from "../contracts"
 import { LinuxExecutionError } from "../errors"
@@ -75,6 +75,26 @@ function workspaceIdOf(projectId: string, hostRoot: string, kind: AuthorizedWork
   return `ws_${digest}`
 }
 
+/** LNXF-R2 9.2：物理冲突域键 = sha256(realpath + dev + ino)。
+ *  同一物理目录（含 bind-mount/软链接别名）→ 同键 → 同锁身份。 */
+function physicalWorkspaceKeyOf(hostRoot: string): string {
+  let dev = 0
+  let ino = 0
+  try {
+    const st = statSync(hostRoot)
+    dev = st.dev
+    ino = st.ino
+  } catch {
+    // hostRoot 已过 canonicalHostRoot 校验（存在且 realpath 成功）；
+    // stat 失败时退化为路径 digest（同 realpath 已归一化别名）。
+  }
+  const digest = createHash("sha256")
+    .update(`${hostRoot}:${dev}:${ino}`)
+    .digest("hex")
+    .slice(0, 24)
+  return `wp_${digest}`
+}
+
 export interface RegisterWorkspaceInput {
   projectId: string
   hostRoot: string
@@ -105,6 +125,7 @@ export class WorkspaceAuthorityRegistry {
     const workspaceId = workspaceIdOf(input.projectId, hostRoot, kind)
     const workspace: AuthorizedWorkspace = {
       workspaceId,
+      physicalWorkspaceKey: physicalWorkspaceKeyOf(hostRoot),
       projectId: input.projectId,
       hostRoot,
       kind,

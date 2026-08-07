@@ -26,6 +26,7 @@ async function collectShell(params: Record<string, unknown>) {
         hostRoot: process.cwd(),
         kind: "main",
         access: "readwrite",
+        physicalWorkspaceKey: "wp_test",
         ownerFiles: [],
       },
     }
@@ -91,13 +92,13 @@ describe("shellStream", () => {
     await runWithRuntimeExecutionContext(createRuntimeExecutionContext(), async () => {
       setExecutionAuthority({
         identity: { runId: "shell-cancel-test", nodeRunId: "shell-cancel-test-0", attempt: 1 },
-        workspace: { workspaceId: "shell-ws", projectId: "shell-proj", hostRoot: process.cwd(), kind: "main", access: "readwrite", ownerFiles: [] },
+        workspace: { workspaceId: "shell-ws", projectId: "shell-proj", hostRoot: process.cwd(), kind: "main", access: "readwrite", physicalWorkspaceKey: "wp_test", ownerFiles: [] },
       })
       const iterator = shellStream({
         command: `node -e "console.log('ready'); setTimeout(() => {}, 2000)"`,
         timeout: 30,
         confirm: true,
-      }, { abortSignal: controller.signal })
+      }, { abortSignal: controller.signal, projectRoot: process.cwd() })
 
       const first = await iterator.next()
       expect(first.done).toBe(false)

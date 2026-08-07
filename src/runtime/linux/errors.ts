@@ -46,6 +46,10 @@ export const LINUX_ERROR_CODES = [
   "WORKSPACE_CWD_MISSING",
   "WORKSPACE_READONLY",
   "WORKSPACE_OWNER_FILE_VIOLATION",
+  // LNXF-R2 9.5 / 9.3
+  "NETWORK_APPROVAL_REQUIRED",
+  "MOUNT_REQUEST_INVALID",
+  "RUNTIME_GRANT_UNAVAILABLE",
 ] as const
 
 export type LinuxErrorCode = (typeof LINUX_ERROR_CODES)[number]
@@ -98,6 +102,9 @@ export const LINUX_ERROR_OUTCOME: Record<LinuxErrorCode, LinuxErrorOutcome> = {
   WORKSPACE_CWD_MISSING: "execution_failed",
   WORKSPACE_READONLY: "execution_failed",
   WORKSPACE_OWNER_FILE_VIOLATION: "execution_failed",
+  NETWORK_APPROVAL_REQUIRED: "blocked",
+  MOUNT_REQUEST_INVALID: "blocked",
+  RUNTIME_GRANT_UNAVAILABLE: "blocked",
   PROCESS_CANCELLED: "cancelled",
   PROCESS_TIMEOUT: "timed_out",
 }

@@ -83,15 +83,35 @@ export interface UntrustedCapabilityRequest {
   stderrMaxBytes?: number
   memoryMaxBytes?: number
   pidsMax?: number
-  writableMounts?: MountRule[]
-  readonlyMounts?: MountRule[]
+  /** LNXF-R2 9.3：请求挂载只允许两态 —— workspace-relative（工作区内
+   *  相对路径）或 runtime-grant（Runtime 授予的挂载物，暂未开放）。
+   *  禁止宿主绝对 source（PR-9 宿主路径漏洞不回归）。 */
+  writableMounts?: RequestedMount[]
+  readonlyMounts?: RequestedMount[]
   cache?: CacheMountRequest[]
 }
+
+/** 请求级挂载（模型声明需求；宿主路径由编译器权威解析，模型不可指定）。 */
+export type RequestedMount =
+  | {
+      source: { type: "workspace-relative"; path: string }
+      target: string
+      mode: "ro" | "rw"
+    }
+  | {
+      source: { type: "runtime-grant"; grantId: string }
+      target: string
+      mode: "ro"
+    }
 
 /** 授权工作区（R2 PR-9：INV-B）。由 WorkspaceAuthorityRegistry 注册生成，
  *  模型不可构造。workspaceId 由 canonical physical root 稳定生成。 */
 export interface AuthorizedWorkspace {
   workspaceId: string
+  /** LNXF-R2 9.2：物理冲突域键 —— 由 realpath + stat(dev,ino) 生成；
+   *  bind-mount/软链接别名指向同一物理目录时键相同（单写者锁
+   *  workspace-physical:<key>，防止 workspaceId 公式旁路）。 */
+  physicalWorkspaceKey: string
   projectId: string
   /** realpath 后的物理根目录。 */
   hostRoot: string

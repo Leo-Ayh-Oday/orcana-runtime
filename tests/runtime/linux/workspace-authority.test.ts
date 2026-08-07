@@ -134,3 +134,33 @@ describe("WorkspaceAuthorityRegistry (R2 PR-9)", () => {
     }
   })
 })
+
+describe("LNXF-R2 9.2: physical workspace key (single-writer identity)", () => {
+  test("same physical root registers the same physicalWorkspaceKey", () => {
+    const root = mkdtempSync(join(tmpdir(), "lnxf-pwk-"))
+    try {
+      const registry = new WorkspaceAuthorityRegistry()
+      const a = registry.registerMainWorkspace({ projectId: "p1", hostRoot: root, access: "readwrite" })
+      const b = registry.registerMainWorkspace({ projectId: "p2", hostRoot: root, access: "readwrite" })
+      expect(a.physicalWorkspaceKey).toBe(b.physicalWorkspaceKey)
+      expect(a.physicalWorkspaceKey.startsWith("wp_")).toBe(true)
+      expect(a.workspaceId).not.toBe(b.workspaceId) // 逻辑身份仍区分
+    } finally {
+      try { rmSync(root, { recursive: true, force: true }) } catch { /* best-effort */ }
+    }
+  })
+
+  test("different physical roots get different keys", () => {
+    const r1 = mkdtempSync(join(tmpdir(), "lnxf-pwk1-"))
+    const r2 = mkdtempSync(join(tmpdir(), "lnxf-pwk2-"))
+    try {
+      const registry = new WorkspaceAuthorityRegistry()
+      const a = registry.registerMainWorkspace({ projectId: "p", hostRoot: r1, access: "readwrite" })
+      const b = registry.registerMainWorkspace({ projectId: "p", hostRoot: r2, access: "readwrite" })
+      expect(a.physicalWorkspaceKey).not.toBe(b.physicalWorkspaceKey)
+    } finally {
+      try { rmSync(r1, { recursive: true, force: true }) } catch { /* best-effort */ }
+      try { rmSync(r2, { recursive: true, force: true }) } catch { /* best-effort */ }
+    }
+  })
+})

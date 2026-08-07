@@ -24,7 +24,7 @@ describe("RT-6 read_file enhancements", () => {
     try {
       const p = join(cwd, "lib.ts")
       writeFileSync(p, TS_FILE)
-      const result = await READ_FILE.execute!({ path: p, selector: { kind: "symbol", name: "greet" } })
+      const result = await READ_FILE.execute!({ path: p, selector: { kind: "symbol", name: "greet" } }, undefined, { projectRoot: cwd })
       expect(result.success).toBe(true)
       const content = result.content
       expect(content).toContain("export function greet")
@@ -40,9 +40,9 @@ describe("RT-6 read_file enhancements", () => {
       const p = join(cwd, "a.txt")
       writeFileSync(p, "content v1")
       const hash = fingerprintContent("content v1").sha256
-      const ok = await READ_FILE.execute!({ path: p, expectedHash: hash })
+      const ok = await READ_FILE.execute!({ path: p, expectedHash: hash }, undefined, { projectRoot: cwd })
       expect(ok.success).toBe(true)
-      const stale = await READ_FILE.execute!({ path: p, expectedHash: "wrong-hash" })
+      const stale = await READ_FILE.execute!({ path: p, expectedHash: "wrong-hash" }, undefined, { projectRoot: cwd })
       expect(stale.success).toBe(false)
       expect(stale.content).toContain("STALE_FILE")
     } finally {
@@ -55,7 +55,7 @@ describe("RT-6 read_file enhancements", () => {
     try {
       const p = join(cwd, "a.txt")
       writeFileSync(p, "l0\nl1\nl2\nl3\n")
-      const result = await READ_FILE.execute!({ path: p, selector: { kind: "lines", start: 1, end: 3 } })
+      const result = await READ_FILE.execute!({ path: p, selector: { kind: "lines", start: 1, end: 3 } }, undefined, { projectRoot: cwd })
       expect(result.success).toBe(true)
       expect(result.content).toBe("l1\nl2")
     } finally {
@@ -70,7 +70,7 @@ describe("RT-6 edit_symbol", () => {
     try {
       const p = join(cwd, "lib.ts")
       writeFileSync(p, TS_FILE)
-      const result = await EDIT_SYMBOL_TOOL.execute!({ path: p, symbol: "User", dryRun: true })
+      const result = await EDIT_SYMBOL_TOOL.execute!({ path: p, symbol: "User", dryRun: true }, undefined, { projectRoot: cwd })
       expect(result.success).toBe(true)
       expect(result.content).toContain("export interface User")
       const meta = result.metadata as { authority: string; startLine: number; endLine: number; dryRun: boolean }
@@ -93,7 +93,7 @@ describe("RT-6 edit_symbol", () => {
         path: p,
         symbol: "greet",
         newText: "export function greet(name: string): string {\n  return `hi ${name}`\n}",
-      })
+      }, undefined, { projectRoot: cwd })
       expect(result.success).toBe(true)
       const updated = readFileSync(p, "utf-8")
       expect(updated).toContain("return `hi ${name}`")
@@ -109,7 +109,7 @@ describe("RT-6 edit_symbol", () => {
     try {
       const p = join(cwd, "lib.ts")
       writeFileSync(p, TS_FILE)
-      const result = await EDIT_SYMBOL_TOOL.execute!({ path: p, symbol: "nope", dryRun: true })
+      const result = await EDIT_SYMBOL_TOOL.execute!({ path: p, symbol: "nope", dryRun: true }, undefined, { projectRoot: cwd })
       expect(result.success).toBe(false)
       expect(result.content).toContain("Symbol not found")
     } finally {

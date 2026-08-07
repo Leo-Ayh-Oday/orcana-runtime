@@ -13,7 +13,7 @@ describe("codegraph tools", () => {
       writeFileSync(join(dir, "src", "index.ts"), "export const ok = true\n", "utf-8")
       writeFileSync(join(dir, ".orcana", "runs", "run.jsonl"), "{}\n", "utf-8")
 
-      const result = await PROJECT_STRUCTURE.execute({ path: dir, max_depth: 3 })
+      const result = await PROJECT_STRUCTURE.execute({ path: dir, max_depth: 3 }, undefined, { projectRoot: dir })
       expect(result.success).toBe(true)
       expect(result.content).toContain("Target project:")
       expect(result.content).toContain("Runtime artifacts")
@@ -32,7 +32,7 @@ describe("codegraph tools", () => {
       const prev = process.cwd()
       process.chdir(dir)
       try {
-        const result = await FIND_SYMBOL.execute({ name: "foo$bar", max_results: 10 })
+        const result = await FIND_SYMBOL.execute({ name: "foo$bar", max_results: 10 }, undefined, { projectRoot: dir })
         expect(result.content).toContain("foo$bar = 1")
       } finally {
         process.chdir(prev)
@@ -49,7 +49,7 @@ describe("codegraph tools", () => {
       const prev = process.cwd()
       process.chdir(dir)
       try {
-        const result = await FIND_REFERENCES.execute({ name: "foo$bar", max_results: 10 })
+        const result = await FIND_REFERENCES.execute({ name: "foo$bar", max_results: 10 }, undefined, { projectRoot: dir })
         expect(result.content).toContain("1 reference(s) to 'foo$bar'")
       } finally {
         process.chdir(prev)

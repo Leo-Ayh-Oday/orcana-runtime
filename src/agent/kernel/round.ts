@@ -737,6 +737,9 @@ export async function* runRound(
     capabilityRegistry: ctx.capabilityRegistry,
     artifactStore: ctx.artifactStore,
     runId: ctx.runId,
+    // RC-19 Phase 2 (D7): the run scope root — tools resolve relative paths
+    // against this, never process.cwd() (PROCESS_CWD_AFFECTS_TOOL=0).
+    projectRoot: ctx.options.projectRoot,
   }))
   if (batchResult.aborted) return { kind: "return", reason: "tool_batch_aborted" }
 

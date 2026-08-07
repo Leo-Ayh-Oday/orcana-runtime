@@ -56,7 +56,7 @@ describe("G3 evidence gate", () => {
         patchNode("w:patch", "--- a/tmp-g3-evidence/a.ts\n+++ b/tmp-g3-evidence/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+export const a = 2\n"),
       ],
     }
-    const run = await runScheduler(spec, registry)
+    const run = await runScheduler(spec, registry, { projectRoot: PROJECT })
     expect(run.status).toBe("blocked_no_evidence")
     expect(run.evidence).toEqual([])
   })

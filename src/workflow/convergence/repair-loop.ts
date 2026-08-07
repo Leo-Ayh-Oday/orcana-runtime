@@ -36,6 +36,8 @@ export interface RepairLoopOptions {
   maxDryRounds?: number
   /** Round budget (inclusive); exceeding it → budget_exhausted. */
   budget?: number
+  /** RC-19 D7: tool path authority root threaded into each scheduler run. */
+  projectRoot?: string
   checkpointDir?: string
 }
 
@@ -64,6 +66,7 @@ export class RepairLoop {
   private readonly maxDryRounds: number
   private readonly budget?: number
   private readonly checkpointDir?: string
+  private readonly projectRoot?: string
 
   constructor(options: RepairLoopOptions) {
     this.registry = options.registry
@@ -72,6 +75,7 @@ export class RepairLoop {
     this.maxDryRounds = options.maxDryRounds ?? 2
     this.budget = options.budget
     this.checkpointDir = options.checkpointDir
+    this.projectRoot = options.projectRoot
   }
 
   async run(): Promise<ConvergenceReport> {
@@ -98,7 +102,7 @@ export class RepairLoop {
         continue
       }
 
-      const run = await runScheduler(spec, this.registry, { checkpointDir: this.checkpointDir })
+      const run = await runScheduler(spec, this.registry, { checkpointDir: this.checkpointDir, projectRoot: this.projectRoot })
 
       const handlerOf = new Map(spec.nodes.map(n => [n.id, n.handler]))
       const failed = run.results.filter(r => r.status === "failed")

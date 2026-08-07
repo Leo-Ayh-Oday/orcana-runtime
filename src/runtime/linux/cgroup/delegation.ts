@@ -66,23 +66,38 @@ function probeWritable(dir: string): boolean {
   }
 }
 
+/** 候选委托根（纯函数，可测）：按优先级排列，detectDelegatedRoot 逐项探测。
+ *  优先级设计：
+ *   1. systemd user manager 的 Delegate 子树 user@UID.service —— systemd 在
+ *      user@.service（Delegate=pids memory cpu）启动时把该目录 chown 给用户，
+ *      是 WSL2（systemd=true）上普通用户唯一可写的委托点。
+ *      存在性判据是目录本身，不是 ~/.config/systemd/user：后者只在用户有
+ *      自定义 user unit 时创建，user manager 在跑而目录缺失时委托依然存在
+ *      （2026-08-07 OTS-004 事故后实测：本机即此场景，旧判据漏检）。
+ *   1b. 老式 ~/.config/systemd/user → user-UID.slice（老 systemd chown 层级）。
+ *   2. systemd system user.slice（root/已 chown 场景）。
+ *   3. 容器运行时委托（/sys/fs/cgroup 本身可写时）。 */
+export function buildDelegationCandidates(home: string, uid: number, cgroupRoot = "/sys/fs/cgroup"): Array<{ dir: string; source: DelegatedRoot["source"] }> {
+  const candidates: Array<{ dir: string; source: DelegatedRoot["source"] }> = []
+  const userSlice = join(cgroupRoot, "user.slice", `user-${uid}.slice`)
+  if (existsSync(join(userSlice, `user@${uid}.service`))) {
+    candidates.push({ dir: join(userSlice, `user@${uid}.service`), source: "systemd-user" })
+  }
+  if (existsSync(join(home, ".config/systemd/user"))) {
+    candidates.push({ dir: userSlice, source: "systemd-user" })
+  }
+  if (existsSync(join(cgroupRoot, "user.slice"))) {
+    candidates.push({ dir: join(cgroupRoot, "user.slice"), source: "systemd-system" })
+  }
+  candidates.push({ dir: cgroupRoot, source: "container-runtime" })
+  return candidates
+}
+
 /** 探测当前用户可用的委托根。 */
 export function detectDelegatedRoot(): DelegatedRoot {
-  const candidates: Array<{ dir: string; source: DelegatedRoot["source"] }> = []
-
-  // 1. systemd user manager delegate（~/.config/systemd/user 存在 = user manager 活跃）。
   const home = process.env.HOME ?? "/root"
-  if (existsSync(join(home, ".config/systemd/user"))) {
-    candidates.push({ dir: join("/sys/fs/cgroup/user.slice", `user-${process.getuid?.() ?? 0}.slice`), source: "systemd-user" })
-  }
-
-  // 2. systemd system user.slice（WSL2/系统级）。
-  if (existsSync("/sys/fs/cgroup/user.slice")) {
-    candidates.push({ dir: "/sys/fs/cgroup/user.slice", source: "systemd-system" })
-  }
-
-  // 3. 容器运行时委托（/sys/fs/cgroup 本身可写时）。
-  candidates.push({ dir: "/sys/fs/cgroup", source: "container-runtime" })
+  const uid = process.getuid?.() ?? 0
+  const candidates = buildDelegationCandidates(home, uid)
 
   for (const candidate of candidates) {
     if (!existsSync(candidate.dir)) continue

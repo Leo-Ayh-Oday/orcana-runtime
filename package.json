@@ -68,7 +68,11 @@
     "typecheck": "tsc --noEmit --pretty false",
     "test:watch": "node scripts/run-tests.cjs --watch",
     "bench:mini": "bun run evals/mini-benchmark.ts --report",
-    "eval:linux": "bun run evals/linux-sandbox-eval.ts"
+    "eval:linux": "bun run evals/linux-sandbox-eval.ts",
+    "eval:readiness": "bun run evals/readiness/runner.ts",
+    "eval:readiness:core": "bun run evals/readiness/runner.ts --suite core --strict",
+    "eval:readiness:live": "bun run evals/readiness/runner.ts --suite live --strict",
+    "eval:readiness:pilot": "bun run evals/readiness/runner.ts --suite pilot --strict"
   },
   "engines": {
     "node": ">=20"

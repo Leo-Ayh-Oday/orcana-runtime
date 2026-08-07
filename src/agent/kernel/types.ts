@@ -82,7 +82,6 @@ export type LoopDecision =
         | "prompt_blocked" // UserPromptSubmit hook blocked
         | "clarification" // clarification gate asked the user
         | "tool_batch_aborted" // tool batch aborted mid-execution
-        | "gate_overflow" // cumulative gate blocks exceeded
       blockReason?: string // prompt_blocked detail, emitted as the error event
     }
 
@@ -146,7 +145,6 @@ export interface RunPhaseContext {
   sandbox: SandboxManager
   pmode: "full" | "strict"
   toolLedger: ToolExecutionLedger
-  gateBlockCounts: Map<string, { count: number; lastSeen: number }>
   deferredGateMessages: string[]
   sm: StateMachine
   /** GATE-03: run-scoped liveness controller (STALLED after 4 no-progress rounds). */

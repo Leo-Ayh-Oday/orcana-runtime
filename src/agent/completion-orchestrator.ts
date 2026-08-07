@@ -317,6 +317,12 @@ export class CompletionOrchestrator {
   // ── Phase 3: Flash Judge ──
 
   private async evaluateFlashJudge(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult, obligationSnapshot: string[]): Promise<CompletionOrchestratorResult | null> {
+    // GATE-05: objective obligations（步骤/文件/验证）未全部通过前不允许
+    // judge —— FlashJudge 是"证据确认器"，不是"缺什么让我猜"的权威；也不得
+    // 在义务未满足时驱动 loop。
+    if (obligationSnapshot.length > 0) {
+      return null // 义务未完成，跳过 judge（继续走 evidence gate 的客观检查）
+    }
     if (!input.flashJudge.shouldEvaluate({
       taskTracker: input.taskTracker,
       taskHadWrite: input.taskHadWrite,

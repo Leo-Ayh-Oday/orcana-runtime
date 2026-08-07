@@ -11,7 +11,7 @@ import type { UILanguage } from "../language"
 import type { UsageStats } from "../loop-types"
 import type { PlanStore } from "./plan-store"
 
-export type AgentRunStopReason = "completed" | "aborted" | "error" | "blocked"
+export type AgentRunStopReason = "completed" | "aborted" | "error" | "blocked" | "stalled"
 
 export interface AgentRunLifecycleState {
   startedAt: number

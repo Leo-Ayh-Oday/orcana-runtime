@@ -104,12 +104,9 @@ export class Recovery {
         })
         return { to: "CLEANED", reason: "cleanup resumed" }
       }
-      case "SIDE_EFFECT_UNKNOWN": {
-        // 外部副作用：不得盲跑（UNKNOWN_SIDE_EFFECT_BLIND_RETRY = 0）。
-        // v1：广播等待 reconcile（查询外部系统 → commit/retry/human）。
-        this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "SIDE_EFFECT_UNKNOWN", action: "reconcile-required" } }, state.latestEventSequence())
-        return { to: "SIDE_EFFECT_UNKNOWN", reason: "external side effect requires reconcile (no blind retry)" }
-      }
+      // SIDE_EFFECT_UNKNOWN 是终态（等待 reconcile）—— 不出现在恢复扫描
+      // （见 TERMINAL_CELL_STATES）；外部副作用不盲跑（UNKNOWN_SIDE_EFFECT
+      // _BLIND_RETRY = 0）：reconcile 是人工/外部流程，恢复不触碰。
       default:
         return { to: cell.currentState, reason: `no recovery action for ${cell.currentState}` }
     }

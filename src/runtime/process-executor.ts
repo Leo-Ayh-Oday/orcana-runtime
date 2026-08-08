@@ -58,9 +58,9 @@ export interface ProcessOutcome {
  *  密钥类键（后缀 _API_KEY / _TOKEN / AWS_* / GITHUB_TOKEN 等）在任何层级都拒绝。
  *  PATH/HOME 属于安全变量（HOST_ENV_SECRET_LEAK 语义排除），宿主工具链依赖。 */
 export const AUDIT_HOST_ALLOW_KEYS = [
-  "ORCANA_*", "USER", "LOGNAME", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL",
+  "ORCANA_*", "USER", "LOGNAME", "LANG", "LANGUAGE", "LC_ALL",
   "LC_CTYPE", "TERM", "CI", "BUN_*", "NPM_CONFIG_*", "YARN_*", "PNPM_*",
-  "NODE_OPTIONS", "EDITOR", "VISUAL", "HOME", "PATH",
+  "NODE_OPTIONS", "EDITOR", "VISUAL",
 ]
 
 const DEFAULT_STDOUT_MAX = 4 * 1024 * 1024

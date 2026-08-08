@@ -89,6 +89,30 @@ function matchesPattern(key: string, pattern: string): boolean {
 }
 
 /** 宿主环境可见性：给定键是否属于默认拒绝集。 */
+/** LNXF-GATE-02：ServiceCell/长期进程的最小宿主环境（E1 语义正式化）。
+ *  白名单键 + 显式 extra（extra 中命中拒绝集的键被过滤）——
+ *  service/MCP/LSP 等长期进程必须用它启动，禁止 `{...process.env}`
+ *  （宿主 API key/代理/SSH 凭据零泄露）。 */
+export const MINIMAL_HOST_ENV_KEYS = [
+  "PATH", "HOME", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
+  "TERM", "USER", "LOGNAME", "CI", "EDITOR", "VISUAL", "SHELL",
+]
+
+export function minimalHostEnv(extra?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const key of MINIMAL_HOST_ENV_KEYS) {
+    const value = process.env[key]
+    if (value !== undefined) env[key] = value
+  }
+  if (extra) {
+    for (const [key, value] of Object.entries(extra)) {
+      if (hostKeyDenied(key)) continue
+      env[key] = value
+    }
+  }
+  return env
+}
+
 export function hostKeyDenied(key: string, extraDenied: string[] = []): boolean {
   return [...DEFAULT_DENIED_KEYS, ...extraDenied].some(p => matchesPattern(key, p))
 }

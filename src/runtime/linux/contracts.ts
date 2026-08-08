@@ -162,6 +162,30 @@ export interface CapabilityRequest {
   attempt?: number
 }
 
+/** LNXF-GATE-02 (B7)：统一清理动作 —— broker finally 按序执行并逐项
+ *  记录结果（process → mounts → secrets → temp → cgroup → lease）。 */
+export interface CleanupAction {
+  kind: "process" | "mounts" | "secrets" | "temp" | "cgroup" | "lease" | "secret-file"
+  name: string
+  ok: boolean
+  detail?: string
+  at: number
+}
+
+/** LNXF-GATE-02 (B7)：secret 交付的生命周期记录（Receipt 审计）。 */
+export interface SecretDeliveryRecord {
+  leaseId: string
+  runId?: string
+  cellId?: string
+  bindingId: string
+  deliveryTarget?: string
+  delivery: "sealed-file" | "file-descriptor" | "environment"
+  expiresAt: number
+  revokedAt?: number
+  /** GS-11 语义：实际删除文件才算 verified；失败如实标记。 */
+  cleanupVerified: boolean
+}
+
 /** 运行期物化材料 —— 不属于策略 Spec，编译完成后由 Runtime 生成并随
  *  上下文传入后端；禁止反向写回 ExecutionCellSpec（P0-1 修复）。 */
 export interface ExecutionMaterialization {
@@ -173,6 +197,10 @@ export interface ExecutionMaterialization {
   secretFiles?: Record<string, string>
   /** 缓存宿主路径映射（target → 宿主源目录；Runtime 决定，模型不可指定）。 */
   cacheHostPaths?: Record<string, string>
+  /** B7：secret 交付生命周期记录（dispose 后 revokedAt/cleanupVerified 落真值）。 */
+  secretRecords?: SecretDeliveryRecord[]
+  /** B7：统一清理动作登记表（dispose 执行时逐项回填 ok/detail）。 */
+  cleanupActions?: CleanupAction[]
   /** C5（SECRET_TEMP_RESIDUE）：运行期物化宿主文件的统一清理回调
    *  （sealed secret 文件 + secret root + seccomp 文件；执行结束后调用，
    *  由 Broker 事务 finally 保证触发）。 */
@@ -375,6 +403,10 @@ export interface SandboxReceipt {
   unexpectedWrites: string[]
   networkMode: string
   secretBindingIds: string[]
+  /** B7: 统一清理动作结果（process→mounts→secrets→temp→cgroup→lease）。 */
+  cleanupActions?: CleanupAction[]
+  /** B7: secret 交付生命周期记录（revokedAt/cleanupVerified 落真值）。 */
+  secretRecords?: SecretDeliveryRecord[]
   violations: SandboxViolation[]
   degradationReasons: string[]
   /** PathGuard 快照有界性证据（OTS-004 事故后加）：跳过的大文件/预算超限/

@@ -508,11 +508,11 @@ describe("LNXF-R2 E1.8: static gate — HOST_PROCESS_BYPASS via legacy-process (
   const LEGACY_STAGING: Record<string, string> = {
     "src/agent/journal.ts": "E1.1: command 规则默认禁用 + opt-in 最小 env（迁 Executor）",
     "src/ripple/astgrep-provider.ts": "E1.5: 参数数组 + 最小 env（迁 Executor）",
-    "src/tools/service.ts": "E1.2: 参数数组 + 最小 env（Service Cell PR-14）",
-    "src/tools/mcp.ts": "E1.3: 最小 env 过滤拒绝键（Service Cell PR-14）",
-    "src/lsp/client.ts": "E1.4: 最小 env（Service Cell PR-14）",
+    "src/tools/service.ts": "E1.2: taskkill/停止路径保留 legacy（主 spawn 已迁 Service Cell）",
     "src/workflow/agents/worktree.ts": "E1.6: args 数组无注入（git Broker 化 PR-13）",
     "src/verification/collector.ts": "E1.7: 死代码（无生产调用方，待删除/迁移）",
+    // LNXF-GATE-02：mcp/lsp 已迁移 ServiceCell（不再导入 legacy-process）——
+    // 若将来重新引入 legacy-process 调用，必须回到本登记表。
   }
 
   interface LegacySite { file: string; line: number; kind: string }

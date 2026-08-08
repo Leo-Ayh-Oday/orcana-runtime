@@ -1,0 +1,33 @@
+# LR2-1（L1-G）：orcana-execd systemd user service
+#
+# 安装（用户级）：
+#   mkdir -p ~/.config/systemd/user
+#   cp packaging/orcana-execd.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now orcana-execd
+#
+# 说明：
+#   - Delegate=cpu memory pids io：systemd 将本 unit cgroup 子树委托给
+#     execd 管理（LR2-0E 委托模型：execd 只管理自身被委托子树）；
+#   - NoNewPrivileges=yes / UMask=0077：最小权限；
+#   - lingering（可选）：loginctl enable-linger $USER —— 用户退出登录后
+#     user manager 继续运行，execd 存活。
+
+[Unit]
+Description=Orcana Linux Execution Control Plane (execd)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/orcana-execd
+Restart=on-failure
+RestartSec=2
+UMask=0077
+Delegate=cpu memory pids io
+NoNewPrivileges=yes
+Environment=ORCANA_EXECD_WORKSPACE=%h
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

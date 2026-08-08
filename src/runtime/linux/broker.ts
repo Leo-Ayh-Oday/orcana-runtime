@@ -10,9 +10,11 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { readFileSync, realpathSync, rmSync, statSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs"
 import { CrossProcessWorkspaceLease } from "./workspace/workspace-lease"
 import { spawnSync } from "node:child_process"
+import { killProcessGroup } from "./process/termination"
+import { processDead } from "./recovery/state-store"
 import type {
   AgentExecutionDomain,
   CapabilityRequest,
@@ -22,6 +24,7 @@ import type {
   ExecutionMaterialization,
   LinuxCapabilities,
   SandboxReceipt,
+  SecretDeliveryRecord,
   TrustedExecutionAuthority,
   UntrustedCapabilityRequest,
 } from "./contracts"
@@ -125,7 +128,7 @@ export interface LinuxExecutionBroker {
   cancelCell(cellId: string): Promise<void>
   cancelAgent(agentId: string): Promise<void>
   cancelRun(runId: string): Promise<void>
-  cleanupRun(runId: string): Promise<{ removed: number }>
+  cleanupRun(runId: string): Promise<{ removed: number; servicesCleaned: number; portsCleaned: number }>
   /** R2: 当前运行中 Cell（诊断/测试）。 */
   activeCells(): ExecutionCell[]
   /** R2: 资源账本（调度接入）。 */
@@ -199,7 +202,10 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
    *  PR-7：seccomp 按后端协议生成（bwrap=raw BPF；podman=OCI JSON）；
    *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。 */
   const materializeExecution = (spec: ExecutionCellSpec, backendId: string): ExecutionMaterialization => {
-    const materialization: ExecutionMaterialization = {}
+    const materialization: ExecutionMaterialization = {
+      // B7：统一清理动作登记表 —— dispose 执行时逐项回填 ok/detail。
+      cleanupActions: [],
+    }
     // C5：sealed secret 的清理回调（删文件 + 空 root 目录）；环境注入类无文件。
     let secretCleanup: (() => void) | undefined
     if ((backendId === "bubblewrap" || backendId === "rootless-podman")
@@ -229,13 +235,26 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       materialization.secretEnv = bound.envInjections
       // PR-7：sealed-file 交付 → 宿主文件真实挂载进沙盒/容器。
       const secretFiles: Record<string, string> = {}
+      const secretRecords: SecretDeliveryRecord[] = []
       for (const item of bound.bound) {
         if (item.deliveryTarget) {
           const target = item.binding.target ?? `/run/secrets/${item.binding.id}`
           secretFiles[target] = item.deliveryTarget
         }
+        // B7：交付生命周期记录（Receipt 审计；dispose 后落 revokedAt/verified）。
+        secretRecords.push({
+          leaseId: item.binding.id,
+          runId: spec.identity.runId,
+          cellId: spec.identity.cellId,
+          bindingId: item.binding.id,
+          deliveryTarget: item.deliveryTarget,
+          delivery: item.binding.delivery,
+          expiresAt: item.binding.expiresAt,
+          cleanupVerified: false,
+        })
       }
       materialization.secretFiles = secretFiles
+      materialization.secretRecords = secretRecords
       // C5：文件不在此处清理 —— 统一由 dispose（execute 事务 finally）调用，
       // 保证执行结束（含异常/取消路径）后 /tmp 无密钥残留。
       secretCleanup = bound.cleanup
@@ -247,11 +266,48 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       }
     }
     // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（seccomp/sealed secret）统一清理。
+    // B7：逐项执行 + 结果回填 cleanupActions / secretRecords（Receipt 审计）。
     materialization.dispose = () => {
+      const actions = materialization.cleanupActions ?? []
+      // temp：seccomp 宿主文件（best-effort，结果如实记录）。
       if (materialization.seccompFile) {
-        try { rmSync(materialization.seccompFile, { force: true }) } catch { /* best-effort */ }
+        try {
+          rmSync(materialization.seccompFile, { force: true })
+          actions.push({ kind: "temp", name: "seccomp-file", ok: true, at: Date.now() })
+        } catch (error) {
+          actions.push({ kind: "temp", name: "seccomp-file", ok: false, detail: error instanceof Error ? error.message : String(error), at: Date.now() })
+        }
       }
-      secretCleanup?.()
+      // secrets：逐文件删除并验证（cleanupVerified 真值 —— 失败如实标记，
+      // 不因 best-effort 伪装干净）。
+      for (const record of materialization.secretRecords ?? []) {
+        if (record.deliveryTarget) {
+          try {
+            rmSync(record.deliveryTarget, { force: true })
+            record.cleanupVerified = !existsSync(record.deliveryTarget)
+          } catch {
+            record.cleanupVerified = false
+          }
+          record.revokedAt = Date.now()
+        } else {
+          // environment 交付无文件 —— 撤销即记录时间戳。
+          record.revokedAt = Date.now()
+          record.cleanupVerified = true
+        }
+        actions.push({
+          kind: "secret-file",
+          name: record.bindingId,
+          ok: record.cleanupVerified,
+          at: record.revokedAt ?? Date.now(),
+        })
+      }
+      // 兜底：secret root 空目录清理（C5）。
+      try {
+        secretCleanup?.()
+        actions.push({ kind: "secrets", name: "secret-root", ok: true, at: Date.now() })
+      } catch (error) {
+        actions.push({ kind: "secrets", name: "secret-root", ok: false, detail: error instanceof Error ? error.message : String(error), at: Date.now() })
+      }
     }
     return materialization
   }
@@ -613,6 +669,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
                 ? cellReceipt.cleanup.processesRemaining
                 : -1
             // 最终 Receipt：合并真实清理结果 + attach 失败降级，重算自摘要后持久化。
+            // B7：统一清理动作结果 + secret 交付生命周期记录随 Receipt 审计。
             const finalReceipt: SandboxReceipt = {
               ...cellReceipt,
               degradationReasons: attachFailure
@@ -624,6 +681,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
                 processesRemaining,
                 cleanupVerified,
               },
+              cleanupActions: materialization?.cleanupActions,
+              secretRecords: materialization?.secretRecords,
             }
             const final: SandboxReceipt = {
               ...finalReceipt,
@@ -707,8 +766,28 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           // best-effort
         }
       }
-      stateStore.writeCleanup(runId, { removed, at: Date.now() })
-      return { removed }
+      // LNXF-GATE-02 (A7/B10)：durable service/port lease 清理 —— 从
+      // stateStore 记录恢复（非空 broker 推测）。runId 匹配 + owner 已死
+      // 双条件；owner 存活时仅 run-end 策略的 lease 停止（manual 存活不
+      // 误杀 —— 可能已被其他进程接管复用）。
+      let servicesCleaned = 0
+      let portsCleaned = 0
+      for (const lease of stateStore.readServiceLeases()) {
+        if (lease.runId !== runId) continue
+        if (!processDead(lease.pid, lease.ownerProcStartTicks)) {
+          if (lease.cleanupPolicy !== "run-end") continue
+          if (lease.pid) killProcessGroup(lease.pid)
+        }
+        stateStore.removeServiceLease(lease.id)
+        servicesCleaned += 1
+      }
+      for (const lease of stateStore.readPortLeases()) {
+        if (lease.runId !== runId) continue
+        stateStore.removePortLease(lease.port)
+        portsCleaned += 1
+      }
+      stateStore.writeCleanup(runId, { removed, servicesCleaned, portsCleaned, at: Date.now() })
+      return { removed, servicesCleaned, portsCleaned }
     },
     activeCells() {
       return [...cells.values()]

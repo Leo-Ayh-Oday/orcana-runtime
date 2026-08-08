@@ -85,6 +85,39 @@ describe("R2 broker transaction", () => {
     expect(existsSync(root)).toBe(false)
   })
 
+  test("B7: receipt carries cleanupActions + secretRecords with verified revocation", async () => {
+    const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
+    const { mkdtempSync, rmSync, readdirSync, readFileSync } = await import("node:fs")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { RuntimeStateStore } = await import("../../../src/runtime/linux/recovery/state-store")
+    const binding = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/reg", expiresAt: Date.now() + 60_000 })
+    const root = mkdtempSync(join(tmpdir(), "orcana-gate02-b7-"))
+    try {
+      const store = new RuntimeStateStore({ root })
+      const broker = createLinuxBroker({ mode: "enabled", stateStore: store, secretValues: { [binding.id]: "s3cr3t" } })
+      await collect(cellSpec({ secrets: [binding] }), broker)
+      // 最终 Receipt 只持久化（stateStore.appendReceipt），事件流里的
+      // cell.receipt 是后端原始版本 —— 从 store 读合并后的审计 receipt。
+      const receiptsDir = join(root, "runs", "r1", "receipts")
+      const files = readdirSync(receiptsDir)
+      expect(files.length).toBeGreaterThan(0)
+      const receipt = JSON.parse(readFileSync(join(receiptsDir, files[0]!), "utf8")) as import("../../../src/runtime/linux/contracts").SandboxReceipt
+      // 统一清理动作：secret-file + secret-root（host-audit 无 seccomp 文件）
+      expect(receipt.cleanupActions?.length).toBeGreaterThan(0)
+      expect(receipt.cleanupActions!.some(a => a.kind === "secret-file" && a.ok)).toBe(true)
+      // secret 交付生命周期：revokedAt 已落 + cleanupVerified 为真（文件已删）
+      const records = receipt.secretRecords ?? []
+      expect(records).toHaveLength(1)
+      expect(records[0]!.leaseId).toBe(binding.id)
+      expect(records[0]!.delivery).toBe("sealed-file")
+      expect(records[0]!.revokedAt).toBeGreaterThan(0)
+      expect(records[0]!.cleanupVerified).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test("C5: failed secret binding cleans partially written files", async () => {
     const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
     const { tmpdir } = await import("node:os")

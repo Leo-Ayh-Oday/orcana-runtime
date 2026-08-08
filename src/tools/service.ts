@@ -12,8 +12,10 @@
  *  The legacy start_service tool is kept as a compatibility forwarder.
  */
 
-import { spawnLegacy, minimalHostEnv, type ChildProcess } from "../runtime/legacy-process"
+import { spawnLegacy, type ChildProcess } from "../runtime/legacy-process"
 const spawn = spawnLegacy
+import { createServiceCell } from "../runtime/linux/service-cell"
+import type { ServiceLeaseStore } from "../runtime/linux/recovery/state-store"
 import { createWriteStream, existsSync, mkdirSync, openSync, readSync, closeSync, statSync } from "node:fs"
 import { request as httpRequest } from "node:http"
 import { request as httpsRequest } from "node:https"
@@ -52,10 +54,32 @@ export interface ServiceLease {
 
 interface LiveLease extends ServiceLease {
   proc: ChildProcess
+  /** LNXF-GATE-02：release 幂等句柄（停进程树 + 删 durable 记录）。 */
+  release: () => void
 }
 
 const serviceLeases = new Map<string, LiveLease>()
 let idCounter = 0
+
+// LNXF-GATE-02：durable lease 存储（惰性；janitor 恢复依据）。测试可注入
+// 内存版 store —— 默认不持久化（legacy 直调语义不变）。
+let serviceLeaseStoreOverride: ServiceLeaseStore | undefined
+export function setServiceLeaseStore(store: ServiceLeaseStore | undefined): void {
+  serviceLeaseStoreOverride = store
+}
+function serviceLeaseStore(): ServiceLeaseStore | undefined {
+  return serviceLeaseStoreOverride
+}
+
+/** 从服务 URL 提取监听端口（PortLease 用）。 */
+export function urlPortOf(url: string): number | undefined {
+  try {
+    const port = new URL(url).port
+    return port ? Number(port) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 function serviceLogDir(): string {
   const dir = resolve(homedir(), ".orcana", "services")
@@ -216,24 +240,45 @@ export async function startServiceInternal(params: Record<string, unknown>, deps
 
   // RT-7: parameterized spawn (shell:false) — explicit shell executable +
   // args, detached process group, no command-string injection surface.
-  // bun's spawn does not accept stream/path stdio entries;
-  // pipe stdout/stderr and forward them into the lease log file instead.
+  // LNXF-GATE-02 (B12+B13): spawnLegacy → ServiceCell —— lease 持久化 +
+  // owner(pid+starttime) + explicit env(minimalHostEnv 白名单) + durable
+  // cleanup；探活失败路径由调用方 markFailed/release。
   const shellPath = process.platform === "win32" ? "cmd.exe" : "/bin/sh"
   const shellArgs = process.platform === "win32" ? ["/c", command] : ["-c", command]
-  const proc = spawn(shellPath, shellArgs, {
+  const port = urlPortOf(url)
+  const cell = createServiceCell({
+    kind: "service",
+    command: shellPath,
+    args: shellArgs,
     cwd: resolvedCwd,
-    shell: false,
+    url,
+    port,
+    runId,
+    cleanupPolicy,
+    logPath,
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    // E1.2：最小宿主环境 —— 不再继承 process.env（模型参数控制的命令
-    // 不得读取宿主 API key/代理/SSH 凭据）；完整 Service Cell 化列 PR-14。
-    env: minimalHostEnv(),
-    windowsHide: true,
+    store: serviceLeaseStore(),
   })
+  const proc = cell.proc
   proc.stdout?.pipe(logStream)
   proc.stderr?.pipe(logStream)
   proc.unref()
+  if (port && proc.pid && serviceLeaseStore()) {
+    serviceLeaseStore()!.writePortLease({
+      port,
+      serviceId: cell.lease.id,
+      runId,
+      pid: proc.pid,
+      ownerProcStartTicks: cell.lease.ownerProcStartTicks,
+      startedAt: Date.now(),
+    })
+  }
 
+  const release = () => {
+    const store = serviceLeaseStore()
+    if (port && store) store.removePortLease(port)
+    cell.release()
+  }
   const lease: LiveLease = {
     id,
     runId,
@@ -246,21 +291,25 @@ export async function startServiceInternal(params: Record<string, unknown>, deps
     cleanupPolicy,
     logPath,
     proc,
+    release,
   }
   serviceLeases.set(id, lease)
 
   const ready = await probe(url, Math.max(1, timeoutSec) * 1000, expectation)
   if (!ready.ok) {
     lease.status = "failed"
+    cell.markFailed()
     if (proc.pid) stopProcessTree(proc.pid)
     return Result.fail(`Service did not become ready at ${url}: ${ready.error}`)
   }
 
   if (stopAfterReady && proc.pid) {
     stopProcessTree(proc.pid)
+    release()
     lease.status = "stopped"
     lease.stoppedAt = Date.now()
   } else {
+    cell.markReady()
     lease.status = "ready"
   }
 
@@ -377,9 +426,8 @@ async function stopService(params: Record<string, unknown>): Promise<ToolResult>
   const lease = findLease(serviceId)
   if (!lease) return Result.fail(`Unknown service lease: ${serviceId}`)
 
-  if (isProcessAlive(lease.proc) && lease.pid) {
-    stopProcessTree(lease.pid)
-  }
+  // LNXF-GATE-02：统一 release（停进程树 + 删 durable service/port 记录）。
+  lease.release()
   lease.status = "stopped"
   lease.stoppedAt = Date.now()
   return Result.ok(`Service ${serviceId} stopped.`, { serviceId, stopped: true, service: true })
@@ -390,7 +438,7 @@ export function stopServicesForRun(runId: string): string[] {
   const stopped: string[] = []
   for (const lease of serviceLeases.values()) {
     if (lease.runId === runId && lease.cleanupPolicy === "run-end" && isProcessAlive(lease.proc)) {
-      if (lease.pid) stopProcessTree(lease.pid)
+      lease.release()
       lease.status = "stopped"
       lease.stoppedAt = Date.now()
       stopped.push(lease.id)

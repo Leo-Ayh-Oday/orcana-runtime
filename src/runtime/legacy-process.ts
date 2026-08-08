@@ -17,29 +17,9 @@ import type { ChildProcess, SpawnSyncOptions, SpawnOptions, ExecSyncOptions } fr
 import { hostKeyDenied } from "./linux/environment"
 export type { ChildProcess }
 
-/** LNXF-R2 E1：暂存区最小宿主环境 —— 白名单键 + 显式 extra（extra 中命中
- *  默认拒绝集的键被过滤）。service/MCP/LSP 等长期进程必须用它启动，
- *  禁止 `{...process.env}`（宿主 API key/代理/SSH 凭据零泄露）。
- *  完全净化在迁移 Executor/Service Cell 后由编译层接管。 */
-const LEGACY_ALLOWED_HOST_KEYS = [
-  "PATH", "HOME", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
-  "TERM", "USER", "LOGNAME", "CI", "EDITOR", "VISUAL", "SHELL",
-]
-
-export function minimalHostEnv(extra?: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = {}
-  for (const key of LEGACY_ALLOWED_HOST_KEYS) {
-    const value = process.env[key]
-    if (value !== undefined) env[key] = value
-  }
-  if (extra) {
-    for (const [key, value] of Object.entries(extra)) {
-      if (hostKeyDenied(key)) continue
-      env[key] = value
-    }
-  }
-  return env
-}
+// minimalHostEnv 已正式化至 ./linux/environment（LNXF-GATE-02）；此处
+// re-export 兼容暂存区既有调用方（astgrep-provider 等，迁移后移除）。
+export { minimalHostEnv } from "./linux/environment"
 
 /** sync spawn（git worktree / 验证收集器 / journal 回放）。 */
 export function spawnSyncLegacy(

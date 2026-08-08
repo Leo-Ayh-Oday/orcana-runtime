@@ -28,11 +28,18 @@ export interface SupervisorOptions {
   detectDaemon?: boolean
   /** 实时输出回调（流式消费者用；数据到达即调用，已截断）。 */
   onOutput?: (stream: "stdout" | "stderr", data: Buffer) => void
-  /** spawn 完成回调（cgroup attach 用）。 */
-  onSpawn?: (pid: number) => void
+  /** spawn 完成回调（cgroup attach 用）。返回值决定 launcher handshake
+   *  释放：true/undefined = 释放目标 exec；false = 阻塞（attach 未确认，
+   *  目标程序不得开始执行 —— LR2-0F 关闭"启动后再 attach"竞态）。 */
+  onSpawn?: (pid: number) => boolean | void
   /** bwrap seccomp BPF 文件：以 FD 3 打开传给子进程（bwrap --seccomp 3）。
    *  PR-4：bwrap --seccomp 协议要求 FD 数字，不是文件路径。 */
   seccompFdPath?: string
+  /** LR2-0F：launcher handshake（Linux only）—— 以包装进程启动目标，
+   *  包装进程先阻塞在 read；attach 确认（onSpawn 返回 true/undefined）
+   *  后写入释放令牌，包装进程才 exec 目标。目标程序在执行任何指令前
+   *  已进入 cgroup（消除 spawn 后 attach 的 fork/读秘密/占资源窗口）。 */
+  launcherHandshake?: boolean
 }
 
 export interface SupervisorResult {
@@ -55,7 +62,8 @@ export interface SpawnedProcess {
 
 export function spawnSupervised(options: SupervisorOptions): SpawnedProcess {
   const detached = process.platform !== "win32"
-  const stdinMode = options.stdin === "pipe" ? "pipe" : "ignore"
+  // LR2-0F：launcher handshake 需要 stdin pipe（释放令牌通道）。
+  const stdinMode = options.stdin === "pipe" || options.launcherHandshake ? "pipe" : "ignore"
   // PR-4：bwrap --seccomp 需要已打开的文件描述符（数字 FD）。
   // 约定 FD 3 为 seccomp 专用槽位：父进程打开 BPF 文件 → stdio[3] 继承。
   let seccompFd: number | undefined
@@ -64,7 +72,15 @@ export function spawnSupervised(options: SupervisorOptions): SpawnedProcess {
     seccompFd = openSync(options.seccompFdPath, "r")
     stdio[3] = seccompFd
   }
-  const proc = spawn(options.executable, options.args, {
+  let executable = options.executable
+  let args = options.args
+  if (options.launcherHandshake && process.platform === "linux") {
+    // 包装进程：read 阻塞（释放令牌）→ exec 目标。exec 替换进程自身，
+    // PID/进程组不变；目标 stdin 为 pipe（释放后 end → EOF ≈ closed）。
+    executable = "/bin/sh"
+    args = ["-c", 'read _ <&0; exec "$@"', "orcana-cell-launcher", options.executable, ...options.args]
+  }
+  const proc = spawn(executable, args, {
     cwd: options.cwd,
     env: options.env,
     stdio: stdio as import("node:child_process").StdioOptions,
@@ -79,7 +95,18 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
   const startedAt = Date.now()
   const limiter = createOutputLimiter(options.limits)
   const { proc, pid } = spawnSupervised(options)
-  options.onSpawn?.(pid)
+  // LR2-0F：launcher handshake —— attach 确认（onSpawn 返回 true/undefined）
+  // 后写入释放令牌；返回 false（attach 未确认）→ 目标程序阻塞在 read，
+  // 不执行任何指令（由取消/清理路径终止）。
+  const released = options.onSpawn?.(pid)
+  if (options.launcherHandshake && released !== false && pid > 0) {
+    try {
+      proc.stdin?.write("go\n")
+      proc.stdin?.end()
+    } catch {
+      // 管道已关（进程异常退出）—— 忽略，退出路径照常处理。
+    }
+  }
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
   // PR-3：超限即杀 —— 一旦累计输出触及上限，立即终止进程树（不再等到

@@ -604,14 +604,23 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
                   // 保留 degradation 声明。GATE：验证失败同样处理。
                   if (isStrictProfile(compiled.profile)) {
                     controller.abort()
+                    // LR2-0F：严格 + attach 失败 → 不释放 launcher（目标
+                    // 程序不 exec，避免在 cgroup 外开始执行）。
+                    return false
                   }
                 }
-              } else {
-                // 无 cgroup 委托 —— 无法验证 Cell 边界（进程组 fallback 模式
-                // 是既有正常路径，不记 degradation）；Receipt 必须如实声明
-                // cleanupVerified=false，不得假装有强保证。
-                attachVerified = false
+                // LR2-0F：launcher handshake 释放决策 —— attach 调用成功
+                // 即释放（cgroup.procs 写入成功即 membership；verify 结果
+                // 记入 Receipt degradation，不阻塞执行 —— mock/已退出竞态
+                // 场景不得让执行挂起）。非严格 + attach 异常 → 降级执行
+                // （Receipt 记 degradation，原语义保留）。
+                return true
               }
+              // 无 cgroup 委托 —— 无法验证 Cell 边界（进程组 fallback 模式
+              // 是既有正常路径，不记 degradation）；Receipt 必须如实声明
+              // cleanupVerified=false，不得假装有强保证。
+              attachVerified = false
+              return true // 无 attach 需求 → 立即释放（不阻塞执行）
             },
             readCellMetrics: () => readCellMetrics(cgroupCellPath),
             cleanupVerify: () => {

@@ -24,7 +24,9 @@ export interface BackendRunContext {
   /** Cell 级 cgroup 路径（Broker 已创建；后端 spawn 后 attach）。 */
   cgroupPath?: string
   /** spawn 后立即 attach（cgroup 绑定真实进程，P0-4 修复）。 */
-  attachCell?: (pid: number) => void
+  /** LR2-0F：attach 回调；返回 false 表示未确认（launcher handshake
+   *  保持阻塞，目标程序不 exec）。 */
+  attachCell?: (pid: number) => boolean | void
   /** 执行结束后读取 cgroup 指标（真实 metrics，P0-6 修复）。 */
   readCellMetrics?: () => SandboxReceipt["metrics"] | undefined
   /** 清理验证：真实执行后报告（默认不假设安全值）。 */
@@ -107,6 +109,9 @@ export async function* streamBackendRun(
     abortSignal: ctx.abortSignal,
     seccompFdPath: compiled.seccompFdPath,
     onSpawn: pid => ctx.attachCell?.(pid),
+    // LR2-0F：有 attach 回调且返回 false 时 launcher 保持阻塞（关闭
+    // spawn 后 attach 的竞态窗口 —— 目标程序在确认前不 exec）。
+    launcherHandshake: !!ctx.attachCell,
   })) {
     if (event.type === "stdout") yield { type: "cell.stdout", cellId: spec.identity.cellId, data: event.data, at: event.at }
     else if (event.type === "stderr") yield { type: "cell.stderr", cellId: spec.identity.cellId, data: event.data, at: event.at }

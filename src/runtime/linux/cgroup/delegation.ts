@@ -169,18 +169,40 @@ function probeWritable(dir: string): boolean {
 }
 
 /** 候选委托根（纯函数，可测）：按优先级排列，detectDelegatedRoot 逐项探测。
- *  优先级设计：
- *   1. systemd user manager 的 Delegate 子树 user@UID.service —— systemd 在
+ *
+ *  LR2-0E 修正：Orcana 不在"任意可写 cgroup 父目录中寻找权力"，只管理
+ *  systemd 明确委托的子树。优先级设计：
+ *   1. 自身被委托子树 —— 从 /proc/self/cgroup 出发逐级向上（execd 模型：
+ *      systemd Delegate=cpu memory pids io 委托给 service 的私有子树；
+ *      最近的可写前缀优先）。系统边界（init.scope/system.slice）跳过。
+ *   2. systemd user manager 的 Delegate 子树 user@UID.service —— systemd 在
  *      user@.service（Delegate=pids memory cpu）启动时把该目录 chown 给用户，
  *      是 WSL2（systemd=true）上普通用户唯一可写的委托点。
  *      存在性判据是目录本身，不是 ~/.config/systemd/user：后者只在用户有
  *      自定义 user unit 时创建，user manager 在跑而目录缺失时委托依然存在
  *      （2026-08-07 OTS-004 事故后实测：本机即此场景，旧判据漏检）。
- *   1b. 老式 ~/.config/systemd/user → user-UID.slice（老 systemd chown 层级）。
- *   2. systemd system user.slice（root/已 chown 场景）。
- *   3. 容器运行时委托（/sys/fs/cgroup 本身可写时）。 */
-export function buildDelegationCandidates(home: string, uid: number, cgroupRoot = "/sys/fs/cgroup"): Array<{ dir: string; source: DelegatedRoot["source"] }> {
+ *   2b. 老式 ~/.config/systemd/user → user-UID.slice（老 systemd chown 层级）。
+ *
+ *  不再扫描 /sys/fs/cgroup/user.slice 根与 cgroupRoot 本身（任意可写父目录
+ *  ≠ 明确委托；container-runtime 场景由容器运行时自身委托）。 */
+export function buildDelegationCandidates(
+  home: string,
+  uid: number,
+  cgroupRoot = "/sys/fs/cgroup",
+  selfCgroup = "",
+): Array<{ dir: string; source: DelegatedRoot["source"] }> {
   const candidates: Array<{ dir: string; source: DelegatedRoot["source"] }> = []
+  // 1. 自身被委托子树（从自身路径逐级向上，跳过系统边界）。
+  if (selfCgroup && selfCgroup.startsWith(cgroupRoot)) {
+    const parts = selfCgroup.slice(cgroupRoot.length).split("/").filter(Boolean)
+    for (let i = parts.length; i >= 1; i--) {
+      const dir = join(cgroupRoot, ...parts.slice(0, i))
+      const source = sourceOfPath(parts.slice(0, i))
+      if (source === "none") continue
+      candidates.push({ dir, source })
+    }
+  }
+  // 2. systemd user 委托树（明确 chown 给用户的子树）。
   const userSlice = join(cgroupRoot, "user.slice", `user-${uid}.slice`)
   if (existsSync(join(userSlice, `user@${uid}.service`))) {
     candidates.push({ dir: join(userSlice, `user@${uid}.service`), source: "systemd-user" })
@@ -188,18 +210,42 @@ export function buildDelegationCandidates(home: string, uid: number, cgroupRoot 
   if (existsSync(join(home, ".config/systemd/user"))) {
     candidates.push({ dir: userSlice, source: "systemd-user" })
   }
-  if (existsSync(join(cgroupRoot, "user.slice"))) {
-    candidates.push({ dir: join(cgroupRoot, "user.slice"), source: "systemd-system" })
-  }
-  candidates.push({ dir: cgroupRoot, source: "container-runtime" })
   return candidates
 }
 
-/** 探测当前用户可用的委托根。 */
+/** 自身路径前缀的委托来源判定（LR2-0E）。
+ *  只拒绝顶层系统边界目录本身（init.scope / system.slice / user.slice 根）；
+ *  user.slice 之下的 user-UID.slice / user@UID.service 是 systemd 明确
+ *  chown 的委托子树，属于可管理范围。 */
+function sourceOfPath(parts: string[]): DelegatedRoot["source"] {
+  if (parts.length === 0) return "none"
+  if (parts.length === 1) {
+    const first = parts[0]!
+    if (first === "init.scope" || first === "system.slice" || first === "user.slice") return "none"
+  }
+  if (parts.some(p => p.includes("user@"))) return "systemd-user"
+  if (parts.some(p => p.includes("user-"))) return "systemd-system"
+  return "container-runtime"
+}
+
+/** 自身 cgroup 路径（/proc/self/cgroup，v2 "0::" 行；无则空串）。 */
+function selfCgroupPath(): string {
+  try {
+    const line = readFileSync("/proc/self/cgroup", "utf8").split("\n").find(l => l.startsWith("0::"))
+    return line ? line.slice(3).replace(/\/+$/, "") : ""
+  } catch {
+    return ""
+  }
+}
+
+/** 探测当前用户可用的委托根。
+ *  LR2-0E：优先自身被委托子树（/proc/self/cgroup 逐级向上），
+ *  其次 systemd 明确委托给用户的子树；不再扫描任意可写父目录。 */
 export function detectDelegatedRoot(): DelegatedRoot {
   const home = process.env.HOME ?? "/root"
   const uid = process.getuid?.() ?? 0
-  const candidates = buildDelegationCandidates(home, uid)
+  const self = selfCgroupPath()
+  const candidates = buildDelegationCandidates(home, uid, "/sys/fs/cgroup", self)
 
   for (const candidate of candidates) {
     if (!existsSync(candidate.dir)) continue

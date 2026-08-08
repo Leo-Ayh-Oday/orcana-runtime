@@ -39,7 +39,7 @@ export function frameKindOf(payload: string): Frame["kind"] {
 
 /** 流式帧解析器：任意分块的 socket 数据 → 完整帧队列。 */
 export class FrameCodec {
-  private buffer = Buffer.alloc(0)
+  private buffer: Buffer = Buffer.alloc(0)
 
   /** feed 一段 socket 数据，返回其中解析出的完整帧（可能 0 到多个）。 */
   feed(chunk: Buffer): Frame[] {

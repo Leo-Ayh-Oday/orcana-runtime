@@ -50,8 +50,8 @@ describe("StateStore (L1-B)", () => {
     const { store, dir } = openStore()
     try {
       store.upsertCell(cell())
-      const seq1 = store.transition("cell-1", "att-1", "POLICY_COMPILED", { from: "ACCEPTED", reasonCode: "compile-ok" })
-      const seq2 = store.transition("cell-1", "att-1", "RUNNING", { from: "POLICY_COMPILED", reasonCode: "started" })
+      const seq1 = store.transition("cell-1", "att-1", "POLICY_COMPILED", { from: "ACCEPTED", reasonCode: "compile-ok" })!
+      const seq2 = store.transition("cell-1", "att-1", "RUNNING", { from: "POLICY_COMPILED", reasonCode: "started" })!
       expect(seq2).toBeGreaterThan(seq1)
       const events = store.eventsForCell("cell-1")
       expect(events).toHaveLength(2)

@@ -156,7 +156,7 @@ describe("execd server (L1-C)", () => {
         capabilityId: "run_process", executable: "/bin/true", argsJson: "[]",
         currentState: "ACCEPTED", createdAt: 1, updatedAt: 2,
       })
-      const seq1 = state.transition("c1", "att-1", "POLICY_COMPILED", { from: "ACCEPTED", reasonCode: "compile" })
+      const seq1 = state.transition("c1", "att-1", "POLICY_COMPILED", { from: "ACCEPTED", reasonCode: "compile" })!;
       const c = client(sockPath)
       c.send(baseReq("WatchCell", { cellId: "c1" }))
       const resp = await c.next()
@@ -167,7 +167,7 @@ describe("execd server (L1-C)", () => {
       expect(hist.type).toBe("event")
       expect((hist.data as { eventSequence: number }).eventSequence).toBe(seq1)
       // 实时推送（状态事件落库 + 广播）→ seq2
-      const seq2 = state.transition("c1", "att-1", "RUNNING", { from: "POLICY_COMPILED", reasonCode: "start" })
+      const seq2 = state.transition("c1", "att-1", "RUNNING", { from: "POLICY_COMPILED", reasonCode: "start" })!;
       server.publishEvent({ kind: "cell.status", cellId: "c1", payload: { state: "RUNNING" } }, seq2)
       const ev = await c.next()
       expect(ev.type).toBe("event")

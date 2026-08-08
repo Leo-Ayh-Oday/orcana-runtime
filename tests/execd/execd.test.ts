@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test"
 import net from "node:net"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecd, type Execd } from "../../src/execd/execd"
@@ -13,7 +13,9 @@ import { PROTOCOL_VERSION } from "../../src/execd/protocol/messages"
 async function setupExecd(): Promise<{ execd: Execd; sockPath: string; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "execd-e2e-"))
   const sockPath = join(dir, "execd.sock")
-  const execd = createExecd({ sockPath, statePath: join(dir, "execd.db"), workspaceHostRoot: process.cwd() })
+  // M8：独立 workspace 目录（共享 cwd 触发跨进程文件锁冲突）。
+  const ws = mkdtempSync(join(tmpdir(), "execd-e2e-ws-"))
+  const execd = createExecd({ sockPath, statePath: join(dir, "execd.db"), workspaceHostRoot: ws })
   await execd.start()
   return { execd, sockPath, dir }
 }
@@ -132,7 +134,10 @@ describe("execd end-to-end (L1-G)", () => {
     const statePath = join(dir, "execd.db")
     try {
       // 第一次运行：提交一个慢任务后"崩溃"（stop 模拟）。
-      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: process.cwd() })
+      // workspace 根必须存在（编译校验 cwd 在 workspace 内）。
+      mkdirSync(join(dir, "ws"), { recursive: true })
+      const ws = join(dir, "ws")
+      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: ws })
       await execd1.start()
       const c = connect(sockPath)
       c.send(req("SubmitCell", { capabilityId: "run_process", executable: "/bin/sh", args: ["-c", "sleep 20"], workloadKind: "build", readonly: false }))
@@ -142,11 +147,12 @@ describe("execd end-to-end (L1-G)", () => {
       await execd1.stop()
       c.socket.destroy()
 
-      // 第二次运行（同 boot 内）：Recovery 收敛 RUNNING 残留 → LOST。
-      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: process.cwd() })
+      // 第二次运行（同 boot 内）：stop 是优雅关闭（M2：在途 cell 被取消
+      // → CANCELLED，无崩溃残留）—— 重启后无非终态残留、新客户端可用。
+      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: ws })
       await execd2.start()
       try {
-        expect(execd2.state.getCell(cellId)!.currentState).toBe("LOST")
+        expect(execd2.state.getCell(cellId)!.currentState).toBe("CANCELLED")
         expect(execd2.state.listNonTerminalCells()).toHaveLength(0)
         // 新客户端可用
         const c2 = connect(sockPath)

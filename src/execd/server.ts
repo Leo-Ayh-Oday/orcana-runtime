@@ -59,15 +59,29 @@ export class ExecdServer {
     const { sockPath } = this.deps
     // 目录 0700 + socket 0600：仅同用户可访问。
     mkdirSync(dirname(sockPath), { recursive: true, mode: 0o700 })
-    rmSync(sockPath, { force: true })
     this.server = net.createServer(socket => this.handleConnection(socket as net.Socket))
-    await new Promise<void>((resolve, reject) => {
-      this.server!.once("error", reject)
-      this.server!.listen(sockPath, () => {
-        chmodSync(sockPath, 0o600)
-        resolve()
+    const listen = (): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        this.server!.once("error", reject)
+        this.server!.listen(sockPath, () => {
+          chmodSync(sockPath, 0o600)
+          resolve()
+        })
       })
-    })
+    try {
+      await listen()
+    } catch (error) {
+      // M5 修复：EADDRINUSE 时先活探测 —— 路径被活跃实例占用则拒绝
+      // 双实例（绝不 unlink 正在监听的 socket）；孤儿残留文件才清理重试。
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === "EADDRINUSE") {
+        if (await probeSocketAlive(sockPath)) throw error
+        rmSync(sockPath, { force: true })
+        await listen()
+      } else {
+        throw error
+      }
+    }
   }
 
   async stop(): Promise<void> {
@@ -206,14 +220,21 @@ export class ExecdServer {
       case "ListRecoverableRuns":
         return { type: "ok", requestId: request.requestId, result: { runs: this.deps.listRecoverableRuns() } }
       case "WatchCell": {
+        // M10 修复：未知 cell 拒绝（与 GetCell 行为一致，避免死订阅）。
+        if (!this.deps.state.getCell(request.payload.cellId)) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNKNOWN_CELL, message: `cell ${request.payload.cellId} not found` } }
+        }
         // 订阅：先回 ok（确认订阅与断点），再补落库历史（since 之后），
         // 最后登记实时推送断点。帧序：ok → 历史事件 → 实时事件。
+        // M11：回放格式与实时一致（落库 kind + payload 直传）。
         const since = request.payload.sinceSequence ?? 0
         const events = this.deps.state.eventsForCell(request.payload.cellId, since)
         const last = events.length > 0 ? events[events.length - 1]!.eventSequence : since
         this.send(conn, { type: "ok", requestId: request.requestId, result: { cellId: request.payload.cellId, resumedFrom: last } })
         for (const ev of events) {
-          this.send(conn, { type: "event", eventSequence: ev.eventSequence, kind: "cell.state", cellId: ev.cellId, payload: { fromState: ev.fromState, toState: ev.toState, reasonCode: ev.reasonCode }, at: ev.at })
+          const kind = kindOfEvent(ev)
+          const payload = payloadOfEvent(ev)
+          this.send(conn, { type: "event", eventSequence: ev.eventSequence, kind, cellId: ev.cellId, runId: this.deps.state.getCell(ev.cellId)?.runId, payload, at: ev.at })
         }
         conn.watchingCell = { cellId: request.payload.cellId, lastAcknowledged: last }
         return null
@@ -230,4 +251,35 @@ export class ExecdServer {
       conn.socket.destroy()
     }
   }
+}
+
+/** M11：落库事件 → 实时线格式（kind 映射 —— 回放与实时格式一致）。 */
+function kindOfEvent(ev: import("./state/store").CellEventRow): string {
+  switch (ev.kind ?? "state") {
+    case "stdout": return "cell.stdout"
+    case "stderr": return "cell.stderr"
+    case "exit": return "cell.exit"
+    case "receipt": return "cell.receipt"
+    default: return "cell.status"
+  }
+}
+
+function payloadOfEvent(ev: import("./state/store").CellEventRow): unknown {
+  if (ev.kind === "stdout" || ev.kind === "stderr") {
+    return { data: ev.payload ?? "" }
+  }
+  if (ev.kind === "exit" || ev.kind === "receipt") {
+    try { return ev.payload ? JSON.parse(ev.payload) : {} } catch { return {} }
+  }
+  return { state: ev.toState, fromState: ev.fromState, reasonCode: ev.reasonCode }
+}
+
+/** M5：socket 路径活探测（活跃实例 → true；孤儿残留文件 → false）。 */
+function probeSocketAlive(sockPath: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = net.createConnection(sockPath)
+    const timer = setTimeout(() => { socket.destroy(); resolve(false) }, 500)
+    socket.on("connect", () => { clearTimeout(timer); socket.destroy(); resolve(true) })
+    socket.on("error", () => { clearTimeout(timer); resolve(false) })
+  })
 }

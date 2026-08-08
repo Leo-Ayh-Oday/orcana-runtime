@@ -74,16 +74,34 @@ async function main(): Promise<void> {
       // Hello 已在连接时发送并打印。
       break
     case "submit": {
+      // M18 修复：`--` 分隔 CLI 选项与目标程序参数（目标参数可含 -- 开头）。
+      // 无 `--`：剔除已知 CLI 选项（--cwd/--timeout 及其值）后其余为目标参数。
       const executable = rest[0]!
-      const args = rest.slice(1).filter(a => !a.startsWith("--"))
-      const cwdIdx = rest.indexOf("--cwd")
-      const timeoutIdx = rest.indexOf("--timeout")
+      const sepIdx = rest.indexOf("--")
+      let cliOpts: string[]
+      let targetArgs: string[]
+      if (sepIdx >= 0) {
+        cliOpts = rest.slice(1, sepIdx)
+        targetArgs = rest.slice(sepIdx + 1)
+      } else {
+        const opts = rest.slice(1)
+        const out: string[] = []
+        for (let i = 0; i < opts.length; i++) {
+          const a = opts[i]!
+          if (a === "--cwd" || a === "--timeout") { i++ /* 跳过选项值 */; continue }
+          out.push(a)
+        }
+        cliOpts = opts
+        targetArgs = out
+      }
+      const cwdIdx = cliOpts.indexOf("--cwd")
+      const timeoutIdx = cliOpts.indexOf("--timeout")
       const result = await request(conn, "SubmitCell", {
         capabilityId: "run_process",
         executable,
-        args,
-        cwdRef: cwdIdx >= 0 ? rest[cwdIdx + 1] : undefined,
-        timeoutMs: timeoutIdx >= 0 ? Number(rest[timeoutIdx + 1]) : undefined,
+        args: targetArgs,
+        cwdRef: cwdIdx >= 0 ? cliOpts[cwdIdx + 1] : undefined,
+        timeoutMs: timeoutIdx >= 0 ? Number(cliOpts[timeoutIdx + 1]) : undefined,
         workloadKind: "build",
         readonly: false,
       }, `cli-submit-${Date.now().toString(36)}`)

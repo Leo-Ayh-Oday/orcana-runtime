@@ -19,7 +19,9 @@ function configFromEnv(): { sockPath: string; statePath: string; workspaceHostRo
   return {
     sockPath: process.env.ORCANA_EXECD_SOCK ?? join(runtimeDir, "orcana", "execd.sock"),
     statePath: process.env.ORCANA_EXECD_STATE ?? join(homedir(), ".orcana", "runtime", "execd", "execd.db"),
-    workspaceHostRoot: process.env.ORCANA_EXECD_WORKSPACE ?? process.cwd(),
+    // M7 修复：默认 workspace 指向专用空目录（绝不默认家目录/cwd ——
+    // 恶意 cell 不得读写用户全部文件）；显式配置才放宽。
+    workspaceHostRoot: process.env.ORCANA_EXECD_WORKSPACE ?? join(homedir(), ".orcana", "runtime", "workspaces"),
   }
 }
 

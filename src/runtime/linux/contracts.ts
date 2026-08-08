@@ -362,6 +362,26 @@ export interface SandboxViolation {
   scope?: string
 }
 
+/** LR2-0（ADR-LR2-003）：观测三态 —— Receipt 只记录真实观测。
+ *  - observed：实测值；
+ *  - unsupported：平台/后端不支持该观测；
+ *  - unknown：未测量/测量失败。
+ *  未观测 ≠ 成功：任何"已验证"断言（receiptComplete、Evidence 绑定）都
+ *  不得把 unknown/unsupported 当作成功事实。 */
+export type Observed<T> =
+  | { status: "observed"; value: T }
+  | { status: "unsupported"; reason: string }
+  | { status: "unknown"; reason: string }
+
+export interface SandboxReceiptMetrics {
+  cpuUsageUsec?: number
+  cpuThrottledUsec?: number
+  peakMemoryBytes?: number
+  peakPids?: number
+  readBytes?: number
+  writeBytes?: number
+}
+
 export interface SandboxReceipt {
   schemaVersion: "1.0"
   /** Receipt 自摘要（完整 Outcome 的 sha256，PR-2；Evidence 绑定此值）。 */
@@ -390,14 +410,8 @@ export interface SandboxReceipt {
   pidLimitHit: boolean
   outputLimitHit: boolean
   tempLimitHit: boolean
-  metrics: {
-    cpuUsageUsec?: number
-    cpuThrottledUsec?: number
-    peakMemoryBytes?: number
-    peakPids?: number
-    readBytes?: number
-    writeBytes?: number
-  }
+  /** LR2-0：观测三态（未测量必须 unknown，禁止空对象冒充完整 metrics）。 */
+  metrics: Observed<SandboxReceiptMetrics>
   observedWrites: string[]
   observedDeletes: string[]
   unexpectedWrites: string[]

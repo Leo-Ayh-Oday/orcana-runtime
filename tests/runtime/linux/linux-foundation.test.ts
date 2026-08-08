@@ -11,7 +11,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { probeLinuxCapabilities, capabilitiesDigest } from "../../../src/runtime/linux/capability-probe"
 import { validateCellSpec, compileCellSpec, compileCapabilityRequest, validateMountSet, validateMountRule, deepFreeze } from "../../../src/runtime/linux/policy-compiler"
-import { buildReceipt, cellSpecDigest, computePolicyDigest, canonicalJson, receiptComplete } from "../../../src/runtime/linux/receipt"
+import { buildReceipt, cellSpecDigest, computePolicyDigest, canonicalJson, digestOf, receiptComplete } from "../../../src/runtime/linux/receipt"
 import { applyProfileDefaults, profileDefaults, isStrictProfile } from "../../../src/runtime/linux/profiles"
 import { selectBackend, backendAvailability } from "../../../src/runtime/linux/backend-router"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
@@ -60,7 +60,7 @@ describe("LF-1: capability probe", () => {
     const a = capabilitiesDigest(probeLinuxCapabilities({ refresh: true }))
     const b = capabilitiesDigest(probeLinuxCapabilities({ refresh: true }))
     expect(a).toBe(b)
-    expect(a.length).toBe(16)
+    expect(a.length).toBe(64)
   })
 
   linuxOnly("bubblewrap/podman availability is explicit", () => {
@@ -76,7 +76,7 @@ describe("LF-1: cell spec schema", () => {
     const result = compileCellSpec(baseSpec())
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.spec.policyDigest.length).toBe(16)
+      expect(result.spec.policyDigest.length).toBe(64)
       expect(result.spec.policyDigest).toBe(computePolicyDigest(result.spec))
     }
   })
@@ -253,6 +253,57 @@ describe("LF-1: receipt schema", () => {
     })
     expect(receiptComplete(receipt)).toBe(false)
   })
+
+  // ── LR2-0（ADR-LR2-003）：未观测字段必须 unknown，不默认成功 ──
+
+  test("unobserved metrics are unknown, never an empty object", () => {
+    const spec = baseSpec()
+    const caps = probeLinuxCapabilities({ refresh: true })
+    const receipt = buildReceipt({
+      spec, capabilities: caps, backend: "host-audit",
+      startedAt: 0, finishedAt: 100, exitCode: 0, signal: null,
+      timedOut: false, cancelled: false, oomKilled: false, pidLimitHit: false,
+      outputLimitHit: false, tempLimitHit: false,
+      cleanup: { processesRemaining: 0 },
+    })
+    expect(receipt.metrics.status).toBe("unknown")
+    // observed 分支透传真实值
+    const withMetrics = buildReceipt({
+      spec, capabilities: caps, backend: "host-audit",
+      startedAt: 0, finishedAt: 100, exitCode: 0, signal: null,
+      timedOut: false, cancelled: false, oomKilled: false, pidLimitHit: false,
+      outputLimitHit: false, tempLimitHit: false,
+      metrics: { status: "observed", value: { cpuUsageUsec: 42 } },
+      cleanup: { processesRemaining: 0 },
+    })
+    expect(withMetrics.metrics.status).toBe("observed")
+    if (withMetrics.metrics.status === "observed") {
+      expect(withMetrics.metrics.value.cpuUsageUsec).toBe(42)
+    }
+  })
+
+  test("worktreeRetained is a measured field — spec policy does not leak into fact", () => {
+    const spec = { ...baseSpec(), lifecycle: { ...baseSpec().lifecycle, retainOnFailure: true } }
+    const caps = probeLinuxCapabilities({ refresh: true })
+    // 未实测 → false（不声称策略承诺是已发生事实）
+    const unmeasured = buildReceipt({
+      spec, capabilities: caps, backend: "host-audit",
+      startedAt: 0, finishedAt: 100, exitCode: 0, signal: null,
+      timedOut: false, cancelled: false, oomKilled: false, pidLimitHit: false,
+      outputLimitHit: false, tempLimitHit: false,
+      cleanup: { processesRemaining: 0 },
+    })
+    expect(unmeasured.cleanup.worktreeRetained).toBe(false)
+    // 实测 → 如实记录
+    const measured = buildReceipt({
+      spec, capabilities: caps, backend: "host-audit",
+      startedAt: 0, finishedAt: 100, exitCode: 0, signal: null,
+      timedOut: false, cancelled: false, oomKilled: false, pidLimitHit: false,
+      outputLimitHit: false, tempLimitHit: false,
+      cleanup: { processesRemaining: 0, worktreeRetained: true },
+    })
+    expect(measured.cleanup.worktreeRetained).toBe(true)
+  })
 })
 
 describe("LF-1: shadow mode", () => {
@@ -320,6 +371,54 @@ describe("PR-1: canonical JSON digests distinguish nested policies (P0-1)", () =
     // 键序无关：打乱键序的对象 digest 相同。
     const shuffled = JSON.parse(canonicalJson(spec)) as ExecutionCellSpec
     expect(cellSpecDigest(shuffled)).toBe(cellSpecDigest(spec))
+  })
+
+  // ── LR2-0：canonicalization 值规范 golden tests（固化语义，防回归） ──
+
+  test("golden: number semantics — int/float/NaN/Infinity", () => {
+    expect(canonicalJson({ n: 1 })).toBe('{"n":1}')
+    expect(canonicalJson({ n: 1.5 })).toBe('{"n":1.5}')
+    // JSON.stringify 语义：NaN/Infinity → null
+    expect(canonicalJson({ n: Number.NaN })).toBe('{"n":null}')
+    expect(canonicalJson({ n: Number.POSITIVE_INFINITY })).toBe('{"n":null}')
+    expect(canonicalJson(42)).toBe("42")
+  })
+
+  test("golden: undefined — keys dropped, top-level and array elements → null", () => {
+    expect(canonicalJson({ a: 1, b: undefined })).toBe('{"a":1}')
+    expect(canonicalJson(undefined)).toBe("null")
+    expect(canonicalJson([1, undefined, 2])).toBe("[1,null,2]")
+  })
+
+  test("golden: arrays and empty object", () => {
+    expect(canonicalJson([{ b: 2, a: [3, { d: 4, c: 5 }] }])).toBe('[{"a":[3,{"c":5,"d":4}],"b":2}]')
+    expect(canonicalJson({})).toBe("{}")
+    expect(canonicalJson([])).toBe("[]")
+    expect(canonicalJson("s")).toBe('"s"')
+    expect(canonicalJson(null)).toBe("null")
+  })
+
+  test("golden: deep nesting recursion (no top-level-key whitelist collapse)", () => {
+    const deep = { a: { b: { c: { d: { e: "x" } } } } }
+    expect(canonicalJson(deep)).toBe('{"a":{"b":{"c":{"d":{"e":"x"}}}}}')
+    // 键序反转后 canonical 输出必须一致（原 bug：顶层白名单丢嵌套字段）。
+    expect(canonicalJson({ b: { y: 1, x: 2 }, a: 3 })).toBe('{"a":3,"b":{"x":2,"y":1}}')
+  })
+
+  test("LR2-0: full SHA-256 digest (64 hex), not 16-char truncation", () => {
+    expect(digestOf({ a: 1 })).toMatch(/^[0-9a-f]{64}$/)
+    expect(cellSpecDigest(baseSpec()).length).toBe(64)
+    expect(capabilitiesDigest(probeLinuxCapabilities({ refresh: true })).length).toBe(64)
+  })
+
+  test("LR2-0: schemaVersion + canonicalizationVersion enter policyDigest", () => {
+    const specA = baseSpec()
+    // schemaVersion 字面量类型 "1.0"；版本敏感性验证用强制断言（cast 仅测试）。
+    const specB = { ...baseSpec(), schemaVersion: "1.1" } as unknown as ExecutionCellSpec
+    expect(computePolicyDigest(specA)).not.toBe(computePolicyDigest(specB))
+    // canonicalizationVersion 固定常量在摘要内：变更实现时须递增该常量，
+    // 否则此断言（版本敏感）会被忽略 —— 两版 spec 摘要都稳定。
+    expect(computePolicyDigest(specA)).toBe(computePolicyDigest(baseSpec()))
   })
 })
 

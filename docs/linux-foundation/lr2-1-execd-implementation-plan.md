@@ -145,3 +145,19 @@ L1-B (store) ────┘                      │
 - **execd 内持有 broker 单例**：Cell 执行仍在 execd 进程内（v1 不跨进程执行）；execd 崩溃 → Cell 丢失（L1-F 只恢复状态记录，不恢复进程）——符合"初期不要求 execd 自身崩溃后 Cell 继续运行"。
 - **事件流内存缓存**：WatchCell 订阅断线期间的增量由 SQLite cell_events 兜底（重连从 eventSequence 续读）。
 - **Windows**：execd Linux-only（非 Linux 平台 main.ts 拒绝启动）。
+
+## 六、独立审核与修复记录（2026-08-09）
+
+独立 subagent 审核产出 1 BLOCKER + 8 MAJOR + 10 MINOR，全部验证后修复（commit `a97c81f`，门禁 318/318）：
+
+- **B1**（cancelCell 用错 cellId → 取消不终止进程，实测复现）：brokerCellIds 映射（manager cellId → broker 编译后 cellId），取消走 broker 键；测试加真实进程终止断言（ps 验证 sleep 消失）。
+- **M1**：状态机守卫（CLEANED 最终态；其他终态仅允许收尾到 CLEANED；from 不匹配拒绝）。
+- **M2**：优雅关闭不崩溃（activeRuns 跟踪 + stop 先取消在途 cell 再关 DB；收尾入 try）。
+- **M3**：租约过期扫描常驻定时器（30s）。
+- **M4**：事件统一落库序号（stdout/stderr/exit/receipt 全落库，SQLite AUTOINCREMENT 单调唯一，断点可续读）。
+- **M5**：socket 劫持防护（先 listen，EADDRINUSE 活探测后再清理孤儿文件）。
+- **M6**：编译失败幂等缓存 rejected 标记（重试返回一致结果）。
+- **M7**：workspace 默认专用目录（~/.orcana/runtime/workspaces，不默认家目录/cwd）。
+- **M8**：测试假绿修复（独立 workspace 目录 + 真实进程终止断言）。
+- MINOR 修复：M9（renew ttl 透传）、M10（WatchCell 未知 cell 拒绝）、M11（回放格式统一）、M12（取消广播）、M15（recovery 不重播）、M16（cleanupRun 残留检查）、M18（CLI `--` 分隔）。
+- MINOR 记录不修：M13（event-stream 订阅机制死代码，v2 清理）、M14（无背压，v2）、M17（approvalToken 校验，v1 信任客户端、完整 Harness 集成在后续线）。

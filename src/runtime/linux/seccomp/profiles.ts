@@ -54,27 +54,27 @@ export function seccompProfileKeyOf(key: SeccompProfileKey): string {
 export const FIRST_BATCH_PROFILES: ReadonlyArray<{ key: SeccompProfileKey; profile: SeccompProfile }> = [
   {
     key: { runtimeFamily: "node-bun", toolKind: "readonly", sandboxProfile: "strict", architecture: "x86_64" },
-    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list"], denySyscalls: [] },
+    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["rt_sigreturn", "clone", "getcwd", "chdir", "faccessat", "faccessat2", "readlinkat", "read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat"], denySyscalls: [] },
   },
   {
     key: { runtimeFamily: "node-bun", toolKind: "build", sandboxProfile: "strict", architecture: "x86_64" },
-    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat", "clone3", "wait4", "waitid", "kill", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "statfs", "fstatfs", "mkdir", "mkdirat", "unlink", "unlinkat", "rename", "renameat", "renameat2", "chmod", "fchmod", "fchmodat", "utimensat", "truncate", "ftruncate", "linkat", "symlinkat", "socket", "connect", "sendto", "recvfrom", "sendmsg", "recvmsg", "bind", "getsockname", "getpeername", "setsockopt", "getsockopt", "poll", "ppoll", "epoll_create1", "epoll_ctl", "epoll_wait", "eventfd2", "timerfd_create", "timerfd_settime", "clock_nanosleep", "nanosleep", "sched_yield"], denySyscalls: [] },
+    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["rt_sigreturn", "clone", "getcwd", "chdir", "faccessat", "faccessat2", "readlinkat", "read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat", "clone3", "wait4", "waitid", "kill", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "statfs", "fstatfs", "mkdir", "mkdirat", "unlink", "unlinkat", "rename", "renameat", "renameat2", "chmod", "fchmod", "fchmodat", "utimensat", "truncate", "ftruncate", "linkat", "symlinkat", "socket", "connect", "sendto", "recvfrom", "sendmsg", "recvmsg", "bind", "getsockname", "getpeername", "setsockopt", "getsockopt", "poll", "ppoll", "epoll_create1", "epoll_ctl", "epoll_wait", "eventfd2", "timerfd_create", "timerfd_settime", "clock_nanosleep", "nanosleep", "sched_yield"], denySyscalls: [] },
   },
   {
     key: { runtimeFamily: "python", toolKind: "readonly", sandboxProfile: "strict", architecture: "x86_64" },
-    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list"], denySyscalls: [] },
+    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["rt_sigreturn", "clone", "getcwd", "chdir", "faccessat", "faccessat2", "readlinkat", "read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat"], denySyscalls: [] },
   },
   {
     key: { runtimeFamily: "generic", toolKind: "git", sandboxProfile: "strict", architecture: "x86_64" },
-    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat", "clone3", "wait4", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "statfs", "fstatfs", "mkdir", "mkdirat", "unlink", "unlinkat", "rename", "renameat", "renameat2", "chmod", "fchmod", "fchmodat", "utimensat", "truncate", "ftruncate", "linkat", "symlinkat", "socket", "connect", "sendto", "recvfrom", "poll", "ppoll", "epoll_create1", "epoll_ctl", "epoll_wait", "eventfd2", "clock_nanosleep", "nanosleep", "sched_yield"], denySyscalls: [] },
+    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["rt_sigreturn", "clone", "getcwd", "chdir", "faccessat", "faccessat2", "readlinkat", "read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat", "clone3", "wait4", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "statfs", "fstatfs", "mkdir", "mkdirat", "unlink", "unlinkat", "rename", "renameat", "renameat2", "chmod", "fchmod", "fchmodat", "utimensat", "truncate", "ftruncate", "linkat", "symlinkat", "socket", "connect", "sendto", "recvfrom", "poll", "ppoll", "epoll_create1", "epoll_ctl", "epoll_wait", "eventfd2", "clock_nanosleep", "nanosleep", "sched_yield"], denySyscalls: [] },
   },
   {
     key: { runtimeFamily: "generic", toolKind: "compiler", sandboxProfile: "strict", architecture: "x86_64" },
-    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat", "clone3", "wait4", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "statfs", "fstatfs", "mkdir", "mkdirat", "unlink", "unlinkat", "rename", "renameat", "renameat2", "chmod", "fchmod", "fchmodat", "utimensat", "truncate", "ftruncate", "linkat", "symlinkat"], denySyscalls: [] },
+    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["rt_sigreturn", "clone", "getcwd", "chdir", "faccessat", "faccessat2", "readlinkat", "read", "write", "openat", "close", "fstat", "lseek", "readlink", "getdents64", "mmap", "munmap", "mprotect", "brk", "access", "newfstatat", "exit", "exit_group", "rt_sigaction", "rt_sigprocmask", "ioctl", "writev", "readv", "pread64", "pwrite64", "futex", "clock_gettime", "getrandom", "prlimit64", "rseq", "sched_getaffinity", "getpid", "gettid", "tgkill", "arch_prctl", "set_tid_address", "set_robust_list", "execve", "execveat", "clone3", "wait4", "dup", "dup2", "dup3", "pipe", "pipe2", "fcntl", "statfs", "fstatfs", "mkdir", "mkdirat", "unlink", "unlinkat", "rename", "renameat", "renameat2", "chmod", "fchmod", "fchmodat", "utimensat", "truncate", "ftruncate", "linkat", "symlinkat"], denySyscalls: [] },
   },
   {
     key: { runtimeFamily: "generic", toolKind: "unknown", sandboxProfile: "strict", architecture: "x86_64" },
-    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: [], denySyscalls: [] },
+    profile: { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: ["exit", "exit_group", "rt_sigreturn", "read", "write", "close", "fstat"], denySyscalls: [] },
   },
 ]
 
@@ -86,7 +86,16 @@ export function resolveSeccompProfile(key: SeccompProfileKey): SeccompProfile {
     p.key.sandboxProfile === key.sandboxProfile &&
     p.key.architecture === key.architecture,
   )
-  if (found) return found.profile
+  if (found) {
+    // m11（LR2-4 审核）：返回冻结副本 —— 调用方修改 allowSyscalls 不得
+    // 毒化全局首批表。
+    return {
+      defaultAction: found.profile.defaultAction,
+      allowSyscalls: Object.freeze([...found.profile.allowSyscalls]),
+      denySyscalls: Object.freeze([...found.profile.denySyscalls]),
+      target: found.profile.target,
+    }
+  }
   // 未命中 → unknown-deny（默认拒绝一切未分类）
-  return { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: [], denySyscalls: [] }
+  return { defaultAction: "SCMP_ACT_ERRNO" as const, allowSyscalls: Object.freeze(["exit", "exit_group", "rt_sigreturn"]), denySyscalls: [] }
 }

@@ -69,3 +69,21 @@ describe("Egress Gateway (P4-B)", () => {
     expect(ok.reasons).toHaveLength(0)
   })
 })
+
+// ── LR2-4 审核修复验收（M1 IPv6）──
+
+describe("Egress audit fixes (M1)", () => {
+  test("M1: IPv6 private ranges are detected (rebinding on v6 blocked)", () => {
+    expect(isPrivateIp("fd00::1")).toBe(true)
+    expect(isPrivateIp("fe80::1")).toBe(true)
+    expect(isPrivateIp("::1")).toBe(true)
+    // v4-mapped 解包
+    expect(isPrivateIp("::ffff:10.0.0.1")).toBe(true)
+    expect(isPrivateIp("::ffff:192.168.1.1")).toBe(true)
+    expect(isPrivateIp("::ffff:172.16.0.1")).toBe(true)
+    expect(isPrivateIp("::ffff:127.0.0.1")).toBe(true)
+    // 公网 v6 放行
+    expect(isPrivateIp("2606:4700:4700::1111")).toBe(false)
+    expect(isPrivateIp("8.8.8.8")).toBe(false)
+  })
+})

@@ -6,12 +6,11 @@ use std::os::unix::io::RawFd;
 use crate::plan::{CellPlan, PlanError};
 
 /// 步骤 3：关闭未授权 FD。
-/// 保留：0/1/2（stdio）+ PLAN_FD(3)（读 plan 用，读完也应关闭 —— 但
-/// 此时已读完，直接关闭）。其余全部 close。
+/// B2（LR2-4 审核）：保留仅 0/1/2（stdio）；PLAN_FD(3) 读完后也必须关闭
+/// —— plan 可能含 env/密钥，泄漏给 exec 后的（可能敌对的）目标进程。
 pub fn close_unauthorized_fds(_plan: &CellPlan) {
-    // 读 plan 已完成：FD 3 也属于未授权（execve 前关闭全部非 stdio）。
     let max_fd = max_open_fd();
-    for fd in 4..=max_fd {
+    for fd in 3..=max_fd {
         unsafe {
             libc_close(fd);
         }
@@ -132,8 +131,9 @@ pub fn apply_seccomp(plan: &CellPlan) {
 }
 
 /// 供测试：验证 FD 关闭逻辑（纯函数 —— 返回应保留的 FD 集合）。
-pub fn retained_fds(plan_fd: RawFd) -> Vec<RawFd> {
-    vec![0, 1, 2, plan_fd]
+/// B2：只保留 stdio（0/1/2）—— plan FD 也关闭。
+pub fn retained_fds(_plan_fd: RawFd) -> Vec<RawFd> {
+    vec![0, 1, 2]
 }
 
 #[cfg(test)]
@@ -141,8 +141,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn retained_fd_policy_keeps_only_stdio_and_plan() {
+    fn retained_fd_policy_keeps_only_stdio() {
         let retained = retained_fds(3);
-        assert_eq!(retained, vec![0, 1, 2, 3]);
+        assert_eq!(retained, vec![0, 1, 2]);
     }
 }

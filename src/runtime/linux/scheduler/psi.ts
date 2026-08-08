@@ -36,6 +36,24 @@ export const DEFAULT_PSI_THRESHOLDS: PsiThresholds = {
   criticalExit: 15,
 }
 
+/** PSI 阈值校准（PSI_THRESHOLD_UNCALIBRATED = 0）：基于本机空闲基线
+ *  推导阈值（不复制云服务器参数）。
+ *  - 空闲压力基线 p50（空闲负载读数）；
+ *  - constrainedEnter = max(10, baseline × 20)（空闲基线 20 倍以上才算约束）；
+ *  - criticalEnter = max(40, baseline × 50)；
+ *  - criticalExit = criticalEnter × 0.4（滞后退出）。 */
+export function calibratePsiThresholds(samples: number[]): PsiThresholds {
+  const sorted = [...samples].sort((a, b) => a - b)
+  const baseline = sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.5)]! : 0
+  const constrainedEnter = Math.max(10, baseline * 20)
+  const criticalEnter = Math.max(40, baseline * 50)
+  return {
+    constrainedEnter,
+    criticalEnter,
+    criticalExit: criticalEnter * 0.4,
+  }
+}
+
 /** 解析 /proc/pressure/<res> 的一行（avg10=.. avg60=.. avg300=.. total=..）。 */
 export function parsePsiLine(line: string): { avg10: number; avg60: number; avg300: number; total: number } {
   const values: Record<string, number> = {}

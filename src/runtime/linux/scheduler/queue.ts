@@ -119,4 +119,9 @@ export class FairQueue {
   resetRunning(): void {
     this.running.clear()
   }
+
+  /** 按索引访问（LR2-3 B1：调度器越过队首扫描需要）。 */
+  at(index: number): QueueItem | undefined {
+    return this.items[index]
+  }
 }

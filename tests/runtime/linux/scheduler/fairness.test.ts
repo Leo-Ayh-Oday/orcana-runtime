@@ -14,11 +14,12 @@ const CONFIG: FairnessConfig = { totalSlots: 6, maxRunShare: 0.5, evolutionQuota
 describe("RunFairnessScheduler (P3-D)", () => {
   test("a big run cannot occupy all slots (STARVATION_BY_RUN)", () => {
     const s = new RunFairnessScheduler(CONFIG)
-    // 大 Run 占满其份额（6 × 0.5 = 3）
-    for (let i = 0; i < 3; i++) s.enqueue(item(`big-${i}`, "big-run"))
-    // 小 Run 也排队
+    // B1 修复（LR2-3 审核）：大 Run 入队 cap+1 项（超出份额）——
+    // 队首被拒时必须越过它调度后续可调度的项（旧实现队首阻塞假绿）。
+    for (let i = 0; i < 8; i++) s.enqueue(item(`big-${i}`, "big-run"))
+    // 小 Run 也排队（排在队尾）
     s.enqueue(item("small-1", "small-run"))
-    // 调度 3 个：前 3 个都是大 Run（份额内），第 4 个轮询到小 Run
+    // 调度 4 个：前 3 个都是大 Run（份额内），第 4 个越过队首 → 小 Run
     const scheduled: string[] = []
     for (let i = 0; i < 4; i++) {
       const d = s.next()
@@ -28,7 +29,6 @@ describe("RunFairnessScheduler (P3-D)", () => {
       }
     }
     expect(scheduled.slice(0, 3).every(r => r === "big-run")).toBe(true)
-    // 第 4 个：大 Run 已达份额上限 → 小 Run 放行
     expect(scheduled[3]).toBe("small-run")
   })
 

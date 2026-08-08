@@ -33,10 +33,13 @@ export interface WorkloadFingerprint {
   previousFailureClass?: string
 }
 
-/** 指纹 → 稳定 digest（存储键）。 */
+/** 指纹 → 稳定 digest（存储键）。
+ *  M4 修复：序列化前按键名排序 —— 键序不同的同逻辑指纹产出相同键
+ *  （否则同一工作负载落到两个画像文件，历史样本分裂）。 */
 export function fingerprintOf(fp: WorkloadFingerprint): string {
+  const sorted = JSON.stringify(fp, Object.keys(fp).sort())
   return createHash("sha256")
-    .update(JSON.stringify(fp))
+    .update(sorted)
     .digest("hex")
     .slice(0, 16)
 }
@@ -168,15 +171,30 @@ export class HistoricalResourceProfile {
 
   /** 序列化（持久化）。 */
   toJSON(): string {
-    return JSON.stringify({ fingerprint: this.fingerprint, samples: this.samples, stableRounds: this.stableRounds, lastOomAt: this.lastOomAt })
+    return JSON.stringify({ version: 1, fingerprint: this.fingerprint, samples: this.samples, stableRounds: this.stableRounds, lastOomAt: this.lastOomAt })
   }
 
+  /** M3 修复：损坏/旧版持久化不得崩溃或传播 NaN —— 形状校验 + 非有限
+   *  值过滤，缺省回退默认；版本号预留迁移。 */
   static fromJSON(json: string): HistoricalResourceProfile {
-    const parsed = JSON.parse(json) as { fingerprint: WorkloadFingerprint; samples: ResourceSample[]; stableRounds: number; lastOomAt: number }
-    const profile = new HistoricalResourceProfile(parsed.fingerprint)
-    profile.samples = parsed.samples
-    profile.stableRounds = parsed.stableRounds
-    profile.lastOomAt = parsed.lastOomAt
+    const parsed = JSON.parse(json) as {
+      version?: number
+      fingerprint?: WorkloadFingerprint
+      samples?: ResourceSample[]
+      stableRounds?: number
+      lastOomAt?: number
+    }
+    const fingerprint = parsed.fingerprint && typeof parsed.fingerprint === "object"
+      ? parsed.fingerprint
+      : { toolKind: "unknown", commandFamily: "unknown", repositoryClass: "unknown", fileCountBucket: "unknown", backend: "unknown", profile: "unknown", cacheState: "unknown", runtimeFamily: "unknown" }
+    const profile = new HistoricalResourceProfile(fingerprint)
+    if (Array.isArray(parsed.samples)) {
+      profile.samples = parsed.samples.filter(s =>
+        s && Number.isFinite(s.cpuUsec) && Number.isFinite(s.peakMemoryBytes) && Number.isFinite(s.wallTimeMs),
+      )
+    }
+    profile.stableRounds = Number.isFinite(parsed.stableRounds) ? parsed.stableRounds! : 0
+    profile.lastOomAt = Number.isFinite(parsed.lastOomAt) ? parsed.lastOomAt! : 0
     return profile
   }
 }

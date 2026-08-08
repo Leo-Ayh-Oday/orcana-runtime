@@ -95,6 +95,12 @@ export interface ProviderCallOptions {
   abortSignal?: AbortSignal
   /** PR-6.4: API-level structured output (response_format). */
   responseFormat?: StructuredOutputRequest
+  /**
+   * PR-GATE-06: Run 级统一重试预算。注入后 provider 的 transport/rateLimit
+   * 重试由 RetryLedger 限次（与 capability/repair 等层共享同一预算，
+   * 禁止各层独立无限重试）；未注入时回退构造时 maxRetries（legacy）。
+   */
+  retryLedger?: import("../runtime/retry-ledger").RetryLedger
 }
 
 export interface LLMProvider {

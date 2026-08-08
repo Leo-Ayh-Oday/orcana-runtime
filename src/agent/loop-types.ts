@@ -85,4 +85,7 @@ export interface AgentOptions {
   /** H9: capability registry — the loop's tool executions route through the
    *  CapabilityExecutor with this registry (shared with the Node Runtime). */
   capabilityRegistry?: import("../harness/contracts/capability").CapabilityRegistry
+  /** PR-GATE-06: Run 级统一重试预算（harness 传入其 scope 的 ledger；
+   *  注入后 loop 内 provider/round 重试与该 ledger 共享，预算跨层统一）。 */
+  retryLedger?: import("../runtime/retry-ledger").RetryLedger
 }

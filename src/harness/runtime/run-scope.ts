@@ -17,6 +17,7 @@ import type { TraceWriter } from "../contracts/scope"
 import { createArtifactStore } from "../artifacts/artifact-store"
 import { createJsonlTraceWriter } from "../telemetry/trace-writer"
 import { createRunCancellation } from "./cancellation"
+import { createRetryLedger } from "../../runtime/retry-ledger"
 
 export function defaultSandboxConfig(projectRoot: string): SandboxConfig {
   return {
@@ -82,5 +83,7 @@ export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
     cancellation: createRunCancellation(controller),
     // H5: typed JSONL trace (H3 no-op replaced).
     trace: createRunTraceWriter(projectRoot, runId, sessionId, onTraceWriteFailure),
+    // PR-GATE-06：Run 级统一重试预算（provider/capability/repair 共享）。
+    retryLedger: createRetryLedger(),
   }
 }

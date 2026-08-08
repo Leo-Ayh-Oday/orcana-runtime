@@ -12,7 +12,7 @@
  */
 
 import type { StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage } from "./types"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt, providerBackoffWait } from "./retry"
+import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt, providerBackoffWait, recordProviderRetry } from "./retry"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
 
@@ -102,11 +102,12 @@ export class OpenAIProvider implements LLMProvider {
           return
         }
         const info = classifyProviderError(e)
-        const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry)
+        const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry, options.retryLedger)
         if (!canRetry) {
           yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
           return
         }
+        recordProviderRetry(info, options.retryLedger)
         const delayMs = providerRetryDelayMs(info, attempt)
         yield { type: "status", data: formatProviderRetryStatus(info, delayMs, attempt, this.maxRetries) }
         const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)

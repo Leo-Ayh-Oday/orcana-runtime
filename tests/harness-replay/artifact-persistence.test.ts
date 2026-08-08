@@ -6,6 +6,7 @@ import { createArtifactStore } from "../../src/harness/artifacts/artifact-store"
 import { putPatchArtifact } from "../../src/harness/artifacts/evidence-adapter"
 import { serializeRun, restoreAgentRun } from "../../src/harness/persistence/serialization"
 import { createFileHarnessStore } from "../../src/harness/persistence/file-harness-store"
+import { createRetryLedger } from "../../src/runtime/retry-ledger"
 import { createAgentHarness } from "../../src/harness/runtime/agent-harness"
 import type { AgentRun } from "../../src/harness/contracts/run"
 import type { HarnessEvent } from "../../src/harness/contracts/events"
@@ -42,6 +43,7 @@ function minimalRun(projectRoot: string): AgentRun {
       artifactStore: createArtifactStore(),
       cancellation: {} as never,
       trace: { append: async () => {}, flush: async () => {}, close: async () => {}, writeFailures: () => 0, pendingEvents: () => 0 },
+      retryLedger: createRetryLedger(),
     },
     budget: { limits: {}, used: { modelCalls: 0, toolCalls: 0, tokens: 0 }, remaining: () => 0 } as never,
     createdAt: 1,

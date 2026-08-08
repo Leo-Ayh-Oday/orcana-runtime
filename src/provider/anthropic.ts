@@ -13,7 +13,7 @@ import Anthropic from "@anthropic-ai/sdk"
 import type { StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, providerBackoffWait } from "./retry"
+import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, providerBackoffWait, canRetryProviderAttempt, recordProviderRetry } from "./retry"
 import { bindProviderAbort, type ClosableAsyncIterable } from "./stream-lifecycle"
 
 interface AnthropicLikeClient {
@@ -83,11 +83,12 @@ export class AnthropicProvider implements LLMProvider {
           return
         }
         const info = classifyProviderError(e)
-        const canRetry = info.retryable && !unsafeToRetry && attempt < this.maxRetries
+        const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry, options.retryLedger)
         if (!canRetry) {
           yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
           return
         }
+        recordProviderRetry(info, options.retryLedger)
         const delayMs = providerRetryDelayMs(info, attempt)
         yield { type: "status", data: formatProviderRetryStatus(info, delayMs, attempt, this.maxRetries) }
         const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)

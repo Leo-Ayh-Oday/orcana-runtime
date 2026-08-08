@@ -6,6 +6,7 @@ import {
   formatProviderStreamBlockedReport,
   formatProviderStreamRecoveryPrompt,
 } from "../runtime-failure"
+import type { RetryLedger } from "../../runtime/retry-ledger"
 import { compactAssistantContext } from "../round/helpers"
 import { missingTaskRequirements, type TaskTracker } from "../task-tracker"
 import type { ProviderFailure } from "../run/types"
@@ -50,6 +51,9 @@ export interface ProviderFailureRecoveryInput {
   finalText: string
   taskTracker: TaskTracker | null
   changedFiles: string[]
+  /** PR-GATE-06：Run 级 RetryLedger —— 同一 round 的轮续跑（truncation 类）
+   *  最多一次，预算与 provider/capability/repair 层共享。 */
+  retryLedger?: RetryLedger
 }
 
 export interface ProviderFailureRecoveryDecision {
@@ -85,7 +89,11 @@ export function decideProviderFailureRecovery(
     }
   }
 
-  const canRetry = input.round + 1 < input.maxRounds
+  // PR-GATE-06：轮续跑属于 truncation 类 —— 同一 round 经 ledger 严格限次
+  // （truncation <= 1），不再只依赖 maxRounds 宽松边界。
+  const roundFingerprint = `truncation:${input.round}`
+  const ledgerAllows = !input.retryLedger || input.retryLedger.canRetry("truncation", roundFingerprint)
+  const canRetry = ledgerAllows && input.round + 1 < input.maxRounds
   const assistantContext: ProviderMessage[] = input.finalText.trim()
     ? [{ role: "assistant", content: compactAssistantContext(input.finalText) }]
     : []
@@ -93,6 +101,7 @@ export function decideProviderFailureRecovery(
   if (input.taskTracker) {
     const missing = missingTaskRequirements(input.taskTracker)
     if (canRetry) {
+      input.retryLedger?.record("truncation", roundFingerprint)
       return {
         action: "continue",
         status: "provider-stream-gate: retrying unfinished long task",
@@ -136,6 +145,7 @@ export function decideProviderFailureRecovery(
   }
 
   if (canRetry) {
+    input.retryLedger?.record("truncation", roundFingerprint)
     return {
       action: "continue",
       status: "provider-stream-gate: retrying interrupted round",

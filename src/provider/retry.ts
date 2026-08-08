@@ -1,3 +1,5 @@
+import { providerRetryFingerprint, type RetryLedger } from "../runtime/retry-ledger"
+
 export type ProviderErrorKind = "rate_limit" | "server" | "network" | "auth" | "client" | "capacity" | "quota" | "unknown"
 
 export interface ProviderErrorInfo {
@@ -80,8 +82,27 @@ export function canRetryProviderAttempt(
   attempt: number,
   maxRetries: number,
   unsafeToRetry: boolean,
+  ledger?: RetryLedger,
 ): boolean {
-  return info.retryable && !unsafeToRetry && attempt < maxRetries
+  if (!info.retryable || unsafeToRetry) return false
+  // PR-GATE-06：注入 Run 级 RetryLedger 时，预算由统一账本裁决（rate_limit
+  // → rateLimit 类，其余 retryable（server/network/capacity）→ transport
+  // 类），构造时 maxRetries 仅作无 ledger 时的 legacy 兜底。
+  if (ledger) {
+    const retryClass = info.kind === "rate_limit" ? "rateLimit" : "transport"
+    return ledger.canRetry(retryClass, providerRetryFingerprint(info.kind, info.status))
+  }
+  return attempt < maxRetries
+}
+
+/** PR-GATE-06：实际发起一次重试前记账（返回本次重试计数）。 */
+export function recordProviderRetry(
+  info: ProviderErrorInfo,
+  ledger: RetryLedger | undefined,
+): void {
+  if (!ledger) return
+  const retryClass = info.kind === "rate_limit" ? "rateLimit" : "transport"
+  ledger.record(retryClass, providerRetryFingerprint(info.kind, info.status))
 }
 
 /**

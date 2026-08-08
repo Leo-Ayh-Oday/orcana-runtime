@@ -58,8 +58,11 @@ export function canSteal(candidate: StealCandidate, target: StealTargetContext):
   //    （3. 重新生成 ParticipantAssignment 同理 —— 调用方契约）
 
   if (reasons.length > 0) return { allowed: false, reasons }
+  // m4（LR2-3 审核）：诚实声明 —— 守卫只验证 5 个条件；条件 3（重新生成
+  // ParticipantAssignment）与 7（生成新的 Node Attempt）是调用方契约，
+  // 守卫无法自证（不谎称"全部满足"）。
   return {
     allowed: true,
-    reason: "all 7 conditions met (new ParticipantAssignment + new Node Attempt by caller)",
+    reason: "5 guard conditions met; conditions 3/7 (new ParticipantAssignment, new Node Attempt) are caller contract obligations",
   }
 }

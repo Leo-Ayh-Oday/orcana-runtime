@@ -109,3 +109,32 @@ describe("HistoricalResourceProfile (P3-A)", () => {
     expect(restored.estimate({ defaultMemoryBytes: 1, defaultWallTimeMs: 1 }).basis).toBe("observed")
   })
 })
+
+// ── LR2-3 审核修复验收（M3/M4）──
+
+describe("Profile audit fixes (M3/M4)", () => {
+  test("M4: fingerprint is key-order independent (real shuffled keys)", () => {
+    const a = fingerprintOf(FP)
+    const shuffled = JSON.parse(JSON.stringify(FP)) as WorkloadFingerprint
+    const keys = Object.keys(shuffled).sort(() => 0.5 - Math.random())
+    const rebuilt = {} as Record<string, unknown>
+    for (const k of keys) rebuilt[k] = (shuffled as unknown as Record<string, unknown>)[k]
+    expect(fingerprintOf(rebuilt as unknown as WorkloadFingerprint)).toBe(a)
+  })
+
+  test("M3: corrupted persisted JSON does not crash or produce NaN estimates", () => {
+    const corrupted = JSON.stringify({ fingerprint: { bogus: true }, samples: "not-an-array", stableRounds: "x", lastOomAt: null })
+    const profile = HistoricalResourceProfile.fromJSON(corrupted)
+    const est = profile.estimate({ defaultMemoryBytes: 512 * 1024 * 1024, defaultWallTimeMs: 30_000 })
+    expect(est.basis).toBe("template")
+    expect(Number.isFinite(est.memoryBytes)).toBe(true)
+    expect(Number.isFinite(est.wallTimeMs)).toBe(true)
+    // 半损坏样本（缺字段）被过滤
+    const halfBroken = JSON.stringify({
+      fingerprint: FP,
+      samples: [{ cpuUsec: 1, peakMemoryBytes: 10, wallTimeMs: 5 }, { cpuUsec: Number.NaN, peakMemoryBytes: 20, wallTimeMs: 6 }],
+    })
+    const p2 = HistoricalResourceProfile.fromJSON(halfBroken)
+    expect(p2.sampleCount).toBe(1)
+  })
+})

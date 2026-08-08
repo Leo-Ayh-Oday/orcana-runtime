@@ -486,16 +486,26 @@ export function resolveAuthorizedCwd(
 
 // ── LR2-2（P2-D）：Plan Cache 接入 —— 编译结果模板缓存 ──
 
-/** 请求策略分量的稳定 digest（缓存键的一部分）：executable/args/profile/
- *  network/env/allowedHostKeys/mounts/cache —— 不含身份与 workspace 特定值。 */
+/** 请求策略分量的稳定 digest（缓存键的一部分）。
+ *  B1 修复（LR2-2 审核）：**全部**进入 spec 的请求派生字段必须在键内 ——
+ *  遗漏 timeoutMs/memoryMaxBytes/pidsMax/stdoutMaxBytes/stderrMaxBytes/
+ *  relativeCwd/stdin 会让命中路径重放首个请求的声明值（资源控制旁路 +
+ *  超时放大）并跳过当前请求的 cwd 逃逸校验。 */
 export function policyRequestDigest(request: UntrustedCapabilityRequest): string {
   return digestOfRequestPolicy({
     executable: request.command.executable,
     args: request.command.args,
+    relativeCwd: request.command.relativeCwd,
+    stdin: request.command.stdin,
     profile: request.profile,
     network: request.network,
     env: request.env ?? {},
     allowedHostKeys: request.allowedHostKeys ?? [],
+    timeoutMs: request.timeoutMs,
+    memoryMaxBytes: request.memoryMaxBytes,
+    pidsMax: request.pidsMax,
+    stdoutMaxBytes: request.stdoutMaxBytes,
+    stderrMaxBytes: request.stderrMaxBytes,
     readonlyMounts: request.readonlyMounts ?? [],
     writableMounts: request.writableMounts ?? [],
     cache: request.cache ?? [],
@@ -525,11 +535,25 @@ export function compileCapabilityRequestCached(
     const key = planCacheKeyFor(request, workspaceIdentity)
     const hit = cache.get(key)
     if (hit) {
+      // B1 修复：命中路径不得跳过当前请求的校验 —— cwd 权威解析
+      // （WORKSPACE_PATH_ESCAPE/NUL 检查）必须执行，且解析结果注入 spec。
+      let canonicalCwd: string
+      try {
+        canonicalCwd = resolveAuthorizedCwd(authority.workspace, request.command.relativeCwd)
+      } catch (error) {
+        return { ok: false, errors: [error instanceof Error ? error.message : String(error)] }
+      }
       const spec = JSON.parse(hit.mountTemplate) as ExecutionCellSpec
       spec.identity = { cellId: `cell-${randomUUID().slice(0, 8)}`, ...authority.identity }
+      spec.command.cwd = canonicalCwd
+      spec.filesystem.worktreeRoot = authority.workspace.hostRoot
+      spec.filesystem.ownerFiles = [...authority.workspace.ownerFiles]
+      // m1：命中产物同样校验 + 冻结（编译产物不可变契约）。
+      const validation = validateCellSpec(spec)
+      if (!validation.ok) return { ok: false, errors: validation.errors }
       // cellSpecDigest 含身份 —— 使用方每次现算；policyDigest 不含身份，
       // 模板中的值在替换身份后仍然正确（策略未变）。
-      return { ok: true, spec }
+      return { ok: true, spec: deepFreeze(spec) }
     }
   }
   const result = compileCapabilityRequest(request, authority)

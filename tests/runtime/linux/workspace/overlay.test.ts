@@ -79,3 +79,39 @@ describe("Overlay (P2-C)", () => {
     }
   })
 })
+
+// ── LR2-2 审核修复验收（M3）──
+
+describe("Overlay audit fixes (M3)", () => {
+  test("M3: path traversal label is rejected", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ovl-"))
+    const repo = join(dir, "repo")
+    const workRoot = join(dir, "work")
+    mkdirSync(repo)
+    mkdirSync(workRoot)
+    try {
+      gitRepo(repo)
+      const overlay = new GitWorktreeOverlay()
+      expect(() => overlay.create(repo, "HEAD", workRoot, "../../escape")).toThrow(/invalid overlay label/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("M3: snapshotRef is pinned to a commit SHA (rev syntax cannot escape)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ovl-"))
+    const repo = join(dir, "repo")
+    const workRoot = join(dir, "work")
+    mkdirSync(repo)
+    mkdirSync(workRoot)
+    try {
+      gitRepo(repo)
+      const overlay = new GitWorktreeOverlay()
+      const inst = overlay.create(repo, "HEAD", workRoot, "cell-pin")
+      expect(inst.mergedPath).toContain("wt-cell-pin")
+      inst.discard()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

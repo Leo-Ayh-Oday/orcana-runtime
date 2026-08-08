@@ -1,7 +1,7 @@
 /** LR2-2（P2-B）：CAS 验收 —— 写入/读取/碰撞/并发/污染拒绝/evict 幂等。 */
 
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ContentAddressedStore } from "../../../../src/runtime/linux/cache/cas"
@@ -116,6 +116,51 @@ describe("ContentAddressedStore (P2-B)", () => {
       expect(results.every(r => r === "published" || r === "existing")).toBe(true)
       // 内容完整无损坏
       expect(cas.read(digestOf("concurrent"))!.toString()).toBe("concurrent")
+    } finally {
+      cleanup()
+    }
+  })
+})
+
+// ── LR2-2 审核修复验收（M1/M2/M5）──
+
+describe("CAS audit fixes (M1/M2/M5)", () => {
+  test("M1: stale lock is taken over (crash residue does not poison the digest)", () => {
+    const { dir, cas, cleanup } = setup()
+    try {
+      const digest = digestOf("x")
+      // 预置陈旧锁（pid=999999 已退出）
+      const lockDir = join(dir, "locks")
+      mkdirSync(lockDir, { recursive: true })
+      writeFileSync(join(lockDir, `${digest}.lock`), "999999:1", { mode: 0o600 })
+      const result = cas.put(Buffer.from("x"), { ok: true })
+      expect(result).toBe("published") // 陈旧锁被接管，不返回假的 "existing"
+      expect(cas.hasValid(digest)).toBe(true)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("M2: invalid digest format is rejected (path traversal guard)", () => {
+    const { dir, cas, cleanup } = setup()
+    try {
+      expect(() => cas.read("../../../etc/passwd")).toThrow(/invalid cache digest/)
+      expect(() => cas.evict("../../x")).toThrow(/invalid cache digest/)
+      expect(() => cas.record("UPPERCASE")).toThrow(/invalid cache digest/)
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("M5: read verifies content hash — corrupted object is quarantined, not returned", () => {
+    const { dir, cas, cleanup } = setup()
+    try {
+      cas.put(Buffer.from("good"), { ok: true })
+      const digest = digestOf("good")
+      // 篡改对象内容（磁盘损坏模拟）
+      writeFileSync(join(dir, "objects", digest), "corrupted")
+      expect(cas.read(digest)).toBeUndefined() // 不返回坏内容
+      expect(cas.record(digest)!.state).toBe("QUARANTINED")
     } finally {
       cleanup()
     }

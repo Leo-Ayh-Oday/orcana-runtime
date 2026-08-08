@@ -60,20 +60,43 @@ export function planKeyString(key: PlanCacheKey): string {
 }
 
 /** 模板污染检查：模板中不得出现注入字段（秘密/路径/身份）。
- *  只检查字符串值（键名如 "secrets" 是合法字段名，不误伤）。 */
+ *  mountTemplate 是 JSON 字符串 —— 解析后递归检查字符串值（键名如
+ *  "secrets" 是合法字段名，不误伤；泄漏形状只出现在值里）。 */
 export function templateIsClean(plan: CompiledSandboxPlan): boolean {
-  const values: string[] = [plan.mountTemplate, plan.seccompObjectRef ?? ""]
-  for (const [k, v] of Object.entries(plan.environmentTemplate)) {
-    values.push(k, v)
-  }
-  values.push(...plan.backendArgvTemplate)
-  // 注入字段的典型形状（cell-/run-/token/secret 值/路径/端口）不得出现在值里。
-  // fail-closed 优先：宁可拒绝合法模板也不放过泄漏（值级检查不误伤键名）。
+  // 注入字段的典型形状（cell-/run-/token/secret 值/路径/端口）。
+  // fail-closed 优先：宁可拒绝合法模板也不放过泄漏。
   const forbidden = [
     "cell-", "run-", "/workspace", "/tmp/orcana-", "token", "Bearer ", "bearer",
     "api_key", "sk-", "secret", ":8080", ":3000",
   ]
-  return !values.some(v => forbidden.some(f => v.includes(f)))
+  const leaky = (value: string): boolean => forbidden.some(f => value.includes(f))
+
+  // mountTemplate：解析 JSON 后递归值检查（无法解析 → 按原始字符串检查）。
+  try {
+    const parsed = JSON.parse(plan.mountTemplate) as unknown
+    const stack: unknown[] = [parsed]
+    while (stack.length > 0) {
+      const item = stack.pop()
+      if (typeof item === "string") {
+        if (leaky(item)) return false
+      } else if (Array.isArray(item)) {
+        stack.push(...item)
+      } else if (item && typeof item === "object") {
+        stack.push(...Object.values(item))
+      }
+    }
+  } catch {
+    if (leaky(plan.mountTemplate)) return false
+  }
+
+  for (const v of Object.values(plan.environmentTemplate)) {
+    if (leaky(v)) return false
+  }
+  for (const a of plan.backendArgvTemplate) {
+    if (leaky(a)) return false
+  }
+  if (plan.seccompObjectRef && leaky(plan.seccompObjectRef)) return false
+  return true
 }
 
 export class PlanCache {

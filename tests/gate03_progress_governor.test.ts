@@ -1,37 +1,45 @@
 /**
- * GATE-03 — ProgressGovernor（GS-01/GS-02）
+ * GATE-03 v2（GS-P1~P6）— ProgressGovernor 行为测试。
  *
- * OTS-013 死循环的正式断环点：run-scoped liveness 控制器。
- *   连续 1 轮无进展 → NO_PROGRESS（记录）
- *   连续 2 轮 → ACTION_FIRST（思考降级、必须发出工具调用）
- *   连续 3 轮 → REPLAN_ONCE（不得重复注入相同提示）
- *   连续 4 轮 → STALLED（终止 + 完整诊断）
- * "模型多写了 4000 token 不算进展"——只有状态变化才算。
+ * v1 → v2 兼容策略：单元 helper 从 snapshot() 重写为 roundProgressInput()，
+ * 行为断言语义等价保留：
+ *   (a) 空输入四连轨迹 proceed → proceed → ACTION_FIRST → REPLAN_ONCE → STALLED
+ *   (b) 真实进展信号（写类提交/文件集增长/节点/证据）清零 streak
+ *   (c) pendingObligationDigest 变化不算进展（模型换说辞 ≠ 推进）
+ *   (d) 提示文本断言
+ *   (e) TruncatedEmptyProvider 端到端：5 次 provider round 内 STALLED（GS-01）
  */
 
 import { describe, expect, test } from "bun:test"
-import { ProgressGovernor, actionFirstPrompt, replanOncePrompt, type ProgressSnapshot } from "../src/agent/kernel/progress-governor"
+import { ProgressGovernor, actionFirstPrompt, replanOncePrompt, type RoundProgressInput } from "../src/agent/kernel/progress-governor"
 import { AgentState, StateMachine } from "../src/agent/state-machine"
 import { agentLoop } from "../src/agent/loop"
 import type { AgentRunTrace } from "../src/agent/run-trace"
 import { HookEvent, HookSystem } from "../src/hooks"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
 import { buildTools, Result } from "../src/tools/registry"
+import type { RoundToolCall } from "../src/agent/run/types"
 
-function snapshot(overrides: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
+function roundInput(overrides: Partial<RoundProgressInput> = {}): RoundProgressInput {
   return {
     round: 1,
-    toolCallsCommitted: 0,
-    writeToolsCommitted: 0,
+    agentState: AgentState.SEARCH,
+    finalText: "",
+    committedToolCalls: [],
+    toolResults: [],
+    verificationResults: [],
     fileCount: 0,
     completedNodes: 0,
     completedSteps: 0,
-    evidenceEntries: 0,
     currentNode: "1",
+    evidenceEntries: 0,
     pendingObligationDigest: "steps:a|b",
     ...overrides,
   }
 }
+
+const writeTool = (name = "write_file"): RoundToolCall => ({ id: "t-w1", name, input: { path: "a.ts" } })
+const readTool = (path: string, id = "t-r1"): RoundToolCall => ({ id, name: "read_file", input: { path } })
 
 class MemoryTrace {
   events: Array<{ type: string; data?: unknown }> = []
@@ -53,10 +61,10 @@ function probeTool() {
   })
 }
 
-describe("ProgressGovernor 状态机（GS-01）", () => {
+describe("ProgressGovernor 状态机（GS-P2）", () => {
   test("连续 4 轮无进展：记录 → ACTION_FIRST → REPLAN_ONCE → STALLED", () => {
     const governor = new ProgressGovernor()
-    const s = snapshot()
+    const s = roundInput()
     // 首轮无基准 → proceed（记录）
     expect(governor.evaluate(s).action).toBe("proceed")
     // 连续 1 轮 → 记录（proceed，trace 由调用方做）
@@ -66,40 +74,43 @@ describe("ProgressGovernor 状态机（GS-01）", () => {
     expect(governor.evaluate(s).action).toBe("action_first")
     // 连续 3 轮 → REPLAN_ONCE
     expect(governor.evaluate(s).action).toBe("replan_once")
-    // 连续 4 轮 → STALLED + 诊断
+    // 连续 4 轮 → STALLED + 诊断（GS-P6 字段）
     const stalled = governor.evaluate(s)
     expect(stalled.action).toBe("stalled")
     if (stalled.action === "stalled") {
+      expect(stalled.reason).toBe("streak")
       expect(stalled.report).toContain("运行停滞")
-      expect(stalled.report).toContain("4 轮")
+      expect(stalled.report).toContain("GS-P2")
+      expect(stalled.report).toContain("近 4 轮 Delta 明细")
+      expect(stalled.report).toContain("[execution=0, evidence=0, epistemic=0, control=0]")
     }
   })
 
   test("任何真实进展信号变化都清零 streak", () => {
     const governor = new ProgressGovernor()
-    governor.evaluate(snapshot())
-    governor.evaluate(snapshot()) // streak=1
+    governor.evaluate(roundInput())
+    governor.evaluate(roundInput()) // streak=1
     expect(governor.consecutiveNoProgress).toBe(1)
-    // 工具调用提交 → 进展
-    expect(governor.evaluate(snapshot({ toolCallsCommitted: 2 })).action).toBe("proceed")
+    // 写类工具提交 → execution 进展
+    expect(governor.evaluate(roundInput({ committedToolCalls: [writeTool()] })).action).toBe("proceed")
     expect(governor.consecutiveNoProgress).toBe(0)
-    // 文件集增长 → 进展
-    governor.evaluate(snapshot({ fileCount: 3 }))
+    // 文件集增长 → execution 进展
+    governor.evaluate(roundInput({ fileCount: 3 }))
     expect(governor.consecutiveNoProgress).toBe(0)
-    // 计划节点推进 → 进展
-    governor.evaluate(snapshot({ completedNodes: 1 }))
+    // 计划节点推进 → control 进展
+    governor.evaluate(roundInput({ completedNodes: 1 }))
     expect(governor.consecutiveNoProgress).toBe(0)
-    // 证据条目增长 → 进展
-    governor.evaluate(snapshot({ evidenceEntries: 1 }))
+    // 证据条目增长 → evidence 进展
+    governor.evaluate(roundInput({ evidenceEntries: 1 }))
     expect(governor.consecutiveNoProgress).toBe(0)
   })
 
   test("pendingObligationDigest 变化不算进展（模型换说辞 ≠ 推进）", () => {
     const governor = new ProgressGovernor()
-    governor.evaluate(snapshot())
-    governor.evaluate(snapshot())
+    governor.evaluate(roundInput())
+    governor.evaluate(roundInput())
     // 只有 digest 变 → 仍无进展
-    expect(governor.evaluate(snapshot({ pendingObligationDigest: "steps:c|d" })).action).toBe("action_first")
+    expect(governor.evaluate(roundInput({ pendingObligationDigest: "steps:c|d" })).action).toBe("action_first")
     expect(governor.consecutiveNoProgress).toBe(2)
   })
 
@@ -126,7 +137,7 @@ describe("状态机 STALLED 终态", () => {
   })
 })
 
-describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 端到端）", () => {
+describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 承接 GS-P2）", () => {
   test("provider 每轮只有截断无产出 → stopReason=stalled，不无限循环", async () => {
     const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
     process.env.ORCANA_FLASH_TRIAGE = "off"
@@ -163,7 +174,7 @@ describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 端到端�
     if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
     else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 
-    // GS-01：连续 4 轮无进展必须终止 STALLED（而非无限重试）
+    // GS-P2：连续 4 轮无进展必须终止 STALLED（而非无限重试）
     expect(stopReasons).toEqual(["stalled"])
     const stalledEvents = events.filter(e => e.type === "status" && String(e.data).includes("STALLED"))
     expect(stalledEvents.length).toBeGreaterThanOrEqual(1)
@@ -172,5 +183,37 @@ describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 端到端�
     // 4 轮无进展 + 首轮基准 = 5 次 provider round 内必须终止
     const stalledRoundTrace = trace.events.find(e => e.type === "agent_loop_stalled")
     expect(stalledRoundTrace).toBeDefined()
+    // 每轮 progress_delta trace（GS-P6）必须存在
+    const deltas = trace.events.filter(e => e.type === "progress_delta")
+    expect(deltas.length).toBeGreaterThanOrEqual(5)
+  })
+})
+
+// ── v2 语义：新观察 read 在 RECON 阶段是 epistemic 进展（误杀修复） ──
+
+describe("v2：novel read 在 RECON 是进展（OTS-013 误杀修复）", () => {
+  test("连续读不同新文件 → streak 不增长（epistemic 续命）", () => {
+    const governor = new ProgressGovernor()
+    governor.evaluate(roundInput())
+    governor.evaluate(roundInput({ committedToolCalls: [readTool("a.ts")] }))
+    expect(governor.consecutiveNoProgress).toBe(0)
+    governor.evaluate(roundInput({ committedToolCalls: [readTool("b.ts", "t-r2")] }))
+    expect(governor.consecutiveNoProgress).toBe(0)
+    governor.evaluate(roundInput({ committedToolCalls: [readTool("c.ts", "t-r3")] }))
+    expect(governor.consecutiveNoProgress).toBe(0)
+  })
+
+  test("同文件重读（同输出）→ 不算进展，streak 照常增长", () => {
+    const governor = new ProgressGovernor()
+    governor.evaluate(roundInput())
+    const input = roundInput({ committedToolCalls: [readTool("a.ts")], toolResults: [{ type: "tool_result", tool_use_id: "t-r1", content: "same" }] })
+    governor.evaluate(input)
+    expect(governor.consecutiveNoProgress).toBe(0)
+    // 重读同文件同输出 → 无 novel
+    governor.evaluate(roundInput({ round: 3, committedToolCalls: [readTool("a.ts")], toolResults: [{ type: "tool_result", tool_use_id: "t-r1", content: "same" }] }))
+    expect(governor.consecutiveNoProgress).toBe(1)
+    // 同文件新输出 → novel（观察到新事实）
+    governor.evaluate(roundInput({ round: 4, committedToolCalls: [readTool("a.ts")], toolResults: [{ type: "tool_result", tool_use_id: "t-r1", content: "different" }] }))
+    expect(governor.consecutiveNoProgress).toBe(0)
   })
 })

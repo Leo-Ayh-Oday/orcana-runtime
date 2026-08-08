@@ -5,6 +5,7 @@
  *  `{ ...process.env, ...requested }` (HOST_ENV_INHERITANCE_BLOCKED).
  */
 
+import { existsSync } from "node:fs"
 import type { EnvironmentPolicy } from "./contracts"
 
 export const DEFAULT_ENV_VARS: Record<string, string> = {
@@ -88,6 +89,46 @@ function matchesPattern(key: string, pattern: string): boolean {
   return key === pattern
 }
 
+/** GATE-TEST-01：宿主 PATH 中受控追加的安全可执行目录。
+ *
+ *  GS-14 保留语义不变（Runtime 决定 PATH 结构，首段固定安全目录）；
+ *  此函数把宿主 PATH 中"真实存在且非危险"的目录只读追加在尾部，保证
+ *  bun/node/tsc 等常用工具可达（LNXF-GATE-01 后 verification 类工具
+ *  命令在固定 PATH 下 command-not-found 的回归）。过滤规则：
+ *    - 相对路径（"."/"./x"）、/tmp（可写注入面）、空段 —— 一律拒绝
+ *    - 宿主 PATH 条目必须真实存在（GS-14 验收：虚构/恶意条目如 /evil
+ *      不进入 Cell，恶意同名命令不可达）
+ *    - 去重 + 上限 16（Runtime 首段固定目录永远优先）
+ */
+export function appendSafeHostPathEntries(
+  runtimePath: string,
+  hostPath: string | undefined,
+  extra: string[] = [],
+): string {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  const push = (p: string, requireExists: boolean) => {
+    if (!p || p === "." || p.startsWith("./") || p.startsWith("/tmp")) return
+    if (requireExists) {
+      try {
+        if (!existsSync(p)) return
+      } catch {
+        return
+      }
+    }
+    if (seen.has(p)) return
+    seen.add(p)
+    parts.push(p)
+  }
+  for (const p of runtimePath.split(":")) push(p, false)
+  for (const p of extra) push(p, false)
+  for (const p of (hostPath ?? "").split(":")) {
+    if (parts.length >= 16) break
+    push(p, true)
+  }
+  return parts.join(":")
+}
+
 /** 宿主环境可见性：给定键是否属于默认拒绝集。 */
 /** LNXF-GATE-02：ServiceCell/长期进程的最小宿主环境（E1 语义正式化）。
  *  白名单键 + 显式 extra（extra 中命中拒绝集的键被过滤）——
@@ -133,9 +174,15 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
   env.ORCANA_NODE_RUN_ID = input.nodeRunId
   // GATE（GS-14）：PATH 由 Runtime 决定 —— allowedHostKeys 的 PATH 会被
   // reserved 拒绝；末步再强制写回（双重保险）。
-  const runtimePath = input.policy.baseProfile === "minimal"
-    ? "/usr/bin:/bin"
-    : `/usr/local/bin:/usr/bin:/bin${(input.pathEntries ?? []).length ? ":" + input.pathEntries!.join(":") : ""}`
+  // GATE-TEST-01：宿主 PATH 安全目录受控追加（bun/node/tsc 可达，首段
+  // 仍是 Runtime 固定目录，/tmp/相对路径不进入）。
+  const runtimePath = appendSafeHostPathEntries(
+    input.policy.baseProfile === "minimal"
+      ? "/usr/bin:/bin"
+      : `/usr/local/bin:/usr/bin:/bin`,
+    process.env.PATH,
+    input.pathEntries,
+  )
   env.PATH = runtimePath
   if (input.policy.baseProfile === "service") {
     env.TERM = "xterm"

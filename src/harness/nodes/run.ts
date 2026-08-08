@@ -31,13 +31,23 @@ export async function* runNode<I, O>(
   }
 
   yield await forward({ type: "node.status", nodeRunId: context.nodeRunId, status: "running", attempt: 1 })
+  let executeError: unknown
   try {
     for await (const event of node.execute(context, input)) {
       yield await forward(event)
     }
+  } catch (error) {
+    executeError = error
+    throw error
   } finally {
-    const result = await node.getResult()
-    yield await forward({ type: "node.status", nodeRunId: context.nodeRunId, status: result.status, attempt: 1 })
+    // GATE-TEST-01：execute 失败时不再调用 getResult —— 原始错误直接
+    // 传播，不被 getResult 的 "called before execute" 掩盖（修复前
+    // harness_llm_agent_node* 全量长跑失败只显示掩盖错误，真实根因
+    // 不可诊断）。
+    if (executeError === undefined) {
+      const result = await node.getResult()
+      yield await forward({ type: "node.status", nodeRunId: context.nodeRunId, status: result.status, attempt: 1 })
+    }
   }
 }
 

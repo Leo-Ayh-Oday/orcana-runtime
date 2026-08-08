@@ -106,8 +106,18 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
     let drainTimer: ReturnType<typeof setTimeout> | undefined
     // F4：父进程 exit 时刻实测的组内幸存者数（不等 stdio close）。
     let orphansAtExit = 0
+    // GATE-TEST-01：wallTime 到期先于任何 finish 路径置位 —— exit/close/
+    // drain 回调（含 terminateTree 阻塞期间排队的事件）不得把 timeout 真值
+    // 覆盖成普通退出（修复前高负载下 SIGTERM→exit 时序偏移导致
+    // timedOut=false 的 flaky 根因）。
+    let timeoutPending = false
 
-    const finish = (exitCode: number | null, signal: string | null, orphans: number) => {
+    const finish = (
+      exitCode: number | null,
+      signal: string | null,
+      orphans: number,
+      outcome: { timedOut?: boolean; cancelled?: boolean } = {},
+    ) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -119,8 +129,10 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
         stdout: stdoutChunks.join("") + finalizeOutput(limiter.state, "stdout"),
         stderr: stderrChunks.join("") + finalizeOutput(limiter.state, "stderr"),
         durationMs: Date.now() - startedAt,
-        timedOut,
-        cancelled,
+        // timeoutPending 优先 —— exit 路径（drain 窗口内 wallTime 已到期）
+        // 也必须如实报 timedOut。
+        timedOut: outcome.timedOut ?? timeoutPending ?? timedOut,
+        cancelled: outcome.cancelled ?? cancelled,
         outputLimitHit: limiter.exceeded(),
         orphanProcesses: orphans,
       })
@@ -131,7 +143,7 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
       // F4（ORPHAN_PROCESS）：取消后残留必须真实上报 —— 不硬编码 0。
       // terminateTree 返回 SIGTERM→SIGKILL 后的实测扫描值，残留如实入 Receipt。
       const report = terminateTree(pid)
-      finish(null, "aborted", report.processesRemaining)
+      finish(null, "aborted", report.processesRemaining, { cancelled: true })
     }
     options.abortSignal?.addEventListener("abort", onAbort, { once: true })
     if (options.abortSignal?.aborted) onAbort()
@@ -147,19 +159,22 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
       // stdio 排水窗口：exit 后管道数据尾有短窗口到达；daemon 持有管道时
       // close 永不触发 —— 窗口后照常 finish（防挂到 wallTime 误报 timeout）。
       drainTimer = setTimeout(() => {
-        finish(code ?? null, signal ?? null, orphansAtExit)
+        finish(code ?? null, signal ?? null, orphansAtExit, { timedOut: timeoutPending })
       }, 150)
     })
     proc.on("close", (code, signal) => {
       if (drainTimer) clearTimeout(drainTimer)
-      finish(code ?? null, signal ?? null, orphansAtExit)
+      finish(code ?? null, signal ?? null, orphansAtExit, { timedOut: timeoutPending })
     })
 
     timer = setTimeout(() => {
+      // 置位必须早于 terminateTree —— 其同步阻塞（SIGTERM→grace→SIGKILL）
+      // 期间 exit/close 事件排队，随后 drain 回调读 timeoutPending 仍为真。
+      timeoutPending = true
       timedOut = true
       // F4：超时终止后的残留同样如实上报（不再硬编码 0）。
       const report = terminateTree(pid)
-      finish(null, "timeout", report.processesRemaining)
+      finish(null, "timeout", report.processesRemaining, { timedOut: true })
     }, options.wallTimeMs)
   })
 }

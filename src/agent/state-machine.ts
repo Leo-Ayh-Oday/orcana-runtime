@@ -82,7 +82,11 @@ const ALLOWED_TRANSITIONS: Map<AgentState, Set<AgentState>> = new Map([
   [AgentState.CODE, new Set<AgentState>([AgentState.VERIFY, AgentState.CODE, AgentState.SEARCH, AgentState.REPAIR, AgentState.DONE, AgentState.BLOCKED, AgentState.STALLED])],
   [AgentState.VERIFY, new Set<AgentState>([AgentState.DONE, AgentState.REPAIR, AgentState.BLOCKED, AgentState.STALLED])],
   [AgentState.REPAIR, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.VERIFY, AgentState.DONE, AgentState.BLOCKED, AgentState.STALLED])],
-  [AgentState.DONE, new Set<AgentState>()],
+  // DONE 允许 → STALLED：ProgressGovernor 终止优先于完成终态——模型写完代码
+  // （状态机转 done）后若 4 轮无有效进展，STALLED 必须仍可落地（GS-P2 任意
+  // 执行状态可转 STALLED）。2026-08-08 EVAL-006 实证：done→stalled 非法转换
+  // 导致 CLI fatal 崩溃（考试暴露）。
+  [AgentState.DONE, new Set<AgentState>([AgentState.STALLED])],
   [AgentState.BLOCKED, new Set<AgentState>()],
   [AgentState.STALLED, new Set<AgentState>()],
 ])

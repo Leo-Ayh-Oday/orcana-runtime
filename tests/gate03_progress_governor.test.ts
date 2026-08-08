@@ -135,6 +135,18 @@ describe("状态机 STALLED 终态", () => {
     // STALLED 是终态：无出口转换
     expect(() => sm.transition(AgentState.REPAIR, "must not")).toThrow()
   })
+
+  test("DONE 可转 STALLED（ProgressGovernor 终止优先于完成终态，EVAL-006 实证）", () => {
+    const sm = new StateMachine()
+    sm.transition(AgentState.UNDERSTAND, "start")
+    sm.transition(AgentState.SEARCH, "search")
+    sm.transition(AgentState.CODE, "code")
+    sm.transition(AgentState.DONE, "task complete")
+    expect(sm.currentState).toBe(AgentState.DONE)
+    // 写码后 4 轮无进展 → ProgressGovernor STALLED 必须可落地（不再 fatal）
+    sm.transition(AgentState.STALLED, "GS-P2 连续 4 轮无有效进展")
+    expect(sm.currentState).toBe(AgentState.STALLED)
+  })
 })
 
 describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 承接 GS-P2）", () => {

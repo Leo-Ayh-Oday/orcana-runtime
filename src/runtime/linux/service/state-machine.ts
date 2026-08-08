@@ -62,7 +62,7 @@ export interface ServiceEvent {
 
 export class ServiceStateMachine {
   private state: ServiceState = "DECLARED"
-  private readonly events: ServiceEvent[] = []
+  private readonly history: ServiceEvent[] = []
   private sequence = 0
 
   constructor(private readonly serviceId: string, private readonly now: () => number = Date.now) {}
@@ -76,7 +76,7 @@ export class ServiceStateMachine {
     if (to === this.state) return false
     const allowed = SERVICE_TRANSITIONS[this.state]
     if (!allowed.has(to)) return false
-    this.events.push({
+    this.history.push({
       sequence: ++this.sequence,
       serviceId: this.serviceId,
       from: this.state,
@@ -90,7 +90,7 @@ export class ServiceStateMachine {
 
   /** 强制迁移（异常终态入口 —— 如外部 lease 到期直接置 LEASE_EXPIRED）。 */
   force(to: ServiceState, reason: string): void {
-    this.events.push({
+    this.history.push({
       sequence: ++this.sequence,
       serviceId: this.serviceId,
       from: this.state,
@@ -106,6 +106,6 @@ export class ServiceStateMachine {
   }
 
   events(): readonly ServiceEvent[] {
-    return this.events
+    return this.history
   }
 }

@@ -1,17 +1,33 @@
 /** MCP client — JSON-RPC lifecycle. Ported from orcana/core/mcp_client.py */
 
-import { spawnLegacy, minimalHostEnv, ChildProcess } from "../runtime/legacy-process"
-const spawn = spawnLegacy
+import type { ChildProcess } from "../runtime/legacy-process"
+import { createServiceCell } from "../runtime/linux/service-cell"
+import type { ServiceLeaseStore } from "../runtime/linux/recovery/state-store"
+import { setServiceLeaseStore } from "./service"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 
 interface ServerState {
   proc: ChildProcess
+  /** LNXF-GATE-02：release 幂等句柄（停进程 + 删 durable 记录）。 */
+  release: () => void
   tools: Array<Record<string, unknown>>
   resources: Array<Record<string, unknown>>
   buffer: string
   pending: Map<number, (value: Record<string, unknown>) => void>
   connected: boolean
+}
+
+// LNXF-GATE-02：MCP 的 durable lease 存储与 service 共用同一 store（测试可
+// 注入内存版；默认不持久化 —— legacy 直调语义不变）。
+let mcpLeaseStoreOverride: ServiceLeaseStore | undefined
+export function setMcpLeaseStore(store: ServiceLeaseStore | undefined): void {
+  mcpLeaseStoreOverride = store
+  // 与 service 层共享同一 store 来源（run-end 清理与 janitor 恢复一致）。
+  setServiceLeaseStore(store)
+}
+function mcpLeaseStore(): ServiceLeaseStore | undefined {
+  return mcpLeaseStoreOverride
 }
 
 export class MCPClientV2 {
@@ -21,13 +37,31 @@ export class MCPClientV2 {
   connect(name: string, command: string, args: string[] = [], env?: Record<string, string>): Promise<boolean> {
     return new Promise(resolve => {
       try {
-        const proc = spawn(command, args, {
+        // LNXF-GATE-02 (B12+B13)：spawnLegacy → ServiceCell（kind: mcp）——
+        // explicit env（minimalHostEnv 白名单 + 拒绝集过滤）+ durable lease
+        // + owner(pid+starttime)；ready 以 MCP initialize 响应为准。
+        const cell = createServiceCell({
+          kind: "mcp",
+          command,
+          args,
+          cwd: process.cwd(),
+          cleanupPolicy: "run-end",
+          logPath: "",
+          env,
           stdio: ["pipe", "pipe", "pipe"],
-          // E1.3：最小宿主环境 —— 配置 env 经拒绝集过滤（*.API_KEY/TOKEN/
-          // SSH_AUTH_SOCK 等不进入 MCP server 进程），不再全量继承宿主。
-          env: minimalHostEnv(env),
+          detached: false,
+          store: mcpLeaseStore(),
         })
-        const state: ServerState = { proc, tools: [], resources: [], buffer: "", pending: new Map(), connected: false }
+        const proc = cell.proc
+        const state: ServerState = {
+          proc,
+          release: () => cell.release(),
+          tools: [],
+          resources: [],
+          buffer: "",
+          pending: new Map(),
+          connected: false,
+        }
         this.servers.set(name, state)
 
         proc.stdout?.on("data", (chunk: Buffer) => {
@@ -53,9 +87,12 @@ export class MCPClientV2 {
         }).then(r => {
           const ok = !("error" in r)
           state.connected = ok
+          if (ok) cell.markReady()
+          else cell.markFailed()
           resolve(ok)
         }).catch(() => {
           state.connected = false
+          cell.markFailed()
           resolve(false)
         })
       } catch { resolve(false) }

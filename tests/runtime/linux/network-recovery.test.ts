@@ -127,7 +127,7 @@ describe("LF-7: recovery", () => {
       const receipts = await startupJanitor({
         store,
         currentBootId: current,
-        cleanupRun: async runId => ({ cgroups: [runId], worktrees: [], ports: 0, containers: [], stateRemoved: true }),
+        cleanupRun: async runId => ({ cgroups: [runId], worktrees: [], ports: 0, services: 0, containers: [], stateRemoved: true }),
       })
       // fresh 是 boot-A 记录的（当前 boot-B）→ 应被清理
       expect(receipts).toHaveLength(1)

@@ -105,7 +105,9 @@ async function main() {
           return {
             cgroups: [],
             worktrees: [],
-            ports: removed.removed,
+            // LNXF-GATE-02：port/service lease 从 durable records 恢复。
+            ports: removed.portsCleaned,
+            services: removed.servicesCleaned,
             containers: [],
             stateRemoved: removed.removed > 0,
           }

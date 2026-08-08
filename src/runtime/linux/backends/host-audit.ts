@@ -132,11 +132,12 @@ export function createHostAuditBackend(): ExecutionBackend {
         snapshotGuard: outcome.snapshotGuard,
         // PR-2：进程残留来自真实测量（countProcessGroup）；host-audit 无挂载/
         // 无 cgroup —— 不创建即无需移除（事实值），进程组实测为 0 才算干净。
+        // LR2-0：worktreeRetained 不再抄 spec 推定 —— 未实测 → 缺省
+        // （buildReceipt 默认 false，不声称保留/清理策略）。
         cleanup: {
           processesRemaining: outcome.cleanup?.processesRemaining ?? -1,
           mountsReleased: true,
           cgroupRemoved: true,
-          worktreeRetained: spec.lifecycle.retainOnFailure,
         },
       })
     },

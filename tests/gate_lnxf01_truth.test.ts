@@ -200,7 +200,7 @@ describe("GS-11 — 清理真值（未验证 ≠ 干净）", () => {
       pidLimitHit: false,
       outputLimitHit: false,
       tempLimitHit: false,
-      metrics: {},
+      metrics: { status: "unknown", reason: "test fixture" },
       observedWrites: [],
       observedDeletes: [],
       unexpectedWrites: [],

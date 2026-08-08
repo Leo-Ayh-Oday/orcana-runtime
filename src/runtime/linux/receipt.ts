@@ -6,7 +6,7 @@
  */
 
 import { createHash } from "node:crypto"
-import type { ExecutionCellSpec, LinuxCapabilities, SandboxReceipt } from "./contracts"
+import type { ExecutionCellSpec, LinuxCapabilities, Observed, SandboxReceipt, SandboxReceiptMetrics } from "./contracts"
 import { capabilitiesDigest } from "./capability-probe"
 
 /** 递归 canonical JSON：每一层键排序，任意嵌套的对象/数组参与序列化。
@@ -35,13 +35,23 @@ function canonicalStringify(value: unknown): string {
   return "{" + keys.map(k => JSON.stringify(k) + ":" + canonicalStringify(obj[k])).join(",") + "}"
 }
 
+/** canonicalization 版本：摘要语义（递归稳定排序 + 值规范）的版本号。
+ *  进入 policyDigest —— 规范化规则变更时摘要自动失效，防止新旧语义混用
+ *  （LR2-0 provenance bug 修复：schemaVersion + canonicalizationVersion
+ *  必须进入摘要）。 */
+export const CANONICALIZATION_VERSION = "1.0"
+
 export function digestOf(value: unknown): string {
-  return createHash("sha256").update(canonicalJson(value)).digest("hex").slice(0, 16)
+  // LR2-0：完整 SHA-256（64 hex），展示层再缩短 —— 16 位截断的 64-bit
+  // 摘要不满足 Evidence/缓存/重放对碰撞安全的要求（R2.1 PR-15.4 遗留）。
+  return createHash("sha256").update(canonicalJson(value)).digest("hex")
 }
 
 /** policyDigest covers everything the sandbox enforces. */
 export function computePolicyDigest(spec: ExecutionCellSpec): string {
   return digestOf({
+    schemaVersion: spec.schemaVersion,
+    canonicalizationVersion: CANONICALIZATION_VERSION,
     isolation: spec.isolation,
     filesystem: spec.filesystem,
     network: spec.network,
@@ -71,7 +81,9 @@ export interface ReceiptInput {
   pidLimitHit: boolean
   outputLimitHit: boolean
   tempLimitHit: boolean
-  metrics?: SandboxReceipt["metrics"]
+  /** LR2-0（ADR-LR2-003）：观测三态，由调用方显式声明 ——
+   *  缺省 → unknown("not measured")，禁止空对象冒充完整 metrics。 */
+  metrics?: Observed<SandboxReceiptMetrics>
   observedWrites?: string[]
   observedDeletes?: string[]
   unexpectedWrites?: string[]
@@ -118,7 +130,7 @@ export function buildReceipt(input: ReceiptInput): SandboxReceipt {
     pidLimitHit: input.pidLimitHit,
     outputLimitHit: input.outputLimitHit,
     tempLimitHit: input.tempLimitHit,
-    metrics: input.metrics ?? {},
+    metrics: input.metrics ?? { status: "unknown", reason: "not measured" },
     observedWrites: input.observedWrites ?? [],
     observedDeletes: input.observedDeletes ?? [],
     unexpectedWrites: input.unexpectedWrites ?? [],
@@ -128,12 +140,14 @@ export function buildReceipt(input: ReceiptInput): SandboxReceipt {
     degradationReasons: input.degradationReasons ?? [],
     snapshotGuard: input.snapshotGuard,
     // PR-2：只保留输入中的真实值；缺失 → -1/false（未验证 ≠ 干净）。
+    // LR2-0：worktreeRetained 改为实测字段（不再抄 spec.lifecycle.retainOnFailure
+    // 推定 —— 策略承诺 ≠ 已发生事实；未实测 → false）。
     cleanup: {
       processesRemaining: input.cleanup.processesRemaining ?? -1,
       mountsReleased: input.cleanup.mountsReleased ?? false,
       cgroupRemoved: input.cleanup.cgroupRemoved ?? false,
       containerRemoved: input.cleanup.containerRemoved ?? false,
-      worktreeRetained: spec.lifecycle.retainOnFailure,
+      worktreeRetained: input.cleanup.worktreeRetained ?? false,
       cleanupVerified: input.cleanup.cleanupVerified ?? false,
       ...input.cleanup,
     },
@@ -145,8 +159,8 @@ export function buildReceipt(input: ReceiptInput): SandboxReceipt {
  *  usable for evidence binding. */
 export function receiptComplete(receipt: SandboxReceipt): boolean {
   return (
-    receipt.cellSpecDigest.length === 16 &&
-    receipt.capabilitiesDigest.length === 16 &&
+    receipt.cellSpecDigest.length === 64 &&
+    receipt.capabilitiesDigest.length === 64 &&
     receipt.finishedAt > 0 &&
     receipt.exitCode !== undefined &&
     receipt.cleanup.processesRemaining === 0

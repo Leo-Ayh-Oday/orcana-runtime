@@ -113,7 +113,8 @@ export async function* streamBackendRun(
     else {
       const result = event.result
       const finishedAt = startedAt + result.durationMs
-      const metrics = ctx.readCellMetrics?.() ?? {}
+      // LR2-0：无观测回调 → unknown（禁止空对象冒充完整 metrics）。
+      const metrics = ctx.readCellMetrics?.() ?? { status: "unknown" as const, reason: "no metrics callback" }
       const cleanup = ctx.cleanupVerify?.() ?? { processesRemaining: -1 }
       yield { type: "cell.exit", cellId: spec.identity.cellId, exitCode: result.exitCode, signal: result.signal, at: event.at }
       yield { type: "cell.receipt", cellId: spec.identity.cellId, receipt: buildReceipt(result, { startedAt, finishedAt, metrics, cleanup }), at: event.at }

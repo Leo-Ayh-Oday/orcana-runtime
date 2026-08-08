@@ -30,7 +30,7 @@ function receipt(overrides: Partial<SandboxReceipt> = {}): SandboxReceipt {
     pidLimitHit: false,
     outputLimitHit: false,
     tempLimitHit: false,
-    metrics: {},
+    metrics: { status: "unknown", reason: "test fixture" },
     observedWrites: [],
     observedDeletes: [],
     unexpectedWrites: [],

@@ -316,11 +316,12 @@ export function createBubblewrapBackend(): ExecutionBackend {
         snapshotGuard: outcome.snapshotGuard,
         // PR-2：无默认成功值 —— 进程残留/移除来自实测；mountsReleased 是
         // bwrap 进程退出即销毁 mount 命名空间的内核事实。
+        // LR2-0：worktreeRetained 不再抄 spec 推定 —— 未实测 → 缺省
+        // （buildReceipt 默认 false，不声称保留/清理策略）。
         cleanup: {
           processesRemaining: outcome.cleanup?.processesRemaining ?? -1,
           mountsReleased: true,
           cgroupRemoved: outcome.cleanup?.cgroupRemoved ?? false,
-          worktreeRetained: spec.lifecycle.retainOnFailure,
         },
       })
     },

@@ -1,0 +1,35 @@
+{
+  "$comment": "LR2-0C：产品级直接进程执行允许清单。src/ 下任何 node:child_process / Bun.spawn / Deno.Command / shell:true 导入不在本清单内即 CI 违例（scripts/check-process-bypass.ts 强制，Gate: DIRECT_PRODUCT_PROCESS_BYPASS=0 / UNCLASSIFIED_CHILD_PROCESS_IMPORT=0）。",
+  "allowlist": [
+    "src/runtime/linux",
+    "src/runtime/process-executor.ts",
+    "src/runtime/legacy-process.ts",
+    "src/tools/process.ts"
+  ],
+  "categories": {
+    "must_enter_broker": [
+      "src/tools/process.ts",
+      "src/tools/shell.ts",
+      "src/tools/git.ts",
+      "src/tools/mcp.ts",
+      "src/tools/service.ts",
+      "src/verification/collector.ts",
+      "src/agent/kernel/*",
+      "src/runtime/process-executor.ts"
+    ],
+    "durable_service_cell": [
+      "src/tools/mcp.ts",
+      "src/tools/service.ts",
+      "src/runtime/linux/service-cell.ts"
+    ],
+    "broker_internal_allowed": [
+      "src/runtime/linux/process/",
+      "src/runtime/linux/backends/"
+    ],
+    "non_product_runtime": [
+      "scripts/",
+      "bin/",
+      "evals/"
+    ]
+  }
+}

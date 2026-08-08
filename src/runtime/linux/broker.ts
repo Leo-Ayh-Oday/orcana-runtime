@@ -363,17 +363,24 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   }
 
   const readCellMetrics = (cgroupCellPath: string): SandboxReceipt["metrics"] => {
-    if (!cgroup || !cgroupCellPath) return {}
+    // LR2-0（ADR-LR2-003）：未观测必须 unknown —— 空对象不得冒充完整
+    // metrics（原实现无委托/读取失败时返回 {}，被当作完整 Receipt）。
+    if (!cgroup || !cgroupCellPath) {
+      return { status: "unknown", reason: "no cgroup delegation" }
+    }
     try {
       const metrics = readMetrics(cgroupCellPath, cgroup.fs)
       return {
-        cpuUsageUsec: metrics.cpuUsageUsec,
-        cpuThrottledUsec: metrics.cpuThrottledUsec,
-        peakMemoryBytes: metrics.peakMemoryBytes,
-        peakPids: metrics.peakPids,
+        status: "observed",
+        value: {
+          cpuUsageUsec: metrics.cpuUsageUsec,
+          cpuThrottledUsec: metrics.cpuThrottledUsec,
+          peakMemoryBytes: metrics.peakMemoryBytes,
+          peakPids: metrics.peakPids,
+        },
       }
     } catch {
-      return {}
+      return { status: "unknown", reason: "cgroup metrics read failed" }
     }
   }
 

@@ -24,13 +24,17 @@ describe("LR2-4 Gates (P4-E)", () => {
     expect(canAdvanceStage("candidate", "compatibility-replay")).toBe(true)
   })
 
-  test("UNCLASSIFIED_SYSCALL_ALLOWED = 0: unknown workloads deny everything", () => {
+  test("UNCLASSIFIED_SYSCALL_ALLOWED = 0: unknown workloads deny everything except exit primitives", () => {
     const unknown = resolveSeccompProfile({ runtimeFamily: "generic", toolKind: "unknown", sandboxProfile: "strict", architecture: "x86_64" })
-    expect(unknown.allowSyscalls).toHaveLength(0)
     expect(unknown.defaultAction).toBe("SCMP_ACT_ERRNO")
-    // 未命中维度 → 同样 deny-all
+    // M4 修复：只允许退出/最小 I/O 原语（危险调用全拒）
+    expect(unknown.allowSyscalls).not.toContain("execve")
+    expect(unknown.allowSyscalls).not.toContain("socket")
+    expect(unknown.allowSyscalls).not.toContain("openat")
+    expect(unknown.allowSyscalls).toContain("exit")
+    // 未命中维度 → 同样 deny（只含退出原语）
     const miss = resolveSeccompProfile({ runtimeFamily: "node-bun", toolKind: "test", sandboxProfile: "standard", architecture: "aarch64" })
-    expect(miss.allowSyscalls).toHaveLength(0)
+    expect(miss.allowSyscalls).not.toContain("execve")
   })
 
   test("EGRESS_UNRECORDED = 0: every egress request is recorded", () => {

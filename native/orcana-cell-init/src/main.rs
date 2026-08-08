@@ -48,12 +48,24 @@ const PLAN_FD: i32 = 3;
 
 fn read_plan() -> Result<CellPlan, PlanError> {
     let mut buf = Vec::new();
+    // m5（LR2-4 审核）：plan 大小上限 1 MiB（父进程塞无限数据 → 拒绝）。
     // 从 FD 3 读取（不信任 argv/env —— 可被 execve 前的调用方污染）。
     unsafe {
         let mut f = std::fs::File::from_raw_fd(PLAN_FD);
-        f.read_to_end(&mut buf)
-            .map_err(|e| PlanError::Io(format!("read plan fd: {e}")))?;
-        std::mem::forget(f); // 防止 drop 关闭 FD 3（execve 需要保留？不 —— 关闭即可）
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = f
+                .read(&mut chunk)
+                .map_err(|e| PlanError::Io(format!("read plan fd: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.len() > 1024 * 1024 {
+                return Err(PlanError::Schema("plan exceeds 1 MiB limit".into()));
+            }
+        }
+        std::mem::forget(f);
     }
     // 注意：读完后 FD 3 属于"未授权 FD"集合 —— 由步骤 3 统一关闭。
     let plan: CellPlan = serde_json_light::parse(&buf)?;

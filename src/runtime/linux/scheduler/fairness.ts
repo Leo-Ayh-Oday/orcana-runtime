@@ -69,39 +69,51 @@ export class RunFairnessScheduler {
     return [...this.running.values()].reduce((a, b) => a + b.count, 0)
   }
 
-  /** 下一次调度决策（可解释拒绝原因）。 */
+  /** 下一次调度决策（可解释拒绝原因）。
+   *  B1 修复（LR2-3 审核）：按优先级遍历队列，返回**第一个全部门禁通过**
+   *  的项 —— 队首被拒（份额/配额/保留槽）时越过它继续扫描，不再阻塞
+   *  其后可调度的项（STARVATION_BY_RUN 真正生效）。 */
   next(): FairnessDecision {
-    const candidate = this.queue.peek()
-    if (!candidate) return { allowed: undefined, denied: undefined }
-
     const runningTotal = this.runningCount
-    const runEntry = this.running.get(candidate.runId)
-
-    // 1. 总槽位
     if (runningTotal >= this.config.totalSlots) {
-      return { allowed: undefined, denied: candidate, reason: `total slots full (${runningTotal}/${this.config.totalSlots})` }
+      const head = this.queue.peek()
+      return { allowed: undefined, denied: head, reason: `total slots full (${runningTotal}/${this.config.totalSlots})` }
     }
-
-    // 2. 交互保留：剩余槽位 < reserved 时只允许 interactive
     const remaining = this.config.totalSlots - runningTotal
-    if (remaining <= this.config.interactiveReserved && candidate.priority !== "interactive") {
-      return { allowed: undefined, denied: candidate, reason: `interactive reserved slots (${remaining} left)` }
-    }
+    const evolutionRunning = [...this.running.values()].reduce((a, b) => a + b.evolution, 0)
+    const shareCap = Math.max(1, Math.floor(this.config.totalSlots * this.config.maxRunShare))
 
-    // 3. Evolution 硬配额
-    if (candidate.priority === "evolution") {
-      const evolutionRunning = [...this.running.values()].reduce((a, b) => a + b.evolution, 0)
-      if (evolutionRunning >= this.config.evolutionQuota) {
-        return { allowed: undefined, denied: candidate, reason: `evolution quota (${evolutionRunning}/${this.config.evolutionQuota})` }
+    for (let i = 0; i < this.queue.size(); i++) {
+      const candidate = this.queue.at(i)
+      if (!candidate) break
+      const runEntry = this.running.get(candidate.runId)
+
+      // 2. 交互保留：剩余槽位 ≤ reserved 时只允许 interactive
+      if (remaining <= this.config.interactiveReserved && candidate.priority !== "interactive") {
+        continue
       }
+      // 3. Evolution 硬配额
+      if (candidate.priority === "evolution" && evolutionRunning >= this.config.evolutionQuota) {
+        continue
+      }
+      // 4. Run 级公平（maxRunShare）
+      if (runEntry && runEntry.count >= shareCap) {
+        continue
+      }
+      // 通过全部闸门 → 调度（dequeue 该 id）
+      const allowed = this.queue.remove(candidate.id) ? candidate : undefined
+      if (allowed) return { allowed, denied: undefined }
+      continue
     }
-
-    // 4. Run 级公平（maxRunShare）
-    if (runEntry && runEntry.count >= Math.max(1, Math.floor(this.config.totalSlots * this.config.maxRunShare))) {
-      return { allowed: undefined, denied: candidate, reason: `run ${candidate.runId} at share cap (${runEntry.count})` }
-    }
-
-    return { allowed: this.queue.dequeue(), denied: undefined }
+    // 全部被拒：返回队首 + 首个拒绝原因（决策日志）
+    const head = this.queue.peek()
+    if (!head) return { allowed: undefined, denied: undefined }
+    const headEntry = this.running.get(head.runId)
+    let reason = "no schedulable item passed all gates"
+    if (remaining <= this.config.interactiveReserved && head.priority !== "interactive") reason = `interactive reserved slots (${remaining} left)`
+    else if (head.priority === "evolution" && evolutionRunning >= this.config.evolutionQuota) reason = `evolution quota (${evolutionRunning}/${this.config.evolutionQuota})`
+    else if (headEntry && headEntry.count >= shareCap) reason = `run ${head.runId} at share cap (${headEntry.count})`
+    return { allowed: undefined, denied: head, reason }
   }
 
   /** 当前运行统计（决策日志）。 */

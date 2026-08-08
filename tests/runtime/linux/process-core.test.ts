@@ -276,6 +276,72 @@ describe("LF-2: WRONG_PROCESS_KILL (F7, pid<=0)", () => {
   })
 })
 
+describe("LF-2: terminateTree bounded budget (LR2-0J)", () => {
+  /** 组内唯一、SIGTERM 显式忽略的进程（系统 node 注册 handler；实测 WSL
+   *  dash 的 trap '' TERM 不可靠——信号后仍退出；bun 的 process.execPath
+   *  可能指向 Windows 兼容层 bun.exe，WSL interop 下 /proc 不可见）。
+   *  必须等 stdout "ready" 再发信号：高负载下 node 启动慢，进程已 fork 但
+   *  handler 尚未注册时 SIGTERM 会走默认退出（预算耗尽路径就不会被触发）。 */
+  async function spawnIgnoringTerm(): Promise<{ proc: import("node:child_process").ChildProcess; pid: number }> {
+    const { spawn } = await import("node:child_process")
+    return new Promise((resolve, reject) => {
+      const proc = spawn("node", ["-e", 'process.on("SIGTERM",()=>{}); console.log("ready"); setInterval(()=>{},1000)'], {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+      proc.stdout?.once("data", () => resolve({ proc, pid: proc.pid ?? 0 }))
+      proc.once("error", reject)
+    })
+  }
+
+  linuxOnly("budget exhaustion reports the real remaining count (never fake 0)", async () => {
+    const { proc, pid } = await spawnIgnoringTerm()
+    expect(countProcessGroup(pid)).toBeGreaterThanOrEqual(1)
+    // 超短预算（1ms）：SIGTERM（被忽略）发出后第一次 /proc 扫描必然已
+    // 超预算 → 立即如实返回当前扫描值（进程仍存活，≥1），不会升级 SIGKILL。
+    // 原实现（`remaining <= 0` 判干净 + 无预算）在高负载 WSL /proc 扫描下
+    // 可同步阻塞 10s+（触发上层 wall-time 超时 → broker 事务 finally 不执行
+    // → Isolation Lock 泄漏）。这里验证有界 + 不假 0。
+    const startedAt = Date.now()
+    const report = terminateTree(pid, { graceMs: 100, attempts: 1, budgetMs: 1 })
+    const elapsed = Date.now() - startedAt
+    expect(elapsed).toBeLessThan(3000)
+    // 预算耗尽返回的是"当下实测值"：SIGKILL 未发出，进程必须仍存活。
+    expect(report.processesRemaining).toBeGreaterThanOrEqual(1)
+    // 清场：正常预算下必须归零。
+    const clean = terminateTree(pid, { graceMs: 200, attempts: 3, budgetMs: 5000 })
+    await new Promise(r => setTimeout(r, 200))
+    expect(countProcessGroup(pid)).toBe(0)
+    expect(clean.processesRemaining).toBe(0)
+  })
+
+  linuxOnly("bounded budget shortens escalation — SIGKILL still cleans the group", async () => {
+    // SIGTERM 被忽略的组：小预算（150ms）内走完 grace → 升级 SIGKILL
+    // → 归零。返回 0 是如实值（SIGKILL 成功），不是假干净。
+    const { proc, pid } = await spawnIgnoringTerm()
+    expect(countProcessGroup(pid)).toBeGreaterThanOrEqual(1)
+    const startedAt = Date.now()
+    const report = terminateTree(pid, { graceMs: 100, attempts: 1, budgetMs: 150 })
+    const elapsed = Date.now() - startedAt
+    // 有界性：预算 150ms + 至多 2 次 /proc 扫描（WSL 高负载下单次扫描
+    // 可能数百 ms）—— 远低于上层 wall-time 超时（5s）的 3s 上界。
+    expect(elapsed).toBeLessThan(3000)
+    await new Promise(r => setTimeout(r, 200))
+    expect(countProcessGroup(pid)).toBe(0)
+    expect(report.processesRemaining).toBe(0)
+  })
+
+  linuxOnly("budget only shortens the escalation — full budget still kills", async () => {
+    // SIGTERM 被忽略的组：完整预算下 SIGKILL 升级必须归零。
+    const { proc, pid } = await spawnIgnoringTerm()
+    expect(countProcessGroup(pid)).toBeGreaterThanOrEqual(1)
+    const report = terminateTree(pid, { graceMs: 100, attempts: 1 })
+    await new Promise(r => setTimeout(r, 200))
+    expect(countProcessGroup(pid)).toBe(0)
+    expect(report.processesRemaining).toBe(0)
+  })
+})
+
 describe("LF-2: host audit backend", () => {
   linuxOnly("executes and produces a receipt", async () => {
     const backend = createHostAuditBackend()
@@ -326,7 +392,7 @@ describe("LF-2: broker execution", () => {
     const broker = createLinuxBroker({ mode: "enabled" })
     const spec = baseSpec({ profile: "untrusted", isolation: { minimum: "container", preferredBackend: "podman", allowDegradation: false } })
     // 编译（结构校验）通过；后端选择（执行路径）fail-closed 拒绝
-    expect(broker.compileSpec(spec).policyDigest.length).toBe(16)
+    expect(broker.compileSpec(spec).policyDigest.length).toBe(64)
     expect(() => broker.selectBackendFor(spec)).toThrow(LinuxExecutionError)
   })
 
@@ -337,7 +403,7 @@ describe("LF-2: broker execution", () => {
     for (const profile of ["test", "dependency", "service", "untrusted", "evolution"] as const) {
       const broker = createLinuxBroker({ mode: "enabled" })
       const spec = baseSpec({ profile, isolation: { minimum: "container", preferredBackend: "podman", allowDegradation: false } })
-      expect(broker.compileSpec(spec).policyDigest.length).toBe(16)
+      expect(broker.compileSpec(spec).policyDigest.length).toBe(64)
       expect(() => broker.selectBackendFor(spec)).toThrow(LinuxExecutionError)
     }
   })
@@ -412,17 +478,16 @@ describe("LF-2: secrets", () => {
 })
 
 describe("LF-2: static gate — DIRECT_LINUX_PROCESS_BYPASS (AST)", () => {
-  // R1: 旁路必须为 0 —— 允许列表只含统一入口与监督器：
+  // R1: 旁路必须为 0 —— 允许列表只含统一入口与监督器（LR2-0C 单一事实源：
+  // config/runtime-process-bypass-allowlist.json，scripts/check-process-bypass.ts
+  // 与本节共用）：
   //  - src/runtime/linux/**     Linux Process Supervisor（唯一真实后端）
   //  - process-executor.ts      跨平台统一执行入口（Windows legacy）
   //  - legacy-process.ts        R1.2 暂存区（sync/长期进程，待迁移，显式标注）
   //  - tools/process.ts         terminateTree 的 Windows taskkill 辅助
-  const ALLOWLIST = [
-    "src/runtime/linux",
-    "src/runtime/process-executor.ts",
-    "src/runtime/legacy-process.ts",
-    "src/tools/process.ts",
-  ]
+  const ALLOWLIST = (JSON.parse(
+    readFileSync(join(process.cwd(), "config", "runtime-process-bypass-allowlist.json"), "utf8"),
+  ) as { allowlist: string[] }).allowlist
   const PROCESS_NAMES = new Set(["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"])
 
   interface SpawnSite { file: string; line: number; kind: string }
@@ -596,7 +661,7 @@ describe("PR-2: receipt reaches ProcessExecutor consumers (no longer dropped)", 
     const outcome = await run()
     expect(outcome.receipt).toBeDefined()
     expect(outcome.receipt!.backend).toBe("host-audit")
-    expect(outcome.receipt!.receiptDigest.length).toBe(16)
+    expect(outcome.receipt!.receiptDigest.length).toBe(64)
     // durationMs 来自真实执行（不是 0 推定值）
     expect(outcome.receipt!.durationMs).toBeGreaterThanOrEqual(0)
     expect(outcome.receipt!.finishedAt).toBeGreaterThan(outcome.receipt!.startedAt)

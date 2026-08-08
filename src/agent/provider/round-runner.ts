@@ -5,6 +5,7 @@ import type {
   StreamEvent,
 } from "../../provider/types"
 import { mergeProviderTokenUsage } from "../../provider/usage"
+import { getRunRetryLedger } from "../../runtime/execution-context"
 import type { RoundToolCall, ThinkingBlock } from "../run/types"
 import {
   failureFromProviderEvent,
@@ -106,6 +107,8 @@ export async function* streamProviderRoundEvents(
     providerIterator = input.provider.streamChat({
       ...input.request,
       abortSignal: providerAbort.signal,
+      // PR-GATE-06：主路径 provider 重试统一走 Run 级 RetryLedger。
+      retryLedger: getRunRetryLedger(),
     })[Symbol.asyncIterator]()
     while (true) {
       const next = await nextProviderEvent(

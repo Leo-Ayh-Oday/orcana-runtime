@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { createPlanStore, type PlanStore } from "../agent/run/plan-store"
 import type { AgentRunToolRegistry } from "../agent/run/tool-registry"
 import type { TrustedExecutionAuthority } from "./linux/contracts"
+import { createRetryLedger, type RetryLedger } from "./retry-ledger"
 
 export interface RuntimeContextKey<T> {
   readonly id: symbol
@@ -167,4 +168,40 @@ export function requireExecutionAuthority(): TrustedExecutionAuthority {
     throw new Error("No trusted execution authority: Linux execution requires an AgentRunScope with registered workspace")
   }
   return authority
+}
+
+// ── PR-GATE-06：Run 级 RetryLedger（各层统一重试预算） ──
+
+const RUN_RETRY_LEDGER = createRuntimeContextKey<RetryLedger>(
+  "run-retry-ledger",
+  () => createRetryLedger(),
+)
+
+/**
+ * 当前 Run 的统一重试预算账本。惰性创建并缓存进 context（同一 Run 内
+ * 所有层共享同一实例 —— 这是 PR-GATE-06 的核心语义；不缓存会在
+ * legacy/无 ALS 路径每次调用都新建 ledger，预算形同虚设）。
+ */
+export function getRunRetryLedger(): RetryLedger {
+  const context = getActiveRuntimeExecutionContext() ?? legacyCompatibilityContext
+  if (context.values.has(RUN_RETRY_LEDGER.id)) {
+    return context.values.get(RUN_RETRY_LEDGER.id) as RetryLedger
+  }
+  const ledger = createRetryLedger()
+  context.values.set(RUN_RETRY_LEDGER.id, ledger)
+  return ledger
+}
+
+/** 显式覆盖当前 Run 的重试账本（harness 注入共享 ledger 用）。 */
+export function setRunRetryLedger(ledger: RetryLedger): void {
+  setRuntimeContextValue(RUN_RETRY_LEDGER, ledger)
+}
+
+/** 将 ledger 直接绑定到指定 context（agentLoop 继承 harness 传入的
+ *  Run 级账本 —— 预算跨 harness scope 与 loop ALS 上下文共享）。 */
+export function bindRunRetryLedgerToContext(
+  context: RuntimeExecutionContext,
+  ledger: RetryLedger,
+): void {
+  context.values.set(RUN_RETRY_LEDGER.id, ledger)
 }

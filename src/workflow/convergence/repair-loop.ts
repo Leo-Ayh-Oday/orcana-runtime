@@ -16,6 +16,7 @@ import type { WorkflowSpec, WorkflowRunResult, WorkflowNodeResult } from "../typ
 import type { HandlerRegistry } from "../execution/handler-registry"
 import { runScheduler } from "../scheduler/scheduler"
 import { fingerprintFailure } from "./failure-signature"
+import type { RetryLedger } from "../../runtime/retry-ledger"
 
 /** Verification producers (G3 whitelist) — their failures surface as
  *  not-passed evidence / blocked_no_evidence, not as repair signatures. */
@@ -39,6 +40,9 @@ export interface RepairLoopOptions {
   /** RC-19 D7: tool path authority root threaded into each scheduler run. */
   projectRoot?: string
   checkpointDir?: string
+  /** PR-GATE-06：Run 级 RetryLedger —— 同一失败签名（semanticRepair 类，
+   *  <= 2）经统一账本限次，与 provider/capability 层共享预算。 */
+  retryLedger?: RetryLedger
 }
 
 export interface RepairAttempt {
@@ -67,6 +71,7 @@ export class RepairLoop {
   private readonly budget?: number
   private readonly checkpointDir?: string
   private readonly projectRoot?: string
+  private readonly retryLedger?: RetryLedger
 
   constructor(options: RepairLoopOptions) {
     this.registry = options.registry
@@ -76,6 +81,7 @@ export class RepairLoop {
     this.budget = options.budget
     this.checkpointDir = options.checkpointDir
     this.projectRoot = options.projectRoot
+    this.retryLedger = options.retryLedger
   }
 
   async run(): Promise<ConvergenceReport> {
@@ -113,6 +119,13 @@ export class RepairLoop {
         writeFailed++
         const sig = fingerprintFailure(result)
         nodeAttempts.set(result.nodeId, (nodeAttempts.get(result.nodeId) ?? 0) + 1)
+        // PR-GATE-06：同一失败签名经 Run 级 RetryLedger 限次（semanticRepair
+        // <= 2）—— 超限的签名不再驱动新的修复轮（不加入 seen），该 node
+        // 计入 blocked；换策略或停止由 specFactory/dry 检测接管。
+        if (this.retryLedger) {
+          if (!this.retryLedger.canRetry("semanticRepair", sig)) continue
+          this.retryLedger.record("semanticRepair", sig)
+        }
         if (!seen.has(sig)) {
           seen.add(sig)
           newSignatures.push(sig)

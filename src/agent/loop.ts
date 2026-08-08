@@ -47,7 +47,7 @@ import { finalizeRun } from "./kernel/finalize"
 import { drainPhase } from "./kernel/effects"
 import type { LoopDecision } from "./kernel/types"
 import { setRuntimeContextBudgetMode } from "./runtime-context"
-import { setExecutionIdentity } from "../runtime/execution-context"
+import { bindRunRetryLedgerToContext, setExecutionIdentity } from "../runtime/execution-context"
 import { resetRippleProgram, setCascadeFiles } from "../ripple/engine"
 import { clearActivePatchContext, clearTransactionRegistry } from "./patch-transaction"
 import { setShellSandbox } from "../tools/shell"
@@ -74,6 +74,11 @@ export async function* agentLoop(
     runId,
     sessionId: options.sessionId,
   })
+  // PR-GATE-06：harness 传入的 Run 级 RetryLedger 绑定进本 scope 的 ALS
+  // context —— 与 harness 侧（tool-node/capability）共享同一重试预算。
+  if (options.retryLedger) {
+    bindRunRetryLedgerToContext(scope.runtimeContext, options.retryLedger)
+  }
   const runOptions: AgentOptions = {
     ...options,
     tools: scope.toolRegistry.tools,

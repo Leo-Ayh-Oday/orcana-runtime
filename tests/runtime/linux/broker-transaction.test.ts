@@ -267,7 +267,7 @@ describe("R2 broker transaction", () => {
     // 清理实测：host-audit 下进程组扫描（sleep 已退出 → 0）
     expect(receipt!.receipt.cleanup.processesRemaining).toBe(0)
     // 自摘要存在且与摘要字段匹配
-    expect(receipt!.receipt.receiptDigest.length).toBe(16)
+    expect(receipt!.receipt.receiptDigest.length).toBe(64)
   })
 
   test("PR-3: cancelCell aborts the running cell and the event stream ends", async () => {
@@ -309,7 +309,7 @@ describe("R2 broker transaction", () => {
       const files = (await import("node:fs")).readdirSync(receiptsDir)
       expect(files.length).toBeGreaterThan(0)
       const persisted = JSON.parse((await import("node:fs")).readFileSync(`${receiptsDir}/${files[0]}`, "utf8"))
-      expect(persisted.receiptDigest.length).toBe(16)
+      expect(persisted.receiptDigest.length).toBe(64)
       expect(persisted.backend).toBe("host-audit")
     } finally {
       (await import("node:fs")).rmSync(root, { recursive: true, force: true })

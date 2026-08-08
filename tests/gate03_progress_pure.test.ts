@@ -33,8 +33,13 @@ describe("指纹确定性（GS-P5）", () => {
 
   test("canonicalInput：对象键序不影响指纹", () => {
     expect(canonicalInput({ a: 1, b: 2 })).toBe(canonicalInput({ b: 2, a: 1 }))
-    expect(canonicalInput(null)).toBe("")
+    // LR2-0：与 receipt.canonicalJson 统一值规范 —— null/undefined → "null"
+    // （原实现返回 ""，语义分裂）。
+    expect(canonicalInput(null)).toBe("null")
+    expect(canonicalInput(undefined)).toBe("null")
     expect(canonicalInput("str")).toBe(JSON.stringify("str"))
+    // LR2-0 回归：嵌套键序不影响指纹（原实现只排顶层键）。
+    expect(canonicalInput({ a: { x: 1, y: 2 } })).toBe(canonicalInput({ a: { y: 2, x: 1 } }))
   })
 
   test("outputTextOf：content/output 提取与缺失退化", () => {

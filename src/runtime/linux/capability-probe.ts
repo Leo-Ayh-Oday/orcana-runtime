@@ -232,10 +232,11 @@ export function probeLinuxCapabilities(options: { refresh?: boolean } = {}): Lin
   return caps
 }
 
-/** Stable hash of the capability set (excludes bootId — it changes per boot). */
+/** Stable hash of the capability set (excludes bootId — it changes per boot).
+ *  LR2-0：完整 SHA-256（Receipt 字段与 cellSpecDigest 同宽）。 */
 export function capabilitiesDigest(caps: LinuxCapabilities): string {
   const { bootId: _boot, ...stable } = caps
-  return createHash("sha256").update(JSON.stringify(stable)).digest("hex").slice(0, 16)
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex")
 }
 
 /** Non-linux platforms: no foundation (Windows keeps legacy paths). */

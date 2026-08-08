@@ -24,15 +24,30 @@ export function stableDigest(parts: string[]): string {
   return hash.digest("hex").slice(0, 16)
 }
 
-/** 输入 canonicalize：键排序的稳定 JSON（对象键序不影响指纹）。 */
+/** 输入 canonicalize：递归键排序的稳定 JSON（对象键序不影响指纹）。
+ *
+ *  LR2-0 provenance bug 修复：原实现只排序顶层键，嵌套对象经
+ *  JSON.stringify 保持原始键序 —— 键序不同但逻辑相同的嵌套输入会产出
+ *  不同指纹（与 receipt.ts 的 canonicalJson 语义不一致）。这里递归展开：
+ *  - 对象：键排序后递归，值为 undefined 的键被丢弃（与 JSON.stringify 一致）；
+ *  - 数组：逐元素递归（undefined 元素 → "null"）；
+ *  - 其余值交给 JSON.stringify（number/string/bool/null/NaN→null）；
+ *  顶层 undefined → "null"（与 canonicalJson 一致）。
+ */
 export function canonicalInput(input: unknown): string {
-  if (input === null || input === undefined) return ""
-  if (typeof input !== "object" || Array.isArray(input)) return JSON.stringify(input)
-  const sorted: Record<string, unknown> = {}
-  for (const key of Object.keys(input as Record<string, unknown>).sort()) {
-    sorted[key] = (input as Record<string, unknown>)[key]
+  return canonicalStringify(input)
+}
+
+function canonicalStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null"
   }
-  return JSON.stringify(sorted)
+  if (Array.isArray(value)) {
+    return "[" + value.map(v => canonicalStringify(v)).join(",") + "]"
+  }
+  const obj = value as Record<string, unknown>
+  const keys = Object.keys(obj).filter(k => obj[k] !== undefined).sort()
+  return "{" + keys.map(k => JSON.stringify(k) + ":" + canonicalStringify(obj[k])).join(",") + "}"
 }
 
 /** 从 toolResult 提取输出文本（best-effort：content 缺失时退化为空串）。 */

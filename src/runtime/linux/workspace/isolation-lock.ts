@@ -26,6 +26,15 @@ export class IsolationDomainLock {
     return `worktree:${agentId}`
   }
 
+  /**
+   * GATE（GS-12）：按真实 workspace 身份（canonicalRealPath + dev/ino）的
+   * 锁键 —— 同物理目录别名同键（单写者），不同 worktree（即使同 agent）
+   * 不同键（允许并行）。
+   */
+  static workspaceKey(workspaceIdentity: string): string {
+    return `workspace:${workspaceIdentity}`
+  }
+
   static cacheKey(type: string, key: string): string {
     return `cache:${type}:${key}`
   }

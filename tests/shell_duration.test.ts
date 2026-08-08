@@ -1,10 +1,10 @@
 /** RC-16 G4: tool duration must be measured from the moment the tool starts
- *  (including queue/spawn wait), not from after execution completes. */
+ *  (including queue/spawn wait), not from after execution completes.
+ *
+ *  GATE（GS-14）：宿主 PATH 不再进入 Cell —— 旧机制靠"宿主 PATH 注入假
+ *  tsc"制造可控时长，已失效且正是被堵的洞。改用真实 sleep 命令测时长。 */
 
-import { describe, expect, test, beforeAll, afterAll } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { describe, expect, test } from "bun:test"
 import { SHELL_TOOL } from "../src/tools/shell"
 import { shellStream } from "../src/tools/shell"
 import {
@@ -13,9 +13,6 @@ import {
   setExecutionAuthority,
 } from "../src/runtime/execution-context"
 import type { TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
-
-let fakeBin: string
-let originalPath: string | undefined
 
 /** Shell tools run through the managed Linux executor — fail-closed without
  *  a trusted execution authority. */
@@ -39,39 +36,22 @@ function withTestAuthority<T>(fn: () => T | Promise<T>): Promise<T> {
   })
 }
 
-beforeAll(() => {
-  // Inside the workspace root — the managed executor's sandbox only exposes
-  // the authorized workspace, so a /tmp fake bin would be invisible.
-  fakeBin = mkdtempSync(join(process.cwd(), ".g4-duration-"))
-  const fakeTsc = join(fakeBin, "tsc")
-  writeFileSync(fakeTsc, "#!/bin/sh\nsleep 0.3\nexit 0\n", "utf-8")
-  chmodSync(fakeTsc, 0o755)
-  originalPath = process.env.PATH
-  process.env.PATH = `${fakeBin}:${originalPath ?? ""}`
-})
-
-afterAll(() => {
-  if (originalPath === undefined) delete process.env.PATH
-  else process.env.PATH = originalPath
-  rmSync(fakeBin, { recursive: true, force: true })
-})
-
 describe("shell duration from start (RC-16 G4)", () => {
   test("durationMs covers execution time, not just result assembly", async () => {
-    const result = await withTestAuthority(() => SHELL_TOOL.execute({ command: "tsc --noEmit", timeout: 10, confirm: true }))
+    const result = await withTestAuthority(() => SHELL_TOOL.execute({ command: "sleep 0.3", timeout: 10, confirm: true }))
     expect(result.success).toBe(true)
-    const verification = (result as { metadata?: { verification?: { durationMs: number } } }).metadata?.verification
-    expect(verification?.durationMs).toBeGreaterThanOrEqual(200)
+    const metadata = (result as { metadata?: { durationMs?: number } }).metadata
+    expect(metadata?.durationMs).toBeGreaterThanOrEqual(200)
   })
 
   test("shellStream durationMs covers execution time", async () => {
-    let done: { data: { success?: boolean; metadata?: { verification?: { durationMs: number } } } } | undefined
+    let done: { data: { success?: boolean; metadata?: { durationMs?: number } } } | undefined
     await withTestAuthority(async () => {
-      for await (const event of shellStream({ command: "tsc --noEmit", timeout: 10, confirm: true })) {
+      for await (const event of shellStream({ command: "sleep 0.3", timeout: 10, confirm: true })) {
         if (event.type === "done") done = event
       }
     })
     expect(done?.data.success).toBe(true)
-    expect(done?.data.metadata?.verification?.durationMs).toBeGreaterThanOrEqual(200)
+    expect(done?.data.metadata?.durationMs).toBeGreaterThanOrEqual(200)
   })
 })

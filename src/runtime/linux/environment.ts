@@ -43,9 +43,17 @@ export const DEFAULT_DENIED_KEYS = [
   "ALL_PROXY",
 ]
 
-/** LNXF-R2 9.4：Runtime 保留环境键 —— requestedValues / allowedHostKeys /
- *  secretEnv 一律不得覆盖；由构造链末步强制写回（防子进程伪造身份）。 */
+/** LNXF-R2 9.4 + GATE（GS-14）：Runtime 保留环境键 —— requestedValues /
+ *  allowedHostKeys / secretEnv 一律不得覆盖；由构造链末步强制写回
+ *  （防子进程伪造身份）。
+ *
+ *  GATE：PATH/HOME/TMPDIR 必须保留 —— 宿主 PATH 经 allowedHostKeys 复制
+ *  覆盖 Runtime 构造的 PATH 是 OTS-013 的 canary 命中路径（恶意同名命令
+ *  可达 Cell）；HOME/TMPDIR 同理（Runtime 自己的 /home/orcana /tmp）。 */
 export const RUNTIME_RESERVED_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
   "ORCANA_RUN_ID",
   "ORCANA_NODE_RUN_ID",
   "ORCANA_AGENT_ID",
@@ -99,9 +107,12 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
   // 1. Runtime 固定安全变量。
   env.ORCANA_RUN_ID = input.runId
   env.ORCANA_NODE_RUN_ID = input.nodeRunId
-  env.PATH = input.policy.baseProfile === "minimal"
+  // GATE（GS-14）：PATH 由 Runtime 决定 —— allowedHostKeys 的 PATH 会被
+  // reserved 拒绝；末步再强制写回（双重保险）。
+  const runtimePath = input.policy.baseProfile === "minimal"
     ? "/usr/bin:/bin"
     : `/usr/local/bin:/usr/bin:/bin${(input.pathEntries ?? []).length ? ":" + input.pathEntries!.join(":") : ""}`
+  env.PATH = runtimePath
   if (input.policy.baseProfile === "service") {
     env.TERM = "xterm"
   }
@@ -153,10 +164,12 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
     }
   }
 
-  // 7. LNXF-R2 9.4：Runtime 保留身份键最后强制写回 —— 请求/secret/宿主
-  //    继承不得伪造 ORCANA_RUN_ID 等身份（子进程 trace/工具不被误导）。
+  // 7. GATE（GS-14）：Runtime 保留键最后强制写回 —— 请求/secret/宿主
+  //    继承不得伪造身份或覆盖 Runtime 决定的 PATH/HOME（恶意同名命令
+  //    不可达 Cell）。
   env.ORCANA_RUN_ID = input.runId
   env.ORCANA_NODE_RUN_ID = input.nodeRunId
+  env.PATH = runtimePath
   if (env.ORCANA_SANDBOX === undefined) env.ORCANA_SANDBOX = "1"
 
   return { ok: true, env, rejectedHostKeys }

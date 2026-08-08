@@ -38,7 +38,7 @@ function receipt(overrides: Partial<SandboxReceipt> = {}): SandboxReceipt {
     secretBindingIds: [],
     violations: [],
     degradationReasons: [],
-    cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false },
+    cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false, cleanupVerified: true },
     ...overrides,
   }
 }
@@ -66,7 +66,7 @@ describe("R5 evidence binding", () => {
 
   test("failed execution does not produce passing sandbox_execution evidence", () => {
     const ledger = createEvidenceLedger()
-    const entry = ingestSandboxReceipt(ledger, receipt({ exitCode: 1, cleanup: { processesRemaining: 3, mountsReleased: false, cgroupRemoved: false, worktreeRetained: false } }))
+    const entry = ingestSandboxReceipt(ledger, receipt({ exitCode: 1, cleanup: { processesRemaining: 3, mountsReleased: false, cgroupRemoved: false, worktreeRetained: false, cleanupVerified: false } }))
     expect(entry?.passed).toBe(false)
     expect(hasEvidence(ledger, "sandbox_execution")).toBe(false)
     expect(hasEvidence(ledger, "sandbox_cleanup")).toBe(false)
@@ -74,7 +74,7 @@ describe("R5 evidence binding", () => {
 
   test("cleanup unverified → no sandbox_cleanup evidence (unknown is not safe)", () => {
     const ledger = createEvidenceLedger()
-    ingestSandboxReceipt(ledger, receipt({ cleanup: { processesRemaining: 1, mountsReleased: false, cgroupRemoved: false, worktreeRetained: false } }))
+    ingestSandboxReceipt(ledger, receipt({ cleanup: { processesRemaining: 1, mountsReleased: false, cgroupRemoved: false, worktreeRetained: false, cleanupVerified: false } }))
     expect(hasEvidence(ledger, "sandbox_cleanup")).toBe(false)
   })
 })

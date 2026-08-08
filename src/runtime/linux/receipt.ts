@@ -134,6 +134,7 @@ export function buildReceipt(input: ReceiptInput): SandboxReceipt {
       cgroupRemoved: input.cleanup.cgroupRemoved ?? false,
       containerRemoved: input.cleanup.containerRemoved ?? false,
       worktreeRetained: spec.lifecycle.retainOnFailure,
+      cleanupVerified: input.cleanup.cleanupVerified ?? false,
       ...input.cleanup,
     },
   }

@@ -24,12 +24,18 @@ describe("seccomp profiles (P4-A)", () => {
     }
   })
 
-  test("unknown-deny denies everything (UNCLASSIFIED_SYSCALL_ALLOWED)", () => {
+  test("unknown-deny allows only exit primitives (UNCLASSIFIED_SYSCALL_ALLOWED)", () => {
     const unknown = resolveSeccompProfile({ runtimeFamily: "generic", toolKind: "unknown", sandboxProfile: "strict", architecture: "x86_64" })
-    expect(unknown.allowSyscalls).toHaveLength(0)
+    // M4 修复：只允许退出/最小 I/O 原语（进程必须能干净退出，不得空转挂起）
+    expect(unknown.allowSyscalls).not.toContain("execve")
+    expect(unknown.allowSyscalls).not.toContain("clone")
+    expect(unknown.allowSyscalls).not.toContain("socket")
+    expect(unknown.allowSyscalls).not.toContain("openat")
+    expect(unknown.allowSyscalls).toContain("exit")
+    expect(unknown.allowSyscalls).toContain("rt_sigreturn")
     // 未命中维度 → unknown-deny 语义（默认拒绝）
     const miss = resolveSeccompProfile({ runtimeFamily: "node-bun", toolKind: "test", sandboxProfile: "standard", architecture: "aarch64" })
-    expect(miss.allowSyscalls).toHaveLength(0)
+    expect(miss.allowSyscalls).not.toContain("execve")
   })
 
   test("evolution advances one step at a time, never auto-promotes (SECCOMP_AUTO_PROMOTION)", () => {
@@ -50,5 +56,30 @@ describe("seccomp profiles (P4-A)", () => {
       const bpf = compileSeccompBpf(profile)
       expect(bpf.length).toBeGreaterThan(0)
     }
+  })
+})
+
+// ── LR2-4 审核修复验收（B1/M2/M3/M4）──
+
+describe("Seccomp audit fixes (B1/M2/M3/M4)", () => {
+  test("B1: every first-batch profile compiles without silent drops (semantics = declaration)", () => {
+    // 此前 build 丢 36/86 条（mkdir/rename 等全删）—— 现在任何未知
+    // syscall 名都会抛错（拒绝生成）。
+    for (const { profile } of FIRST_BATCH_PROFILES) {
+      const bpf = compileSeccompBpf(profile)
+      expect(bpf.length).toBeGreaterThan(0)
+    }
+  })
+
+  test("M2/M3: rt_sigreturn and clone are present in runtime profiles", () => {
+    const build = resolveSeccompProfile({ runtimeFamily: "node-bun", toolKind: "build", sandboxProfile: "strict", architecture: "x86_64" })
+    expect(build.allowSyscalls).toContain("rt_sigreturn")
+    expect(build.allowSyscalls).toContain("clone")
+    expect(build.allowSyscalls).toContain("getcwd")
+  })
+
+  test("M4: readonly profiles can execve (target must start)", () => {
+    const readonly = resolveSeccompProfile({ runtimeFamily: "node-bun", toolKind: "readonly", sandboxProfile: "strict", architecture: "x86_64" })
+    expect(readonly.allowSyscalls).toContain("execve")
   })
 })

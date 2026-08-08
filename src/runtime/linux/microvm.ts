@@ -5,7 +5,7 @@
  *  时拒绝执行。
  */
 
-import { accessSync, constants } from "node:fs"
+import { accessSync, constants, statSync } from "node:fs"
 
 export interface MicrovmAvailability {
   available: boolean
@@ -14,13 +14,19 @@ export interface MicrovmAvailability {
 
 export function detectKvm(): MicrovmAvailability {
   const reasons: string[] = []
-  try {
-    accessSync("/dev/kvm", constants.R_OK | constants.W_OK)
-  } catch {
-    reasons.push("/dev/kvm not accessible (no KVM)")
-  }
   if (process.platform !== "linux") {
     reasons.push("MicroVM is Linux-only")
+  }
+  try {
+    accessSync("/dev/kvm", constants.R_OK | constants.W_OK)
+    // m6（LR2-4 审核）：必须真是字符设备 —— 容器内伪造节点/普通文件
+    // 不得被当作可用 KVM（accessSync 只查权限位）。
+    const stat = statSync("/dev/kvm")
+    if (!stat.isCharacterDevice()) {
+      reasons.push("/dev/kvm is not a character device (fake node)")
+    }
+  } catch {
+    reasons.push("/dev/kvm not accessible (no KVM)")
   }
   return { available: reasons.length === 0, reasons }
 }

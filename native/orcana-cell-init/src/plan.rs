@@ -69,11 +69,15 @@ pub enum Json {
 pub struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    depth: usize,
 }
+
+/// m2（LR2-4 审核）：最大嵌套深度（防递归下降栈溢出）。
+const MAX_DEPTH: usize = 64;
 
 impl<'a> Parser<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
-        Parser { bytes, pos: 0 }
+        Parser { bytes, pos: 0, depth: 0 }
     }
 
     fn skip_ws(&mut self) {
@@ -102,6 +106,10 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         match self.peek() {
             Some(b'{') => {
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    return Err(PlanError::Schema("max nesting depth exceeded".into()));
+                }
                 self.pos += 1;
                 let mut obj = HashMap::new();
                 self.skip_ws();
@@ -128,9 +136,14 @@ impl<'a> Parser<'a> {
                         _ => return Err(PlanError::Schema("expected , or }".into())),
                     }
                 }
+                self.depth -= 1;
                 Ok(Json::Object(obj))
             }
             Some(b'[') => {
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    return Err(PlanError::Schema("max nesting depth exceeded".into()));
+                }
                 self.pos += 1;
                 let mut arr = Vec::new();
                 self.skip_ws();
@@ -153,37 +166,50 @@ impl<'a> Parser<'a> {
                         _ => return Err(PlanError::Schema("expected , or ]".into())),
                     }
                 }
+                self.depth -= 1;
                 Ok(Json::Array(arr))
             }
             Some(b'"') => Ok(Json::String(self.parse_string()?)),
             Some(b't') => {
-                self.pos += 4; // true
-                Ok(Json::Bool(true))
+                if self.bytes[self.pos..].starts_with(b"true") {
+                    self.pos += 4;
+                    Ok(Json::Bool(true))
+                } else {
+                    Err(PlanError::Schema("bad literal".into()))
+                }
             }
             Some(b'f') => {
-                self.pos += 5; // false
-                Ok(Json::Bool(false))
+                if self.bytes[self.pos..].starts_with(b"false") {
+                    self.pos += 5;
+                    Ok(Json::Bool(false))
+                } else {
+                    Err(PlanError::Schema("bad literal".into()))
+                }
             }
             Some(b'n') => {
-                self.pos += 4; // null
-                Ok(Json::Null)
+                if self.bytes[self.pos..].starts_with(b"null") {
+                    self.pos += 4;
+                    Ok(Json::Null)
+                } else {
+                    Err(PlanError::Schema("bad literal".into()))
+                }
             }
             _ => {
-                // number
+                // m1（LR2-4 审核）：严格无符号整数（plan 的数值字段都是
+                // u64 —— 小数/负数/超大值会导致 rlimit 饱和/失效）。
                 let start = self.pos;
-                while self.pos < self.bytes.len()
-                    && (self.bytes[self.pos] as char).is_ascii_digit()
-                        || self.bytes.get(self.pos) == Some(&b'-')
-                        || self.bytes.get(self.pos) == Some(&b'.')
-                {
+                while self.pos < self.bytes.len() && (self.bytes[self.pos] as char).is_ascii_digit() {
                     self.pos += 1;
+                }
+                if self.pos == start {
+                    return Err(PlanError::Schema("expected number".into()));
                 }
                 let s = std::str::from_utf8(&self.bytes[start..self.pos])
                     .map_err(|_| PlanError::Schema("bad number".into()))?;
                 let n = s
-                    .parse::<f64>()
-                    .map_err(|_| PlanError::Schema(format!("bad number: {s}")))?;
-                Ok(Json::Number(n))
+                    .parse::<u64>()
+                    .map_err(|_| PlanError::Schema(format!("invalid unsigned integer: {s}")))?;
+                Ok(Json::Number(n as f64))
             }
         }
     }
@@ -192,8 +218,10 @@ impl<'a> Parser<'a> {
         self.expect(b'"')?;
         let start = self.pos;
         while self.pos < self.bytes.len() && self.bytes[self.pos] != b'"' {
+            // M8（LR2-4 审核）：不支持转义就**拒绝**（遇到 \ 报错）——
+            // 静默腐蚀合法 JSON（\n → 字面 b\nc）会产生错误路径/env 值。
             if self.bytes[self.pos] == b'\\' {
-                self.pos += 1; // 跳过转义字符（v1 不支持转义 —— plan 由内部生成）
+                return Err(PlanError::Schema("escapes unsupported (rejected, not corrupted)".into()));
             }
             self.pos += 1;
         }
@@ -254,6 +282,11 @@ fn str_array(v: &Json) -> Vec<String> {
 pub fn parse_plan(text: &str) -> Result<CellPlan, PlanError> {
     let mut parser = Parser::new(text.as_bytes());
     let root = parser.parse_value()?;
+    // m3：根值后必须只有空白（尾随垃圾拒绝 —— 此前 `{...}xyz` 被接受）。
+    parser.skip_ws();
+    if parser.pos < text.len() {
+        return Err(PlanError::Schema("trailing garbage after JSON root".into()));
+    }
     let obj = as_object(&root).ok_or_else(|| PlanError::Schema("plan root must be object".into()))?;
 
     // schemaVersion 校验
@@ -362,6 +395,34 @@ mod tests {
         assert!(parse_plan(r#"{"schemaVersion":"1.0","exec":{}}"#).is_err());
         assert!(parse_plan(r#"not json"#).is_err());
         assert!(parse_plan(r#"{"schemaVersion":"1.0","exec":{"path":"","args":[]},"cwd":"/x"}"#).is_err());
+    }
+
+    #[test]
+    fn rejects_escapes_instead_of_corrupting() {
+        // M8：\n 等转义 → 拒绝（不腐蚀成字面量）
+        assert!(parse_plan(r#"{"schemaVersion":"1.0","exec":{"path":"a\nb","args":[],"env":{}},"cwd":"/"}"#).is_err());
+    }
+
+    #[test]
+    fn rejects_fractional_or_negative_numbers() {
+        // m1：小数/负数 → 拒绝（rlimit 饱和会 SIGSEGV/fail-open）
+        assert!(parse_plan(r#"{"schemaVersion":"1.0","exec":{"path":"/bin/true","args":[],"env":{}},"cwd":"/","rlimits":{"as":0.5}}"#).is_err());
+        assert!(parse_plan(r#"{"schemaVersion":"1.0","exec":{"path":"/bin/true","args":[],"env":{}},"cwd":"/","rlimits":{"as":-1}}"#).is_err());
+    }
+
+    #[test]
+    fn rejects_deep_nesting() {
+        // m2：64 层上限（100k 层曾栈溢出 exit 134）
+        let deep = format!(r#"{{"schemaVersion":"1.0","exec":{{"path":"/bin/true","args":{},"env":{{}}}},"cwd":"/"}}"#, "[".repeat(100) + "0" + &"]".repeat(100));
+        assert!(parse_plan(&deep).is_err());
+    }
+
+    #[test]
+    fn rejects_trailing_garbage() {
+        // m3：根值后残留 → 拒绝（此前 `{...}xyz` 被接受 exit 0）
+        let good = r#"{"schemaVersion":"1.0","exec":{"path":"/bin/true","args":[],"env":{}},"cwd":"/"}"#;
+        assert!(parse_plan(good).is_ok());
+        assert!(parse_plan(&format!("{good} xyz")).is_err());
     }
 
     #[test]

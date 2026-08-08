@@ -61,8 +61,14 @@ export class EgressRecorder {
   }
 }
 
-/** E3：泄漏检测决策。 */
-export function evaluateEgress(entry: Omit<EgressRecord, "at" | "sensitivePatterns"> & { at?: number }, policy: EgressPolicy): {
+/** E3：泄漏检测决策。
+ *  M5 修复（LR2-4 审核）：敏感模式必须**真实匹配请求内容**（传入 body
+ *  片段）—— 不再无条件标记所有非空 pattern（伪造检测）。 */
+export function evaluateEgress(
+  entry: Omit<EgressRecord, "at" | "sensitivePatterns"> & { at?: number },
+  policy: EgressPolicy,
+  bodySnippet?: string,
+): {
   allowed: boolean
   reasons: string[]
   record: EgressRecord
@@ -93,11 +99,12 @@ export function evaluateEgress(entry: Omit<EgressRecord, "at" | "sensitivePatter
   if (policy.blockPrivateResolvedIp && entry.resolvedIp && isPrivateIp(entry.resolvedIp)) {
     reasons.push(`DNS rebinding: resolved to private IP ${entry.resolvedIp}`)
   }
-  // 敏感模式扫描
-  if (entry.method === "POST" || entry.method === "PUT") {
+  // M5：敏感模式真实匹配（body 提供时）；无 body 不标记（如实记录）。
+  if (bodySnippet && (entry.method === "POST" || entry.method === "PUT")) {
     for (const pattern of policy.sensitivePatterns) {
-      // 记录模式：敏感模式命中标记（真实观测）；强制模式在字节预算层拦截。
-      if (pattern.length > 0) sensitivePatterns.push(pattern)
+      if (pattern.length > 0 && bodySnippet.includes(pattern)) {
+        sensitivePatterns.push(pattern)
+      }
     }
   }
 
@@ -105,12 +112,30 @@ export function evaluateEgress(entry: Omit<EgressRecord, "at" | "sensitivePatter
   return { allowed: reasons.length === 0, reasons, record }
 }
 
-/** 私有 IP 判定（DNS rebinding 防护）。 */
+/** 私有 IP 判定（DNS rebinding 防护）。
+ *  M1 修复（LR2-4 审核）：完整覆盖 IPv6（fc00::/7、fe80::/10、::1）与
+ *  v4-mapped 地址（::ffff:a.b.c.d 解包后按 v4 判定）—— 此前 IPv6 解析
+ *  路径的 rebinding 防护完全失效。 */
 export function isPrivateIp(ip: string): boolean {
-  if (ip === "127.0.0.1" || ip === "::1") return true
-  if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true
-  if (ip.startsWith("169.254.")) return true
+  // v4
+  if (ip.includes(".") && !ip.includes(":")) {
+    if (ip === "127.0.0.1" || ip === "0.0.0.0") return true
+    if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true
+    if (ip.startsWith("169.254.")) return true
+    if (ip.startsWith("100.64.") || ip.startsWith("100.65.") || ip.startsWith("100.66.")) return true // CGNAT 段部分
+    return false
+  }
+  // v6
+  const lower = ip.toLowerCase()
+  if (lower === "::1" || lower === "::") return true
+  if (lower.startsWith("fc") || lower.startsWith("fd")) return true // fc00::/7（含 fd00::/8）
+  if (lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) return true // fe80::/10
+  if (lower.startsWith("::ffff:")) {
+    // v4-mapped：解包后按 v4 判定
+    const v4 = lower.slice(7)
+    if (v4.includes(".")) return isPrivateIp(v4)
+  }
   return false
 }
 

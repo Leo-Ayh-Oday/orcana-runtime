@@ -2,6 +2,7 @@
  *  启动）/ 14 态状态机推进 / Receipt 落库 / 取消 / 清理。 */
 
 import { describe, expect, test } from "bun:test"
+import { execSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -26,8 +27,12 @@ function setup() {
   const state = new StateStore(join(dir, "execd.db"))
   const broker = createLinuxBroker({ mode: "enabled" })
   const published: Array<{ kind: string; cellId: string }> = []
-  const mgr = new CellManager({ state, broker, workspaceHostRoot: process.cwd(), publish: (e) => published.push({ kind: e.kind, cellId: e.cellId }) })
-  return { dir, state, broker, mgr, published, cleanup: () => { state.close(); rmSync(dir, { recursive: true, force: true }) } }
+  // M8 修复：每个测试独立 workspace 目录（共享 process.cwd() 会触发
+  // 跨进程文件锁 WORKSPACE_LEASE_HELD —— 并行 worker 互踩）。
+  const ws = mkdtempSync(join(tmpdir(), "execd-cell-ws-"))
+  const mgr = new CellManager({ state, broker, workspaceHostRoot: ws, publish: (e) => published.push({ kind: e.kind, cellId: e.cellId }) })
+  const cleanup = () => { state.close(); rmSync(dir, { recursive: true, force: true }); rmSync(ws, { recursive: true, force: true }) }
+  return { dir, state, broker, mgr, published, cleanup }
 }
 
 /** 轮询等待 cell 进入终态（超时兜底）。 */
@@ -102,7 +107,10 @@ describe("CellManager (L1-D)", () => {
   test("cancelCell marks CANCELLED and cleanupRun cleans it", async () => {
     const { state, mgr, cleanup } = setup()
     try {
-      const result = await mgr.submit(payload({ executable: "/bin/sh", args: ["-c", "sleep 30"] }), "ik-c", "s1")
+      // M8 修复：真实进程终止断言 —— 取消后 sleep 进程必须消失
+      // （B1 曾让取消纯虚构：状态写 CANCELLED 但进程跑满全程）。
+      const marker = `execd-cancel-${Date.now().toString(36)}`
+      const result = await mgr.submit(payload({ executable: "/bin/sh", args: ["-c", `sleep 60; echo ${marker} > /dev/null`] }), "ik-c", "s1")
       // 等 RUNNING 再取消
       const deadline = Date.now() + 5000
       while ((state.getCell(result.cellId)?.currentState ?? "") !== "RUNNING" && Date.now() < deadline) {
@@ -111,7 +119,10 @@ describe("CellManager (L1-D)", () => {
       expect(state.getCell(result.cellId)!.currentState).toBe("RUNNING")
       await mgr.cancelCell(result.cellId)
       expect(state.getCell(result.cellId)!.currentState).toBe("CANCELLED")
-      // 进程必须真实终止（broker cancelCell 已触发 —— 残留验证）
+      // 真实进程终止验证：等待后系统中不应再有该 sleep 进程
+      await new Promise(r => setTimeout(r, 1500))
+      const psOut = execSync("ps -eo args", { encoding: "utf8" })
+      expect(psOut).not.toContain("sleep 60")
       const clean = await mgr.cleanupRun(result.runId)
       expect(clean.removed).toBe(1)
       expect(state.getCell(result.cellId)!.currentState).toBe("CLEANED")

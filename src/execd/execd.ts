@@ -14,6 +14,9 @@ import { Recovery } from "./recovery"
 import { ExecdServer, type ExecdServerDeps } from "./server"
 import { createLinuxBroker, type LinuxExecutionBroker } from "../runtime/linux/broker"
 
+/** M3：租约过期扫描间隔（daemon 常驻定时器）。 */
+const LEASE_SWEEP_INTERVAL_MS = 30_000
+
 export interface ExecdOptions {
   sockPath: string
   statePath: string
@@ -48,7 +51,9 @@ export function createExecd(opts: ExecdOptions): Execd {
   const leaseManager = new LeaseManager({
     state,
     onExpired: (leaseId, runId) => {
-      server.publishEvent({ kind: "lease.expired", cellId: "", runId, payload: { leaseId } }, state.latestEventSequence() + 1)
+      // M4 修复：租约过期事件也落库（统一序号空间，可断点续读）。
+      const seq = state.appendStreamEvent({ cellId: "", attemptId: "", kind: "exit", payload: JSON.stringify({ leaseId, runId, event: "lease.expired" }) })
+      server.publishEvent({ kind: "lease.expired", cellId: "", runId, payload: { leaseId } }, seq)
     },
   })
   const recovery = new Recovery({
@@ -66,7 +71,8 @@ export function createExecd(opts: ExecdOptions): Execd {
     cancelRun: runId => cellManager.cancelRun(runId),
     cleanupRun: runId => cellManager.cleanupRun(runId),
     acquireLease: (runId, ttlMs) => Promise.resolve(leaseManager.acquire(runId, ttlMs)),
-    renewLease: leaseId => Promise.resolve(leaseManager.renew(leaseId, 60_000)),
+    // M9 修复：renew 透传客户端 ttlMs（不再静默丢弃）。
+    renewLease: (leaseId, ttlMs) => Promise.resolve(leaseManager.renew(leaseId, ttlMs)),
     releaseLease: leaseId => Promise.resolve(leaseManager.release(leaseId)),
     listRecoverableRuns: () => cellManager.listRecoverableRuns(),
   }
@@ -76,18 +82,29 @@ export function createExecd(opts: ExecdOptions): Execd {
   cellManager.setPublisher((event, sequence) => server.publishEvent({ ...event, cellId: event.cellId ?? "" }, sequence))
 
   let started = false
+  let leaseSweepTimer: ReturnType<typeof setInterval> | undefined
+
   const start = async (): Promise<void> => {
     await server.start()
     // 启动恢复：收敛崩溃残留（SAME_BOOT_CRASH_UNRECOVERED = 0）。
-    const report = recovery.run()
-    if (report.scanned > 0) {
-      for (const r of report.recovered) {
-        server.publishEvent({ kind: "recovery", cellId: r.cellId, payload: { from: r.from, to: r.to, reason: r.reason } }, state.latestEventSequence())
+    // M15：recovery.run 内部已按分支广播（不再此处重播）。
+    recovery.run()
+    // M3 修复：租约过期扫描常驻定时器（daemon 运行期间租约必须真实过期）。
+    leaseSweepTimer = setInterval(() => {
+      try {
+        leaseManager.sweepExpired()
+      } catch (error) {
+        // 扫描失败不崩溃 daemon（记录到 stderr，systemd journal）。
+        console.error(`[execd] lease sweep failed: ${error instanceof Error ? error.message : String(error)}`)
       }
-    }
+    }, LEASE_SWEEP_INTERVAL_MS)
     started = true
   }
   const stop = async (): Promise<void> => {
+    // M2 修复：先取消在途 cell 并等待收尾（进程真实终止），再关 server
+    // 与 DB —— 否则在途 runCell 写已关闭 DB 崩溃 daemon。
+    await cellManager.stop()
+    if (leaseSweepTimer) clearInterval(leaseSweepTimer)
     await server.stop()
     state.close()
     started = false

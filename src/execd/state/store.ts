@@ -64,6 +64,8 @@ export interface CellEventRow {
   actor: string
   payloadDigest: string
   at: number
+  kind?: "state" | "stdout" | "stderr" | "exit" | "receipt"
+  payload?: string
 }
 
 export interface CellRecord {
@@ -133,7 +135,9 @@ CREATE TABLE IF NOT EXISTS cell_events (
   reason_code TEXT NOT NULL,
   actor TEXT NOT NULL,
   payload_digest TEXT NOT NULL,
-  at INTEGER NOT NULL
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'state',
+  payload TEXT
 );
 CREATE TABLE IF NOT EXISTS reservations (
   reservation_id TEXT PRIMARY KEY,
@@ -274,25 +278,61 @@ export class StateStore {
 
   appendCellEvent(ev: Omit<CellEventRow, "eventSequence">): number {
     const result = this.run(
-      `INSERT INTO cell_events (cell_id, attempt_id, from_state, to_state, reason_code, actor, payload_digest, at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO cell_events (cell_id, attempt_id, from_state, to_state, reason_code, actor, payload_digest, at, kind, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ev.cellId, ev.attemptId, ev.fromState ?? null, ev.toState, ev.reasonCode, ev.actor, ev.payloadDigest, ev.at,
+      ev.kind ?? "state", ev.payload ?? null,
     )
     return Number(result.lastInsertRowid)
   }
 
-  /** 状态迁移：追加事件 + 物化 current_state（调用方置于事务内）。 */
+  /** 非状态事件落库（stdout/stderr/exit/receipt —— 全部事件统一序号空间，
+   *  保证 eventSequence 单调唯一且可断点续读，M4 修复）。 */
+  appendStreamEvent(ev: {
+    cellId: string
+    attemptId: string
+    kind: "stdout" | "stderr" | "exit" | "receipt"
+    payload: string
+    at?: number
+  }): number {
+    return this.appendCellEvent({
+      cellId: ev.cellId,
+      attemptId: ev.attemptId,
+      fromState: null,
+      toState: "RUNNING" as CellState, // 流事件不迁移状态；to_state 占位（不更新物化态）
+      reasonCode: ev.kind,
+      actor: "execd",
+      payloadDigest: "",
+      kind: ev.kind,
+      payload: ev.payload,
+      at: ev.at ?? Date.now(),
+    })
+  }
+
+  /** 状态迁移：追加事件 + 物化 current_state（调用方置于事务内）。
+   *
+   *  M1 修复（审核）：守卫式 —— from 必须匹配当前状态，且当前状态不得是
+   *  终态（CANCELLED 之后不得再写 EXIT_OBSERVED 等成功链）。守卫拒绝时
+   *  返回 null（不追加事件、不更新物化态），调用方按幂等语义忽略。
+   */
   transition(cellId: string, attemptId: string, to: CellState, opts: {
     from?: CellState | null
     reasonCode?: string
     actor?: string
     payloadDigest?: string
     at?: number
-  } = {}): number {
+  } = {}): number | null {
     const at = opts.at ?? Date.now()
+    const current = this.getCell(cellId)
+    if (!current) return null
+    // M1 守卫：CLEANED 是最终态（不可再迁移）；其他终态只允许收尾到
+    // CLEANED（如 CANCELLED→CLEANED 的清理确认），不允许复活成功链。
+    if (current.currentState === "CLEANED") return null
+    if (TERMINAL_CELL_STATES.has(current.currentState) && to !== "CLEANED") return null
+    if (opts.from !== undefined && opts.from !== null && current.currentState !== opts.from) return null // from 不匹配
     const sequence = this.appendCellEvent({
       cellId, attemptId,
-      fromState: opts.from ?? null,
+      fromState: opts.from ?? current.currentState,
       toState: to,
       reasonCode: opts.reasonCode ?? "transition",
       actor: opts.actor ?? "execd",
@@ -307,7 +347,7 @@ export class StateStore {
     return this.all<CellEventRow>(
       `SELECT event_sequence AS eventSequence, cell_id AS cellId, attempt_id AS attemptId,
               from_state AS fromState, to_state AS toState, reason_code AS reasonCode,
-              actor, payload_digest AS payloadDigest, at
+              actor, payload_digest AS payloadDigest, at, kind, payload
        FROM cell_events WHERE cell_id = ? AND event_sequence > ? ORDER BY event_sequence`,
       cellId, afterSequence,
     )

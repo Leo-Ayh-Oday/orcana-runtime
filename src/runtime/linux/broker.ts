@@ -10,7 +10,8 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { readFileSync, rmSync } from "node:fs"
+import { readFileSync, realpathSync, rmSync, statSync } from "node:fs"
+import { CrossProcessWorkspaceLease } from "./workspace/workspace-lease"
 import { spawnSync } from "node:child_process"
 import type {
   AgentExecutionDomain,
@@ -170,11 +171,13 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   const caps = requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
-  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string }>()
+  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string; leaseRelease?: () => void }>()
 
   const ledger = options.ledger ?? new ResourceLedger()
   const stateStore = options.stateStore ?? new RuntimeStateStore()
   const domainManager = new AgentDomainManager({ ledger })
+  // GATE（GS-13）：跨进程 workspace lease（mkdir 原子锁）。
+  const workspaceLease = new CrossProcessWorkspaceLease()
   const cacheManager = new CacheManager(options.cacheRoot ?? join(stateStore.capabilitiesPath(), "..", "cache"))
 
   // cgroup：仅在有真实委托时启用（无委托 → cgroupPath 为空，严格任务已在
@@ -431,6 +434,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       let cellReceipt: SandboxReceipt | undefined
       // PR-5：attach 失败不再吞掉 —— 记入 Receipt degradation（fail-closed 审计）。
       let attachFailure: string | undefined
+      // GATE（GS-11）：attach 后必须验证真实 membership —— 仅"attach 调用
+      // 未抛错"不算验证成功（WSL2 EACCES 等场景 attach 可能静默空操作）。
+      let attachVerified = false
+      // GATE（GS-13）：跨进程 lease 释放句柄 —— try 外声明（finally 必须
+      // 无条件可达，即使 cellRuns.set 之前抛错）。
+      let leaseRelease: (() => void) | undefined
       // C5：try 前声明 —— 物化本身抛错时 finally 仍可安全访问（避免 TDZ）。
       let materialization: ExecutionMaterialization | undefined
       try {
@@ -438,15 +447,16 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         // C5：物化在事务内进行 —— finally 保证宿主文件（sealed secret/
         // seccomp）在成功、异常、取消任何路径后都被清理。
         materialization = materializeExecution(compiled, selection.backend)
-        // Isolation Lock（PR-4）：worktreeRoot + agentId → 按 Agent 的 worktree
-        // 独占；worktreeRoot 无 agentId（工具投影）→ 物理冲突域独占（正式
-        // 工作区单写者，LNXF-R2 9.2：同物理目录别名同键）；无 worktree →
-        // main-workspace 独占兜底。
-        const physicalKey = executeOptions?.authority?.workspace.physicalWorkspaceKey
-        const lockTarget = agentId
-          ? IsolationDomainLock.worktreeKey(agentId)
-          : (physicalKey
-              ? IsolationDomainLock.physicalKey(physicalKey)
+        // GATE（GS-12）：Isolation Lock 身份 = 真实 workspace（canonical
+        // realpath + dev/ino）——同 agent 不同 worktree 必须允许并行；
+        // agent 是 owner 不是 lock domain。无 hostRoot → 回退 agent/物理
+        // 键（保留既有语义）。
+        const hostRoot = executeOptions?.authority?.workspace.hostRoot
+        const workspaceIdentity = workspaceIdentityOf(hostRoot)
+        const lockTarget = workspaceIdentity
+          ? IsolationDomainLock.workspaceKey(workspaceIdentity)
+          : (agentId
+              ? IsolationDomainLock.worktreeKey(agentId)
               : IsolationDomainLock.mainWorkspaceKey())
         if (!locks.acquire(lockTarget, "exclusive", cellId)) {
           throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `isolation lock held: ${lockTarget}`, { lockTarget })
@@ -493,7 +503,16 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             executeOptions.abortSignal.addEventListener("abort", () => controller.abort(), { once: true })
           }
         }
-        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile })
+        // GATE（GS-13）：跨进程 workspace 写互斥（进程内隔离锁之外的 OS 级
+        // 互斥）。同一 workspace 跨进程并发 writer → 拒绝（fail-fast）。
+        if (workspaceIdentity) {
+          const lease = workspaceLease.acquire(workspaceIdentity)
+          if (!lease.ok) {
+            throw new LinuxExecutionError("WORKSPACE_LEASE_HELD", lease.reason ?? `workspace lease held: ${workspaceIdentity}`, { workspaceIdentity })
+          }
+          leaseRelease = lease.release
+        }
+        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile, leaseRelease })
         stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId), backend: selection.backend, ownerPid: process.pid, ownerProcStartTicks: readProcStartTicks() })
 
         // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
@@ -509,15 +528,26 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               if (cgroup && cgroupCellPath) {
                 try {
                   cgroup.attach(pid, cgroupCellPath)
+                  // GATE（GS-11）：ATTACH_VERIFIED —— 读 /proc/<pid>/cgroup
+                  // 确认真实 membership，不假设 attach 调用成功即生效。
+                  attachVerified = verifyCgroupMembership(pid, cgroupCellPath)
+                  if (!attachVerified) {
+                    attachFailure = `CGROUP_ATTACH_NOT_VERIFIED: pid ${pid} not found in ${cgroupCellPath}`
+                  }
                 } catch (error) {
                   attachFailure = `CGROUP_ATTACH_FAILED: ${error instanceof Error ? error.message : String(error)}`
                   // LNXF-R2 10.5：严格 Profile attach 失败 → 立即取消
                   // （fail-fast：资源限额不被绕过到执行结束）；非严格
-                  // 保留 degradation 声明。
+                  // 保留 degradation 声明。GATE：验证失败同样处理。
                   if (isStrictProfile(compiled.profile)) {
                     controller.abort()
                   }
                 }
+              } else {
+                // 无 cgroup 委托 —— 无法验证 Cell 边界（进程组 fallback 模式
+                // 是既有正常路径，不记 degradation）；Receipt 必须如实声明
+                // cleanupVerified=false，不得假装有强保证。
+                attachVerified = false
               }
             },
             readCellMetrics: () => readCellMetrics(cgroupCellPath),
@@ -555,6 +585,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         if (podmanCidfile) {
           try { rmSync(podmanCidfile, { force: true }) } catch { /* best-effort */ }
         }
+        // GATE：锁与 lease 无条件释放 —— cellRuns.set 之前抛错（物化/
+        // cgroup/lease 失败）时 record 不存在，若只在 record 内释放会
+        // 泄漏锁，后续所有 cell 撞同一 workspace 键。
+        for (const key of lockKeys) locks.release(key, cellId)
+        leaseRelease?.()
         const record = cellRuns.get(cellId)
         if (record) {
           // Cell cgroup 真实移除（PR-2 先做 best-effort；PR-5 重建完整协议）。
@@ -567,6 +602,16 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             }
           }
           if (cellReceipt) {
+            // GATE（GS-11）：清理真值 —— 空 cgroup 删除成功 ≠ 原进程已清理。
+            // attach 已验证且空 cgroup 移除 → 0 残留；attach 未验证（进程
+            // 从未进入 Cell，或 WSL2 EACCES 等）→ processesRemaining=-1 /
+            // cleanupVerified=false，绝不谎报 0。
+            const cleanupVerified = attachVerified && cgroupRemoved
+            const processesRemaining = cleanupVerified
+              ? 0
+              : attachVerified
+                ? cellReceipt.cleanup.processesRemaining
+                : -1
             // 最终 Receipt：合并真实清理结果 + attach 失败降级，重算自摘要后持久化。
             const finalReceipt: SandboxReceipt = {
               ...cellReceipt,
@@ -576,7 +621,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               cleanup: {
                 ...cellReceipt.cleanup,
                 cgroupRemoved: cgroupRemoved || cellReceipt.cleanup.cgroupRemoved,
-                processesRemaining: cgroupRemoved ? 0 : cellReceipt.cleanup.processesRemaining,
+                processesRemaining,
+                cleanupVerified,
               },
             }
             const final: SandboxReceipt = {
@@ -591,7 +637,6 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               // 持久化失败不阻断执行（Receipt 仍在事件流中）
             }
           }
-          for (const key of record.lockKeys) locks.release(key, cellId)
           ledger.release(record.reservationId)
           cellRuns.delete(cellId)
           cells.delete(cellId)
@@ -680,6 +725,37 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
 export function getLinuxBroker(): LinuxExecutionBroker {
   if (!shared) shared = createLinuxBroker({ mode: "shadow" })
   return shared
+}
+
+/**
+ * GATE（GS-11）：读 /proc/<pid>/cgroup 验证 pid 真实位于 cell cgroup。
+ * attach 调用成功 ≠ 生效（WSL2 EACCES 下 attach 可能静默空操作），
+ * 只有 membership 可读且包含 cell 路径才算 ATTACH_VERIFIED。
+ */
+function verifyCgroupMembership(pid: number, cgroupPath: string): boolean {
+  try {
+    const content = readFileSync(`/proc/${pid}/cgroup`, "utf8")
+    return content.includes(cgroupPath)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * GATE（GS-12/GS-13）：workspace 身份 = canonicalRealPath + filesystem
+ * identity（dev/ino）。同物理目录的别名/符号链接 → 同一身份 → 同锁键；
+ * 不同目录（即使同 agent）→ 不同身份 → 允许并行（A10 修复语义）。
+ * 目录不可解析时返回 undefined（调用方回退到 agent/main 键）。
+ */
+export function workspaceIdentityOf(hostRoot: string | undefined): string | undefined {
+  if (!hostRoot) return undefined
+  try {
+    const canonical = realpathSync(hostRoot)
+    const st = statSync(canonical)
+    return `${st.dev}:${st.ino}`
+  } catch {
+    return undefined
+  }
 }
 
 /** R2 PR-9（EA-012）：shadow/单元测试使用的显式 Test Authority。

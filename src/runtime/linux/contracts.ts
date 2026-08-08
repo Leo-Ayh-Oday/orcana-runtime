@@ -391,6 +391,12 @@ export interface SandboxReceipt {
     cgroupRemoved: boolean
     containerRemoved?: boolean
     worktreeRetained: boolean
+    /**
+     * GATE（GS-11）：清理是否经真实验证。attach 未验证（进程从未进入
+     * Cell cgroup）时不得宣称强保证 —— 空 cgroup 删除成功 ≠ 原进程
+     * 已清理。
+     */
+    cleanupVerified: boolean
   }
 }
 

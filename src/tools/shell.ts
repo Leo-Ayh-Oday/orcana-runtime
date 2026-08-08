@@ -325,6 +325,9 @@ function shellResult(input: {
   const metadata: Record<string, unknown> = {}
   if (input.exitCode !== undefined) metadata.exitCode = input.exitCode
   if (input.truncated !== undefined) metadata.truncated = input.truncated
+  // RC-16 G4：durationMs 始终暴露在顶层 metadata（verification 只对验证类
+  // 命令生成——非验证命令的执行时长也必须可观测）。
+  metadata.durationMs = input.durationMs
   const verification = buildVerificationResult({
     command: input.command,
     passed: input.success,

@@ -131,16 +131,20 @@ describe("RT-7 tools", () => {
     expect(scriptSideEffectPlan("sudo apt update")).toContain("privilege")
   })
 
-  test("terminateTree is callable without throwing on a finished process", () => {
+  test("terminateTree is callable without throwing on a finished process", async () => {
     // Smoke: terminating an already-exited process must not throw.
+    // 必须 await —— fire-and-forget 会让测试进程退出中断未完成的 execute，
+    // 跨进程 workspace lease（GS-13）残留锁文件，污染后续测试。
     const controller = new AbortController()
-    void withAuthority(async () => {
+    await withAuthority(async () => {
       const promise = runProcess({
         command: IS_WIN ? "cmd.exe" : "echo",
         args: IS_WIN ? ["/c", "echo", "x"] : ["x"],
         abortSignal: controller.signal,
       })
-      promise.then(() => controller.abort())
+      const result = await promise
+      controller.abort()
+      return result
     })
   })
 })

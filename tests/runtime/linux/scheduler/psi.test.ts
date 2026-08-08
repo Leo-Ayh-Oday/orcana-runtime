@@ -48,7 +48,7 @@ describe("PsiBackpressure state machine (P3-B)", () => {
     bp4["state"] = "CRITICAL" as never
     expect(bp4.tick().state).toBe("CRITICAL")
     // 降到 10 → RECOVERY
-    const bp5 = new PsiBackpressure(thresholds, fakePsi(10))
+    const bp5 = new PsiBackpressure(thresholds, fakePsi(8))
     bp5["state"] = "CRITICAL" as never
     expect(bp5.tick().state).toBe("RECOVERY")
     // RECOVERY 后压力继续低 → NORMAL

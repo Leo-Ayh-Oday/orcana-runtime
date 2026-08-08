@@ -34,6 +34,11 @@ export interface SubmitResult {
 export class CellManager {
   constructor(private readonly opts: CellManagerOptions) {}
 
+  /** 事件广播注入（组装时 server 未就绪，占位后替换）。 */
+  setPublisher(publish: CellManagerOptions["publish"]): void {
+    this.opts.publish = publish
+  }
+
   private get now(): number {
     return this.opts.now?.() ?? Date.now()
   }

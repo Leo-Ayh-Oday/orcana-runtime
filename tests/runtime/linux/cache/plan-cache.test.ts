@@ -54,7 +54,7 @@ describe("PlanCache (P2-A)", () => {
   test("template with secrets/paths is rejected (fail-closed)", () => {
     const cache = new PlanCache()
     const poisoned = cleanPlan({
-      mountTemplate: '{"source":"/home/user/secret-data"}',
+      mountTemplate: '{"source":"/home/user/data","auth":"Bearer tok123"}',
     })
     expect(templateIsClean(poisoned)).toBe(false)
     expect(cache.put(poisoned)).toBe(false)

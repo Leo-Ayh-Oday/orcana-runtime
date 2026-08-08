@@ -59,20 +59,21 @@ export function planKeyString(key: PlanCacheKey): string {
     .digest("hex")
 }
 
-/** 模板污染检查：模板中不得出现注入字段（秘密/路径/身份）。 */
+/** 模板污染检查：模板中不得出现注入字段（秘密/路径/身份）。
+ *  只检查字符串值（键名如 "secrets" 是合法字段名，不误伤）。 */
 export function templateIsClean(plan: CompiledSandboxPlan): boolean {
-  const blob = JSON.stringify({
-    mount: plan.mountTemplate,
-    env: plan.environmentTemplate,
-    argv: plan.backendArgvTemplate,
-    seccomp: plan.seccompObjectRef ?? "",
-  })
-  // 注入字段的典型形状（cell-/run-/ws-/token/secret/port）不得出现在模板。
+  const values: string[] = [plan.mountTemplate, plan.seccompObjectRef ?? ""]
+  for (const [k, v] of Object.entries(plan.environmentTemplate)) {
+    values.push(k, v)
+  }
+  values.push(...plan.backendArgvTemplate)
+  // 注入字段的典型形状（cell-/run-/token/secret 值/路径/端口）不得出现在值里。
+  // fail-closed 优先：宁可拒绝合法模板也不放过泄漏（值级检查不误伤键名）。
   const forbidden = [
-    "cell-", "run-", "/workspace", "/tmp/orcana-", "token", "secret", "bearer",
-    ":8080", ":3000",
+    "cell-", "run-", "/workspace", "/tmp/orcana-", "token", "Bearer ", "bearer",
+    "api_key", "sk-", "secret", ":8080", ":3000",
   ]
-  return !forbidden.some(f => blob.includes(f))
+  return !values.some(v => forbidden.some(f => v.includes(f)))
 }
 
 export class PlanCache {

@@ -483,3 +483,80 @@ export function resolveAuthorizedCwd(
   }
   return candidate
 }
+
+// ── LR2-2（P2-D）：Plan Cache 接入 —— 编译结果模板缓存 ──
+
+/** 请求策略分量的稳定 digest（缓存键的一部分）：executable/args/profile/
+ *  network/env/allowedHostKeys/mounts/cache —— 不含身份与 workspace 特定值。 */
+export function policyRequestDigest(request: UntrustedCapabilityRequest): string {
+  return digestOfRequestPolicy({
+    executable: request.command.executable,
+    args: request.command.args,
+    profile: request.profile,
+    network: request.network,
+    env: request.env ?? {},
+    allowedHostKeys: request.allowedHostKeys ?? [],
+    readonlyMounts: request.readonlyMounts ?? [],
+    writableMounts: request.writableMounts ?? [],
+    cache: request.cache ?? [],
+  })
+}
+
+function digestOfRequestPolicy(value: unknown): string {
+  // 通用 canonical JSON digest（receipt.ts 的 canonicalJson 语义 ——
+  // 递归稳定排序；不是 spec 级 computePolicyDigest，后者要求完整 spec 形状）。
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { digestOf } = require("./receipt") as typeof import("./receipt")
+  return digestOf(value)
+}
+
+/**
+ * 带 Plan Cache 的编译：同 workspace + 同策略请求命中模板 → 注入新身份
+ *  （跳过完整 Policy Compiler）。模板 = 清洗身份后的 spec 序列化（不含
+ *  cell- / run- 等注入形状，满足 PlanCache 无秘密检查）。
+ */
+export function compileCapabilityRequestCached(
+  request: UntrustedCapabilityRequest,
+  authority: TrustedExecutionAuthority,
+  cache?: import("./cache/plan-cache").PlanCache,
+  workspaceIdentity?: string,
+): { ok: true; spec: ExecutionCellSpec } | { ok: false; errors: string[] } {
+  if (cache && workspaceIdentity) {
+    const key = planCacheKeyFor(request, workspaceIdentity)
+    const hit = cache.get(key)
+    if (hit) {
+      const spec = JSON.parse(hit.mountTemplate) as ExecutionCellSpec
+      spec.identity = { cellId: `cell-${randomUUID().slice(0, 8)}`, ...authority.identity }
+      // cellSpecDigest 含身份 —— 使用方每次现算；policyDigest 不含身份，
+      // 模板中的值在替换身份后仍然正确（策略未变）。
+      return { ok: true, spec }
+    }
+  }
+  const result = compileCapabilityRequest(request, authority)
+  if (result.ok && cache && workspaceIdentity) {
+    const key = planCacheKeyFor(request, workspaceIdentity)
+    const template = JSON.parse(JSON.stringify(result.spec)) as ExecutionCellSpec
+    // 清洗身份（模板不含注入形状，PlanCache.templateIsClean 才放行）。
+    template.identity = { cellId: "", runId: "", nodeRunId: "", attempt: 0 }
+    cache.put({
+      key,
+      mountTemplate: JSON.stringify(template),
+      environmentTemplate: {},
+      backendArgvTemplate: [],
+      validationResult: { ok: true, errors: [] },
+      createdAt: Date.now(),
+    })
+  }
+  return result
+}
+
+function planCacheKeyFor(request: UntrustedCapabilityRequest, workspaceIdentity: string): import("./cache/plan-cache").PlanCacheKey {
+  return {
+    profileDigest: request.profile,
+    toolContractDigest: policyRequestDigest(request),
+    runtimeVersion: process.versions.bun ?? "node",
+    platform: `${process.platform}-${process.arch}`,
+    backendVersion: "",
+    policyDigest: `${workspaceIdentity}`,
+  }
+}

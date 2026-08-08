@@ -30,7 +30,7 @@ import type {
 } from "./contracts"
 import type { DomainResourceBudget } from "./contracts"
 import { probeLinuxCapabilities, requireLinuxPlatform } from "./capability-probe"
-import { compileCapabilityRequest, compileCellSpec } from "./policy-compiler"
+import { compileCapabilityRequest, compileCapabilityRequestCached, compileCellSpec } from "./policy-compiler"
 import { selectBackend } from "./backend-router"
 import type { BackendSelection } from "./backend-router"
 import { isStrictProfile } from "./profiles"
@@ -85,6 +85,9 @@ export interface LinuxBrokerOptions {
   secretValues?: Record<string, string>
   /** PR-7: 已批准镜像策略（digest 全串或 registry 前缀；命中才允许 podman 执行）。 */
   approvedImages?: string[]
+  /** LR2-2（P2-D）：Sandbox Plan Cache —— 同 workspace 同策略请求跳过
+   *  完整 Policy Compiler（命中注入新身份）。 */
+  planCache?: import("./cache/plan-cache").PlanCache
 }
 
 /** PR-6：统一 ExecutionRuntimeContext —— Graph 调度 / ProcessExecutor /
@@ -393,8 +396,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       if (mode === "enabled" && !authority) {
         throw new LinuxExecutionError("EXECUTION_AUTHORITY_MISSING", "enabled execution requires a TrustedExecutionAuthority")
       }
+      // LR2-2（P2-D）：Plan Cache 命中跳过完整编译（workspace 限定键）。
+      const wsIdentity = authority ? workspaceIdentityOf(authority.workspace.hostRoot) : undefined
       const compiled = authority
-        ? compileCapabilityRequest(request, authority)
+        ? (options.planCache
+            ? compileCapabilityRequestCached(request, authority, options.planCache, wsIdentity)
+            : compileCapabilityRequest(request, authority))
         : compileCapabilityRequest(request, testAuthorityFallback())
       if (!compiled.ok) {
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `request invalid: ${compiled.errors.join("; ")}`)

@@ -126,6 +126,9 @@ export function buildLoopOptions(
     // H9: capability registry — the loop's tool executions route through the
     // CapabilityExecutor with this registry (shared with the future Node Runtime).
     capabilityRegistry: deps.capabilityRegistry,
+    // PR-GATE-06: run-scoped retry ledger — the loop's provider/round retries
+    // share the same budget as harness-side capability retries.
+    retryLedger: run.scope.retryLedger,
     hooks: deps.hooks,
     stagedContext: deps.stagedContext,
     thinkingStore: deps.thinkingStore,

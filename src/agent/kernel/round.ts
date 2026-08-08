@@ -40,6 +40,7 @@ import { CompletionOrchestrator } from "../completion-orchestrator"
 import { AgentState } from "../state-machine"
 import { executeToolBatch } from "../tool-execution/batch-executor"
 import { setRuntimeContextBudgetMode } from "../runtime-context"
+import { getRunRetryLedger } from "../../runtime/execution-context"
 import { currentTransactionEvidenceBinding } from "../patch-transaction"
 import { buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../round/request-builder"
 import { createPreRoundChain } from "../gates/pre-round"
@@ -575,6 +576,7 @@ export async function* runRound(
       finalText,
       taskTracker: planning.taskTracker,
       changedFiles: [...taskFiles],
+      retryLedger: getRunRetryLedger(),
     })
     for (const message of recovery.messages) rawMessages.push(message)
     if (recovery.emitError) {

@@ -14,6 +14,10 @@ import { spawn } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 import { collectProcessRun } from "../runtime/process-executor"
+import { getExecutionGateway } from "../runtime/execution/execution-gateway"
+import type { ExecutionIntent } from "../runtime/execution/execution-intent"
+import type { ExecutionResult } from "../runtime/execution/execution-result"
+import { currentExecutionAuthority } from "../runtime/execution/execution-context"
 
 export interface RunProcessParams {
   command: string
@@ -36,8 +40,31 @@ export interface RunProcessResult {
   aborted: boolean
 }
 
-/** Parameterized process execution — never shell:true. */
+/** Parameterized process execution — never shell:true.
+ *
+ *  LR2-0D：存在受信执行权威时经 ExecutionGateway（统一入口 → Broker →
+ *  Receipt）；无权威（Windows/测试/legacy 环境）保留旧路径 —— 渐进迁移，
+ *  shadow → enabled → enforced。 */
 export function runProcess(params: RunProcessParams): Promise<RunProcessResult> {
+  const authority = currentExecutionAuthority()
+  if (authority) {
+    const intent: ExecutionIntent = {
+      requestId: `rp-${params.command}-${params.args[0] ?? ""}-${Date.now().toString(36)}`,
+      tool: {
+        capabilityId: "run_process",
+        executable: params.command,
+        args: params.args,
+        cwdRef: params.cwd,
+      },
+      workload: { kind: "build", readonly: false },
+      timeoutMs: params.timeoutMs ?? 120_000,
+      env: params.env,
+      abortSignal: params.abortSignal,
+    }
+    return getExecutionGateway()
+      .collect(intent, { approvedCapabilityId: "run_process", sideEffectClass: "write", authority })
+      .then(adaptResult)
+  }
   return collectProcessRun({
     command: params.command,
     args: params.args,
@@ -46,6 +73,18 @@ export function runProcess(params: RunProcessParams): Promise<RunProcessResult> 
     timeoutMs: params.timeoutMs ?? 120_000,
     abortSignal: params.abortSignal,
   })
+}
+
+function adaptResult(r: ExecutionResult): RunProcessResult {
+  return {
+    exitCode: r.exitCode,
+    signal: r.signal,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    durationMs: r.durationMs,
+    timedOut: r.timedOut,
+    aborted: r.aborted,
+  }
 }
 
 /** Kill the whole process tree (taskkill /T on Windows, SIGTERM→SIGKILL

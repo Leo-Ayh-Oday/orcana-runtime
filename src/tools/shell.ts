@@ -6,9 +6,39 @@ import { buildVerificationResult } from "../verification/result"
 import type { SandboxManager } from "../sandbox/sandbox"
 import { recordRuntimeObservedWrites } from "../file-state"
 import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
-import { executeProcess, type ProcessEvent } from "../runtime/process-executor"
+import { executeProcess, type ProcessEvent, type ProcessRequest } from "../runtime/process-executor"
+import { getExecutionGateway } from "../runtime/execution/execution-gateway"
+import { currentExecutionAuthority } from "../runtime/execution/execution-context"
+import type { ExecutionIntent } from "../runtime/execution/execution-intent"
 
 const SHELL_RESULT_MAX_CHARS = 8000
+
+/** LR2-0D：shell 执行路由 —— 存在受信权威时经 ExecutionGateway（统一
+ *  入口 → Broker → Receipt），否则保留旧路径（Windows/测试/legacy）。 */
+function executeShellRequest(request: ProcessRequest, capabilityId: string): AsyncGenerator<ProcessEvent> {
+  const authority = currentExecutionAuthority()
+  if (authority) {
+    const intent: ExecutionIntent = {
+      requestId: `sh-${capabilityId}-${Date.now().toString(36)}`,
+      tool: {
+        capabilityId,
+        executable: request.command,
+        args: request.args,
+        cwdRef: request.cwd,
+      },
+      workload: { kind: "build", readonly: false },
+      timeoutMs: request.timeoutMs,
+      env: request.env,
+      abortSignal: request.abortSignal,
+    }
+    return getExecutionGateway().execute(intent, {
+      approvedCapabilityId: capabilityId,
+      sideEffectClass: "write",
+      authority,
+    })
+  }
+  return executeProcess(request)
+}
 
 export function parseTimeoutSec(value: unknown, fallback: number): number {
   const n = Number(value)
@@ -104,13 +134,13 @@ async function shell(
   let aborted = false
   let exitCode: number | null = null
   const startedAt = Date.now()
-  for await (const event of executeProcess({
+  for await (const event of executeShellRequest({
     command: shellExecutable(),
     args: shellArgs(command),
     env: sandboxed && verdict.injectedEnv ? (verdict.injectedEnv as Record<string, string>) : undefined,
     timeoutMs: effectiveTimeout * 1000,
     abortSignal: context?.abortSignal,
-  })) {
+  }, "run_shell_script")) {
     switch (event.type) {
       case "stdout":
         stdoutChunks.push(event.data)
@@ -216,13 +246,13 @@ export async function* shellStream(
   let spawnError = ""
   let exitCode: number | null = null
   const startedAt = Date.now()
-  for await (const event of executeProcess({
+  for await (const event of executeShellRequest({
     command: shellExecutable(),
     args: shellArgs(command),
     env: childEnv,
     timeoutMs: timeoutSec * 1000,
     abortSignal: context?.abortSignal,
-  })) {
+  }, "run_shell_script")) {
     if (event.type === "exit" && event.signal === "error") spawnError = "failed to spawn"
 
     switch (event.type) {

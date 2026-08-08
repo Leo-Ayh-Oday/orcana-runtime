@@ -1,0 +1,12 @@
+[package]
+name = "orcana-cell-init"
+version = "0.1.0"
+edition = "2021"
+description = "Orcana cell init: fixed 9-step isolation bootstrap before execve (LR2-4)"
+
+[dependencies]
+# 纯 std —— 无外部依赖（最小攻击面）
+
+[profile.release]
+opt-level = 2
+strip = true

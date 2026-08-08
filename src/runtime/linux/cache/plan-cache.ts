@@ -100,21 +100,38 @@ export function templateIsClean(plan: CompiledSandboxPlan): boolean {
 }
 
 export class PlanCache {
+  /** m6：LRU 上限（长期运行不无界增长）。 */
+  private static readonly MAX_PLANS = 256
   private readonly plans = new Map<string, CompiledSandboxPlan>()
 
   /** 命中返回缓存计划；未命中 undefined（调用方编译后 put）。 */
   get(key: PlanCacheKey): CompiledSandboxPlan | undefined {
-    return this.plans.get(planKeyString(key))
+    const k = planKeyString(key)
+    const plan = this.plans.get(k)
+    if (plan) {
+      // LRU：命中移到末尾（最近使用）
+      this.plans.delete(k)
+      this.plans.set(k, plan)
+    }
+    return plan
   }
 
   /** 放入缓存；模板污染（含秘密/路径）时拒绝（fail-closed）。 */
   put(plan: CompiledSandboxPlan): boolean {
     if (!templateIsClean(plan)) return false
-    this.plans.set(planKeyString(plan.key), plan)
+    const k = planKeyString(plan.key)
+    this.plans.delete(k)
+    this.plans.set(k, plan)
+    if (this.plans.size > PlanCache.MAX_PLANS) {
+      const oldest = this.plans.keys().next().value
+      if (oldest !== undefined) this.plans.delete(oldest)
+    }
     return true
   }
 
-  /** 注入运行时字段 → 展开后的执行视图（模板本身不变）。 */
+  /** 注入运行时字段 → 展开后的执行视图（模板本身不变）。
+   *  m2：替换后残留的 `{{` 占位符 → 报错（静默保留字面占位符会进入
+   *  挂载源/环境/argv）。 */
   materialize(plan: CompiledSandboxPlan, injection: PlanRuntimeInjection): {
     mount: string
     environment: Record<string, string>
@@ -126,13 +143,18 @@ export class PlanCache {
       .replaceAll("{{cellId}}", injection.cellId)
       .replaceAll("{{runId}}", injection.runId)
       .replaceAll("{{workspacePath}}", injection.workspacePath)
-    return {
-      mount: subst(plan.mountTemplate),
-      environment: Object.fromEntries(
-        Object.entries(plan.environmentTemplate).map(([k, v]) => [k, subst(v)]),
-      ),
-      argv: plan.backendArgvTemplate.map(subst),
+    const mount = subst(plan.mountTemplate)
+    const environment = Object.fromEntries(
+      Object.entries(plan.environmentTemplate).map(([k, v]) => [k, subst(v)]),
+    )
+    const argv = plan.backendArgvTemplate.map(subst)
+    // 残留占位符检测（模板含未支持占位符 → fail-closed）。
+    for (const v of [mount, ...Object.values(environment), ...argv]) {
+      if (v.includes("{{")) {
+        throw new Error(`unresolved template placeholder in materialized plan`)
+      }
     }
+    return { mount, environment, argv }
   }
 
   get size(): number {

@@ -20,6 +20,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { join } from "node:path"
 import { CacheObjectState, READABLE_CACHE_STATES, type CacheObjectRecord } from "./cache-states"
 
+/** M1：锁陈旧阈值（写入方崩溃遗留的锁超过此时长即接管）。 */
+const LOCK_STALE_MS = 30_000
+
 export interface ProducerReceipt {
   ok: boolean
   runId?: string
@@ -55,11 +58,21 @@ export class ContentAddressedStore {
     return this.nowFn()
   }
 
+  /** M2 修复：digest 格式守卫（非 64-hex 直接抛错 —— 防路径穿越）。
+   *  digest 只能来自内容哈希（内部生成）或 manifest 记录（外部可信面）。 */
+  private assertDigestFormat(digest: string): void {
+    if (!/^[a-f0-9]{64}$/.test(digest)) {
+      throw new Error(`invalid cache digest: ${digest.slice(0, 32)}...`)
+    }
+  }
+
   private objectPath(digest: string): string {
+    this.assertDigestFormat(digest)
     return join(this.objectsDir, digest)
   }
 
   private manifestPath(digest: string): string {
+    this.assertDigestFormat(digest)
     return join(this.manifestsDir, `${digest}.json`)
   }
 
@@ -69,12 +82,21 @@ export class ContentAddressedStore {
     return record !== undefined && READABLE_CACHE_STATES.has(record.state)
   }
 
-  /** 读取 VALID 对象内容；非 VALID（QUARANTINED/INVALID/STAGING）拒绝。 */
+  /** 读取 VALID 对象内容；非 VALID（QUARANTINED/INVALID/STAGING）拒绝。
+   *  M5 修复：读取侧 sha256 校验（磁盘损坏/外部篡改 → 静默降级为
+   *  QUARANTINED，不返回坏内容）。 */
   read(digest: string): Buffer | undefined {
     const record = this.record(digest)
     if (!record || !READABLE_CACHE_STATES.has(record.state)) return undefined
     const path = this.objectPath(digest)
-    return existsSync(path) ? readFileSync(path) : undefined
+    if (!existsSync(path)) return undefined
+    const content = readFileSync(path)
+    const actual = createHash("sha256").update(content).digest("hex")
+    if (actual !== digest) {
+      this.mark(digest, "QUARANTINED", "content hash mismatch on read")
+      return undefined
+    }
+    return content
   }
 
   record(digest: string): CacheObjectRecord | undefined {
@@ -111,14 +133,18 @@ export class ContentAddressedStore {
       // INVALID/EVICTING：允许重写发布。
     }
 
-    // 写锁（并发双写保护：staging 唯一 + 原子 rename）
+    // 写锁（并发双写保护：staging 唯一 + 原子 rename）。
+    // M1 修复：锁文件写 pid+timestamp；陈旧锁（写入方崩溃遗留）超时即
+    // 视为失效并接管 —— 崩溃残留不得永久毒化该 digest。
     const lockPath = join(this.locksDir, `${digest}.lock`)
     if (existsSync(lockPath)) {
-      // 已有写入进行中：等待（v1 简化：锁存在即视为并发，返回 existing？
-      // —— 不：并发写同一内容最终一致；返回 existing 由调用方重读。）
-      return "existing"
+      if (this.isStaleLock(lockPath)) {
+        rmSync(lockPath, { force: true })
+      } else {
+        return "existing"
+      }
     }
-    writeFileSync(lockPath, String(process.pid), { mode: 0o600 })
+    writeFileSync(lockPath, `${process.pid}:${this.now}`, { mode: 0o600 })
 
     try {
       // staging（唯一临时名）→ digest 校验 → 原子 rename
@@ -166,13 +192,37 @@ export class ContentAddressedStore {
     renameSync(temp, this.manifestPath(digest))
   }
 
-  /** 淘汰（EVICTING → 删除对象 + manifest）。幂等。 */
+  /** M1：锁陈旧判定 —— 锁内容 "pid:ts"，超时（默认 30s）或 pid 已退出
+   *  即视为崩溃遗留。 */
+  private isStaleLock(lockPath: string): boolean {
+    try {
+      const [pidStr, tsStr] = readFileSync(lockPath, "utf8").split(":")
+      const ts = Number(tsStr)
+      if (Number.isFinite(ts) && this.now - ts > LOCK_STALE_MS) return true
+      const pid = Number(pidStr)
+      if (Number.isFinite(pid) && pid > 0) {
+        // pid 存活检查（尽力而为：ESRCH = 已退出 → 陈旧）
+        try {
+          process.kill(pid, 0)
+          return false // 写入方还活着 → 不接管
+        } catch {
+          return true // 进程已退出 → 陈旧
+        }
+      }
+      return true
+    } catch {
+      return true
+    }
+  }
+
+  /** 淘汰（EVICTING → 删除对象 + manifest + 锁）。幂等。 */
   evict(digest: string): boolean {
     const record = this.record(digest)
     if (!record) return false
     this.mark(digest, "EVICTING")
     rmSync(this.objectPath(digest), { force: true })
     rmSync(this.manifestPath(digest), { force: true })
+    rmSync(join(this.locksDir, `${digest}.lock`), { force: true })
     return true
   }
 

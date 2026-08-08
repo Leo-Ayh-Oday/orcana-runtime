@@ -178,11 +178,22 @@ export class ProgressGovernor {
     const delta = this.computeDelta(input)
 
     // ── GS-P4：无工具轮检测文本承诺（有工具轮不设承诺——动作已在执行） ──
+    // 注册轮不计债务（"后续 2 轮" = 承诺之后的完整两轮）；新文本承诺不重置
+    // 既有债务（防"每 2 轮再承诺一次"Goodhart）。
+    let commitmentState: { discharged: boolean; debtRemaining: number; status: "ok" | "action_required" | "stalled" }
     if (input.committedToolCalls.length === 0) {
       const commitment = detectCommitment(input.finalText, input.round)
-      if (commitment) this.commitments.register(commitment)
+      if (commitment) {
+        this.commitments.register(commitment)
+        commitmentState = { discharged: false, debtRemaining: this.commitments.pendingDebt, status: "ok" }
+      } else {
+        commitmentState = this.commitments.tickRound(input.committedToolCalls)
+      }
+    } else {
+      commitmentState = this.commitments.tickRound(input.committedToolCalls)
     }
-    const commitmentState = this.commitments.tickRound(input.committedToolCalls)
+    // delta.commitment 反映 tick 后状态（偿付轮 → null；未偿付 → 挂起承诺）
+    delta.commitment = this.commitments.active
 
     // ── streak（GS-P2）：effective → 清零；否则递增。
     // 首轮无基准（this.last 为 null）不计入 streak —— 与 v1 一致：

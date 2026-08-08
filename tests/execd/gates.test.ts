@@ -13,7 +13,7 @@
 
 import { describe, expect, test } from "bun:test"
 import net from "node:net"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecd, type Execd } from "../../src/execd/execd"
@@ -62,7 +62,9 @@ function req(method: string, payload?: unknown, idempotencyKey = `g-${Math.rando
 async function setup(): Promise<{ execd: Execd; sockPath: string; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "execd-gates-"))
   const sockPath = join(dir, "execd.sock")
-  const execd = createExecd({ sockPath, statePath: join(dir, "execd.db"), workspaceHostRoot: process.cwd() })
+  // workspace 根必须存在（编译校验 cwd 在 workspace 内）。
+  mkdirSync(join(dir, "ws"), { recursive: true })
+  const execd = createExecd({ sockPath, statePath: join(dir, "execd.db"), workspaceHostRoot: join(dir, "ws") })
   await execd.start()
   return { execd, sockPath, dir }
 }
@@ -168,19 +170,23 @@ describe("LR2-1 Gates (L1-H)", () => {
     const sockPath = join(dir, "execd.sock")
     const statePath = join(dir, "execd.db")
     try {
-      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: process.cwd() })
+      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: join(dir, "ws") })
       await execd1.start()
-      const c = connect(sockPath)
-      c.send(req("SubmitCell", { capabilityId: "run_process", executable: "/bin/sh", args: ["-c", "sleep 20"], workloadKind: "build", readonly: false }))
-      const cellId = (await c.next() as { result: { cellId: string } }).result.cellId
+      // 模拟崩溃：直接注入 RUNNING 残留（绕过优雅关闭 —— 优雅关闭会
+      // 取消在途 cell，注入的残留不在跟踪集合内）。
+      execd1.state.upsertCell({
+        cellId: "crash-cell", runId: "crash-run", nodeRunId: "crash-run:n", attempt: 1,
+        capabilityId: "run_process", executable: "/bin/true", argsJson: "[]",
+        currentState: "RUNNING", createdAt: Date.now(), updatedAt: Date.now(),
+      })
       await execd1.stop()
-      c.socket.destroy()
 
-      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: process.cwd() })
+      // 重启：Recovery 收敛残留 → LOST；无任何非终态残留。
+      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: join(dir, "ws") })
       await execd2.start()
       try {
-        expect(execd2.state.listNonTerminalCells()).toHaveLength(0) // 全部收敛
-        expect(execd2.state.getCell(cellId)!.currentState).toBe("LOST")
+        expect(execd2.state.getCell("crash-cell")!.currentState).toBe("LOST")
+        expect(execd2.state.listNonTerminalCells()).toHaveLength(0)
       } finally {
         await execd2.stop()
       }

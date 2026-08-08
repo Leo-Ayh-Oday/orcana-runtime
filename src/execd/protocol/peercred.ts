@@ -34,9 +34,10 @@ function loadGetsockopt(): ((fd: number, level: number, opt: number, value: Uint
 }
 
 /** 读取 unix socket 对端凭据；非 linux / ffi 不可用 → undefined。 */
-export function peerCredentialsOf(socket: { _handle?: { fd?: number } }): PeerCredentials | undefined {
+export function peerCredentialsOf(socket: unknown): PeerCredentials | undefined {
   const fn = loadGetsockopt()
-  const fd = socket._handle?.fd
+  const handle = (socket as { _handle?: { fd?: number } })._handle
+  const fd = handle?.fd
   if (!fn || !fd || fd < 0) return undefined
   try {
     const value = new Uint8Array(12) // struct ucred: pid, uid, gid (4B each)

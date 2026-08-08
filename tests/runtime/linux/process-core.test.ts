@@ -276,6 +276,73 @@ describe("LF-2: WRONG_PROCESS_KILL (F7, pid<=0)", () => {
   })
 })
 
+describe("LF-2: launcher handshake (LR2-0F)", () => {
+  const { mkdtempSync, writeFileSync, existsSync } = require("node:fs") as typeof import("node:fs")
+  const { tmpdir } = require("node:os") as typeof import("node:os")
+  const { join } = require("node:path") as typeof import("node:path")
+
+  linuxOnly("attach rejection blocks the target before exec (no instructions run)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lh-block-"))
+    const marker = join(dir, "executed.txt")
+    // onSpawn 返回 false（attach 未确认）→ launcher 阻塞在 read，
+    // 目标（写 marker 的命令）不得执行。
+    const controller = new AbortController()
+    const promise = runSupervised({
+      executable: "/bin/sh",
+      args: ["-c", `echo EXECUTED > ${marker}`],
+      cwd: "/tmp",
+      env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
+      limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
+      wallTimeMs: 5000,
+      abortSignal: controller.signal,
+      launcherHandshake: true,
+      onSpawn: () => false,
+    })
+    await new Promise(r => setTimeout(r, 400))
+    expect(existsSync(marker)).toBe(false) // 目标从未执行
+    controller.abort()
+    const result = await promise
+    expect(result.cancelled).toBe(true)
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  linuxOnly("handshake releases the target after attach confirmation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lh-rel-"))
+    const marker = join(dir, "executed.txt")
+    const result = await runSupervised({
+      executable: "/bin/sh",
+      args: ["-c", `echo EXECUTED > ${marker}; echo out; exit 7`],
+      cwd: "/tmp",
+      env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
+      limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
+      wallTimeMs: 5000,
+      launcherHandshake: true,
+      onSpawn: () => true, // attach 确认 → 释放
+    })
+    expect(result.exitCode).toBe(7)
+    expect(result.stdout.trim()).toBe("out")
+    expect(existsSync(marker)).toBe(true)
+    // exec 替换进程自身 —— PID 不变（launcher 语义）。
+    expect(result.orphanProcesses).toBe(0)
+  })
+
+  linuxOnly("handshake preserves seccomp FD slot and stdin semantics", async () => {
+    // launcher 模式下 stdin 为 pipe（释放令牌通道）；释放后 end → 目标
+    // stdin EOF（≈ closed）。目标读 stdin 应立即 EOF。
+    const result = await runSupervised({
+      executable: "/bin/sh",
+      args: ["-c", "read -r line && echo got:$line || echo eof"],
+      cwd: "/tmp",
+      env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
+      limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 },
+      wallTimeMs: 5000,
+      launcherHandshake: true,
+      onSpawn: () => true,
+    })
+    expect(result.stdout.trim()).toBe("eof")
+  })
+})
+
 describe("LF-2: terminateTree bounded budget (LR2-0J)", () => {
   /** 组内唯一、SIGTERM 显式忽略的进程（系统 node 注册 handler；实测 WSL
    *  dash 的 trap '' TERM 不可靠——信号后仍退出；bun 的 process.execPath

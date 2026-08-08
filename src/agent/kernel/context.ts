@@ -45,7 +45,7 @@ import { SandboxManager } from "../../sandbox/sandbox"
 import { setShellSandbox } from "../../tools/shell"
 import { setActiveMode } from "../mode-contract"
 import { ToolExecutionLedger } from "../tool-ledger"
-import { ProgressGovernor } from "./progress-governor"
+import { ProgressGovernor, resolveProgressConfig } from "./progress-governor"
 import { StateMachine, AgentState } from "../state-machine"
 import { createEpochState, epochThresholdsForContext } from "../context-epoch"
 import type { LoopDecision, RunPhaseContext } from "./types"
@@ -370,8 +370,8 @@ export async function buildRunContext(
   // GATE-05: GateOverflow 已删除（断环职责并入 ProgressGovernor）——
   // deferredGateMessages 保留给 revise-plan 等通用延迟消息。
   const deferredGateMessages: string[] = []
-  // GATE-03: run-scoped liveness ledger — one governor per run.
-  const progressGovernor = new ProgressGovernor()
+  // GATE-03 v2: run-scoped liveness ledger — one governor per run（GS-P1~P6 配置）。
+  const progressGovernor = new ProgressGovernor(resolveProgressConfig())
   options.runTrace?.record("agent_loop_started", { maxRounds, toolCount: tools.length })
 
   // L1 ownership: Router State remains the legacy behavior driver.

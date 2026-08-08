@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { ProgressGovernor, type RoundProgressInput, type ProgressConfig } from "../src/agent/kernel/progress-governor"
+import { ProgressGovernor, resolveProgressConfig, type RoundProgressInput, type ProgressConfig } from "../src/agent/kernel/progress-governor"
 import { AgentState } from "../src/agent/state-machine"
 import type { RoundToolCall } from "../src/agent/run/types"
 import type { VerificationResult } from "../src/verification/result"
@@ -315,5 +315,113 @@ describe("GS-P4 — Action Commitment", () => {
     const content = commitmentPrompt().content as string
     expect(content).toContain("同类")
     expect(content).toContain("工具调用")
+  })
+})
+
+// ── 配置（env 覆盖，ORCANA_PROGRESS_*） ──
+
+describe("resolveProgressConfig", () => {
+  test("默认值与 v1 一致（窗口 4 不变）", () => {
+    const cfg = resolveProgressConfig({})
+    expect(cfg.stallRounds).toBe(4)
+    expect(cfg.reconBudget).toBe(20)
+    expect(cfg.commitmentDebt).toBe(2)
+    expect(cfg.seenCap).toBe(1024)
+  })
+
+  test("env 覆盖 + 非法值回落默认", () => {
+    const cfg = resolveProgressConfig({
+      ORCANA_PROGRESS_STALL_ROUNDS: "6",
+      ORCANA_PROGRESS_RECON_BUDGET: "10",
+      ORCANA_PROGRESS_COMMITMENT_DEBT: "3",
+      ORCANA_PROGRESS_SEEN_CAP: "512",
+    })
+    expect(cfg.stallRounds).toBe(6)
+    expect(cfg.reconBudget).toBe(10)
+    expect(cfg.commitmentDebt).toBe(3)
+    expect(cfg.seenCap).toBe(512)
+    const bad = resolveProgressConfig({ ORCANA_PROGRESS_STALL_ROUNDS: "abc", ORCANA_PROGRESS_RECON_BUDGET: "-5" })
+    expect(bad.stallRounds).toBe(4)
+    expect(bad.reconBudget).toBe(20)
+  })
+})
+
+// ── GS-P6：STALLED 报告 v2 断言 ──
+
+describe("GS-P6 — STALLED 报告 v2", () => {
+  test("报告含 Delta 明细表 / Recon 预算 / 重复观察 / 判定理由", () => {
+    const g = new ProgressGovernor()
+    // 两轮 novel read 后进入重复空转
+    g.evaluate(read("a.md", "r1"))
+    g.evaluate(read("a.md", "r1"))
+    g.evaluate(read("a.md", "r1"))
+    g.evaluate(read("a.md", "r1"))
+    const stalled = g.evaluate(read("a.md", "r1"))
+    expect(stalled.action).toBe("stalled")
+    if (stalled.action === "stalled") {
+      const r = stalled.report
+      expect(r).toContain("近 4 轮 Delta 明细")
+      expect(r).toContain("| 轮 | 阶段 | execution | evidence | epistemic | control |")
+      expect(r).toContain("Recon 预算:")
+      expect(r).toContain("重复观察: 累计")
+      expect(r).toContain("[execution=0, evidence=0, epistemic=0, control=0]")
+      expect(r).toContain("跟踪文件:")
+    }
+  })
+
+  test("commitment 停滞报告含未执行承诺原文与 class", () => {
+    const g = new ProgressGovernor()
+    g.evaluate(input({ finalText: "我接下来把失败清单落盘保存。" }))
+    g.evaluate(read("a.ts", "r1"))
+    g.evaluate(read("a.ts", "r1"))
+    const stalled = g.evaluate(read("a.ts", "r1"))
+    expect(stalled.action).toBe("stalled")
+    if (stalled.action === "stalled") {
+      expect(stalled.report).toContain("GS-P4")
+      expect(stalled.report).toContain("未执行承诺")
+      expect(stalled.report).toContain("落盘")
+    }
+  })
+})
+
+// ── RECON → DIAGNOSE → IMPLEMENT 状态转换评测 ──
+
+describe("评测：RECON → DIAGNOSE → IMPLEMENT 全程不被误杀", () => {
+  test("合法侦察序列：novel reads + 验证基线 + FAIL→PASS + 写实现 → 全程 proceed", () => {
+    const g = new ProgressGovernor()
+    // RECON：读文档 + 源码（novel）
+    expect(g.evaluate(read("docs/architecture.md", "r1")).action).toBe("proceed")
+    expect(g.evaluate(read("docs/backend-contract.md", "r2")).action).toBe("proceed")
+    expect(g.evaluate(read("src/runtime/linux/broker.ts", "r3")).action).toBe("proceed")
+    // DIAGNOSE：跑测试拿基线（新命令新输出 → execution）
+    expect(g.evaluate(cmd("bun test tests/runtime/linux", "c1", "17 failed")).action).toBe("proceed")
+    // 分类失败（novel read）
+    expect(g.evaluate(read("tests/runtime/linux/broker.test.ts", "r4")).action).toBe("proceed")
+    // VERIFY+failed → DIAGNOSE 阶段；FAIL→PASS 翻转（evidence+2）
+    expect(g.evaluate(input({ agentState: AgentState.VERIFY, verificationResults: [verify("test", "bun test", false)] })).action).toBe("proceed")
+    const flip = g.evaluate(input({ agentState: AgentState.VERIFY, verificationResults: [verify("test", "bun test", true)] }))
+    expect(flip.action).toBe("proceed")
+    // IMPLEMENT：进入 CODE（阶段转换 control）+ 写实现（execution）
+    expect(g.evaluate(input({ agentState: AgentState.CODE, committedToolCalls: [{ id: "w", name: "edit_file", input: { path: "src/runtime/linux/broker.ts" } }] })).action).toBe("proceed")
+    // 全程无停滞
+    expect(g.consecutiveNoProgress).toBe(0)
+  })
+
+  test("反向：承诺不执行 → 提前 stalled（比 4 轮 streak 更快）", () => {
+    const g = new ProgressGovernor()
+    g.evaluate(input({ finalText: "我接下来重跑测试确认。" })) // 注册（verify 承诺），debt=0
+    g.evaluate(read("a.ts", "r1")) // debt=1
+    expect(g.evaluate(read("a.ts", "r1")).action).toBe("action_required") // debt=2 → action_required（第 N+2 轮，先于 streak）
+    const stalled = g.evaluate(read("a.ts", "r1")) // debt=3 → commitment stalled
+    expect(stalled.action).toBe("stalled")
+    if (stalled.action === "stalled") expect(stalled.reason).toBe("commitment")
+  })
+
+  test("承诺被偿付：重跑测试承诺 → terminal bun test → 清除，继续前进", () => {
+    const g = new ProgressGovernor()
+    g.evaluate(input({ finalText: "我接下来重跑测试确认。" }))
+    const d = g.evaluate(cmd("bun test", "c1", "all pass"))
+    expect(d.delta?.commitment).toBeNull() // 偿付（verify 类匹配）
+    expect(d.action).toBe("proceed")
   })
 })

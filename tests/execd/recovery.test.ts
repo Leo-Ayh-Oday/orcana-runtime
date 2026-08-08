@@ -84,9 +84,12 @@ describe("Recovery (L1-F)", () => {
     const { state, recovery, published, cleanup } = setup()
     try {
       state.upsertCell(crashedCell("c-se", "SIDE_EFFECT_UNKNOWN"))
-      recovery.run()
-      expect(state.getCell("c-se")!.currentState).toBe("SIDE_EFFECT_UNKNOWN") // 不迁移、不重跑
-      expect(published).toContain("recovery") // 广播等待 reconcile
+      const report = recovery.run()
+      // SIDE_EFFECT_UNKNOWN 是终态（等待 reconcile）—— 恢复扫描不触碰：
+      // 不迁移、不重跑、无广播（reconcile 是人工/外部流程）。
+      expect(report.scanned).toBe(0)
+      expect(state.getCell("c-se")!.currentState).toBe("SIDE_EFFECT_UNKNOWN")
+      expect(published).toHaveLength(0)
     } finally {
       cleanup()
     }

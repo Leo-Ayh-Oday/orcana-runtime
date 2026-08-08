@@ -16,7 +16,7 @@
  */
 
 import { existsSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve, sep } from "node:path"
 import { execFileSync } from "node:child_process"
 
 export type OverlayBackend = "overlayfs" | "fuse-overlayfs" | "git-worktree" | "none"
@@ -41,16 +41,28 @@ export interface OverlayInstance {
   snapshot(): string
 }
 
-/** 探测可用的 Overlay 后端（按优先级）。 */
+/** 探测可用的 Overlay 后端（按优先级）。
+ *  M4 修复：native OverlayFS 必须**真实挂载成功**才算可用（模块加载
+ *  ≠ 有 CAP_SYS_ADMIN —— mount --help 无特权也成功，会谎报能力）。 */
 export function detectOverlayBackend(): OverlayBackend {
-  // 1. native OverlayFS：需要 mount 权限（WSL 上通常无 —— 条件启用）。
+  // 1. native OverlayFS：真实尝试挂载临时 overlay（EPERM/失败 → 降级）。
   try {
-    execFileSync("mount", ["-t", "overlay", "--help"], { stdio: "ignore" })
-    // 实际挂载测试：无权限则抛错 → 降级。
-    const probe = execFileSync("sh", ["-c", "test -r /sys/module/overlay/version && echo yes"], { encoding: "utf8" }).trim()
-    if (probe === "yes") return "overlayfs"
+    const tmp = execFileSync("mktemp", ["-d"], { encoding: "utf8" }).trim()
+    const lower = `${tmp}/lower`
+    const upper = `${tmp}/upper`
+    const work = `${tmp}/work`
+    const merged = `${tmp}/merged`
+    const { mkdirSync, rmSync } = require("node:fs") as typeof import("node:fs")
+    mkdirSync(lower)
+    mkdirSync(upper)
+    mkdirSync(work)
+    mkdirSync(merged)
+    execFileSync("mount", ["-t", "overlay", "overlay", "-o", `lowerdir=${lower},upperdir=${upper},workdir=${work}`, merged], { stdio: "ignore" })
+    execFileSync("umount", [merged], { stdio: "ignore" })
+    rmSync(tmp, { recursive: true, force: true })
+    return "overlayfs"
   } catch {
-    // 降级
+    // 无挂载权限（WSL 常见）→ 降级
   }
   // 2. fuse-overlayfs：可执行文件存在。
   try {
@@ -80,11 +92,21 @@ export class GitWorktreeOverlay {
    * @param label worktree 标签（cellId 等）
    */
   create(repoPath: string, snapshotRef: string, workRoot: string, label: string): OverlayInstance {
+    // M3 修复：label 必须是安全字符（防路径穿越 —— label 来自调用方）。
+    if (!/^[A-Za-z0-9._-]+$/.test(label)) {
+      throw new Error(`invalid overlay label: ${label}`)
+    }
     const worktreePath = join(workRoot, `wt-${label}`)
+    // M3：worktree 路径必须落在 workRoot 之下（防御性校验）。
+    const resolvedWork = resolve(workRoot)
+    if (!resolve(worktreePath).startsWith(resolvedWork + sep)) {
+      throw new Error(`worktree escapes workRoot: ${worktreePath}`)
+    }
     if (!existsSync(repoPath)) throw new Error(`repo not found: ${repoPath}`)
     const run = (args: string[]): string => execFileSync("git", args, { cwd: repoPath, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
-    run(["worktree", "add", "--detach", worktreePath, snapshotRef])
-    const snapshotBase = snapshotRef
+    // M3：snapshotRef 固化为 commit SHA（rev 语法歧义/前导 - 不可达）。
+    const snapshotBase = run(["rev-parse", "--verify", `${snapshotRef}^{commit}`]).trim()
+    run(["worktree", "add", "--detach", worktreePath, snapshotBase])
 
     return {
       backend: "git-worktree",

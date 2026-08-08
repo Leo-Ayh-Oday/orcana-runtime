@@ -72,6 +72,41 @@ describe("Plan Cache wiring (P2-D)", () => {
     }
   })
 
+  test("B1: different timeoutMs/memory never share the cached template", () => {
+    const ws = mkdtempSync(join(tmpdir(), "pc-ws-"))
+    try {
+      const cache = new PlanCache()
+      const a = compileCapabilityRequestCached(request({ timeoutMs: 5000, memoryMaxBytes: 64 * 1024 * 1024 }), wsAuthority(ws, "r1"), cache, ws)
+      expect(a.ok).toBe(true)
+      const b = compileCapabilityRequestCached(request({ timeoutMs: 120_000, memoryMaxBytes: 2 * 1024 * 1024 * 1024 }), wsAuthority(ws, "r2"), cache, ws)
+      expect(b.ok).toBe(true)
+      if (a.ok && b.ok) {
+        // 键含资源分量 → 不共享（b 保留自己的声明值）
+        expect(b.spec.resources.wallTimeMs).not.toBe(a.spec.resources.wallTimeMs)
+        expect(cache.size).toBe(2)
+      }
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  test("B1: cwd escape is rejected even on cache hit (no validation bypass)", () => {
+    const ws = mkdtempSync(join(tmpdir(), "pc-ws-"))
+    try {
+      const cache = new PlanCache()
+      const first = compileCapabilityRequestCached(request(), wsAuthority(ws, "r1"), cache, ws)
+      expect(first.ok).toBe(true)
+      // 命中路径：恶意 relativeCwd（越界）必须被拒绝 —— 不能放行旧模板
+      const escaped = compileCapabilityRequestCached(
+        request({ command: { executable: "/bin/true", args: [], relativeCwd: "../etc", stdin: "closed" } }),
+        wsAuthority(ws, "r2"), cache, ws,
+      )
+      expect(escaped.ok).toBe(false)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
   test("broker compileRequest honors the plan cache", () => {
     const ws = mkdtempSync(join(tmpdir(), "pc-ws-"))
     try {

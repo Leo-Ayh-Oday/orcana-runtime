@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, renameSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
-import { SessionStore, type Session, SessionCorruptedError } from "./sqlite-session"
+import { SessionStore, type Session, SessionCorruptedError, isSessionSqliteAvailable } from "./sqlite-session"
 
 export interface MigrationResult {
   migrated: number
@@ -55,6 +55,12 @@ export function migrateSession(sessionId: string, storeDir?: string): boolean {
   const jsonPath = join(dir, `${sessionId}.json`)
   const dbPath = join(dir, `${sessionId}.db`)
 
+  // SQLite 不可用（纯 node 运行时，npm 发布主路径）时禁止迁移：SessionStore
+  // 会退化为内存 fallback，不产生 .db——此时 rename json→bak 等于丢数据
+  // （load 只认 .json/.db）。2026-08-08 续考事故：node 下迁移把会话 rename
+  // 成 .bak 后 load 报"不存在"，且每次启动重复迁移内容翻倍。
+  if (!isSessionSqliteAvailable()) return false
+
   // Already migrated
   if (existsSync(dbPath)) return false
   // No JSON source
@@ -89,6 +95,9 @@ export function migrateSession(sessionId: string, storeDir?: string): boolean {
 
 /** Check if any old JSON sessions need migration. */
 export function needsMigration(storeDir?: string): boolean {
+  // 与 migrateSession 同守卫：sqlite 不可用（纯 node 运行时）时迁移无意义
+  // 且 rename 会丢数据——此时永远不需要"迁移"。
+  if (!isSessionSqliteAvailable()) return false
   const dir = storeDir ?? join(homedir(), ".orcana", "sessions")
   try {
     return readdirSync(dir).some(f => f.endsWith(".json") && !f.endsWith(".tmp") && !f.endsWith(".bak"))

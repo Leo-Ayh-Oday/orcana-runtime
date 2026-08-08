@@ -22,7 +22,7 @@ export interface ExecdServerDeps {
   sockPath: string
   state: StateStore
   /** L1-D：Cell/Run 操作（server 保持路由薄层）。 */
-  submitCell: (payload: import("./protocol/messages").SubmitCellPayload, sessionId: string) => Promise<{ cellId: string; runId: string; idempotent: boolean }>
+  submitCell: (payload: import("./protocol/messages").SubmitCellPayload, idempotencyKey: string, sessionId: string) => Promise<{ cellId: string; runId: string; idempotent: boolean }>
   getCell: (cellId: string) => import("./state/store").CellRecord | undefined
   cancelCell: (cellId: string) => Promise<void>
   cancelAgent: (agentId: string) => Promise<void>
@@ -173,7 +173,7 @@ export class ExecdServer {
         return { type: "ok", requestId: request.requestId, result: cell }
       }
       case "SubmitCell": {
-        const result = await this.deps.submitCell(request.payload, conn.sessionId ?? "anon")
+        const result = await this.deps.submitCell(request.payload, request.idempotencyKey, conn.sessionId ?? "anon")
         return { type: "ok", requestId: request.requestId, result }
       }
       case "CancelCell":

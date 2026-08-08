@@ -36,13 +36,16 @@ describe("Priority model (P3-C)", () => {
     expect(evaluatePriority(base({ resourcePressureCost: 1 })).score).toBeLessThan(baseScore)
   })
 
-  test("PSI CRITICAL pressure overrides new tasks (pressurePenalty)", () => {
+  test("PSI CRITICAL pressure heavily penalizes new tasks (gate at PSI layer)", () => {
     const idle = evaluatePriority(base({ resourcePressureCost: 0 }))
     const pressured = evaluatePriority(base({ resourcePressureCost: 1 }))
-    // 压力成本权重 5 —— 一个 5 倍关键路径差无法抵消
+    // 同关键路径下压力显著降低评分
     expect(pressured.score).toBeLessThan(idle.score)
-    const longCriticalUnderPressure = evaluatePriority(base({ criticalPathLength: 10, resourcePressureCost: 1 }))
-    expect(longCriticalUnderPressure.score).toBeLessThan(idle.score)
+    const samePath = evaluatePriority(base({ criticalPathLength: 5 }))
+    const samePathPressured = evaluatePriority(base({ criticalPathLength: 5, resourcePressureCost: 1 }))
+    expect(samePathPressured.score).toBeLessThan(samePath.score)
+    // 暂停新任务的闸门在 PSI 层（pauseNewBuilds）—— 排序公式不承担
+    // "压过一切"的职责（极端关键路径 + 压力仍可能正分）。
   })
 
   test("decision log records every field contribution (explainable)", () => {

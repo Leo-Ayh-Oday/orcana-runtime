@@ -247,4 +247,55 @@ describe("AK-1 recovery", () => {
       fixture.cleanup()
     }
   })
+
+  test("manifest edges are verified from immutable content even if media metadata is tampered", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      const file = createFileManifest(fixture.store.cas, Buffer.from("preserve chunk"), "text/plain")
+      const chunkDigest = file.manifest.chunks[0]!.digest
+      fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        mutations: [{
+          type: "object.put",
+          objectId: "file",
+          objectType: "file",
+          contentRef: file.digest,
+        }],
+      })
+
+      const db = new Database(fixture.store.databasePath)
+      try {
+        expect(() => db.run(
+          "UPDATE cas_objects SET media_type = 'text/plain' WHERE digest = ?",
+          [file.digest],
+        )).toThrow(/CAS_OBJECT_METADATA_IMMUTABLE/)
+        db.run("DROP TRIGGER cas_objects_immutable_metadata")
+        db.run("UPDATE cas_objects SET media_type = 'text/plain' WHERE digest = ?", [file.digest])
+        db.run(
+          "DELETE FROM cas_links WHERE owner_type = 'cas_object' AND owner_id = ? AND digest = ?",
+          [file.digest, chunkDigest],
+        )
+      } finally {
+        db.close()
+      }
+
+      const report = recoverWorldStore(fixture.store)
+      expect(report.integrityIssues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: "CAS_REFERENCE_DIVERGENCE",
+          detail: expect.stringContaining(file.digest),
+        }),
+      ]))
+      expect(report.removedUnreachableObjects).not.toContain(chunkDigest)
+      expect(fixture.store.cas.record(chunkDigest)).toBeDefined()
+      expect(existsSync(fixture.store.cas.resolveObjectPath(chunkDigest))).toBe(true)
+      expect(fixture.store.getWorld("w1")?.status).toBe("corrupted")
+    } finally {
+      fixture.cleanup()
+    }
+  })
 })

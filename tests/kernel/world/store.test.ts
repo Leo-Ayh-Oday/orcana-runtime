@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { rmSync } from "node:fs"
+import { rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
   canonicalDigest,
@@ -344,23 +344,104 @@ describe("AK-1 WorldStore", () => {
     }
   })
 
-  test("metadata bigint is rejected instead of silently changing type", () => {
+  test("empty or structurally spoofed installed schemas fail closed", () => {
+    for (const corrupt of [
+      (db: Database) => db.run("DELETE FROM world_schema_meta"),
+      (db: Database) => db.run("DROP TRIGGER cas_objects_immutable_metadata"),
+    ]) {
+      const fixture = createTestWorldStore()
+      fixture.store.close()
+      const db = new Database(join(fixture.root, "world.db"))
+      try {
+        corrupt(db)
+      } finally {
+        db.close()
+      }
+      try {
+        expect(() => new WorldStore(fixture.root)).toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test("metadata is limited to reversible canonical JSON", () => {
     const fixture = createTestWorldStore()
     try {
       fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
-      expect(() => fixture.store.compareAndCommit({
+      const cyclic: Record<string, unknown> = {}
+      cyclic.self = cyclic
+      const accessor = Object.defineProperty({}, "unsafe", {
+        enumerable: true,
+        get: () => {
+          throw new Error("accessor must not execute")
+        },
+      })
+      const invalidValues: unknown[] = [
+        undefined,
+        1n,
+        new Date(0),
+        new Map([["key", "value"]]),
+        new Uint8Array([1]),
+        cyclic,
+        accessor,
+        Array(1),
+      ]
+      for (const unsafe of invalidValues) {
+        expect(() => fixture.store.compareAndCommit({
+          worldId: "w1",
+          branchId: "main",
+          baseRevision: 0n,
+          actor: "agent:a",
+          mutations: [{
+            type: "service.set",
+            serviceId: "indexer",
+            status: "ready",
+            metadata: { unsafe },
+          }],
+        })).toThrow(/canonical JSON/)
+      }
+      expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("an unchanged contentRef is revalidated before metadata-only updates", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      const content = fixture.store.cas.put(Buffer.from("trusted"), "text/plain")
+      fixture.store.compareAndCommit({
         worldId: "w1",
         branchId: "main",
         baseRevision: 0n,
         actor: "agent:a",
         mutations: [{
-          type: "service.set",
-          serviceId: "indexer",
-          status: "ready",
-          metadata: { unsafe: 1n },
+          type: "object.put",
+          objectId: "file",
+          objectType: "file",
+          contentRef: content.digest,
+          metadata: { version: 1 },
         }],
-      })).toThrow(/bigint values to be encoded explicitly as strings/)
-      expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
+      })
+      writeFileSync(fixture.store.cas.resolveObjectPath(content.digest), "corrupt")
+
+      expect(() => fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 1n,
+        actor: "agent:a",
+        mutations: [{
+          type: "object.put",
+          objectId: "file",
+          objectType: "file",
+          contentRef: content.digest,
+          metadata: { version: 2 },
+        }],
+      })).toThrow(/CAS object content is corrupt/)
+      expect(fixture.store.getWorld("w1")?.currentRevision).toBe(1n)
+      expect(fixture.store.listObjects("w1", "main")[0]?.metadata).toEqual({ version: 1 })
     } finally {
       fixture.cleanup()
     }

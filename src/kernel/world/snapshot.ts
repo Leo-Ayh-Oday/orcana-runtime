@@ -60,8 +60,8 @@ function objectEntry(object: WorldObject): SectionManifestEntry {
   return {
     id: object.objectId,
     kind: object.objectType,
-    path: object.path,
-    contentRef: object.contentRef,
+    ...(object.path === undefined ? {} : { path: object.path }),
+    ...(object.contentRef === undefined ? {} : { contentRef: object.contentRef }),
     metadata: object.metadata,
   }
 }
@@ -121,7 +121,9 @@ export class WorldSnapshotManager {
         this.source.listServices(worldId, branchId).map(service => ({
           id: service.serviceId,
           kind: "service",
-          contentRef: service.definitionDigest,
+          ...(service.definitionDigest === undefined
+            ? {}
+            : { contentRef: service.definitionDigest }),
           metadata: { ...service.metadata, status: service.status },
         })),
       )

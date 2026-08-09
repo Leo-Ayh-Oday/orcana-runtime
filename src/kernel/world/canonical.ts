@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto"
 import type { CasDigest } from "./contracts"
 
-function canonicalValue(value: unknown): string {
-  if (value === null || value === undefined) return "null"
+function canonicalValue(value: unknown, ancestors: Set<object>): string {
+  if (value === null) return "null"
+  if (value === undefined) throw new Error("canonical JSON rejects undefined values")
   if (typeof value === "bigint") {
     throw new Error("canonical JSON requires bigint values to be encoded explicitly as strings")
   }
@@ -11,20 +12,50 @@ function canonicalValue(value: unknown): string {
     return JSON.stringify(value)
   }
   if (typeof value === "boolean" || typeof value === "string") return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(canonicalValue).join(",")}]`
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) throw new Error("canonical JSON rejects cyclic arrays")
+    ancestors.add(value)
+    try {
+      return `[${Array.from(
+        { length: value.length },
+        (_, index) => canonicalValue(value[index], ancestors),
+      ).join(",")}]`
+    } finally {
+      ancestors.delete(value)
+    }
+  }
   if (typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("canonical JSON accepts only plain objects")
+    }
+    if (ancestors.has(value)) throw new Error("canonical JSON rejects cyclic objects")
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      throw new Error("canonical JSON rejects symbol keys")
+    }
     const record = value as Record<string, unknown>
-    const entries = Object.keys(record)
-      .filter(key => record[key] !== undefined)
-      .sort()
-      .map(key => `${JSON.stringify(key)}:${canonicalValue(record[key])}`)
-    return `{${entries.join(",")}}`
+    const descriptors = Object.getOwnPropertyDescriptors(record)
+    if (Object.values(descriptors).some(descriptor => descriptor.get || descriptor.set)) {
+      throw new Error("canonical JSON rejects accessors")
+    }
+    if (Object.values(descriptors).some(descriptor => !descriptor.enumerable)) {
+      throw new Error("canonical JSON rejects non-enumerable properties")
+    }
+    ancestors.add(value)
+    try {
+      const entries = Object.keys(record)
+        .sort()
+        .map(key => `${JSON.stringify(key)}:${canonicalValue(descriptors[key]!.value, ancestors)}`)
+      return `{${entries.join(",")}}`
+    } finally {
+      ancestors.delete(value)
+    }
   }
   throw new Error(`canonical JSON rejects ${typeof value}`)
 }
 
 export function canonicalJson(value: unknown): string {
-  return canonicalValue(value)
+  return canonicalValue(value, new Set())
 }
 
 export function sha256Digest(content: string | Uint8Array): CasDigest {

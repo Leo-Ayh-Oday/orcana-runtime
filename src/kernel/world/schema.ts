@@ -1,4 +1,37 @@
+import type { Database } from "bun:sqlite"
+import { canonicalDigest } from "./canonical"
+import type { CasDigest } from "./contracts"
+import { dbAll } from "./database"
+
 export const WORLD_SCHEMA_VERSION = 2
+
+interface SchemaObjectRow {
+  type: "table" | "index" | "trigger"
+  name: string
+  tableName: string
+  sql: string
+}
+
+export function worldSchemaFingerprint(db: Database): CasDigest {
+  const rows = dbAll<SchemaObjectRow>(
+    db,
+    `SELECT type, name, tbl_name AS tableName, sql
+     FROM sqlite_master
+     WHERE type IN ('table', 'index', 'trigger')
+       AND name NOT LIKE 'sqlite_%'
+       AND sql IS NOT NULL
+     ORDER BY type, name`,
+  )
+  return canonicalDigest(rows.map(row => ({
+    type: row.type,
+    name: row.name,
+    tableName: row.tableName,
+    sql: row.sql.replace(/\s+/g, " ").trim(),
+  })))
+}
+
+export const WORLD_SCHEMA_FINGERPRINT: CasDigest =
+  "sha256:797d29aa4819a89e2e19ed0a98f3f404b4501354e7fd8c34be67fb427006159d"
 
 export const WORLD_SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_schema_meta (
@@ -173,6 +206,18 @@ CREATE TRIGGER IF NOT EXISTS world_commits_immutable_update
 BEFORE UPDATE ON world_commits
 BEGIN
   SELECT RAISE(ABORT, 'WORLD_COMMIT_IMMUTABLE');
+END;
+
+CREATE TRIGGER IF NOT EXISTS cas_objects_immutable_metadata
+BEFORE UPDATE OF digest, size, media_type, created_at ON cas_objects
+BEGIN
+  SELECT RAISE(ABORT, 'CAS_OBJECT_METADATA_IMMUTABLE');
+END;
+
+CREATE TRIGGER IF NOT EXISTS cas_links_immutable_update
+BEFORE UPDATE ON cas_links
+BEGIN
+  SELECT RAISE(ABORT, 'CAS_LINK_IMMUTABLE');
 END;
 
 CREATE TRIGGER IF NOT EXISTS world_commits_immutable_delete

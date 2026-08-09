@@ -101,12 +101,13 @@ export async function runTypeScriptNoEmit(cwd = process.cwd()): Promise<TypeScri
     }
     // 非零退出（tsc --noEmit 报类型错误时 exit 1/2）：失败，绝不等于通过。
     const combined = (r.stdout + "\n" + r.stderr).trim()
+    const issues = Math.max(1, countIssues(combined))
     return {
       status: "failed",
       passed: false,
       available: true,
-      issues: countIssues(combined),
-      output: combined,
+      issues,
+      output: combined || `tsc exited with code ${r.exitCode}`,
       exitCode: r.exitCode,
       signal: r.signal,
     }

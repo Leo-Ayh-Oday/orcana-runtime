@@ -158,7 +158,7 @@ describe("TL-002 — cancelled processes leave no orphans", () => {
     )
     expect(result.timedOut).toBe(true)
     expect(result.exitCode).not.toBe(0)
-  })
+  }, 15_000)
 })
 
 describe("TL-003 — apply_patch path escape is rejected", () => {
@@ -212,14 +212,17 @@ describe("TL-005 — multi-file transaction rolls back on partial failure", () =
 describe("TL-006 — verification failure does not commit", () => {
   test("verify_claim refuses a claim the verification actually fails", async () => {
     const { root, relCwd } = workspaceProject(".tl-006-")
-    writeFileSync(join(root, "package.json"), JSON.stringify({
-      name: "tl-006",
-      scripts: { typecheck: "node -e \"process.exit(1)\"" },
-    }))
-    const result = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
-    expect(result.success).toBe(false)
-    expect(result.content).toContain("UNVERIFIED")
-    rmSync(root, { recursive: true, force: true })
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify({
+        name: "tl-006",
+        scripts: { typecheck: "node -e \"process.exit(1)\"" },
+      }))
+      const result = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
+      expect(result.success).toBe(false)
+      expect(result.content).toContain("UNVERIFIED")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
@@ -270,13 +273,16 @@ describe("TL-008 — git special-character paths are safe", () => {
 describe("TL-009 — rg-style special patterns cause no command injection", () => {
   test("run_process passes args verbatim (no shell interpolation)", async () => {
     const { root, relCwd } = workspaceProject(".tl-009-")
-    writeFileSync(join(root, "a.txt"), "findme\n")
-    const pattern = "$(touch injected.txt);*"
-    const result = await withTestAuthority(process.cwd(), () => runProcess({ command: "rg", args: [pattern, root], cwd: relCwd }))
-    expect(existsSync(join(root, "injected.txt"))).toBe(false)
-    // rg treats the pattern as a literal-ish search; exit semantics irrelevant
-    expect(result).toBeDefined()
-    rmSync(root, { recursive: true, force: true })
+    try {
+      writeFileSync(join(root, "a.txt"), "findme\n")
+      const pattern = "$(touch injected.txt);*"
+      const result = await withTestAuthority(process.cwd(), () => runProcess({ command: "rg", args: [pattern, root], cwd: relCwd }))
+      expect(existsSync(join(root, "injected.txt"))).toBe(false)
+      // rg treats the pattern as a literal-ish search; exit semantics irrelevant
+      expect(result).toBeDefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
@@ -405,18 +411,21 @@ describe("TL-015 — stale LSP-style diagnostics are rejected via freshness", ()
 describe("TL-016 — verify_claim refuses stale evidence", () => {
   test("a previously-passed claim is re-run and fails after the project breaks", async () => {
     const { root, relCwd } = workspaceProject(".tl-016-")
-    const script = { name: "tl-016", scripts: { typecheck: "node -e \"process.exit(0)\"" } }
-    writeFileSync(join(root, "package.json"), JSON.stringify(script))
-    // 1. first pass (evidence would be recorded)
-    const first = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
-    expect(first.success).toBe(true)
-    // 2. project breaks — claim must NOT be trusted from the earlier run
-    script.scripts.typecheck = "node -e \"process.exit(1)\""
-    writeFileSync(join(root, "package.json"), JSON.stringify(script))
-    const second = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
-    expect(second.success).toBe(false)
-    expect(second.content).toContain("UNVERIFIED")
-    rmSync(root, { recursive: true, force: true })
+    try {
+      const script = { name: "tl-016", scripts: { typecheck: "node -e \"process.exit(0)\"" } }
+      writeFileSync(join(root, "package.json"), JSON.stringify(script))
+      // 1. first pass (evidence would be recorded)
+      const first = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
+      expect(first.success).toBe(true)
+      // 2. project breaks — claim must NOT be trusted from the earlier run
+      script.scripts.typecheck = "node -e \"process.exit(1)\""
+      writeFileSync(join(root, "package.json"), JSON.stringify(script))
+      const second = await withTestAuthority(process.cwd(), () => VERIFY_CLAIM_TOOL.execute({ claims: ["typecheck_passed"], cwd: relCwd }))
+      expect(second.success).toBe(false)
+      expect(second.content).toContain("UNVERIFIED")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

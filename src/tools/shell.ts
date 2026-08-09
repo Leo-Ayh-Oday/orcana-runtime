@@ -1,5 +1,6 @@
 /** Shell tool — execute commands with streaming progress. */
 
+import { performance } from "node:perf_hooks"
 import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result, isNonInteractive } from "./registry"
 import { buildVerificationResult } from "../verification/result"
@@ -12,6 +13,10 @@ import { currentExecutionAuthority } from "../runtime/execution/execution-contex
 import type { ExecutionIntent } from "../runtime/execution/execution-intent"
 
 const SHELL_RESULT_MAX_CHARS = 8000
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAt))
+}
 
 /** LR2-0D：shell 执行路由 —— 存在受信权威时经 ExecutionGateway（统一
  *  入口 → Broker → Receipt），否则保留旧路径（Windows/测试/legacy）。 */
@@ -133,7 +138,7 @@ async function shell(
   let timedOut = false
   let aborted = false
   let exitCode: number | null = null
-  const startedAt = Date.now()
+  const startedAt = performance.now()
   for await (const event of executeShellRequest({
     command: shellExecutable(),
     args: shellArgs(command),
@@ -168,7 +173,7 @@ async function shell(
       success: false,
       error: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}`,
       content: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}${sandboxReport}`,
-      durationMs: Math.max(0, Date.now() - startedAt),
+      durationMs: elapsedMs(startedAt),
     })
   }
   let output = stdoutChunks.join("").trim() || "(empty output)"
@@ -182,7 +187,7 @@ async function shell(
       error: `Command exited with code ${code}`,
       content: output.slice(0, 8000),
       exitCode: code,
-      durationMs: Math.max(0, Date.now() - startedAt),
+      durationMs: elapsedMs(startedAt),
     })
   }
   return shellResult({
@@ -190,7 +195,7 @@ async function shell(
     success: true,
     content: output.slice(0, 8000),
     exitCode: code,
-    durationMs: Math.max(0, Date.now() - startedAt),
+    durationMs: elapsedMs(startedAt),
   })
 }
 
@@ -245,7 +250,7 @@ export async function* shellStream(
   let aborted = false
   let spawnError = ""
   let exitCode: number | null = null
-  const startedAt = Date.now()
+  const startedAt = performance.now()
   for await (const event of executeShellRequest({
     command: shellExecutable(),
     args: shellArgs(command),
@@ -285,7 +290,7 @@ export async function* shellStream(
       success: false,
       error: `Command timed out after ${timeoutSec}s`,
       content: `Command timed out after ${timeoutSec}s${sandboxReport}`,
-      durationMs: Math.max(0, Date.now() - startedAt),
+      durationMs: elapsedMs(startedAt),
     }) }
     return
   }
@@ -311,7 +316,7 @@ export async function* shellStream(
       error: `Command exited with code ${code}`,
       content: display,
       exitCode: code,
-      durationMs: Math.max(0, Date.now() - startedAt),
+      durationMs: elapsedMs(startedAt),
       truncated: truncated ? output.length : undefined,
     }) }
     return
@@ -321,7 +326,7 @@ export async function* shellStream(
     success: true,
     content: display,
     exitCode: code,
-    durationMs: Math.max(0, Date.now() - startedAt),
+    durationMs: elapsedMs(startedAt),
     truncated: truncated ? output.length : undefined,
   }) }
 }

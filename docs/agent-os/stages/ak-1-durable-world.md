@@ -350,3 +350,39 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第七轮修复候选门评估
 
 第七轮 4 个 High 与 2 个 Medium 已分别由 kernel-released flock、durable append-only bootstrap provenance、snapshot-compatible mutation validation、fatal UTF-8 与 nonblocking regular-file probes 闭锁。AK-1 仍保持 `FIXED_REAUDIT_PENDING`，等待独立 Agent 对包含本记录的固定候选 HEAD 只读复审。
+
+### FACT — 第七轮复审隔离失效与新增发现
+
+- 第七轮复审固定对象为 `5606f900fe06ca5e957b9992358e3275e06a88ad`，parent 为 `0192aa5532d5fc2776f72c9c4e10ac9f6a40ad26`。
+- 审计开始后，主代理为重复测试短暂创建并删除未跟踪的 `node_modules` symlink；tracked tree、index 与 HEAD 未变化，但审计起止状态不一致。该轮即使没有代码发现也不得作为最终独立验收，必须在干净且全程不变的 worktree 上重做。
+- 独立 Agent 最终给出 `CHANGES_REQUIRED`，确认 2 个阻断 High：
+  1. bootstrap provenance 只证明 `world.db`，未拒绝无 `complete` state 时预置的非空 WAL/SHM/journal；
+  2. transaction 前 validator 未检查运行时 `objectType` 与 metadata shape，可提交随后无法 snapshot 的 World。
+- 审计另记录 2 个残余风险：目录 `fchmod(0500)` 后未再次 fsync；`flock()` 把非 contention errno 当 busy 且使用可回拨 wall clock。
+- 审计期间的未跟踪 symlink 由主代理测试流程产生并移除，不是审计 Agent 写入；该过程违反本阶段 clean-start/clean-end 隔离要求，已作为治理事实保留。
+
+### FACT — 第八轮修复
+
+- 修复提交为 `3ae1d126a088f0e674a7c27f743876a4137695eb`，parent 为 `5606f900fe06ca5e957b9992358e3275e06a88ad`；只修改 `src/kernel/world/**` 与 `tests/kernel/world/**` 白名单内 6 个文件。
+- bootstrap 现在在 durable `complete` 缺失时要求 `world.db-wal`、`world.db-shm`、`world.db-journal` 全部为空；检查基于已通过 no-follow/single-link/regular-file 验证并固定的 FD，在写 initial image 或发布 `complete` 前 fail-closed。
+- 回归使用另一个相同 `installedAt` WorldStore 产生的真实有效 WAL 注入空目标 root，并验证构造拒绝、main DB 保持空、WAL bytes 保持不变；SHM 与 rollback journal 也逐项覆盖非空拒绝。
+- `WORLD_OBJECT_TYPES` 成为冻结的运行时/类型共同真源；commit validator 在 transaction 前验证 exact object type，并要求 object/artifact/service metadata 为 plain non-array record。
+- 回归逐项拒绝空 object type 和三类数组 metadata，确认 revision 保持 0；随后提交全部受支持 object types 并成功生成 revision 1 snapshot，闭合 commit-to-snapshot contract。
+- `recovery/` 与 World root 在 `fchmod(0500)` 后立即 fsync 对应 directory FD。
+- `flock` wrapper 读取 Linux errno：仅 `EAGAIN` 视为 contention，`EINTR` 在同一 monotonic deadline 内重试，其余错误立即 fail-closed；新增 invalid-FD 与双 FD contention/timeout 回归。
+
+### FACT — 第八轮修复后主代理验证
+
+- 定向 `file-lock + schema-bootstrap + store`：`24 pass / 0 fail / 116 expect`（加入全 object-type snapshot 断言后，单独 store suite 为 `14 pass / 0 fail / 82 expect`）。
+- `bun test tests/kernel`：`70 pass / 0 fail / 391 expect`。
+- `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- bootstrap + flock 定向 suite 连续 5 轮：每轮 `10 pass / 0 fail / 35 expect`。
+- `git diff --check`：通过；测试依赖 symlink 已删除，代码提交后 worktree 干净。
+- 一次 build 前置命令因 PowerShell/WSL PATH 转义错误未启动 build；随后使用固定 Linux PATH 重跑并通过。该命令错误不计为测试或 build 通过证据。
+- hosted CI 仍被既有账号 billing lock 阻塞为 0 steps；live/provider 测试未运行且不计为通过。
+
+### INFERENCE — 第八轮修复候选门评估
+
+第七轮复审的 2 个 High 与 2 个残余风险均已由 pinned-sidecar bootstrap validation、snapshot-compatible runtime validation、post-chmod directory fsync 和 errno-aware monotonic flock 闭锁。阶段状态仍为 `FIXED_REAUDIT_PENDING`；必须在全程无任何主代理 mutation 的干净 worktree 上完成新的独立只读复审，才可关闭 AK-1。

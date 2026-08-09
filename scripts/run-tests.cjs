@@ -15,7 +15,8 @@ const { join, relative, sep } = require("node:path")
 const { spawnSync } = require("node:child_process")
 
 const root = process.cwd()
-const extraArgs = process.argv.slice(2)
+const runLiveProvider = process.argv.includes("--live-provider")
+const extraArgs = process.argv.slice(2).filter(arg => arg !== "--live-provider")
 
 // GATE-TEST-01：显式隔离（QUARANTINED）—— 不静默排除；每项带原因，
 // 报告中逐条可见。迁移回正式门禁需先过 isolated lane。
@@ -28,6 +29,10 @@ const QUARANTINED = new Map([
   ["tests/thinking_depth.test.ts", "Live Provider Lane: provider 深度测试"],
   ["tests/thinking_quality.test.ts", "Live Provider Lane: provider 质量测试"],
 ])
+
+// This test executes provider-generated JavaScript in the host process. Keep
+// it quarantined until execution is isolated from credentials and network.
+const LIVE_PROVIDER_BLOCKED = new Set(["tests/code_as_action.test.ts"])
 
 const excludedDirs = [
   "tests/tmp",
@@ -60,7 +65,24 @@ function walk(dir, out = []) {
   return out
 }
 
-const files = [...walk(join(root, "tests")), ...walk(join(root, "src"))].sort()
+const files = runLiveProvider
+  ? [...QUARANTINED.keys()].filter(file => !LIVE_PROVIDER_BLOCKED.has(file)).sort()
+  : [...walk(join(root, "tests")), ...walk(join(root, "src"))].sort()
+
+const missingQuarantinedFiles = [...QUARANTINED.keys()].filter(file => !existsSync(join(root, file)))
+if (missingQuarantinedFiles.length > 0) {
+  console.error(`TEST_MANIFEST_DRIFT: missing quarantined files: ${missingQuarantinedFiles.join(", ")}`)
+  process.exit(1)
+}
+if (files.length === 0) {
+  console.error(`ZERO_TEST_GATE: no ${runLiveProvider ? "live-provider" : "default"} test files were discovered`)
+  process.exit(1)
+}
+
+if (runLiveProvider && !process.env.DEEPSEEK_API_KEY) {
+  console.error("LIVE_PROVIDER_SECRET_REQUIRED: DEEPSEEK_API_KEY is not configured")
+  process.exit(78)
+}
 
 function resolveBun() {
   if (process.platform !== "win32") return { command: "bun", shell: false }
@@ -131,9 +153,16 @@ if (fail > 0 || errored > 0) {
   }
 }
 
-console.log(`\n  QUARANTINED (${QUARANTINED.size}, not run — reasons visible):`)
-for (const [file, reason] of QUARANTINED) {
-  console.log(`    ⚠ ${file} — ${reason}`)
+if (runLiveProvider) {
+  console.log(`\n  LIVE_PROVIDER_BLOCKED (${LIVE_PROVIDER_BLOCKED.size}, not run):`)
+  for (const file of LIVE_PROVIDER_BLOCKED) {
+    console.log(`    ⚠ ${file} — generated-code execution is not credential-safe`)
+  }
+} else {
+  console.log(`\n  QUARANTINED (${QUARANTINED.size}, not run — reasons visible):`)
+  for (const [file, reason] of QUARANTINED) {
+    console.log(`    ⚠ ${file} — ${reason}`)
+  }
 }
 
 console.log(`  slowest files:`)

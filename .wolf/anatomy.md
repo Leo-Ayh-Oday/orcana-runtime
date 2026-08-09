@@ -32,8 +32,10 @@ Last verified: 2026-08-09
 - Local typecheck, build, official aggregate tests, real Bubblewrap, real
   rootless Podman, and delegated-cgroup evaluation have verified execution on
   the canonical WSL checkout.
-- Seven provider/live tests remain explicitly quarantined because they require
-  `DEEPSEEK_API_KEY` and network access.
+- Seven provider/live tests remain explicitly quarantined. Six have a protected
+  manual lane whose `DEEPSEEK_LIVE_API_KEY` secret is exposed to tests as
+  `DEEPSEEK_API_KEY`; `code_as_action.test.ts` stays
+  blocked until generated-code execution is credential-free and network-isolated.
 - GitHub-hosted jobs are currently blocked before step execution by an account
   billing lock. Repository changes cannot clear that external lock.
 - Landlock is unavailable on the current WSL kernel. Do not claim that boundary

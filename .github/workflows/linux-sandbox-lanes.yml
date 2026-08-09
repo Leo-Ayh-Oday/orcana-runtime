@@ -72,10 +72,11 @@ jobs:
         run: bun run eval:linux --require=podman
       - name: Cleanup Orcana Podman resources and pause process
         if: always()
+        timeout-minutes: 3
         run: |
-          ids="$(podman ps -a -q --filter label=io.orcana.run || true)"
-          if [ -n "$ids" ]; then podman rm -f $ids; fi
-          podman system migrate
+          ids="$(timeout 45s podman ps -a -q --filter label=io.orcana.run || true)"
+          if [ -n "$ids" ]; then timeout 60s podman rm -f $ids; fi
+          timeout 60s podman system migrate
           test -z "$(pgrep -x catatonit || true)"
 
   lane-cgroup:

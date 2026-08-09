@@ -18,7 +18,8 @@ belong in `docs/`.
 - Completion status must separate local test success, real Linux capability,
   live-provider validation, CI execution, mainline landing, and release.
 - Provider/live tests may run only in an explicit lane with configured secrets.
-  Missing credentials stay `QUARANTINED` or `ENV_BLOCKED`, never simulated.
+  Missing credentials stay `QUARANTINED` or `ENV_BLOCKED`, never simulated;
+  provider-generated code never executes in a process holding those secrets.
 - Preserve unrelated long-running business workloads. Process cleanup is based
   on verified ownership, not broad name or PID-range killing.
 - Implementation and independent audit remain separate. Audit reports are
@@ -43,8 +44,10 @@ belong in `docs/`.
 ## Pending Owner or External Gates
 
 - GitHub account billing lock must be cleared before hosted Actions can execute.
-- The seven live/provider tests require an explicitly configured
-  `DEEPSEEK_API_KEY` lane.
+- Six live/provider tests require an explicitly configured protected
+  `live-provider` environment and `DEEPSEEK_LIVE_API_KEY` secret.
+- `code_as_action.test.ts` remains blocked pending credential-free,
+  network-isolated generated-code execution.
 - Mainline landing and package release remain separate owner decisions.
 - A future Linux sandbox optimization plan will be evaluated separately and
   must not retroactively change the evidence recorded here.

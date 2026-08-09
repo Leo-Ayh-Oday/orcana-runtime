@@ -18,6 +18,7 @@ run_workdir="$(pwd -P)"
 unit_suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
 unit_suffix="$(printf '%s' "$unit_suffix" | tr -cd 'A-Za-z0-9_.-')"
 unit_name="orcana-cgroup-${unit_suffix}"
+runtime_max_sec=600
 
 environment=(
   "-E" "HOME=$run_home"
@@ -34,6 +35,9 @@ common=(
   "--unit=$unit_name"
   "--property=Type=exec"
   "--property=Delegate=yes"
+  "--property=KillMode=control-group"
+  "--property=RuntimeMaxSec=${runtime_max_sec}s"
+  "--property=TimeoutStopSec=15s"
   "--property=WorkingDirectory=$run_workdir"
 )
 

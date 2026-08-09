@@ -439,18 +439,20 @@ bun run typecheck
 ### Tests
 
 ```bash
-# Default test gate
-bun test
-
-# Repo-defined test script
+# Default repository gate (provider/live tests remain visibly quarantined)
 bun run test
 
-# Integration tests
+# Non-provider integration tests
 bun run test:integration
 
-# Full test suite
+# Alias for the full local gate; live/provider tests are not executed
 bun run test:all
 ```
+
+Paid provider tests run only through the manual `Live Provider Lane` workflow
+from the protected default branch. `code_as_action.test.ts` remains blocked
+until model-generated code execution has a credential-free, network-isolated
+sandbox.
 
 ### Build and publish check
 

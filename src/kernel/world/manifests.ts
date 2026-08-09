@@ -1,4 +1,4 @@
-import { canonicalJson } from "./canonical"
+import { canonicalJson, compareCanonicalStrings } from "./canonical"
 import type {
   CasDigest,
   DirectoryManifest,
@@ -78,7 +78,9 @@ export function createDirectoryManifest(
   cas: WorldCas,
   entries: readonly DirectoryManifestEntry[],
 ): StoredManifest<DirectoryManifest> {
-  const sorted = [...entries].sort((left, right) => left.name.localeCompare(right.name, "en"))
+  const sorted = [...entries].sort((left, right) =>
+    compareCanonicalStrings(left.name, right.name),
+  )
   const names = new Set<string>()
   for (const entry of sorted) {
     if (!entry.name || entry.name === "." || entry.name === ".." || /[\\/]/.test(entry.name)) {
@@ -102,8 +104,8 @@ export function createSectionManifest(
   entries: readonly SectionManifestEntry[],
 ): StoredManifest<SectionManifest> {
   const sorted = [...entries].sort((left, right) => {
-    const pathOrder = (left.path ?? "").localeCompare(right.path ?? "", "en")
-    return pathOrder !== 0 ? pathOrder : left.id.localeCompare(right.id, "en")
+    const pathOrder = compareCanonicalStrings(left.path ?? "", right.path ?? "")
+    return pathOrder !== 0 ? pathOrder : compareCanonicalStrings(left.id, right.id)
   })
   const referenced = sorted
     .map(entry => entry.contentRef)

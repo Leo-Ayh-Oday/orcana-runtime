@@ -1,4 +1,4 @@
-export const WORLD_SCHEMA_VERSION = 1
+export const WORLD_SCHEMA_VERSION = 2
 
 export const WORLD_SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_schema_meta (
@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS world_commits (
   new_revision TEXT NOT NULL,
   actor TEXT NOT NULL,
   delta_digest TEXT NOT NULL,
+  materialized_state_digest TEXT NOT NULL,
   execution_receipt_ids_json TEXT NOT NULL,
   effect_receipt_ids_json TEXT NOT NULL,
   committed_at INTEGER NOT NULL,
@@ -126,7 +127,7 @@ CREATE TABLE IF NOT EXISTS world_snapshots (
   service_state_digest TEXT NOT NULL,
   artifact_state_digest TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  UNIQUE (world_id, branch_id, revision, manifest_digest),
+  UNIQUE (world_id, branch_id, revision),
   FOREIGN KEY (world_id, branch_id) REFERENCES world_branches(world_id, branch_id)
 );
 

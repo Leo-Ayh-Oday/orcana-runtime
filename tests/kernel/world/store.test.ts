@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { rmSync } from "node:fs"
+import { join } from "node:path"
 import {
+  canonicalDigest,
+  encodeCasOwnerId,
+  recoverWorldStore,
   WorldConflictError,
   WorldStore,
   type WorldCommitRequest,
@@ -133,6 +137,8 @@ describe("AK-1 WorldStore", () => {
       ).toThrow(WorldConflictError)
       expect(peer.getWorld("w1")?.currentRevision).toBe(1n)
       expect(peer.getBranch("w1", "main")?.headRevision).toBe(1n)
+      const recovery = recoverWorldStore(peer)
+      expect(recovery.removedUnreachableObjects).toContain(second.digest)
       expect(peer.verifyIntegrity()).toEqual([])
     } finally {
       peer?.close()
@@ -220,6 +226,141 @@ describe("AK-1 WorldStore", () => {
           detail: expect.stringContaining("forged-event"),
         }),
       ]))
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("CAS root owner tuples cannot collide across World and branch identifiers", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "a", branchId: "b:c", owner: "user:one" })
+      fixture.store.createWorld({ worldId: "a:b", branchId: "c", owner: "user:two" })
+      const content = fixture.store.cas.put(Buffer.from("shared"), "text/plain")
+      for (const [worldId, branchId] of [["a", "b:c"], ["a:b", "c"]] as const) {
+        fixture.store.compareAndCommit({
+          worldId,
+          branchId,
+          baseRevision: 0n,
+          actor: "agent:a",
+          mutations: [{
+            type: "object.put",
+            objectId: "d",
+            objectType: "file",
+            contentRef: content.digest,
+          }],
+        })
+      }
+      expect(encodeCasOwnerId(["a", "b:c", "d"])).not.toBe(
+        encodeCasOwnerId(["a:b", "c", "d"]),
+      )
+      expect(fixture.store.cas.record(content.digest)?.refCount).toBe(2)
+      fixture.store.compareAndCommit({
+        worldId: "a",
+        branchId: "b:c",
+        baseRevision: 1n,
+        actor: "agent:a",
+        mutations: [{ type: "object.delete", objectId: "d" }],
+      })
+      expect(fixture.store.cas.record(content.digest)?.refCount).toBe(1)
+      expect(fixture.store.cas.gc()).not.toContain(content.digest)
+      expect(fixture.store.cas.get(content.digest).toString()).toBe("shared")
+      expect(fixture.store.verifyIntegrity()).toEqual([])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("materialized tampering and valid-digest orphan events fail integrity", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        mutations: [{ type: "service.set", serviceId: "indexer", status: "ready" }],
+      })
+      const forgedPayload = { forged: true }
+      const db = new Database(fixture.store.databasePath)
+      try {
+        db.run("UPDATE world_services SET status = 'forged' WHERE service_id = 'indexer'")
+        db.run(
+          `INSERT INTO world_events (
+             event_id, world_id, branch_id, revision, event_type, actor,
+             payload_digest, payload_json, occurred_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "orphan-valid-event",
+            "w1",
+            "main",
+            "1",
+            "forged.event",
+            "attacker",
+            canonicalDigest(forgedPayload),
+            JSON.stringify(forgedPayload),
+            1,
+          ],
+        )
+      } finally {
+        db.close()
+      }
+      const issues = fixture.store.verifyIntegrity()
+      expect(issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: "LEDGER_DB_DIVERGENCE",
+          detail: expect.stringContaining("materialized state"),
+        }),
+        expect.objectContaining({
+          code: "LEDGER_DB_DIVERGENCE",
+          detail: expect.stringContaining("no governed commit/snapshot semantics"),
+        }),
+      ]))
+      const report = recoverWorldStore(fixture.store)
+      expect(report.corruptedWorldIds).toEqual(["w1"])
+      expect(fixture.store.getWorld("w1")?.status).toBe("corrupted")
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("unknown schema versions fail closed on reopen", () => {
+    const fixture = createTestWorldStore()
+    let closed = false
+    try {
+      fixture.store.close()
+      closed = true
+      const db = new Database(join(fixture.root, "world.db"))
+      try {
+        db.run("UPDATE world_schema_meta SET schema_version = 999")
+      } finally {
+        db.close()
+      }
+      expect(() => new WorldStore(fixture.root)).toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
+    } finally {
+      if (!closed) fixture.store.close()
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  test("metadata bigint is rejected instead of silently changing type", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      expect(() => fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        mutations: [{
+          type: "service.set",
+          serviceId: "indexer",
+          status: "ready",
+          metadata: { unsafe: 1n },
+        }],
+      })).toThrow(/bigint values to be encoded explicitly as strings/)
+      expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
     } finally {
       fixture.cleanup()
     }

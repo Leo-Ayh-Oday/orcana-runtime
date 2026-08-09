@@ -8,7 +8,9 @@ import type {
   WorldObject,
   WorldServiceState,
   WorldSnapshot,
+  WorldFaultPoint,
 } from "./contracts"
+import { WorldCorruptionError } from "./contracts"
 import { WorldCas } from "./cas"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { WorldLedger } from "./ledger"
@@ -72,6 +74,7 @@ export class WorldSnapshotManager {
     private readonly source: WorldSnapshotSource,
     private readonly now: () => number,
     private readonly eventId: () => string,
+    private readonly faultInjector?: (point: WorldFaultPoint) => void,
   ) {}
 
   create(worldId: string, branchId: string): WorldSnapshot {
@@ -119,7 +122,7 @@ export class WorldSnapshotManager {
           id: service.serviceId,
           kind: "service",
           contentRef: service.definitionDigest,
-          metadata: { status: service.status, ...service.metadata },
+          metadata: { ...service.metadata, status: service.status },
         })),
       )
       const artifacts = createSectionManifest(
@@ -129,7 +132,7 @@ export class WorldSnapshotManager {
           id: artifact.artifactId,
           kind: "artifact",
           contentRef: artifact.contentRef,
-          metadata: { mediaType: artifact.mediaType, ...artifact.metadata },
+          metadata: { ...artifact.metadata, mediaType: artifact.mediaType },
         })),
       )
 
@@ -150,8 +153,18 @@ export class WorldSnapshotManager {
       }
       const stored = createWorldManifest(this.cas, worldManifest)
       const snapshotId = `snapshot:${stored.digest.slice("sha256:".length)}`
-      const existing = this.get(snapshotId)
-      if (existing) return existing
+      this.faultInjector?.("after_snapshot_manifest_before_insert")
+      const existing = this.getForRevision(worldId, branchId, world.currentRevision)
+      if (existing) {
+        if (existing.manifestDigest !== stored.digest) {
+          throw new WorldCorruptionError([{
+            code: "LEDGER_DB_DIVERGENCE",
+            worldId,
+            detail: `revision ${world.currentRevision} already has snapshot ${existing.manifestDigest}, refusing ${stored.digest}`,
+          }])
+        }
+        return existing
+      }
 
       const createdAt = this.now()
       const inserted = dbRun(
@@ -161,7 +174,7 @@ export class WorldSnapshotManager {
            filesystem_digest, memory_digest, task_state_digest,
            capability_state_digest, service_state_digest, artifact_state_digest, created_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(snapshot_id) DO NOTHING`,
+         ON CONFLICT(world_id, branch_id, revision) DO NOTHING`,
         snapshotId,
         worldId,
         branchId,
@@ -175,7 +188,15 @@ export class WorldSnapshotManager {
         artifacts.digest,
         createdAt,
       )
-      this.cas.link("snapshot", snapshotId, stored.digest)
+      this.cas.linkMany("snapshot", snapshotId, [
+        stored.digest,
+        filesystem.digest,
+        memory.digest,
+        task.digest,
+        capability.digest,
+        services.digest,
+        artifacts.digest,
+      ])
       if (inserted.changes === 1) {
         this.ledger.appendWithinTransaction({
           eventId: this.eventId(),
@@ -189,7 +210,16 @@ export class WorldSnapshotManager {
           occurredAt: createdAt,
         })
       }
-      return this.get(snapshotId)!
+      this.faultInjector?.("after_snapshot_insert_before_commit")
+      const result = this.getForRevision(worldId, branchId, world.currentRevision)
+      if (!result || result.manifestDigest !== stored.digest) {
+        throw new WorldCorruptionError([{
+          code: "LEDGER_DB_DIVERGENCE",
+          worldId,
+          detail: `snapshot conflict for revision ${world.currentRevision}`,
+        }])
+      }
+      return result
     })
   }
 
@@ -205,6 +235,28 @@ export class WorldSnapshotManager {
               artifact_state_digest AS artifactStateDigest, created_at AS createdAt
        FROM world_snapshots WHERE snapshot_id = ?`,
       snapshotId,
+    )
+    return row ? snapshotFromRow(row) : undefined
+  }
+
+  getForRevision(
+    worldId: string,
+    branchId: string,
+    revision: bigint,
+  ): WorldSnapshot | undefined {
+    const row = dbGet<SnapshotRow>(
+      this.db,
+      `SELECT snapshot_id AS snapshotId, world_id AS worldId, branch_id AS branchId,
+              revision, manifest_digest AS manifestDigest,
+              filesystem_digest AS filesystemDigest, memory_digest AS memoryDigest,
+              task_state_digest AS taskStateDigest,
+              capability_state_digest AS capabilityStateDigest,
+              service_state_digest AS serviceStateDigest,
+              artifact_state_digest AS artifactStateDigest, created_at AS createdAt
+       FROM world_snapshots WHERE world_id = ? AND branch_id = ? AND revision = ?`,
+      worldId,
+      branchId,
+      revision.toString(),
     )
     return row ? snapshotFromRow(row) : undefined
   }

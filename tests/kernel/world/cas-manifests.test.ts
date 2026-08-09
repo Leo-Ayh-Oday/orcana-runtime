@@ -54,6 +54,13 @@ describe("AK-1 World CAS", () => {
       ])
       expect(left.digest).toBe(right.digest)
 
+      const unicode = createDirectoryManifest(fixture.store.cas, [
+        { name: "ä", kind: "file", digest: a.digest },
+        { name: "Z", kind: "file", digest: b.digest },
+        { name: "😀", kind: "file", digest: a.digest },
+      ])
+      expect(unicode.manifest.entries.map(entry => entry.name)).toEqual(["Z", "ä", "😀"])
+
       const manifest: WorldManifest = {
         schemaVersion: 1,
         type: "world",
@@ -106,6 +113,26 @@ describe("AK-1 World CAS", () => {
         /cannot link invalid CAS object/,
       )
       expect(fixture.store.cas.record(object.digest)?.refCount).toBe(0)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("mark-and-sweep collects unreachable CAS cycles and ghost roots", () => {
+    const fixture = createTestWorldStore()
+    try {
+      const left = fixture.store.cas.put(Buffer.from("left"), "text/plain")
+      const right = fixture.store.cas.put(Buffer.from("right"), "text/plain")
+      const self = fixture.store.cas.put(Buffer.from("self"), "text/plain")
+      fixture.store.cas.link("cas_object", left.digest, right.digest)
+      fixture.store.cas.link("cas_object", right.digest, left.digest)
+      fixture.store.cas.link("cas_object", self.digest, self.digest)
+      fixture.store.cas.link("not_authoritative", "ghost", left.digest)
+      expect(fixture.store.cas.record(left.digest)?.refCount).toBe(2)
+      expect(fixture.store.cas.record(right.digest)?.refCount).toBe(1)
+      const removed = fixture.store.cas.gc()
+      expect(removed).toEqual(expect.arrayContaining([left.digest, right.digest, self.digest]))
+      expect(fixture.store.cas.list()).toEqual([])
     } finally {
       fixture.cleanup()
     }

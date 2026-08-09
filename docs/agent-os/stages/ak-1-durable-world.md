@@ -244,3 +244,38 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第四轮修复候选门评估
 
 第四轮 4 个 High 已分别由硬退出恢复、事务内 schema guard、WorldDB/CAS 根句柄绑定和父目录持久化闭锁；3 个 residual 已实现关闭或明确为 fail-closed AK-1 策略。阶段仍保持 `FIXED_REAUDIT_PENDING`，等待独立 Agent 对包含本记录的固定候选 HEAD 最终只读复审。
+
+### FACT — 第五轮独立复审
+
+- 独立 Agent 对 `62ca71d8a2a79ebcb943c523e1a465b47c1d5381` 给出 `CHANGES_REQUIRED`，确认第四轮 GC crash、recovery schema guard、root fd、父目录 fsync 与 recovery fd leak 均已关闭。
+- 新阻塞发现：2 High。
+  1. 单一 `media_type` 的 first-writer 策略会让同 bytes 先以普通 MIME 写入后，File chunk、Directory/World manifest 与 Snapshot 的合法构造稳定失败；
+  2. SQLite 仍会按 pathname 重开 main DB，并按 pathname 打开 `world.db-wal/-shm/-journal`，只保护 main 文件不足以阻止 sidecar symlink 越界与打开窗口内的入口替换。
+- 残余发现：root replacement 后公开 pathname locator 可能指向替换目录；World root/CAS 新目录 fsync 异常路径各有一个 fd leak。
+- 审计 Agent 保持只读，未修改文件、运行测试/构建或启动服务；固定 HEAD、parent、白名单与 clean status 均通过。
+
+### FACT — 第五轮修复
+
+- 修复提交为 `d3119bc77520bdc2dad3fcd98534ed4cc6bb73ed`，parent 为 `62ca71d8a2a79ebcb943c523e1a465b47c1d5381`。
+- CAS schema 升级为未发布的 v4：`cas_media_roles` 对每个 digest 追加多个 MIME role；`cas_objects.is_manifest` 是从 `0` 到 `1` 的单向、数据库 trigger 约束的 manifest attestation。首个 `media_type` 保持不可变兼容字段，但不再拒绝同 bytes 的新增合法 role。
+- `putManifest()` 在一个 `BEGIN IMMEDIATE` 中验证/复用 bytes、追加 manifest role、单向 attestation 并绑定 child links；普通 JSON lookalike 只有经 manifest 构造路径 attestation 后才获得 manifest 语义。
+- 直接反例覆盖：File chunk 先以 `text/plain` 写入、Directory/World manifest canonical bytes 先以 `application/json` 写入、Snapshot 的六个 section bytes 先以普通 JSON 写入，随后构造均成功且完整性为 0。
+- WorldDB main、WAL、SHM 与 rollback journal 均先以 `O_NOFOLLOW` 打开，要求 single-link regular file，fsync 后锁定 World root 为 `0500`，再次核验 inode 后才交给 SQLite；Store 正常关闭或构造失败时恢复 `0700`。
+- 首次空库在受限的 bootstrap 窗口完成 WAL/schema transaction，再重新固定全部 SQLite entries 后进入正式 Store 生命周期；已有 authority DB 不经过 bootstrap 写窗口。
+- `databasePath`、`objectsRoot`、`stagingRoot` 与 `resolveObjectPath()` 改为 pinned `/proc/self/fd/...` locator，root rename/replace 后不会指向替换 World；两个 fsync 异常路径均显式关闭新 fd。
+- 双进程 CAS link-vs-GC 测试的协作文件移入受权 `recovery/` 子目录，不再依赖锁定后的 World root 顶层可写。
+
+### FACT — 第五轮修复后主代理验证
+
+- `bun test tests/kernel/world`：`45 pass / 0 fail / 237 expect`。
+- `bun test tests/kernel`：`55 pass / 0 fail / 318 expect`，同时复验 AK-0 authority graph。
+- schema bootstrap 4 进程竞争测试额外连续运行 5 轮，全部通过。
+- `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- `git diff --check`：通过。
+- hosted CI 仍因既有账号 billing lock 未执行；live/provider 测试未执行且不计为通过。
+
+### INFERENCE — 第五轮修复候选门评估
+
+第五轮 2 个 High 已由 append-only media roles/manifest attestation，以及 SQLite 全入口 no-follow + parent write lock 闭锁；2 个 residual 同步关闭。AK-1 继续保持 `FIXED_REAUDIT_PENDING`，必须由独立 Agent 对包含本记录的固定候选 HEAD 再次只读复审后才能完成。

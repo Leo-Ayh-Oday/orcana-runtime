@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecd, type Execd } from "../../src/execd/execd"
 import { ExecdServer } from "../../src/execd/server"
+import { fixedApprovalTokenProvider } from "../../src/execd/approval"
 import { StateStore } from "../../src/execd/state/store"
 import { Recovery } from "../../src/execd/recovery"
 import { FrameCodec, encodeFrame } from "../../src/execd/protocol/frame"
@@ -55,16 +56,24 @@ function req(method: string, payload?: unknown, idempotencyKey = `g-${Math.rando
     sessionId: "gates",
     sequence: 1,
     method,
+    approvalToken: GATES_TOKEN,
     ...(payload !== undefined ? { payload } : {}),
   }
 }
+
+const GATES_TOKEN = "gates-test-token"
 
 async function setup(): Promise<{ execd: Execd; sockPath: string; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "execd-gates-"))
   const sockPath = join(dir, "execd.sock")
   // workspace 根必须存在（编译校验 cwd 在 workspace 内）。
   mkdirSync(join(dir, "ws"), { recursive: true })
-  const execd = createExecd({ sockPath, statePath: join(dir, "execd.db"), workspaceHostRoot: join(dir, "ws") })
+  const execd = createExecd({
+    sockPath,
+    statePath: join(dir, "execd.db"),
+    workspaceHostRoot: join(dir, "ws"),
+    approval: fixedApprovalTokenProvider([GATES_TOKEN]),
+  })
   await execd.start()
   return { execd, sockPath, dir }
 }
@@ -121,6 +130,7 @@ describe("LR2-1 Gates (L1-H)", () => {
     const server = new ExecdServer(
       { sockPath, state, submitCell: async () => ({ cellId: "x", runId: "r", idempotent: false }), getCell: () => undefined, cancelCell: async () => {}, cancelAgent: async () => {}, cancelRun: async () => {}, cleanupRun: async () => ({ removed: 0 }), acquireLease: async (r, t) => ({ leaseId: "L", expiresAt: t }), renewLease: async () => ({ expiresAt: 0 }), releaseLease: async () => {}, listRecoverableRuns: () => [] },
       undefined, undefined,
+      fixedApprovalTokenProvider(["test-token"]),
       () => ({ pid: 1, uid: 65534, gid: 65534 }), // nobody —— 异 uid
     )
     try {
@@ -170,7 +180,7 @@ describe("LR2-1 Gates (L1-H)", () => {
     const sockPath = join(dir, "execd.sock")
     const statePath = join(dir, "execd.db")
     try {
-      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: join(dir, "ws") })
+      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: join(dir, "ws"), approval: fixedApprovalTokenProvider([GATES_TOKEN]) })
       await execd1.start()
       // 模拟崩溃：直接注入 RUNNING 残留（绕过优雅关闭 —— 优雅关闭会
       // 取消在途 cell，注入的残留不在跟踪集合内）。
@@ -182,7 +192,7 @@ describe("LR2-1 Gates (L1-H)", () => {
       await execd1.stop()
 
       // 重启：Recovery 收敛残留 → LOST；无任何非终态残留。
-      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: join(dir, "ws") })
+      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: join(dir, "ws"), approval: fixedApprovalTokenProvider([GATES_TOKEN]) })
       await execd2.start()
       try {
         expect(execd2.state.getCell("crash-cell")!.currentState).toBe("LOST")

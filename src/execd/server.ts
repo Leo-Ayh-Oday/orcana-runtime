@@ -17,6 +17,7 @@ import { peerCredentialsOf } from "./protocol/peercred"
 import { SessionManager } from "./session-manager"
 import { EventStream } from "./event-stream"
 import type { StateStore } from "./state/store"
+import { checkApproval, envApprovalTokenProvider, type ApprovalTokenProvider } from "./approval"
 
 export interface ExecdServerDeps {
   sockPath: string
@@ -51,6 +52,8 @@ export class ExecdServer {
     private readonly deps: ExecdServerDeps,
     private readonly sessions = new SessionManager(),
     private readonly events = new EventStream(),
+    /** L2-D：approval token 源（缺省读 env —— fail closed）。 */
+    private readonly approval: ApprovalTokenProvider = envApprovalTokenProvider(),
     /** 对端凭据获取器（可注入测试；默认 SO_PEERCRED ffi）。 */
     private readonly peerCredentialFn: (socket: unknown) => import("./protocol/peercred").PeerCredentials | undefined = peerCredentialsOf,
   ) {}
@@ -187,19 +190,43 @@ export class ExecdServer {
         return { type: "ok", requestId: request.requestId, result: cell }
       }
       case "SubmitCell": {
+        // L2-D：Submit 必须持受信 approvalToken（UNAUTHORIZED_APPROVAL = 0）。
+        const approval = checkApproval(this.approval, request.approvalToken, "SubmitCell")
+        if (!approval.ok) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNAUTHORIZED_APPROVAL, message: approval.reason } }
+        }
         const result = await this.deps.submitCell(request.payload, request.idempotencyKey, conn.sessionId ?? "anon")
         return { type: "ok", requestId: request.requestId, result }
       }
-      case "CancelCell":
+      case "CancelCell": {
+        const approval = checkApproval(this.approval, request.approvalToken, "CancelCell")
+        if (!approval.ok) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNAUTHORIZED_APPROVAL, message: approval.reason } }
+        }
         await this.deps.cancelCell(request.payload.cellId)
         return { type: "ok", requestId: request.requestId, result: { cellId: request.payload.cellId } }
-      case "CancelAgent":
+      }
+      case "CancelAgent": {
+        const approval = checkApproval(this.approval, request.approvalToken, "CancelAgent")
+        if (!approval.ok) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNAUTHORIZED_APPROVAL, message: approval.reason } }
+        }
         await this.deps.cancelAgent(request.payload.agentId)
         return { type: "ok", requestId: request.requestId, result: { agentId: request.payload.agentId } }
-      case "CancelRun":
+      }
+      case "CancelRun": {
+        const approval = checkApproval(this.approval, request.approvalToken, "CancelRun")
+        if (!approval.ok) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNAUTHORIZED_APPROVAL, message: approval.reason } }
+        }
         await this.deps.cancelRun(request.payload.runId)
         return { type: "ok", requestId: request.requestId, result: { runId: request.payload.runId } }
+      }
       case "CleanupRun": {
+        const approval = checkApproval(this.approval, request.approvalToken, "CleanupRun")
+        if (!approval.ok) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNAUTHORIZED_APPROVAL, message: approval.reason } }
+        }
         const result = await this.deps.cleanupRun(request.payload.runId)
         return { type: "ok", requestId: request.requestId, result }
       }

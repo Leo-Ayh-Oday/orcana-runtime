@@ -113,6 +113,190 @@ function digestHex(digest: CasDigest): string {
   return match[1]!
 }
 
+function manifestRecord(value: unknown, context: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new CasIntegrityError(`${context} must be an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function assertManifestKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+  context: string,
+): void {
+  const allowed = new Set([...required, ...optional])
+  const missing = required.filter(key => !Object.prototype.hasOwnProperty.call(value, key))
+  const extra = Object.keys(value).filter(key => !allowed.has(key))
+  if (missing.length > 0 || extra.length > 0) {
+    throw new CasIntegrityError(
+      `${context} has invalid keys (missing=${missing.join(",") || "none"}; extra=${extra.join(",") || "none"})`,
+    )
+  }
+}
+
+function manifestString(value: unknown, context: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new CasIntegrityError(`${context} must be a non-empty string`)
+  }
+  return value
+}
+
+function manifestDigest(value: unknown, context: string): CasDigest {
+  const digest = manifestString(value, context)
+  if (!/^sha256:[a-f0-9]{64}$/.test(digest)) {
+    throw new CasIntegrityError(`${context} is not a canonical CAS digest`)
+  }
+  return digest as CasDigest
+}
+
+function manifestInteger(value: unknown, context: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new CasIntegrityError(`${context} must be a non-negative safe integer`)
+  }
+  return value as number
+}
+
+function parseManifestReferences(content: Buffer, digest: CasDigest): CasDigest[] {
+  const text = content.toString("utf8")
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new CasIntegrityError(`manifest ${digest} is not valid JSON`)
+  }
+  let canonical: string
+  try {
+    canonical = canonicalJson(parsed)
+  } catch (error) {
+    throw new CasIntegrityError(
+      `manifest ${digest} cannot be canonically encoded: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  if (canonical !== text) {
+    throw new CasIntegrityError(`manifest ${digest} is not canonically encoded`)
+  }
+
+  const root = manifestRecord(parsed, `manifest ${digest}`)
+  if (root.schemaVersion !== 1) {
+    throw new CasIntegrityError(`manifest ${digest} has unsupported schemaVersion`)
+  }
+  const references: CasDigest[] = []
+
+  if (root.type === "file") {
+    assertManifestKeys(root, ["schemaVersion", "type", "mediaType", "size", "chunks"], [], `file manifest ${digest}`)
+    manifestString(root.mediaType, `file manifest ${digest} mediaType`)
+    const size = manifestInteger(root.size, `file manifest ${digest} size`)
+    if (!Array.isArray(root.chunks)) {
+      throw new CasIntegrityError(`file manifest ${digest} chunks must be an array`)
+    }
+    let expectedOffset = 0
+    for (const [index, rawChunk] of root.chunks.entries()) {
+      const chunk = manifestRecord(rawChunk, `file manifest ${digest} chunk ${index}`)
+      assertManifestKeys(chunk, ["digest", "offset", "size"], [], `file manifest ${digest} chunk ${index}`)
+      const chunkDigest = manifestDigest(chunk.digest, `file manifest ${digest} chunk ${index} digest`)
+      const offset = manifestInteger(chunk.offset, `file manifest ${digest} chunk ${index} offset`)
+      const chunkSize = manifestInteger(chunk.size, `file manifest ${digest} chunk ${index} size`)
+      if (chunkSize === 0 || offset !== expectedOffset || expectedOffset + chunkSize > size) {
+        throw new CasIntegrityError(`file manifest ${digest} has a non-contiguous chunk layout`)
+      }
+      expectedOffset += chunkSize
+      references.push(chunkDigest)
+    }
+    if (expectedOffset !== size || (size === 0 && root.chunks.length !== 0)) {
+      throw new CasIntegrityError(`file manifest ${digest} chunks do not cover its declared size`)
+    }
+  } else if (root.type === "directory") {
+    assertManifestKeys(root, ["schemaVersion", "type", "entries"], [], `directory manifest ${digest}`)
+    if (!Array.isArray(root.entries)) {
+      throw new CasIntegrityError(`directory manifest ${digest} entries must be an array`)
+    }
+    let previousName: string | undefined
+    for (const [index, rawEntry] of root.entries.entries()) {
+      const entry = manifestRecord(rawEntry, `directory manifest ${digest} entry ${index}`)
+      assertManifestKeys(entry, ["name", "kind", "digest"], ["mode"], `directory manifest ${digest} entry ${index}`)
+      const name = manifestString(entry.name, `directory manifest ${digest} entry ${index} name`)
+      if (name === "." || name === ".." || /[\\/]/.test(name)) {
+        throw new CasIntegrityError(`directory manifest ${digest} contains an unsafe name`)
+      }
+      if (previousName !== undefined && compareCanonicalStrings(previousName, name) >= 0) {
+        throw new CasIntegrityError(`directory manifest ${digest} entries are not uniquely sorted`)
+      }
+      previousName = name
+      if (entry.kind !== "file" && entry.kind !== "directory") {
+        throw new CasIntegrityError(`directory manifest ${digest} entry ${index} has invalid kind`)
+      }
+      if (entry.mode !== undefined) manifestInteger(entry.mode, `directory manifest ${digest} entry ${index} mode`)
+      references.push(manifestDigest(entry.digest, `directory manifest ${digest} entry ${index} digest`))
+    }
+  } else if (root.type === "world-section") {
+    assertManifestKeys(root, ["schemaVersion", "type", "section", "entries"], [], `section manifest ${digest}`)
+    manifestString(root.section, `section manifest ${digest} section`)
+    if (!Array.isArray(root.entries)) {
+      throw new CasIntegrityError(`section manifest ${digest} entries must be an array`)
+    }
+    let previousSortKey: readonly [string, string] | undefined
+    const ids = new Set<string>()
+    for (const [index, rawEntry] of root.entries.entries()) {
+      const entry = manifestRecord(rawEntry, `section manifest ${digest} entry ${index}`)
+      assertManifestKeys(entry, ["id", "kind"], ["path", "contentRef", "metadata"], `section manifest ${digest} entry ${index}`)
+      const id = manifestString(entry.id, `section manifest ${digest} entry ${index} id`)
+      manifestString(entry.kind, `section manifest ${digest} entry ${index} kind`)
+      if (ids.has(id)) throw new CasIntegrityError(`section manifest ${digest} contains duplicate id ${id}`)
+      ids.add(id)
+      const path = entry.path === undefined
+        ? ""
+        : manifestString(entry.path, `section manifest ${digest} entry ${index} path`)
+      const sortKey: readonly [string, string] = [path, id]
+      if (previousSortKey !== undefined) {
+        const pathOrder = compareCanonicalStrings(previousSortKey[0], sortKey[0])
+        if (pathOrder > 0 || (pathOrder === 0 && compareCanonicalStrings(previousSortKey[1], sortKey[1]) >= 0)) {
+          throw new CasIntegrityError(`section manifest ${digest} entries are not uniquely sorted`)
+        }
+      }
+      previousSortKey = sortKey
+      if (entry.contentRef !== undefined) {
+        references.push(manifestDigest(entry.contentRef, `section manifest ${digest} entry ${index} contentRef`))
+      }
+      if (entry.metadata !== undefined) {
+        manifestRecord(entry.metadata, `section manifest ${digest} entry ${index} metadata`)
+      }
+    }
+  } else if (root.type === "world") {
+    assertManifestKeys(
+      root,
+      [
+        "schemaVersion", "type", "worldId", "branchId", "revision", "worldStatus", "rootObjectId",
+        "filesystemDigest", "memoryDigest", "taskStateDigest", "capabilityStateDigest",
+        "serviceStateDigest", "artifactStateDigest",
+      ],
+      [],
+      `world manifest ${digest}`,
+    )
+    manifestString(root.worldId, `world manifest ${digest} worldId`)
+    manifestString(root.branchId, `world manifest ${digest} branchId`)
+    const revision = manifestString(root.revision, `world manifest ${digest} revision`)
+    if (!/^(0|[1-9][0-9]*)$/.test(revision)) {
+      throw new CasIntegrityError(`world manifest ${digest} revision is not canonical`)
+    }
+    if (!new Set(["active", "suspended", "archived", "corrupted"]).has(root.worldStatus as string)) {
+      throw new CasIntegrityError(`world manifest ${digest} has invalid worldStatus`)
+    }
+    manifestString(root.rootObjectId, `world manifest ${digest} rootObjectId`)
+    for (const field of [
+      "filesystemDigest", "memoryDigest", "taskStateDigest", "capabilityStateDigest",
+      "serviceStateDigest", "artifactStateDigest",
+    ]) {
+      references.push(manifestDigest(root[field], `world manifest ${digest} ${field}`))
+    }
+  } else {
+    throw new CasIntegrityError(`manifest ${digest} has unknown type`)
+  }
+
+  return [...new Set(references)].sort(compareCanonicalStrings)
+}
+
 export function encodeCasOwnerId(parts: readonly string[]): string {
   return canonicalJson(parts)
 }
@@ -254,11 +438,16 @@ export class WorldCas {
         }
       }
       const prefixFd = openDirectoryNoFollow(prefixPath)
-      if (created) {
-        fsyncSync(prefixFd)
-        fsyncSync(objectsFd)
+      try {
+        if (created) {
+          fsyncSync(prefixFd)
+          fsyncSync(objectsFd)
+        }
+        return prefixFd
+      } catch (error) {
+        closeSync(prefixFd)
+        throw error
       }
-      return prefixFd
     } finally {
       closeSync(objectsFd)
     }
@@ -428,6 +617,29 @@ export class WorldCas {
     const bytes = Buffer.from(content)
     const digest = sha256Digest(bytes)
     return withImmediateTransaction(this.db, () => {
+      const derivedReferences = parseManifestReferences(bytes, digest)
+      const suppliedReferences = [...new Set(referencedDigests)].sort(compareCanonicalStrings)
+      if (
+        derivedReferences.length !== suppliedReferences.length ||
+        derivedReferences.some((reference, index) => reference !== suppliedReferences[index])
+      ) {
+        throw new CasIntegrityError(
+          `manifest ${digest} supplied references do not match its canonical content`,
+        )
+      }
+      for (const reference of derivedReferences) {
+        try {
+          this.get(reference)
+        } catch (error) {
+          if (error instanceof CasIntegrityError) {
+            throw new CasIntegrityError(
+              `manifest ${digest} references invalid CAS object ${reference}: ${error.message}`,
+            )
+          }
+          throw error
+        }
+      }
+
       let record = this.record(digest)
       if (record) {
         const existing = this.get(digest)
@@ -447,10 +659,21 @@ export class WorldCas {
           digest,
         )
       }
-      this.linkMany("cas_object", digest, referencedDigests)
+      this.linkMany("cas_object", digest, derivedReferences)
       const attested = this.record(digest)
       if (!attested?.isManifest) {
         throw new CasIntegrityError(`CAS manifest attestation failed: ${digest}`)
+      }
+      const actualReferences = this.linksForOwner("cas_object", digest)
+        .map(link => link.digest)
+        .sort(compareCanonicalStrings)
+      if (
+        actualReferences.length !== derivedReferences.length ||
+        actualReferences.some((reference, index) => reference !== derivedReferences[index])
+      ) {
+        throw new CasIntegrityError(
+          `manifest ${digest} persisted references do not match its canonical content`,
+        )
       }
       return attested
     })
@@ -694,73 +917,15 @@ export class WorldCas {
 
   private manifestReferenceIssues(record: CasObjectRecord, content: Buffer): WorldIntegrityIssue[] {
     if (!record.isManifest) return []
-    let manifest: Record<string, unknown>
+    let expected: CasDigest[]
     try {
-      manifest = JSON.parse(content.toString("utf8")) as Record<string, unknown>
-    } catch {
-      return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid manifest JSON ${record.digest}` }]
+      expected = parseManifestReferences(content, record.digest)
+    } catch (error) {
+      return [{
+        code: "CAS_CONTENT_CORRUPT",
+        detail: error instanceof Error ? error.message : `invalid manifest ${record.digest}`,
+      }]
     }
-    if (!manifest || typeof manifest !== "object" || manifest.schemaVersion !== 1) {
-      return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid manifest envelope ${record.digest}` }]
-    }
-    const recognizedType = manifest.type === "file" ||
-      manifest.type === "directory" ||
-      manifest.type === "world-section" ||
-      manifest.type === "world"
-    if (!recognizedType) {
-      return [{ code: "CAS_CONTENT_CORRUPT", detail: `unknown manifest type ${record.digest}` }]
-    }
-    const declared: string[] = []
-    if (manifest.type === "file") {
-      if (!Array.isArray(manifest.chunks)) {
-        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid file manifest ${record.digest}` }]
-      }
-      for (const chunk of manifest.chunks) {
-        if (chunk && typeof chunk === "object" && typeof (chunk as { digest?: unknown }).digest === "string") {
-          declared.push((chunk as { digest: string }).digest)
-        }
-      }
-      if (declared.length !== manifest.chunks.length) {
-        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid file manifest ${record.digest}` }]
-      }
-    } else if (manifest.type === "directory") {
-      if (!Array.isArray(manifest.entries)) {
-        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid directory manifest ${record.digest}` }]
-      }
-      for (const entry of manifest.entries) {
-        if (entry && typeof entry === "object" && typeof (entry as { digest?: unknown }).digest === "string") {
-          declared.push((entry as { digest: string }).digest)
-        }
-      }
-      if (declared.length !== manifest.entries.length) {
-        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid directory manifest ${record.digest}` }]
-      }
-    } else if (manifest.type === "world-section") {
-      if (!Array.isArray(manifest.entries)) {
-        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid section manifest ${record.digest}` }]
-      }
-      for (const entry of manifest.entries) {
-        const contentRef = entry && typeof entry === "object"
-          ? (entry as { contentRef?: unknown }).contentRef
-          : undefined
-        if (typeof contentRef === "string") declared.push(contentRef)
-      }
-    } else if (manifest.type === "world") {
-      for (const field of [
-        "filesystemDigest",
-        "memoryDigest",
-        "taskStateDigest",
-        "capabilityStateDigest",
-        "serviceStateDigest",
-        "artifactStateDigest",
-      ]) {
-        if (typeof manifest[field] !== "string") {
-          return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid world manifest ${record.digest}` }]
-        }
-        declared.push(manifest[field] as string)
-      }
-    }
-    const expected = [...new Set(declared)].sort(compareCanonicalStrings)
     const actual = this.linksForOwner("cas_object", record.digest)
       .map(link => link.digest)
       .sort(compareCanonicalStrings)

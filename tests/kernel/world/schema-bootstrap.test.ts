@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn, type ChildProcess } from "node:child_process"
 import { WorldStore } from "../../../src/kernel/world"
+import { removeTestWorldRoot } from "./helpers"
 
 const CHILD = join(import.meta.dir, "schema-bootstrap-child.ts")
 
@@ -48,7 +49,45 @@ describe("AK-1 WorldDB schema bootstrap", () => {
       for (const child of children) {
         if (child.exitCode === null) child.kill()
       }
-      rmSync(root, { recursive: true, force: true })
+      removeTestWorldRoot(root)
+    }
+  })
+
+  test("a stale bootstrap lock recovers a partially written first database", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-world-schema-crash-"))
+    try {
+      mkdirSync(join(root, "recovery"))
+      writeFileSync(join(root, "world.db"), "partial sqlite image")
+      writeFileSync(join(root, "world.db-wal"), "")
+      writeFileSync(join(root, "world.db-shm"), "")
+      writeFileSync(join(root, "world.db-journal"), "")
+      writeFileSync(join(root, "recovery", "worlddb-bootstrap.lock"), "999999\n")
+
+      const store = new WorldStore(root)
+      try {
+        expect(store.verifyIntegrity()).toEqual([])
+        expect(existsSync(join(root, "recovery", "worlddb-bootstrap.complete"))).toBe(true)
+        expect(existsSync(join(root, "recovery", "worlddb-bootstrap.lock"))).toBe(false)
+        expect(readFileSync(join(root, "world.db")).subarray(0, 15).toString()).toBe(
+          "SQLite format 3",
+        )
+      } finally {
+        store.close()
+      }
+    } finally {
+      removeTestWorldRoot(root)
+    }
+  })
+
+  test("a non-empty database without bootstrap provenance fails closed", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-world-schema-unproven-"))
+    const unproven = Buffer.from("unproven database bytes")
+    try {
+      writeFileSync(join(root, "world.db"), unproven)
+      expect(() => new WorldStore(root)).toThrow(/WORLD_DB_BOOTSTRAP_MARKER_MISSING/)
+      expect(readFileSync(join(root, "world.db"))).toEqual(unproven)
+    } finally {
+      removeTestWorldRoot(root)
     }
   })
 })

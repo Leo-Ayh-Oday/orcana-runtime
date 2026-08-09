@@ -209,3 +209,38 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第三轮修复候选门评估
 
 第三轮 3 个 High 与 3 个 residual 均已由 fail-closed 实现和直接反例覆盖；AK-1 仍等待独立 Agent 对最新候选 HEAD 做最终只读复审。
+
+### FACT — 第四轮独立复审
+
+- 独立 Agent 对 `c8878bf8476ceaa65a09d8dd9065ffec25d51a3b` 给出 `CHANGES_REQUIRED`，确认第三轮 ordinary JSON、canonical array、CAS symlink、schema bootstrap 与 v3 持久格式问题均已关闭。
+- 新阻塞发现：4 High。
+  1. GC 先删除并 fsync CAS 文件、再提交 metadata；进程在二者之间崩溃会留下已注册但缺失 bytes 的 unreachable object，原 recovery 无法收敛；
+  2. `cas.recover()` 的 schema guard 与后续 World quarantine mutation 不在同一事务，DDL 可在二者之间改变 schema；
+  3. `world.db` symlink 与 Store 打开后的根路径替换未受目录句柄约束，可能造成 SQLite 与 CAS 使用不同的物理根；
+  4. Store 首次创建 World root 后未 fsync 父目录，断电可能丢失已经返回成功的根目录项。
+- 残余发现：同 digest 的媒体类型采用 first-writer-wins、recovery 打开第二个目录失败时可能泄漏首个 fd、无法归属具体 World 的嵌套 CAS 图损坏会触发全 Store fail-closed quarantine。
+- 审计 Agent 保持只读，未修改文件、运行测试/构建或启动服务。
+
+### FACT — 第四轮修复
+
+- 修复提交为 `ba66b59f6292636103bc4822f49abb6d1103cc11`，parent 为 `c8878bf8476ceaa65a09d8dd9065ffec25d51a3b`。
+- 新增 GC 文件 fsync 后、metadata commit 前的真实子进程硬退出故障点；文件删除现在对已缺失对象幂等，重启 recovery 可删除回滚后遗留 metadata 并恢复完整性。
+- `markCorruptedFromRecovery()` 与 `quarantineWorldFromRecovery()` 在各自 `BEGIN IMMEDIATE` 内重新执行 schema version/fingerprint 校验，关闭 recovery guard 与隔离写入之间的 DDL 窗口。
+- World root、WorldDB 与 CAS 绑定已打开的目录 fd；WorldDB 使用 `O_NOFOLLOW` 预打开并校验 inode，SQLite 与 CAS 在根路径被 rename/replace 后仍写入同一个物理 World。
+- 新建 World root 的每级目录和父目录均执行 fsync；已有递归创建语义保留，路径组件按目录句柄逐级创建并拒绝 final symlink。
+- recovery 在第二个受信目录打开失败时显式关闭第一个 fd，消除审计指出的描述符泄漏。
+- 同 digest 的 `mediaType` 是 CAS immutable metadata 的 first-writer-wins 属性；不同媒体类型复用同 bytes 必须接受既有记录或使用外层 manifest 描述，不允许改写已注册对象。
+- 无法可靠归属单一 World 的嵌套 CAS 图损坏在 AK-1 明确采用 Store 级 fail-closed quarantine。更细的 transitive ownership containment 不在本阶段引入，避免错误地让共享损坏对象继续服务任一 World。
+
+### FACT — 第四轮修复后主代理验证
+
+- `bun test tests/kernel/world`：`41 pass / 0 fail / 211 expect`。
+- `bun test tests/kernel`：`51 pass / 0 fail / 292 expect`，同时复验 AK-0 authority graph。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- `git diff --check`：通过。
+- hosted CI 仍因既有账号 billing lock 未执行；live/provider 测试未执行且不计为通过。
+
+### INFERENCE — 第四轮修复候选门评估
+
+第四轮 4 个 High 已分别由硬退出恢复、事务内 schema guard、WorldDB/CAS 根句柄绑定和父目录持久化闭锁；3 个 residual 已实现关闭或明确为 fail-closed AK-1 策略。阶段仍保持 `FIXED_REAUDIT_PENDING`，等待独立 Agent 对包含本记录的固定候选 HEAD 最终只读复审。

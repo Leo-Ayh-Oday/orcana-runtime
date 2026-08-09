@@ -174,3 +174,38 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第二轮修复候选门评估
 
 第二轮 3 个阻塞项和 3 个残余项均有实现闭锁与直接反例测试；AK-1 状态保持 `FIXED_REAUDIT_PENDING`，必须由独立 Agent 对包含本记录的最终候选 HEAD 再次只读复审后才能关闭阶段。
+
+### FACT — 第三轮独立复审
+
+- 独立 Agent 对 `aac73c64f93e948c12ccbfba6a2f2b527707069e` 给出 `CHANGES_REQUIRED`，确认第二轮 schema shape、正常目录 fsync、旧 contentRef 校验与真实双进程 link-vs-GC 已关闭。
+- 新阻塞发现：3 High。
+  1. 对所有 JSON 按内容识别 manifest 会把合法 `application/json` lookalike 误报为全局 CAS divergence，并可能 quarantine 所有 World；
+  2. canonical array 分支直接读取索引，array accessor 可在多次 digest/materialization/ledger 计算之间返回不同值；
+  3. CAS 对既存 symlink 使用 follow 语义，put/recovery 可能越出 World 根写入或删除。
+- 残余发现：并发首次 schema bootstrap 的一次性失败、持久格式变更仍沿用 v2、`-0` 不能字面可逆。
+- 审计 Agent 保持只读，未修改文件、运行测试/构建或启动服务。
+
+### FACT — 第三轮修复
+
+- 修复提交为 `bd42d74358757bc77effc5c5711ed22b34fb3cc9`，parent 为 `aac73c64f93e948c12ccbfba6a2f2b527707069e`。
+- manifest 检查重新要求 immutable `application/vnd.orcana.manifest+json`；`gc()`/`recover()` 在同一 `BEGIN IMMEDIATE` 删除事务内先复核 schema version/fingerprint，schema 被篡改时在 refCount、文件删除或 World quarantine 前 fail closed。
+- 普通 JSON manifest-lookalike 已在两个 World 的回归中证明不会产生 divergence 或跨 World quarantine。
+- canonical array 只接受完整 `0..length-1` data descriptors，拒绝 accessor、稀疏索引、额外 string/symbol property、non-enumerable element；commit 输入只 canonicalize 一次并解析为内部 plain JSON，后续 delta/materialization/ledger 复用同一规范值。数组 accessor 回归证明 getter 调用数为 0。
+- canonical number 明确拒绝 `-0`，避免 stringification 丢失数值身份。
+- World/CAS root、objects/staging、digest prefix 和 staging entry 使用 `lstat`、`O_NOFOLLOW` 与 `/proc/self/fd/<dirfd>` 相对操作；恢复先验证完整布局再删除，symlink 指向的外部 sentinel 均保持不变。
+- schema bootstrap 的空库判定移入 `BEGIN IMMEDIATE`，WAL 初始化对 `SQLITE_BUSY` 做 5 秒有界重试；4 个独立 Bun 进程并发首次打开连续 5 轮通过。
+- 持久格式版本从 v2 明确提升为 v3；AK-1 尚未发布，不对中间候选数据库提供隐式迁移或自愈。
+
+### FACT — 第三轮修复后主代理验证
+
+- `bun test tests/kernel/world`：`37 pass / 0 fail / 186 expect`。
+- schema bootstrap 4 进程竞争测试额外连续运行 5 轮，全部通过。
+- `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- `git diff --check`：通过。
+- hosted CI 仍因既有账号 billing lock 未执行；live/provider 测试未执行且不计为通过。
+
+### INFERENCE — 第三轮修复候选门评估
+
+第三轮 3 个 High 与 3 个 residual 均已由 fail-closed 实现和直接反例覆盖；AK-1 仍等待独立 Agent 对最新候选 HEAD 做最终只读复审。

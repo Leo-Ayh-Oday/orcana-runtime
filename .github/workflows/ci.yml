@@ -139,8 +139,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Linux sandbox eval (LX-001..035)
-        run: bun run eval:linux
+      - name: Linux sandbox eval (real delegated cgroup required)
+        run: bash scripts/ci/run-delegated-cgroup.sh bun run eval:linux --require=cgroup
 
   build:
     runs-on: ubuntu-latest

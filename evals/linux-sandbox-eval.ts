@@ -1,4 +1,4 @@
-/** LNXF LF-8: Linux sandbox production evaluation — 35 scenarios (LX-001..035).
+/** LNXF LF-8: Linux sandbox production evaluation — 37 scenarios (LX-001..037).
  *
  *  Each scenario runs against the real runtime; environment-dependent
  *  scenarios (no bwrap/podman on this machine) report SKIP with a reason.
@@ -32,7 +32,7 @@ import { buildEgressPolicy, checkEgressHop, checkEgressRedirect, dnsRebindingGua
 import { compileLandlockRuleset, compileSeccompProfile, seccompBackwardCompatible, landlockUsable } from "../src/runtime/linux/landlock-seccomp"
 import { RuntimeStateStore, BootIdentityStore, startupJanitor, procStartTicksOf } from "../src/runtime/linux/recovery/state-store"
 import { createRuntimeExecutionContext, runWithRuntimeExecutionContext, setExecutionAuthority } from "../src/runtime/execution-context"
-import type { ExecutionCellSpec, ResourceRequest, TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
+import type { ExecutionCellSpec, LinuxCapabilities, ResourceRequest, TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
 
 export interface ScenarioResult {
   id: string
@@ -51,9 +51,55 @@ export interface EvalReport {
   fail: number
   skip: number
   total: number
+  requiredCapabilities: RequiredLinuxCapability[]
+  requiredFailures: string[]
 }
 
 type ScenarioOutcome = { pass?: boolean; skip?: boolean; reason?: string }
+
+export type RequiredLinuxCapability = "bubblewrap" | "podman" | "cgroup"
+
+export interface LinuxSandboxEvalOptions {
+  requiredCapabilities?: readonly RequiredLinuxCapability[]
+}
+
+function scenarioPassed(results: readonly ScenarioResult[], id: string): boolean {
+  return results.some(result => result.id === id && result.status === "PASS")
+}
+
+/** Capability-specific CI lanes fail closed without making unrelated optional
+ * backends mandatory. A lane must both detect its real backend and pass the
+ * scenarios that exercise that backend; a SKIP never satisfies the lane. */
+export function requiredCapabilityFailures(
+  capabilities: LinuxCapabilities,
+  results: readonly ScenarioResult[],
+  required: readonly RequiredLinuxCapability[],
+): string[] {
+  const failures: string[] = []
+  for (const capability of new Set(required)) {
+    if (capability === "bubblewrap") {
+      if (!capabilities.bubblewrap.available || !capabilities.bubblewrap.unprivilegedUsable) {
+        failures.push("bubblewrap: backend unavailable or user namespaces unusable")
+      } else if (!scenarioPassed(results, "LX-012")) {
+        failures.push("bubblewrap: LX-012 real network namespace scenario did not PASS")
+      }
+    } else if (capability === "podman") {
+      if (!capabilities.podman.available || !capabilities.podman.rootlessReady) {
+        failures.push("podman: rootless backend unavailable")
+      } else if (!scenarioPassed(results, "LX-030")) {
+        failures.push("podman: LX-030 real container scenario did not PASS")
+      }
+    } else if (capability === "cgroup") {
+      if (!capabilities.cgroup.delegated) {
+        failures.push("cgroup: writable delegated cgroup unavailable")
+      }
+      for (const id of ["LX-016", "LX-017", "LX-018", "LX-019"]) {
+        if (!scenarioPassed(results, id)) failures.push(`cgroup: ${id} did not PASS`)
+      }
+    }
+  }
+  return failures
+}
 
 function spec(overrides: Partial<ExecutionCellSpec> = {}): ExecutionCellSpec {
   return {
@@ -148,10 +194,11 @@ function removeEvalCgroupRun(manager: CgroupManager, runId: string): void {
   }
 }
 
-export async function runLinuxSandboxEval(): Promise<EvalReport> {
+export async function runLinuxSandboxEval(options: LinuxSandboxEvalOptions = {}): Promise<EvalReport> {
   const caps = probeLinuxCapabilities()
   const isLinux = platform() === "linux"
   const results: ScenarioResult[] = []
+  const requiredCapabilities = [...new Set(options.requiredCapabilities ?? [])]
 
   const add = async (id: string, name: string, run: () => Promise<ScenarioOutcome>) => {
     let outcome: ScenarioOutcome
@@ -350,11 +397,45 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
     manager.createAgent("lx", "a") // 独立 createCell 会因父层未授权 fail-loud
     const cell = manager.createCell("lx", "a", "mem", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 8, oomGroup: true })
     try {
-      const { spawn } = await import("node:child_process")
-      // LNXF-R2 10.1：WSL2 控制台进程挂 root 属主 /init.scope —— 迁移
-      // EACCES（源 cgroup 不可写，45eba78 已知场景）；真机 lane 验收。
-      // detached：炸弹须为独立进程组领导，EACCES fallback 的组杀才能命中整树。
-      const proc = spawn("/bin/sh", ["-c", "head -c 1073741824 /dev/zero | tr '\\0' 'x' > /dev/null; sleep 0.1"], { detached: true, stdio: "ignore" })
+      const { spawn, spawnSync } = await import("node:child_process")
+      // READY + SIGUSR2 是两阶段启动闸门：必须先确认 handler 已安装，再
+      // attach，最后发信号开始分配，避免短暂在宿主 cgroup 中烧内存。
+      // 持续保留内存块才是真实堆增长；流式 head|tr 不会积累工作集，
+      // 不能作为 memory.max 的证据。
+      const allocator = [
+        "import signal, time",
+        "chunks = []",
+        "def allocate(_signum, _frame):",
+        "    while True:",
+        "        block = bytearray(8 * 1024 * 1024)",
+        "        for offset in range(0, len(block), 4096):",
+        "            block[offset] = 1",
+        "        chunks.append(block)",
+        "signal.signal(signal.SIGUSR2, allocate)",
+        "print('READY', flush=True)",
+        "while True:",
+        "    time.sleep(1)",
+      ].join("\n")
+      // Python bytearray 是单调持有的匿名内存，不受 V8 外部内存 GC 策略
+      // 影响；GitHub Ubuntu 与当前 WSL 都提供 python3。
+      const proc = spawn("python3", ["-c", allocator], { detached: true, stdio: ["ignore", "pipe", "ignore"] })
+      const ready = await new Promise<boolean>(resolve => {
+        let settled = false
+        let timeout: ReturnType<typeof setTimeout> | undefined
+        const finish = (value: boolean) => {
+          if (settled) return
+          settled = true
+          if (timeout) clearTimeout(timeout)
+          resolve(value)
+        }
+        proc.stdout?.once("data", chunk => finish(String(chunk).includes("READY")))
+        proc.once("exit", () => finish(false))
+        timeout = setTimeout(() => finish(false), 2_000)
+      })
+      if (!ready) {
+        killBombTree(proc.pid)
+        return { pass: false, reason: "内存分配器 READY 握手失败" }
+      }
       try {
         manager.attach(proc.pid ?? 0, cell)
       } catch {
@@ -362,16 +443,55 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
         killBombTree(proc.pid)
         return { skip: true, reason: "进程迁移 EACCES（源 cgroup /init.scope root 属主不可写）—— 真机 lane 验收" }
       }
-      const events = manager.memoryEvents(cell)
-      const killed = await new Promise<boolean>(resolve => {
-        proc.on("exit", () => resolve(true))
-        setTimeout(() => { try { proc.kill("SIGKILL") } catch {} resolve(false) }, 8000)
+      const before = manager.memoryEvents(cell)
+      const exitedPromise = new Promise<boolean>(resolve => {
+        let settled = false
+        let timeout: ReturnType<typeof setTimeout> | undefined
+        const finish = (value: boolean) => {
+          if (settled) return
+          settled = true
+          if (timeout) clearTimeout(timeout)
+          resolve(value)
+        }
+        proc.once("exit", () => finish(true))
+        timeout = setTimeout(() => {
+          killBombTree(proc.pid)
+          finish(false)
+        }, 8000)
       })
-      const oomEvents = manager.memoryEvents(cell)
-      return (killed || oomEvents.oom_kill > 0 || oomEvents.oom > 0)
-        ? { pass: true, reason: `oom_kill=${oomEvents.oom_kill} oom=${oomEvents.oom}` }
-        : { pass: false, reason: "内存炸弹未被限制（进程存活且无 OOM 事件）" }
+      const signal = spawnSync("/bin/kill", ["-USR2", String(proc.pid)], { encoding: "utf8", timeout: 2_000 })
+      if (signal.status !== 0) {
+        killBombTree(proc.pid)
+        await exitedPromise
+        return { pass: false, reason: `内存分配器启动信号失败: ${signal.stderr.trim()}` }
+      }
+      let after = before
+      const evidenceDeadline = Date.now() + 5_000
+      while (Date.now() < evidenceDeadline) {
+        after = manager.memoryEvents(cell)
+        const maxDelta = (after.max ?? 0) - (before.max ?? 0)
+        const oomDelta = (after.oom ?? 0) - (before.oom ?? 0)
+        const oomKillDelta = (after.oom_kill ?? 0) - (before.oom_kill ?? 0)
+        if (maxDelta > 0 || oomDelta > 0 || oomKillDelta > 0) break
+        if (proc.exitCode !== null) break
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
+      // memory.max 命中已经证明内核执行限额；立即停止压力源，不继续用
+      // CPU 反复触发 direct reclaim 等待可选的 OOM-kill 策略。
+      killBombTree(proc.pid)
+      const exited = await exitedPromise
+      after = manager.memoryEvents(cell)
+      const maxDelta = (after.max ?? 0) - (before.max ?? 0)
+      const oomDelta = (after.oom ?? 0) - (before.oom ?? 0)
+      const oomKillDelta = (after.oom_kill ?? 0) - (before.oom_kill ?? 0)
+      return (maxDelta > 0 || oomKillDelta > 0 || oomDelta > 0)
+        ? { pass: true, reason: `max_delta=${maxDelta} oom_kill_delta=${oomKillDelta} oom_delta=${oomDelta} reaped=${exited}` }
+        : { pass: false, reason: `内存限制无命中证据 max_delta=${maxDelta} oom_kill_delta=${oomKillDelta} oom_delta=${oomDelta} reaped=${exited}` }
     } finally {
+      // OOM exit 事件可能早于 cgroup 的 populated 状态完成回收。无论场景
+      // 判定如何，先树杀兜底并异步等待归零，再删除完整 run。
+      manager.kill(cell)
+      await waitCgroupEmptyAsync(manager, cell, 5_000)
       removeEvalCgroupRun(manager, "lx")
     }
   })
@@ -630,7 +750,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       store.writeRun("crash-run", { status: "running" })
       const receipts = await startupJanitor({
         store, currentBootId: "new-boot",
-        cleanupRun: async id => ({ cgroups: [`run-${id}`], worktrees: [], ports: 0, containers: [], stateRemoved: true }),
+        cleanupRun: async id => ({ cgroups: [`run-${id}`], worktrees: [], ports: 0, containers: [], services: 0, stateRemoved: true }),
       })
       // 同 boot 重启安全：janitor 之后写入、owner 存活的 run 不被清理（PR-7 owner token）。
       store.writeRun("live-run", {
@@ -642,7 +762,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       store.writeRun("crashed-run", { status: "running", ownerPid: 999999, ownerProcStartTicks: 1 })
       const secondPass = await startupJanitor({
         store, currentBootId: "new-boot",
-        cleanupRun: async id => ({ cgroups: [`run-${id}`], worktrees: [], ports: 0, containers: [], stateRemoved: true }),
+        cleanupRun: async id => ({ cgroups: [`run-${id}`], worktrees: [], ports: 0, containers: [], services: 0, stateRemoved: true }),
       })
       const cleaned = receipts.map(r => r.runId).sort().join(",")
       const secondCleaned = secondPass.map(r => r.runId).sort().join(",")
@@ -723,7 +843,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
           },
         }
         setExecutionAuthority(authority)
-        return collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 15_000, runId: "lx036-run" })
+        return collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 15_000 })
       })
     } finally {
       await cleanupProcessRun("lx036-run")
@@ -783,6 +903,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   const pass = results.filter(r => r.status === "PASS").length
   const fail = results.filter(r => r.status === "FAIL").length
   const skip = results.filter(r => r.status === "SKIP").length
+  const requiredFailures = requiredCapabilityFailures(caps, results, requiredCapabilities)
   return {
     version: "LNXF-1.0",
     ranAt: Date.now(),
@@ -793,21 +914,42 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
     fail,
     skip,
     total: results.length,
+    requiredCapabilities,
+    requiredFailures,
   }
 }
 
-/** CLI：bun run eval:linux [--strict]
+/** CLI：bun run eval:linux [--strict] [--require=bubblewrap|podman|cgroup]
  *  --strict：关键场景不允许 SKIP —— 任何 SKIP 都视为失败（供具备
- *  bwrap/podman/cgroup 委托的真机 CI lane 使用；PR-8）。 */
+ *  全部 bwrap/podman/cgroup 能力的真机使用）。
+ *  --require：能力专属 lane 只要求对应真实后端及其场景必须 PASS。 */
 export async function linuxEvalCli(): Promise<number> {
   const strict = process.argv.includes("--strict")
-  const report = await runLinuxSandboxEval()
-  console.log(`LNXF Linux Sandbox Eval — ${report.pass} pass, ${report.fail} fail, ${report.skip} skip (${report.total} scenarios)${strict ? " [STRICT]" : ""}`)
+  const requested = process.argv
+    .filter(arg => arg.startsWith("--require="))
+    .flatMap(arg => arg.slice("--require=".length).split(","))
+    .filter(Boolean)
+  const allowed = new Set<RequiredLinuxCapability>(["bubblewrap", "podman", "cgroup"])
+  const invalid = requested.filter(value => !allowed.has(value as RequiredLinuxCapability))
+  if (invalid.length > 0) {
+    console.error(`Unknown required Linux capability: ${invalid.join(", ")}`)
+    return 2
+  }
+  const requiredCapabilities = requested as RequiredLinuxCapability[]
+  const report = await runLinuxSandboxEval({ requiredCapabilities })
+  const requirementLabel = report.requiredCapabilities.length > 0
+    ? ` [REQUIRE=${report.requiredCapabilities.join(",")}]`
+    : ""
+  console.log(`LNXF Linux Sandbox Eval — ${report.pass} pass, ${report.fail} fail, ${report.skip} skip (${report.total} scenarios)${strict ? " [STRICT]" : ""}${requirementLabel}`)
   for (const result of report.results) {
     const mark = result.status === "PASS" ? "ok" : result.status === "SKIP" ? "-" : "x"
     console.log(` [${mark}] ${result.id} ${result.name}${result.detail ? ` — ${result.detail}` : ""}`)
   }
   if (report.fail > 0) return 1
+  if (report.requiredFailures.length > 0) {
+    for (const failure of report.requiredFailures) console.log(`[required] ${failure}`)
+    return 1
+  }
   if (strict && report.skip > 0) {
     console.log(`[strict] ${report.skip} 个场景 SKIP —— 真机 lane 不允许跳过`)
     return 1

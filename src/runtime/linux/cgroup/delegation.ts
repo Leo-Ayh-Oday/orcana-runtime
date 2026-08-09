@@ -198,8 +198,15 @@ export function buildDelegationCandidates(
 ): Array<{ dir: string; source: DelegatedRoot["source"] }> {
   const candidates: Array<{ dir: string; source: DelegatedRoot["source"] }> = []
   // 1. 自身被委托子树（从自身路径逐级向上，跳过系统边界）。
-  if (selfCgroup && selfCgroup.startsWith(cgroupRoot)) {
-    const parts = selfCgroup.slice(cgroupRoot.length).split("/").filter(Boolean)
+  // /proc/self/cgroup 的 v2 记录是相对 cgroupfs 的绝对式路径
+  // （例如 /system.slice/orcana.service），而测试/调用方也可能传入已经
+  // 拼好 cgroupRoot 的文件系统路径。两种输入都归一化到相对组件，避免
+  // transient systemd Delegate 单元因路径形态不匹配而永远不可发现。
+  if (selfCgroup) {
+    const relativeSelf = selfCgroup.startsWith(cgroupRoot)
+      ? selfCgroup.slice(cgroupRoot.length)
+      : selfCgroup
+    const parts = relativeSelf.split("/").filter(Boolean)
     for (let i = parts.length; i >= 1; i--) {
       const dir = join(cgroupRoot, ...parts.slice(0, i))
       const source = sourceOfPath(parts.slice(0, i))
@@ -230,6 +237,7 @@ function sourceOfPath(parts: string[]): DelegatedRoot["source"] {
   }
   if (parts.some(p => p.includes("user@"))) return "systemd-user"
   if (parts.some(p => p.includes("user-"))) return "systemd-system"
+  if (parts[0] === "system.slice") return "systemd-system"
   return "container-runtime"
 }
 

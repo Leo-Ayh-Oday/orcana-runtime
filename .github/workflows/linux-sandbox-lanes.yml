@@ -41,7 +41,7 @@ jobs:
       - name: Real bubblewrap backend tests (conditionals auto-enable)
         run: bun test tests/runtime/linux/bubblewrap.test.ts tests/runtime/linux/linux-foundation.test.ts
       - name: Linux sandbox eval with real bwrap
-        run: bun run eval:linux
+        run: bun run eval:linux --require=bubblewrap
 
   lane-podman:
     runs-on: ubuntu-latest
@@ -69,7 +69,14 @@ jobs:
       - name: Real podman backend tests (digest-locked image, strict no-degrade)
         run: bun test tests/runtime/linux/podman.test.ts
       - name: Linux sandbox eval (LX-030 real)
-        run: bun run eval:linux
+        run: bun run eval:linux --require=podman
+      - name: Cleanup Orcana Podman resources and pause process
+        if: always()
+        run: |
+          ids="$(podman ps -a -q --filter label=io.orcana.run || true)"
+          if [ -n "$ids" ]; then podman rm -f $ids; fi
+          podman system migrate
+          test -z "$(pgrep -x catatonit || true)"
 
   lane-cgroup:
     runs-on: ubuntu-latest
@@ -83,11 +90,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Probe cgroup delegation
+      - name: Host cgroup diagnostics
         run: |
           mount | grep cgroup2 || true
           ls -la /sys/fs/cgroup/ | head -20
-          test -w /sys/fs/cgroup && echo DELEGATED || echo NOT-DELEGATED
       - run: bun install --frozen-lockfile
-      - name: cgroup tests (mock lifecycle always; real-kernel sections auto-enable when delegated)
-        run: bun test tests/runtime/linux/cgroup.test.ts
+      - name: Real delegated cgroup tests and resource eval
+        run: bash scripts/ci/run-delegated-cgroup.sh bun run ci:cgroup

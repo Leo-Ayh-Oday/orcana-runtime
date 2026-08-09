@@ -20,13 +20,13 @@ const extraArgs = process.argv.slice(2)
 // GATE-TEST-01：显式隔离（QUARANTINED）—— 不静默排除；每项带原因，
 // 报告中逐条可见。迁移回正式门禁需先过 isolated lane。
 const QUARANTINED = new Map([
-  ["tests/code_as_action.test.ts", "live lane: 需要 provider 环境"],
-  ["tests/e2e_fullstack_flow.test.ts", "live lane: 端到端 provider + 网络"],
-  ["tests/e2e_user_flow.test.ts", "live lane: 端到端 provider + 网络"],
-  ["tests/fullstack_depth.test.ts", "live lane: 深度端到端"],
-  ["tests/knowledge_pipeline.test.ts", "live lane: 知识库外部依赖"],
-  ["tests/thinking_depth.test.ts", "live lane: provider 深度测试"],
-  ["tests/thinking_quality.test.ts", "live lane: provider 质量测试"],
+  ["tests/code_as_action.test.ts", "Live Provider Lane: 需要 DEEPSEEK_API_KEY + 网络"],
+  ["tests/e2e_fullstack_flow.test.ts", "Live Provider Lane: 端到端 provider + 网络"],
+  ["tests/e2e_user_flow.test.ts", "Live Provider Lane: 端到端 provider + 网络"],
+  ["tests/fullstack_depth.test.ts", "Live Provider Lane: provider 深度端到端"],
+  ["tests/knowledge_pipeline.test.ts", "Live Provider Lane: provider 蒸馏 + 外部调用"],
+  ["tests/thinking_depth.test.ts", "Live Provider Lane: provider 深度测试"],
+  ["tests/thinking_quality.test.ts", "Live Provider Lane: provider 质量测试"],
 ])
 
 const excludedDirs = [

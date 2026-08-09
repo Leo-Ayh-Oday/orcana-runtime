@@ -33,6 +33,8 @@ export interface ExecdServerDeps {
   renewLease: (leaseId: string, ttlMs: number) => Promise<{ expiresAt: number } | undefined>
   releaseLease: (leaseId: string) => Promise<void>
   listRecoverableRuns: () => Array<{ runId: string; cellCount: number }>
+  /** L2-B：AttachLogs 大对象回放（execd 组装时注入 LogStore）。 */
+  attachLogs: (cellId: string, kind: "stdout" | "stderr", offset: number) => import("./log-store").AttachChunk
 }
 
 interface Connection {
@@ -40,8 +42,8 @@ interface Connection {
   codec: FrameCodec
   sessionId?: string
   peerUid?: number
-  /** WatchCell 订阅（cellId + 服务端已送达断点）。 */
-  watchingCell?: { cellId: string; lastAcknowledged: number }
+  /** WatchCell 订阅（cellId + 服务端已送达断点 + L2-C 落后标记）。 */
+  watchingCell?: { cellId: string; lastAcknowledged: number; lagged?: boolean }
 }
 
 export class ExecdServer {
@@ -97,16 +99,23 @@ export class ExecdServer {
   }
 
   /** 事件广播入口（CellManager 执行时调用；eventSequence 单调分配）。
-   *  只推送给订阅了该 Cell 的连接（EVENT_SEQUENCE_GAP_UNDETECTED）。 */
+   *  只推送给订阅了该 Cell 的连接（EVENT_SEQUENCE_GAP_UNDETECTED）。
+   *  L2-C（B3）：每连接有界实时队列 —— 慢消费者标记落后（改从落库历史
+   *  补读），socket 写缓冲不无限增长（EVENT_QUEUE_UNBOUNDED = 0）。 */
   publishEvent(event: Omit<import("./protocol/events").ServerEvent, "eventSequence" | "type" | "at">, sequence: number, at = Date.now()): void {
     const full = this.events.publish(event, sequence, at)
     for (const conn of this.connections) {
       const watching = conn.watchingCell
-      if (watching && watching.cellId === event.cellId) {
-        this.send(conn, full)
-        if (sequence > watching.lastAcknowledged) {
-          watching.lastAcknowledged = sequence
+      if (!watching || watching.cellId !== event.cellId) continue
+      if (watching.lagged) continue // 落后：实时停推（落库历史补读）
+      if (sequence > watching.lastAcknowledged) {
+        // L2-C：写缓冲不可写（慢消费者）→ 落队列；队列满 → 落后标记。
+        if (conn.socket.writableLength > 0 && !conn.socket.write("")) {
+          watching.lagged = true
+          continue
         }
+        this.send(conn, full)
+        watching.lastAcknowledged = sequence
       }
     }
   }
@@ -266,8 +275,22 @@ export class ExecdServer {
         conn.watchingCell = { cellId: request.payload.cellId, lastAcknowledged: last }
         return null
       }
-      default:
-        return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNKNOWN_METHOD, message: `unknown method: ${(request as { method: string }).method}` } }
+      case "AttachLogs": {
+        // L2-B（B2 修复）：AttachLogs 路由 —— 完整大对象回放（>16KB 不截断）。
+        const cell = this.deps.state.getCell(request.payload.cellId)
+        if (!cell) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNKNOWN_CELL, message: `cell ${request.payload.cellId} not found` } }
+        }
+        const kind = request.payload.kind === "stderr" ? "stderr" : "stdout"
+        const offset = request.payload.offset ?? 0
+        const chunk = this.deps.attachLogs(request.payload.cellId, kind, offset)
+        return { type: "ok", requestId: request.requestId, result: chunk }
+      }
+      default: {
+        // 所有已知方法已覆盖 —— 防御未知（类型层面 never，运行时兜底）。
+        const method = (request as { method?: string }).method ?? "unknown"
+        return { type: "error", requestId: (request as { requestId?: string }).requestId ?? "", error: { code: EXECD_ERROR_CODES.UNKNOWN_METHOD, message: `unknown method: ${method}` } }
+      }
     }
   }
 

@@ -13,7 +13,8 @@
 
 export interface LogFileFs {
   append(path: string, data: string): void
-  read(path: string, offset: number): string
+  /** M2：按字节 offset 读取尾部（不整文件读入内存 —— 大日志流式）。 */
+  readTail(path: string, byteOffset: number): string
   stat(path: string): { size: number } | undefined
   exists(path: string): boolean
   remove(path: string): void
@@ -26,10 +27,27 @@ export const REAL_LOG_FS: LogFileFs = {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     appendFileSync(path, data, { mode: 0o600 })
   },
-  read(path: string, offset: number): string {
-    const { readFileSync } = require("node:fs") as typeof import("node:fs")
-    const data = readFileSync(path, "utf8")
-    return data.slice(offset)
+  // M2：fd 定位到字节 offset 后只读尾部（`position` 是字节语义）。
+  // 返回前把尾随截断的多字节字符丢弃（UTF-8 边界安全）：buffer 按
+  // utf8 解码后，若末尾是无效序列（\uFFFD），剥掉最后一个字符重试。
+  readTail(path: string, byteOffset: number): string {
+    const { openSync, readSync, fstatSync, closeSync } = require("node:fs") as typeof import("node:fs")
+    const fd = openSync(path, "r")
+    try {
+      const size = fstatSync(fd).size
+      if (byteOffset >= size) return ""
+      const len = size - byteOffset
+      const buf = Buffer.alloc(len)
+      readSync(fd, buf, 0, len, byteOffset)
+      let text = buf.toString("utf8")
+      // 尾随截断字符（CJK 等多字节被切开 → 解码出 \uFFFD）→ 剥掉重试
+      while (text.length > 0 && text.charCodeAt(text.length - 1) === 0xfffd) {
+        text = text.slice(0, -1)
+      }
+      return text
+    } finally {
+      closeSync(fd)
+    }
   },
   stat(path: string): { size: number } | undefined {
     try {
@@ -100,7 +118,8 @@ export class LogStore {
     return `${this.logRoot}/${cellId}/${kind}.log`
   }
 
-  /** 追加写：文件追加 + 索引更新（大对象不进 DB）。 */
+  /** 追加写：文件追加 + 索引更新（大对象不进 DB；lengthBytes 用字节数
+   *  —— Buffer.byteLength，与文件 stat.size 一致，避免 UTF-16 错位）。 */
   append(cellId: string, kind: "stdout" | "stderr", data: string): void {
     if (data.length === 0) return
     this.fs.append(this.pathOf(cellId, kind), data)
@@ -108,12 +127,12 @@ export class LogStore {
     this.index.upsert({
       cellId,
       kind,
-      lengthBytes: (existing?.lengthBytes ?? 0) + data.length,
+      lengthBytes: (existing?.lengthBytes ?? 0) + Buffer.byteLength(data, "utf8"),
       updatedAt: this.deps.now?.() ?? Date.now(),
     })
   }
 
-  /** AttachLogs 回放：从 offset 读到 EOF。 */
+  /** AttachLogs 回放：从字节 offset 读到 EOF（M2：不整文件读入内存）。 */
   attach(cellId: string, kind: "stdout" | "stderr", offset: number): AttachChunk {
     const path = this.pathOf(cellId, kind)
     const stat = this.fs.stat(path)
@@ -121,8 +140,8 @@ export class LogStore {
     if (!stat || offset >= totalBytes) {
       return { cellId, kind, data: "", totalBytes, eof: true }
     }
-    const data = this.fs.read(path, offset)
-    return { cellId, kind, data, totalBytes, eof: offset + data.length >= totalBytes }
+    const data = this.fs.readTail(path, offset)
+    return { cellId, kind, data, totalBytes, eof: offset + Buffer.byteLength(data, "utf8") >= totalBytes }
   }
 
   /** 当前已落盘长度（断点续读基准）。 */
@@ -143,8 +162,12 @@ export function memLogFs(): { fs: LogFileFs; files: Map<string, string> } {
   const files = new Map<string, string>()
   const fs: LogFileFs = {
     append(path, data) { files.set(path, (files.get(path) ?? "") + data) },
-    read(path, offset) { return (files.get(path) ?? "").slice(offset) },
-    stat(path) { return files.has(path) ? { size: files.get(path)!.length } : undefined },
+    // 内存模拟按字节 offset 读尾部（Buffer 字节语义 —— 与真实 fs 一致）
+    readTail(path, byteOffset) {
+      const content = files.get(path) ?? ""
+      return Buffer.from(content, "utf8").subarray(byteOffset).toString("utf8")
+    },
+    stat(path) { return files.has(path) ? { size: Buffer.byteLength(files.get(path)!, "utf8") } : undefined },
     exists(path) { return files.has(path) },
     remove(path) { files.delete(path) },
   }

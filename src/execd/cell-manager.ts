@@ -22,6 +22,8 @@ export interface CellManagerOptions {
   workspaceHostRoot: string
   /** 事件广播（server.publishEvent）。 */
   publish: (event: { kind: string; cellId: string; runId?: string; payload?: unknown }, sequence: number) => void
+  /** L2-B（B2）：大对象日志落盘（stdout/stderr 完整可回放）。 */
+  logStore?: import("./log-store").LogStore
   now?: () => number
 }
 
@@ -183,6 +185,24 @@ export class CellManager {
     })
     this.opts.publish({ kind: "cell.status", cellId, runId, payload: { state: "RUNNING" } }, state.latestEventSequence())
 
+    // L2-A（B1 修复）：启动即记录执行句柄（重启接管的持久化锚点）。
+    // cgroup 路径 = broker 委托基 + hierarchyPaths（与 broker 内部一致）。
+    // 无委托 → 无句柄（重启后诚实 LOST —— v1 语义）。
+    const cgroupBase = this.opts.broker.cgroupBase()
+    if (cgroupBase) {
+      const { hierarchyPaths } = require("../runtime/linux/cgroup/manager") as typeof import("../runtime/linux/cgroup/manager")
+      const paths = hierarchyPaths(cgroupBase, runId, undefined, compiled.identity.cellId)
+      state.upsertExecutionHandle({
+        handleId: `h-${cellId}`,
+        cellId,
+        runId,
+        attemptId,
+        cgroupPath: paths.cell,
+        spawnPid: undefined, // pid 由 broker 内部 spawn —— 句柄只依赖 cgroup 锚点
+        startedAt: this.now,
+      })
+    }
+
     // M2：收尾纳入 try —— 优雅关闭（stop 已 await 本 promise）时任何
     // 一步失败都会正确收敛而不是 unhandled rejection 崩溃 daemon。
     try {
@@ -203,6 +223,9 @@ export class CellManager {
                 payload: data.length > 16 * 1024 ? data.slice(0, 16 * 1024) : data,
                 at: this.now,
               })
+              // L2-B（B2 修复）：大对象完整落盘（AttachLogs 可回放全文；
+              // 在线事件仍截断 16KB 索引语义）。
+              this.opts.logStore?.append(cellId, event.type === "cell.stdout" ? "stdout" : "stderr", data)
               this.opts.publish({ kind: event.type, cellId, runId, payload: { data } }, seq)
             }
             break
@@ -262,6 +285,9 @@ export class CellManager {
         state.transition(cellId, attemptId, "EVIDENCE_BOUND", { from: "RECEIPT_COMMITTED", reasonCode: "receipt-bound", actor: "execd", at: this.now })
         state.transition(cellId, attemptId, "CLEANED", { from: "EVIDENCE_BOUND", reasonCode: "cleaned", actor: "execd", at: this.now })
       })
+      // L2-A（B1）+ L2-B：句柄与日志随 cell 终结清理（防复用错接管/泄漏）。
+      state.deleteExecutionHandle(`h-${cellId}`)
+      this.opts.logStore?.remove(cellId)
       this.opts.publish({ kind: "cell.status", cellId, runId, payload: { state: "CLEANED" } }, state.latestEventSequence())
     }
   }
@@ -276,6 +302,10 @@ export class CellManager {
     try {
       if (brokerCellId) {
         await this.opts.broker.cancelCell(brokerCellId)
+      } else {
+        // L2-A（B4 修复）：重启后 broker 内存映射丢失 —— 改用持久化句柄
+        // 的 cgroup.kill 路径（进程树真实终止，不把 CANCELLED 标给活进程）。
+        await this.killViaHandle(cell)
       }
     } catch {
       // 未运行/已结束：幂等容忍。
@@ -287,7 +317,26 @@ export class CellManager {
       if (seq !== null) {
         this.opts.publish({ kind: "cell.status", cellId, runId: cell.runId, payload: { state: "CANCELLED" } }, seq)
       }
+      // L2-A（B1）：句柄生命周期随 cell 终结删除（防复用错接管）。
+      this.opts.state.deleteExecutionHandle(`h-${cellId}`)
     })
+  }
+
+  /** L2-A（B4）：无 broker 内存态时的取消 —— cgroup.kill 树杀（句柄锚点）。
+   *  无 cgroup 委托 → 无法终止（返回 false，调用方幂等容忍）。 */
+  private async killViaHandle(cell: { cellId: string; runId: string; attempt: number }): Promise<boolean> {
+    const handles = this.opts.state.listHandlesByCell(cell.cellId)
+    if (handles.length === 0) return false
+    const { CgroupManager } = require("../runtime/linux/cgroup/manager") as typeof import("../runtime/linux/cgroup/manager")
+    const base = this.opts.broker.cgroupBase()
+    if (!base) return false
+    const cgroup = new CgroupManager({ base })
+    try {
+      cgroup.kill(handles[0]!.cgroupPath)
+      return true
+    } catch {
+      return false
+    }
   }
 
   async cancelAgent(agentId: string): Promise<void> {

@@ -48,9 +48,34 @@ describe("L2-C: EventStream backpressure", () => {
     expect(d2.lagged).toBe(true)
     // 事件 5 未丢失 —— resumeFromSequence 指向可补读起点（=2+1）
     expect(d2.resumeFromSequence).toBe(3)
-    // 落后清不清除：确认到 5 → 恢复实时
+    // M4：补读后逐事件确认（不能跳越）→ 落后清除，恢复实时
+    es.acknowledge(sub, 3)
+    es.acknowledge(sub, 4)
     es.acknowledge(sub, 5)
     expect(sub.lagged).toBe(false)
+  })
+
+  test("M4: jumping ahead while lagged (unbackfilled) is rejected", () => {
+    const es = new EventStream({ maxQueued: 2 })
+    const sub = es.subscribe("cell-1")
+    es.publish(ev(1), 1)
+    es.publish(ev(2), 2)
+    es.drain(sub)
+    es.acknowledge(sub, 2)
+    es.publish(ev(3), 3)
+    es.publish(ev(4), 4)
+    es.publish(ev(5), 5) // 落后（resumeFromSequence=3）
+    expect(sub.lagged).toBe(true)
+    // 未补读直接跳到 5 → 拒绝（lastAcknowledged 不动，事件不丢）
+    es.acknowledge(sub, 5)
+    expect(sub.lastAcknowledged).toBe(2)
+    expect(sub.lagged).toBe(true)
+    // 逐事件补读确认 → 通过
+    es.acknowledge(sub, 3)
+    es.acknowledge(sub, 4)
+    es.acknowledge(sub, 5)
+    expect(sub.lagged).toBe(false)
+    expect(sub.lastAcknowledged).toBe(5)
   })
 
   test("lagged subscriber stops receiving live events (no growth)", () => {
@@ -64,11 +89,17 @@ describe("L2-C: EventStream backpressure", () => {
     expect(sub.lagged).toBe(true)
   })
 
-  test("acknowledge past lag point clears lagged", () => {
+  test("acknowledge past lag point clears lagged (sequential backfill)", () => {
     const es = new EventStream({ maxQueued: 2 })
     const sub = es.subscribe("cell-1")
     for (let i = 1; i <= 6; i++) es.publish(ev(i), i)
     expect(sub.lagged).toBe(true)
+    // M4：逐事件补读确认（不能跳越）
+    es.acknowledge(sub, 1)
+    es.acknowledge(sub, 2)
+    es.acknowledge(sub, 3)
+    es.acknowledge(sub, 4)
+    es.acknowledge(sub, 5)
     es.acknowledge(sub, 6)
     expect(sub.lagged).toBe(false)
     // 恢复实时通道

@@ -279,3 +279,37 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第五轮修复候选门评估
 
 第五轮 2 个 High 已由 append-only media roles/manifest attestation，以及 SQLite 全入口 no-follow + parent write lock 闭锁；2 个 residual 同步关闭。AK-1 继续保持 `FIXED_REAUDIT_PENDING`，必须由独立 Agent 对包含本记录的固定候选 HEAD 再次只读复审后才能完成。
+
+### FACT — 第六轮独立复审
+
+- 独立 Agent 对 `a0b9afa8275c7ac75ab703e9648529e76838a3d9` 给出 `CHANGES_REQUIRED`，确认第五轮 MIME collision、pinned DB/CAS locator 与稳态 sidecar symlink 问题已关闭。
+- 新阻塞发现：3 High。
+  1. `putManifest()` 信任公开 `referencedDigests`，可在同一事务内提升缺字段 manifest 或提交与 bytes 不一致的 child links；
+  2. 首次 bootstrap 关闭验证 fd 后在可写 root 下交给 SQLite pathname，存在 main/sidecar 替换窗口；
+  3. 每个 Store open/close 都切换共享 root 权限，一个并发 Store 关闭会解锁仍活跃 Store 的 authority 目录。
+- 残余发现：公开 `WorldStore.root` 仍是可被替换的 configured pathname；CAS digest prefix 新目录 fsync 异常会泄漏 `prefixFd`。
+- 审计 Agent 保持只读，未修改文件、运行测试/构建或启动服务；HEAD、parent、白名单、diff-check 与 clean status 证据一致。
+
+### FACT — 第六轮修复
+
+- 修复提交为 `c624645b68aa2401ac8c3f3c9a3b7a1d278e7609`，parent 为 `a0b9afa8275c7ac75ab703e9648529e76838a3d9`。
+- manifest attestation 在同一 `BEGIN IMMEDIATE` 内解析 canonical bytes，对 File/Directory/WorldSection/World 执行完整 envelope、字段、排序、digest 与布局校验；child refs 从 bytes 推导并与调用方及已持久链接精确比对。
+- malformed、noncanonical、missing-ref 与 extra-ref 在 `is_manifest` 提升前 fail-closed；同一 parser 复用于后续 integrity verification，避免 attestation 和完整性语义分叉。
+- WorldDB 首次镜像在内存中构造并预置 SQLite WAL header，通过已验证 main fd 写入；进程间 hard-link lock 与 schema-fingerprint completion marker 区分完成、未完成与无法证明的 DB。
+- root 在任何 bootstrap 或 SQLite pathname open 之前设为 `0500`，所有 main/WAL/SHM/journal fd 保持到 inode 复验完成；Store close 不再恢复顶层写权限，因此并发 Store 无法互相解锁。
+- 崩溃遗留 bootstrap lock 只允许重建未完成的首次镜像；非空 DB 缺失 completion marker 时拒绝自动覆盖并报 `WORLD_DB_BOOTSTRAP_MARKER_MISSING`。
+- `WorldStore.root` 改为 pinned `/proc/self/fd/<rootFd>` locator，原输入仅作为 `configuredRoot`；CAS prefix fsync 异常路径显式关闭 `prefixFd`。
+- 新增反例覆盖 manifest 提升回滚、精确 refs、崩溃 bootstrap 恢复、无证明 DB fail-closed 与并发 Store close 不解锁。
+
+### FACT — 第六轮修复后主代理验证
+
+- `bun test tests/kernel/world`：`50 pass / 0 fail / 258 expect`。
+- 新增专项组（manifest + bootstrap + confinement）：`21 pass / 0 fail / 90 expect`。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- `git diff --check`：通过。
+- hosted CI 仍因既有账号 billing lock 未执行；live/provider 测试未执行且不计为通过。
+
+### INFERENCE — 第六轮修复候选门评估
+
+第六轮 3 个 High 和 2 个 residual 已由同事务 manifest parser/reference derivation、进程间 bootstrap 证明协议、永不恢复的顶层 root write lock 与 pinned locator 闭锁。AK-1 仍保持 `FIXED_REAUDIT_PENDING`，必须对包含本记录的固定候选 HEAD 进行独立只读复审。

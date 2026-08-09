@@ -429,7 +429,7 @@ Typed Execution Graph 保持这个权威。
 ```text
 文件
 Memory
-Task state
+Task projection / reference（非权威；Graph 保持唯一写入和完成裁决权）
 Artifact
 Service
 World object
@@ -516,7 +516,7 @@ AgentWorld
 ├── CAS
 ├── Semantic Memory
 ├── Artifact Registry
-├── Task State
+├── Task Projection / Graph Reference（non-authoritative）
 ├── Agent Processes
 ├── Services
 ├── Events
@@ -2118,7 +2118,7 @@ CAS
 AgentProcess checkpoint
 Pending Events
 Capability Grants
-Task State
+Task Projection / Graph Reference（non-authoritative）
 ```
 
 然后：

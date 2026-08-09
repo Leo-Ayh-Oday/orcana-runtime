@@ -1,7 +1,7 @@
 # AK-1 Durable Agent World
 
 **Task ID:** `AK1-WORLD-001`
-**状态:** `FIXED_REAUDIT_PENDING`
+**状态:** `PASSED`
 **基线 / 回滚点:** `60bff0515214197b297993faebb53bb4858938c3`
 **专用分支:** `feat/agent-os`
 
@@ -414,3 +414,29 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第九轮修复候选门评估
 
 第八轮独立复审的唯一 High 已由 pre-transaction normalized string validation 与 explicit malformed-genesis integrity failure 闭锁。AK-1 仍为 `FIXED_REAUDIT_PENDING`；需要新的 clean-start/clean-end 独立只读复审确认后才能关闭。
+
+### FACT — AK-1 最终独立复审与关闭
+
+- 独立 Agent 对固定候选 `380c52634d92cf38e83131851cc06d40cfb413db` 给出 `PASS, no blocking findings`。
+- 候选 sole parent 为 `3bd4bcedeb45e4e5b562e1e730665f60e398e445`；该实现提交 sole parent 为 `398f13544fa02bd500613f3fbb0518d7922bc507`。rollback `60bff0515214197b297993faebb53bb4858938c3` 到候选的全部路径均在 AK-1 白名单内。
+- 审核为全新 clean-start/clean-end 只读轮次；期间主代理未读取、写入、测试、构建或创建 symlink，HEAD、index、tracked/untracked worktree 全程未变化。
+- 审计确认第九轮 runtime coercion 与 malformed genesis High 已关闭，并复核此前 sidecar provenance、snapshot contract、flock/fsync、CAS/manifest/schema/root confinement、ledger atomicity 与 crash recovery 路径无回归。
+- 审计没有运行测试、typecheck 或 build，也没有采信阶段日志中的主代理计数；其 `PASS` 仅来自独立 Git/静态证据。动态验证证据仍由主代理负责并已在上一节记录。
+
+### FACT — 最终 Gate
+
+```text
+WORLD_REVISION_SPLIT_BRAIN     = 0
+LEDGER_DB_DIVERGENCE           = 0
+CAS_MISSING_REFERENCED_OBJECT  = 0
+UNREACHABLE_OBJECT_LEAK        = 0
+NONDETERMINISTIC_SNAPSHOT      = 0
+CRASH_LOSES_COMMITTED_WORLD    = 0
+```
+
+AK-1 状态正式关闭为 `PASSED`。未使用 skipped、mock、hosted CI、live/provider 测试作为通过证据；未 merge main、未 push、未发布、未修改外部系统。
+
+### INFERENCE — 残余风险
+
+- bootstrap state torn-record、错误 initial-image prefix 及 digest/fingerprint divergence 已有静态 fail-closed 路径，但尚无直接故障注入测试；保留为后续测试强化项，不阻塞当前 AK-1 正确性门。
+- `file-lock.ts` 当前依赖 glibc `libc.so.6` / `__errno_location`；权威 Ubuntu 环境满足，musl Linux 支持未在 AK-1 声称范围内。

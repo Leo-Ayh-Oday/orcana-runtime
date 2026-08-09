@@ -25,6 +25,11 @@ export type PerfVerdict =
   | { ok: true; reason: string }
   | { ok: false; reason: string; regressed: Array<{ benchName: string; baselineP95Ms: number; candidateP95Ms: number; ratio: number }> }
 
+/** 构造"无数据/缺项"类失败（无具体基准对比 —— regressed 为空但 ok=false）。 */
+function reject(reason: string): PerfVerdict {
+  return { ok: false, reason, regressed: [] }
+}
+
 export interface PerfRegressionOptions {
   /** 允许的最大退化比例（相对基线 p95）。来自清单 criteria。 */
   maxRegressionRatio: number
@@ -34,8 +39,9 @@ export interface PerfRegressionOptions {
 export function computePerfBaseline(benchName: string, samplesMs: number[], source = "baseline-run"): PerfBaselineSnapshot {
   if (samplesMs.length === 0) throw new Error(`perf baseline requires samples: ${benchName}`)
   const sorted = [...samplesMs].sort((a, b) => a - b)
+  // nearest-rank 百分位：ceil(p * n)，n 小时不坍缩到 max
   const pct = (p: number) => {
-    const idx = Math.min(sorted.length - 1, Math.floor(p * sorted.length))
+    const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))
     return sorted[idx]!
   }
   return {
@@ -48,7 +54,9 @@ export function computePerfBaseline(benchName: string, samplesMs: number[], sour
   }
 }
 
-/** 候选采样 → p95 对比基线（阈值来自基线，不硬编码数字）。 */
+/** 候选采样 → p95 对比基线（阈值来自基线，不硬编码数字）。
+ *  M7：基线存在的基准在候选侧缺席 → 拒绝；候选采样为空 → 拒绝
+ *  （"无数据 = 通过"是静默绕过）。 */
 export function comparePerfBaselines(
   baselines: PerfBaselineSnapshot[],
   candidateSamples: PerfSample[],
@@ -56,6 +64,12 @@ export function comparePerfBaselines(
 ): PerfVerdict {
   if (opts.maxRegressionRatio < 0 || opts.maxRegressionRatio > 1) {
     throw new Error("maxRegressionRatio must be in [0,1]")
+  }
+  if (baselines.length === 0) {
+    throw new Error("perf comparison requires baseline snapshots")
+  }
+  if (candidateSamples.length === 0) {
+    return reject("perf regression: candidate produced no samples (unevaluated)")
   }
   const byName = new Map(baselines.map(b => [b.benchName, b]))
   const candidateByName = new Map<string, number[]>()
@@ -65,18 +79,23 @@ export function comparePerfBaselines(
     candidateByName.set(s.benchName, arr)
   }
   const regressed: Array<{ benchName: string; baselineP95Ms: number; candidateP95Ms: number; ratio: number }> = []
+  // 基线基准在候选侧缺席：候选跳过了慢基准 → 拒绝
+  const missingBenches = baselines.filter(b => !candidateByName.has(b.benchName)).map(b => b.benchName)
 
   for (const [name, samples] of candidateByName) {
     const base = byName.get(name)
     if (!base) continue // 候选新增基准不判定回归（也不隐藏）
     const sorted = [...samples].sort((a, b) => a - b)
-    const p95 = sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))]!
+    const p95 = sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(0.95 * sorted.length) - 1))]!
     const ratio = base.p95Ms > 0 ? p95 / base.p95Ms : 1
     if (ratio > 1 + opts.maxRegressionRatio) {
       regressed.push({ benchName: name, baselineP95Ms: base.p95Ms, candidateP95Ms: p95, ratio })
     }
   }
 
+  if (missingBenches.length > 0) {
+    return reject(`perf regression: baseline benches not evaluated by candidate: ${missingBenches.join(", ")}`)
+  }
   if (regressed.length > 0) {
     return {
       ok: false,

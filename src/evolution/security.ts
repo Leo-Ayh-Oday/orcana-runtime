@@ -17,19 +17,24 @@ export type SecurityGateVerdict =
   | { ok: true; reason: string }
   | { ok: false; reason: string; regressedGates: Array<{ gate: string; baseline: number; candidate: number }> }
 
-/** 对比安全 Gate：候选任何项 > 基线 → 回归。 */
+/** 对比安全 Gate：候选任何项 > 基线 → 回归；候选缺项 → 拒绝
+ *  （M6：未评估 ≠ 安全 —— 安全评估工具失效/被移除必须显式失败）。 */
 export function compareSecurityGates(baseline: SecurityGateSnapshot, candidate: SecurityGateSnapshot): SecurityGateVerdict {
   const regressed: Array<{ gate: string; baseline: number; candidate: number }> = []
   const allGates = new Set([...Object.keys(baseline.gates), ...Object.keys(candidate.gates)])
   for (const gate of allGates) {
     const b = baseline.gates[gate] ?? 0
     const c = candidate.gates[gate] ?? 0
+    if (!(gate in candidate.gates)) {
+      regressed.push({ gate, baseline: b, candidate: -1 }) // candidate: -1 = 未评估
+      continue
+    }
     if (c > b) regressed.push({ gate, baseline: b, candidate: c })
   }
   if (regressed.length > 0) {
     return {
       ok: false,
-      reason: `security gate regression: ${regressed.map(r => `${r.gate} ${r.baseline}→${r.candidate}`).join(", ")}`,
+      reason: `security gate regression: ${regressed.map(r => `${r.gate} ${r.baseline}→${r.candidate === -1 ? "UNEVAULATED" : r.candidate}`).join(", ")}`,
       regressedGates: regressed,
     }
   }

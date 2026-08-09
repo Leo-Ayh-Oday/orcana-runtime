@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto"
-import { lstatSync, mkdirSync } from "node:fs"
-import { join, resolve } from "node:path"
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+} from "node:fs"
+import { basename, dirname, join, resolve } from "node:path"
 import { Database } from "bun:sqlite"
 import {
   canonicalDigest,
@@ -28,6 +36,7 @@ import { WorldConflictError, WorldCorruptionError } from "./contracts"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { WorldLedger } from "./ledger"
 import {
+  assertWorldSchemaCompatible,
   initializeOrValidateWorldSchema,
 } from "./schema"
 import { WorldSnapshotManager } from "./snapshot"
@@ -286,6 +295,90 @@ function enableWalWithBusyRetry(db: Database, timeoutMs = 5_000): void {
   }
 }
 
+function isFsError(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && error.code === code
+}
+
+function fdPath(fd: number, entry?: string): string {
+  const root = `/proc/self/fd/${fd}`
+  return entry === undefined ? root : join(root, entry)
+}
+
+function openDirectoryNoFollow(path: string): number {
+  const fd = openSync(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  )
+  if (!fstatSync(fd).isDirectory()) {
+    closeSync(fd)
+    throw new Error(`World root is not a directory: ${path}`)
+  }
+  return fd
+}
+
+function openOrCreateDurableWorldRoot(configuredRoot: string): number {
+  const missing: string[] = []
+  let existing = configuredRoot
+  for (;;) {
+    try {
+      const stat = lstatSync(existing)
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error(`World root must be a real directory: ${existing}`)
+      }
+      break
+    } catch (error) {
+      if (!isFsError(error, "ENOENT")) throw error
+      const name = basename(existing)
+      const parent = dirname(existing)
+      if (!name || name === "." || name === ".." || parent === existing) {
+        throw new Error(`invalid World root: ${configuredRoot}`)
+      }
+      missing.push(name)
+      existing = parent
+    }
+  }
+
+  let currentFd = openDirectoryNoFollow(existing)
+  try {
+    for (const name of missing.reverse()) {
+      try {
+        mkdirSync(fdPath(currentFd, name), { mode: 0o700 })
+      } catch (error) {
+        if (!isFsError(error, "EEXIST")) throw error
+      }
+      const nextFd = openDirectoryNoFollow(fdPath(currentFd, name))
+      fsyncSync(nextFd)
+      fsyncSync(currentFd)
+      closeSync(currentFd)
+      currentFd = nextFd
+    }
+    return currentFd
+  } catch (error) {
+    closeSync(currentFd)
+    throw error
+  }
+}
+
+function ensureDurableRootDirectory(rootFd: number, name: string): void {
+  const path = fdPath(rootFd, name)
+  let created = false
+  try {
+    mkdirSync(path, { mode: 0o700 })
+    created = true
+  } catch (error) {
+    if (!isFsError(error, "EEXIST")) throw error
+  }
+  const directoryFd = openDirectoryNoFollow(path)
+  try {
+    if (created) {
+      fsyncSync(directoryFd)
+      fsyncSync(rootFd)
+    }
+  } finally {
+    closeSync(directoryFd)
+  }
+}
+
 export class WorldStore {
   readonly root: string
   readonly databasePath: string
@@ -293,44 +386,86 @@ export class WorldStore {
   readonly cas: WorldCas
   readonly snapshots: WorldSnapshotManager
   private readonly db: Database
+  private readonly rootFd: number
   private readonly now: () => number
   private readonly idFactory: (kind: "world" | "event" | "commit") => string
   private readonly faultInjector?: (point: WorldFaultPoint) => void
+  private closed = false
 
   constructor(root: string, options: Omit<WorldStoreOptions, "root"> = {}) {
     this.now = options.now ?? (() => Date.now())
     this.idFactory = options.idFactory ?? (kind => `${kind}-${randomUUID()}`)
     this.faultInjector = options.faultInjector
     const configuredRoot = resolve(root)
-    mkdirSync(configuredRoot, { recursive: true, mode: 0o700 })
-    const rootStat = lstatSync(configuredRoot)
-    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-      throw new Error(`World root must be a real directory: ${configuredRoot}`)
-    }
+    this.rootFd = openOrCreateDurableWorldRoot(configuredRoot)
     this.root = configuredRoot
-    for (const directory of ["ledger", "snapshots", "projections", "recovery"]) {
-      mkdirSync(join(configuredRoot, directory), { recursive: true, mode: 0o700 })
+    try {
+      for (const directory of ["ledger", "snapshots", "projections", "recovery"]) {
+        ensureDurableRootDirectory(this.rootFd, directory)
+      }
+    } catch (error) {
+      closeSync(this.rootFd)
+      throw error
     }
     this.databasePath = join(configuredRoot, "world.db")
-    this.db = new Database(this.databasePath)
-    this.db.exec("PRAGMA foreign_keys = ON")
-    this.db.exec("PRAGMA busy_timeout = 5000")
-    enableWalWithBusyRetry(this.db)
-    this.db.exec("PRAGMA synchronous = FULL")
+    const databaseFdPath = fdPath(this.rootFd, "world.db")
+    let verifiedDatabaseFd: number | undefined
+    let database: Database | undefined
     try {
+      verifiedDatabaseFd = openSync(
+        databaseFdPath,
+        constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
+        0o600,
+      )
+      const verified = fstatSync(verifiedDatabaseFd)
+      if (!verified.isFile()) throw new Error(`WorldDB must be a regular file: ${this.databasePath}`)
+      fsyncSync(verifiedDatabaseFd)
+      fsyncSync(this.rootFd)
+      database = new Database(databaseFdPath)
+      const opened = lstatSync(databaseFdPath)
+      if (
+        opened.isSymbolicLink() ||
+        !opened.isFile() ||
+        opened.dev !== verified.dev ||
+        opened.ino !== verified.ino
+      ) {
+        throw new Error(`WORLD_DB_IDENTITY_CHANGED: ${this.databasePath}`)
+      }
+    } catch (error) {
+      database?.close()
+      closeSync(this.rootFd)
+      throw error
+    } finally {
+      if (verifiedDatabaseFd !== undefined) closeSync(verifiedDatabaseFd)
+    }
+    if (!database) throw new Error(`failed to open WorldDB: ${this.databasePath}`)
+    this.db = database
+    try {
+      this.db.exec("PRAGMA foreign_keys = ON")
+      this.db.exec("PRAGMA busy_timeout = 5000")
+      enableWalWithBusyRetry(this.db)
+      this.db.exec("PRAGMA synchronous = FULL")
       withImmediateTransaction(this.db, () => {
         initializeOrValidateWorldSchema(this.db, this.now())
       })
     } catch (error) {
       this.db.close()
+      closeSync(this.rootFd)
       throw error
     }
     this.ledger = new WorldLedger(this.db)
+    let cas: WorldCas | undefined
     try {
-      this.cas = new WorldCas(this.db, configuredRoot, this.now, this.faultInjector)
-      this.snapshots = new WorldSnapshotManager(
+      cas = new WorldCas(
         this.db,
-        this.cas,
+        configuredRoot,
+        this.now,
+        this.faultInjector,
+        this.rootFd,
+      )
+      const snapshots = new WorldSnapshotManager(
+        this.db,
+        cas,
         this.ledger,
         {
           getWorld: worldId => this.getWorld(worldId),
@@ -343,14 +478,22 @@ export class WorldStore {
         () => this.idFactory("event"),
         this.faultInjector,
       )
+      this.cas = cas
+      this.snapshots = snapshots
     } catch (error) {
+      cas?.close()
       this.db.close()
+      closeSync(this.rootFd)
       throw error
     }
   }
 
   close(): void {
+    if (this.closed) return
+    this.closed = true
+    this.cas.close()
     this.db.close()
+    closeSync(this.rootFd)
   }
 
   createWorld(input: CreateWorldInput): AgentWorld {
@@ -1120,6 +1263,7 @@ export class WorldStore {
 
   markCorruptedFromRecovery(worldId: string, detail: string): void {
     withImmediateTransaction(this.db, () => {
+      assertWorldSchemaCompatible(this.db)
       const world = this.getWorld(worldId)
       if (!world || world.status === "corrupted") return
       const branch = this.getBranch(worldId, world.currentBranchId)
@@ -1203,6 +1347,7 @@ export class WorldStore {
 
   quarantineWorldFromRecovery(worldId: string, detail: string): void {
     withImmediateTransaction(this.db, () => {
+      assertWorldSchemaCompatible(this.db)
       const world = this.getWorld(worldId)
       if (!world || world.status === "corrupted") return
       const at = this.now()

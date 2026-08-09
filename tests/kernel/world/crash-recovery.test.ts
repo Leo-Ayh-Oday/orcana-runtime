@@ -95,6 +95,29 @@ describe("AK-1 process crash recovery", () => {
     }
   })
 
+  test("a hard exit after GC file fsync converges missing bytes and rolled-back metadata", () => {
+    const root = createRoot()
+    const digest = sha256Digest("gc crash")
+    try {
+      crash("gc-file", root)
+      const reopened = new WorldStore(root)
+      try {
+        expect(reopened.cas.record(digest)).toBeDefined()
+        expect(existsSync(reopened.cas.resolveObjectPath(digest))).toBe(false)
+        const report = recoverWorldStore(reopened)
+        assertWorldRecovered(report)
+        expect(report.removedUnreachableObjects).toContain(digest)
+        expect(reopened.cas.record(digest)).toBeUndefined()
+        expect(existsSync(reopened.cas.resolveObjectPath(digest))).toBe(false)
+        expect(reopened.verifyIntegrity()).toEqual([])
+      } finally {
+        reopened.close()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test("snapshot manifest and row-insert crash windows leave no committed snapshot", () => {
     for (const scenario of ["snapshot-manifest", "snapshot-insert"]) {
       const root = createRoot()

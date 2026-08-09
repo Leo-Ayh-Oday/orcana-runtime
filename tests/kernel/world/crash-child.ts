@@ -11,6 +11,7 @@ const faultByScenario: Readonly<Record<string, WorldFaultPoint>> = {
   "cas-temp": "after_cas_temp_fsync",
   "cas-rename": "after_cas_rename_before_metadata",
   "cas-metadata": "after_cas_metadata_before_return",
+  "gc-file": "after_gc_file_fsync_before_metadata_commit",
   "snapshot-manifest": "after_snapshot_manifest_before_insert",
   "snapshot-insert": "after_snapshot_insert_before_commit",
 }
@@ -49,6 +50,9 @@ if (scenario === "world-precommit" || scenario === "world-ledger") {
   })
 } else if (scenario.startsWith("cas-")) {
   store.cas.put(Buffer.from("cas crash"), "text/plain")
+} else if (scenario === "gc-file") {
+  store.cas.put(Buffer.from("gc crash"), "text/plain")
+  store.cas.gc()
 } else {
   store.createSnapshot("w1", "main")
 }

@@ -196,6 +196,17 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   response_json TEXT NOT NULL,
   at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS execution_handles (
+  handle_id TEXT PRIMARY KEY,
+  cell_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL,
+  cgroup_path TEXT NOT NULL,
+  spawn_pid INTEGER,
+  started_at INTEGER NOT NULL,
+  takeover TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_handles_cell ON execution_handles(cell_id);
 CREATE INDEX IF NOT EXISTS idx_cell_events_cell ON cell_events(cell_id, event_sequence);
 CREATE INDEX IF NOT EXISTS idx_cells_run ON cells(run_id);
 `
@@ -413,6 +424,42 @@ export class StateStore {
     return this.all<{ leaseId: string; runId: string; expiresAt: number }>(
       "SELECT lease_id AS leaseId, run_id AS runId, expires_at AS expiresAt FROM leases WHERE released_at IS NULL",
     )
+  }
+
+  // ── execution handles（L2-A）──
+
+  upsertExecutionHandle(h: { handleId: string; cellId: string; runId: string; attemptId: string; cgroupPath: string; spawnPid?: number; startedAt: number; takeover?: string }): void {
+    this.run(
+      `INSERT INTO execution_handles (handle_id, cell_id, run_id, attempt_id, cgroup_path, spawn_pid, started_at, takeover)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(handle_id) DO UPDATE SET
+         cgroup_path = excluded.cgroup_path,
+         spawn_pid = excluded.spawn_pid,
+         started_at = excluded.started_at,
+         takeover = excluded.takeover`,
+      h.handleId, h.cellId, h.runId, h.attemptId, h.cgroupPath, h.spawnPid ?? null, h.startedAt, h.takeover ?? null,
+    )
+  }
+
+  getExecutionHandle(handleId: string): { handleId: string; cellId: string; runId: string; attemptId: string; cgroupPath: string; spawnPid: number | null; startedAt: number; takeover: string | null } | undefined {
+    return this.get<{ handleId: string; cellId: string; runId: string; attemptId: string; cgroupPath: string; spawnPid: number | null; startedAt: number; takeover: string | null }>(
+      `SELECT handle_id AS handleId, cell_id AS cellId, run_id AS runId, attempt_id AS attemptId,
+              cgroup_path AS cgroupPath, spawn_pid AS spawnPid, started_at AS startedAt, takeover
+       FROM execution_handles WHERE handle_id = ?`,
+      handleId,
+    )
+  }
+
+  listHandlesByCell(cellId: string): Array<{ handleId: string; cgroupPath: string; startedAt: number; takeover: string | null }> {
+    return this.all<{ handleId: string; cgroupPath: string; startedAt: number; takeover: string | null }>(
+      `SELECT handle_id AS handleId, cgroup_path AS cgroupPath, started_at AS startedAt, takeover
+       FROM execution_handles WHERE cell_id = ? ORDER BY started_at DESC`,
+      cellId,
+    )
+  }
+
+  deleteExecutionHandle(handleId: string): void {
+    this.run("DELETE FROM execution_handles WHERE handle_id = ?", handleId)
   }
 
   // ── idempotency ──

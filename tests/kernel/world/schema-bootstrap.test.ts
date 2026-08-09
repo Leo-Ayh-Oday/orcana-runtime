@@ -139,4 +139,44 @@ describe("AK-1 WorldDB schema bootstrap", () => {
       removeTestWorldRoot(root)
     }
   })
+
+  test("a valid but unproven WAL cannot inject bootstrap authority", () => {
+    const donorRoot = mkdtempSync(join(tmpdir(), "orcana-world-schema-wal-donor-"))
+    const targetRoot = mkdtempSync(join(tmpdir(), "orcana-world-schema-wal-target-"))
+    let donor: WorldStore | undefined
+    try {
+      donor = new WorldStore(donorRoot, { now: () => 1_000 })
+      donor.createWorld({ worldId: "injected", owner: "user:attacker" })
+      const validWal = readFileSync(join(donorRoot, "world.db-wal"))
+      expect(validWal.byteLength).toBeGreaterThan(0)
+
+      writeFileSync(join(targetRoot, "world.db-wal"), validWal)
+      expect(() => new WorldStore(targetRoot, { now: () => 1_000 })).toThrow(
+        /WORLD_DB_BOOTSTRAP_UNPROVEN_SIDECAR: world\.db-wal/,
+      )
+      expect(readFileSync(join(targetRoot, "world.db"))).toHaveLength(0)
+      expect(readFileSync(join(targetRoot, "world.db-wal"))).toEqual(validWal)
+    } finally {
+      donor?.close()
+      removeTestWorldRoot(donorRoot)
+      removeTestWorldRoot(targetRoot)
+    }
+  })
+
+  for (const sidecar of ["world.db-shm", "world.db-journal"] as const) {
+    test(`a non-empty unproven ${sidecar} fails closed`, () => {
+      const root = mkdtempSync(join(tmpdir(), "orcana-world-schema-sidecar-"))
+      const unproven = Buffer.from(`unproven ${sidecar}`)
+      try {
+        writeFileSync(join(root, sidecar), unproven)
+        expect(() => new WorldStore(root)).toThrow(
+          new RegExp(`WORLD_DB_BOOTSTRAP_UNPROVEN_SIDECAR: ${sidecar.replace(".", "\\.")}`),
+        )
+        expect(readFileSync(join(root, "world.db"))).toHaveLength(0)
+        expect(readFileSync(join(root, sidecar))).toEqual(unproven)
+      } finally {
+        removeTestWorldRoot(root)
+      }
+    })
+  }
 })

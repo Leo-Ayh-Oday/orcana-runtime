@@ -9,6 +9,7 @@ import {
   WorldConflictError,
   WorldStore,
   type WorldCommitRequest,
+  type WorldMutation,
 } from "../../../src/kernel/world"
 import { createTestWorldStore, removeTestWorldRoot } from "./helpers"
 
@@ -428,6 +429,51 @@ describe("AK-1 WorldStore", () => {
       }
       expect(arrayAccessorCalls).toBe(0)
       expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("commit rejects identifiers that cannot be represented by snapshots", () => {
+    const fixture = createTestWorldStore()
+    try {
+      expect(() => fixture.store.createWorld({
+        worldId: "invalid-root",
+        rootObjectId: "",
+        owner: "user:owner",
+      })).toThrow(/root object.*non-empty/)
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      const content = fixture.store.cas.put(Buffer.from("content"), "text/plain")
+      const invalid: WorldMutation[] = [
+        { type: "object.put", objectId: "", objectType: "file" },
+        { type: "object.put", objectId: "object", objectType: "file", path: "" },
+        { type: "object.delete", objectId: "" },
+        {
+          type: "artifact.put",
+          artifactId: "",
+          mediaType: "text/plain",
+          contentRef: content.digest,
+        },
+        { type: "artifact.delete", artifactId: "" },
+        { type: "service.set", serviceId: "", status: "ready" },
+        { type: "service.set", serviceId: "service", status: "" },
+        { type: "service.delete", serviceId: "" },
+      ]
+      for (const [index, mutation] of invalid.entries()) {
+        expect(() => fixture.store.compareAndCommit({
+          worldId: "w1",
+          branchId: "main",
+          baseRevision: 0n,
+          actor: "agent:test",
+          commitId: `invalid-${index}`,
+          mutations: [mutation],
+        })).toThrow(/must be a non-empty string/)
+      }
+      expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
+      expect(fixture.store.snapshots.create("w1", "main")).toEqual(expect.objectContaining({
+        worldId: "w1",
+        revision: 0n,
+      }))
     } finally {
       fixture.cleanup()
     }

@@ -159,7 +159,15 @@ function manifestInteger(value: unknown, context: string): number {
 }
 
 function parseManifestReferences(content: Buffer, digest: CasDigest): CasDigest[] {
-  const text = content.toString("utf8")
+  let text: string
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(content)
+  } catch {
+    throw new CasIntegrityError(`manifest ${digest} is not valid UTF-8`)
+  }
+  if (!Buffer.from(text, "utf8").equals(content)) {
+    throw new CasIntegrityError(`manifest ${digest} is not canonical UTF-8`)
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
@@ -469,7 +477,7 @@ export class WorldCas {
       try {
         fileFd = openSync(
           descriptorPath(prefixFd, hex),
-          constants.O_RDONLY | constants.O_NOFOLLOW,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
         )
       } catch (error) {
         if (isFsError(error, "ENOENT")) {
@@ -543,7 +551,7 @@ export class WorldCas {
         try {
           const existingFd = openSync(
             destination,
-            constants.O_RDONLY | constants.O_NOFOLLOW,
+            constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
           )
           try {
             if (!fstatSync(existingFd).isFile()) {

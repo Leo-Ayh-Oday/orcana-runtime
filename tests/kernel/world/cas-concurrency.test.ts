@@ -30,9 +30,9 @@ async function waitForFile(path: string, timeoutMs = 5_000): Promise<void> {
 describe("AK-1 CAS transaction concurrency", () => {
   test("recovery GC cannot pass a concurrent link transaction", async () => {
     const root = mkdtempSync(join(tmpdir(), "orcana-world-cas-race-"))
-    const readyPath = join(root, "recovery", "link.ready")
-    const releasePath = join(root, "recovery", "link.release")
-    const recoveryDonePath = join(root, "recovery", "recovery.done")
+    const readyPath = join(root, "projections", "link.ready")
+    const releasePath = join(root, "projections", "link.release")
+    const recoveryDonePath = join(root, "projections", "recovery.done")
     let linker: ChildProcess | undefined
     let collector: ChildProcess | undefined
     try {

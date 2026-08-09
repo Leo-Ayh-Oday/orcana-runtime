@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -52,6 +53,75 @@ describe("AK-1 CAS filesystem confinement", () => {
         rmSync(root, { recursive: true, force: true })
         rmSync(outside, { recursive: true, force: true })
       }
+    }
+  })
+
+  test("a pre-existing WorldDB symlink is rejected without touching its target", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-world-db-root-"))
+    const outside = mkdtempSync(join(tmpdir(), "orcana-world-db-outside-"))
+    const outsideDatabase = join(outside, "sentinel.db")
+    try {
+      writeFileSync(outsideDatabase, "must survive")
+      symlinkSync(outsideDatabase, join(root, "world.db"), "file")
+      expect(() => new WorldStore(root)).toThrow()
+      expect(readFileSync(outsideDatabase, "utf8")).toBe("must survive")
+      expect(existsSync(`${outsideDatabase}-wal`)).toBe(false)
+      expect(existsSync(`${outsideDatabase}-shm`)).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test("an open store remains pinned to a durably-created World root after pathname replacement", () => {
+    const parent = mkdtempSync(join(tmpdir(), "orcana-world-root-replace-"))
+    const root = join(parent, "world")
+    const originalRoot = join(parent, "world-original")
+    const digest = sha256Digest("pinned root")
+    let store: WorldStore | undefined
+    try {
+      expect(existsSync(root)).toBe(false)
+      store = new WorldStore(root)
+      expect(existsSync(root)).toBe(true)
+      store.createWorld({ worldId: "w1", owner: "user:owner" })
+
+      renameSync(root, originalRoot)
+      mkdirSync(root)
+
+      const content = store.cas.put(Buffer.from("pinned root"), "text/plain")
+      expect(content.digest).toBe(digest)
+      store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:test",
+        commitId: "commit-pinned-root",
+        mutations: [{
+          type: "object.put",
+          objectId: "pinned",
+          objectType: "file",
+          contentRef: digest,
+        }],
+      })
+      store.close()
+      store = undefined
+
+      const hex = digest.slice("sha256:".length)
+      expect(existsSync(join(originalRoot, "cas", "sha256", hex.slice(0, 2), hex))).toBe(true)
+      expect(existsSync(join(root, "cas"))).toBe(false)
+      expect(existsSync(join(root, "world.db"))).toBe(false)
+
+      const reopened = new WorldStore(originalRoot)
+      try {
+        expect(reopened.getWorld("w1")?.currentRevision).toBe(1n)
+        expect(reopened.cas.get(digest).toString()).toBe("pinned root")
+        expect(reopened.verifyIntegrity()).toEqual([])
+      } finally {
+        reopened.close()
+      }
+    } finally {
+      store?.close()
+      rmSync(parent, { recursive: true, force: true })
     }
   })
 

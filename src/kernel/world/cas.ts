@@ -147,32 +147,59 @@ export class WorldCas {
   readonly objectsRoot: string
   readonly stagingRoot: string
   private readonly trustedRoot: string
+  private readonly rootFd: number
+  private closed = false
 
   constructor(
     private readonly db: Database,
     root: string,
     private readonly now: () => number = () => Date.now(),
     private readonly faultInjector?: (point: WorldFaultPoint) => void,
+    trustedRootFd?: number,
   ) {
     const configuredRoot = resolve(root)
-    const rootStat = lstatSync(configuredRoot)
-    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-      throw new CasIntegrityError(`CAS root must be a real directory: ${configuredRoot}`)
+    if (trustedRootFd === undefined) {
+      const rootStat = lstatSync(configuredRoot)
+      if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+        throw new CasIntegrityError(`CAS root must be a real directory: ${configuredRoot}`)
+      }
+      this.rootFd = openDirectoryNoFollow(configuredRoot)
+    } else {
+      const trusted = fstatSync(trustedRootFd)
+      if (!trusted.isDirectory()) throw new CasIntegrityError("trusted CAS root fd is not a directory")
+      this.rootFd = openSync(
+        descriptorPath(trustedRootFd),
+        constants.O_RDONLY | constants.O_DIRECTORY,
+      )
     }
-    this.trustedRoot = realpathSync(configuredRoot)
+    this.trustedRoot = realpathSync(descriptorPath(this.rootFd))
     this.objectsRoot = join(this.trustedRoot, "cas", "sha256")
     this.stagingRoot = join(this.trustedRoot, "recovery", "cas-staging")
-    const objectsFd = this.openTrustedDirectory(["cas", "sha256"], true)
     try {
-      const stagingFd = this.openTrustedDirectory(["recovery", "cas-staging"], true)
-      closeSync(stagingFd)
-    } finally {
-      closeSync(objectsFd)
+      const objectsFd = this.openTrustedDirectory(["cas", "sha256"], true)
+      try {
+        const stagingFd = this.openTrustedDirectory(["recovery", "cas-staging"], true)
+        closeSync(stagingFd)
+      } finally {
+        closeSync(objectsFd)
+      }
+    } catch (error) {
+      closeSync(this.rootFd)
+      throw error
     }
   }
 
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    closeSync(this.rootFd)
+  }
+
   private openTrustedDirectory(segments: readonly string[], create: boolean): number {
-    let currentFd = openDirectoryNoFollow(this.trustedRoot)
+    if (this.closed) throw new CasIntegrityError("CAS is closed")
+    if (segments.length === 0) throw new CasIntegrityError("CAS directory path must be non-empty")
+    let currentFd = this.rootFd
+    let ownsCurrent = false
     try {
       for (const segment of segments) {
         if (!segment || segment === "." || segment === ".." || /[\\/]/.test(segment)) {
@@ -193,12 +220,13 @@ export class WorldCas {
           fsyncSync(nextFd)
           fsyncSync(currentFd)
         }
-        closeSync(currentFd)
+        if (ownsCurrent) closeSync(currentFd)
         currentFd = nextFd
+        ownsCurrent = true
       }
       return currentFd
     } catch (error) {
-      closeSync(currentFd)
+      if (ownsCurrent) closeSync(currentFd)
       throw error
     }
   }
@@ -268,10 +296,22 @@ export class WorldCas {
 
   private removeObjectFile(digest: CasDigest): void {
     const hex = digestHex(digest)
-    const prefixFd = this.openDigestDirectory(digest, false)
+    let prefixFd: number
+    try {
+      prefixFd = this.openDigestDirectory(digest, false)
+    } catch (error) {
+      if (isFsError(error, "ENOENT")) return
+      throw error
+    }
     try {
       const path = descriptorPath(prefixFd, hex)
-      const stat = lstatSync(path)
+      let stat: ReturnType<typeof lstatSync>
+      try {
+        stat = lstatSync(path)
+      } catch (error) {
+        if (isFsError(error, "ENOENT")) return
+        throw error
+      }
       if (stat.isSymbolicLink() || !stat.isFile()) {
         throw new CasIntegrityError(`refusing to remove unsafe CAS object path: ${digest}`)
       }
@@ -676,6 +716,7 @@ export class WorldCas {
         .sort(compareCanonicalStrings)
       for (const digest of removed) {
         this.removeObjectFile(digest)
+        this.faultInjector?.("after_gc_file_fsync_before_metadata_commit")
         dbRun(this.db, "DELETE FROM cas_links WHERE digest = ?", digest)
         dbRun(
           this.db,
@@ -754,7 +795,13 @@ export class WorldCas {
     return withImmediateTransaction(this.db, () => {
       assertWorldSchemaCompatible(this.db)
       const stagingFd = this.openTrustedDirectory(["recovery", "cas-staging"], false)
-      const objectsFd = this.openTrustedDirectory(["cas", "sha256"], false)
+      let objectsFd: number
+      try {
+        objectsFd = this.openTrustedDirectory(["cas", "sha256"], false)
+      } catch (error) {
+        closeSync(stagingFd)
+        throw error
+      }
       try {
         const temporaryFiles = readdirSync(descriptorPath(stagingFd))
         for (const file of temporaryFiles) {

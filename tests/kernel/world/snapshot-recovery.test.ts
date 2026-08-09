@@ -325,4 +325,33 @@ describe("AK-1 recovery", () => {
       fixture.cleanup()
     }
   })
+
+  test("recovery quarantine mutations revalidate schema inside their own transaction", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      expect(fixture.store.cas.recover().integrityIssues).toEqual([])
+
+      const db = new Database(fixture.store.databasePath)
+      try {
+        db.run("DROP TRIGGER cas_objects_immutable_metadata")
+      } finally {
+        db.close()
+      }
+
+      expect(() => fixture.store.markCorruptedFromRecovery("w1", "test corruption"))
+        .toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
+      expect(() => fixture.store.quarantineWorldFromRecovery("w1", "test quarantine"))
+        .toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
+      expect(fixture.store.getWorld("w1")).toEqual(expect.objectContaining({
+        currentRevision: 0n,
+        status: "active",
+      }))
+      expect(fixture.store.ledger.list("w1").map(event => event.eventType)).toEqual([
+        "world.created",
+      ])
+    } finally {
+      fixture.cleanup()
+    }
+  })
 })

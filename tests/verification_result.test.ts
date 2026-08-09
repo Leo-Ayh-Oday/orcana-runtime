@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { buildVerificationResult, detectVerificationKind, hasServiceTestFailure, parseVerificationResult } from "../src/verification/result"
 import { shellStream } from "../src/tools/shell"
 import type { VerificationResult } from "../src/verification/result"
@@ -8,6 +8,10 @@ import {
   setExecutionAuthority,
 } from "../src/runtime/execution-context"
 import type { TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
+import { installHostAuditProcessBroker, resetProcessBroker } from "./helpers/linux-process-test-broker"
+
+beforeAll(installHostAuditProcessBroker)
+afterAll(resetProcessBroker)
 
 /** shellStream 走 managed Linux executor —— 无 trusted authority fail-closed
  *  （R2 PR-9，git_rt8/typescript_rc01 同款）。 */
@@ -159,4 +163,3 @@ describe("VerificationResult", () => {
     expect(missingScript?.metadata?.verification).toBeUndefined()
   })
 })
-

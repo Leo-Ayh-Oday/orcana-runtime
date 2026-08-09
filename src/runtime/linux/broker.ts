@@ -72,6 +72,9 @@ export interface ShadowExecutionRecord {
 export interface LinuxBrokerOptions {
   /** shadow = 编译 spec + 记录后端选择，仍走旧执行路径（LF-1）。 */
   mode: "shadow" | "enabled" | "enforced"
+  /** Deterministic capability fixture for tests. Rejected unless
+   *  NODE_ENV=test; production always uses the live probe. */
+  testCapabilities?: LinuxCapabilities
   onShadow?: (record: ShadowExecutionRecord) => void
   /** R2: 注入 cgroup 管理器（无委托时 Broker 自动降级为无 cgroup）。 */
   cgroup?: CgroupManager
@@ -177,7 +180,10 @@ function resourceRequestOf(spec: ExecutionCellSpec): ResourceRequest {
 
 export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBroker {
   const mode = options.mode
-  const caps = requireLinuxPlatform()
+  if (options.testCapabilities && process.env.NODE_ENV !== "test") {
+    throw new Error("test capability injection requires NODE_ENV=test")
+  }
+  const caps = options.testCapabilities ?? requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
   const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string; leaseRelease?: () => void }>()
@@ -392,7 +398,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
 
   return {
     probe(opts) {
-      return probeLinuxCapabilities(opts)
+      return options.testCapabilities ?? probeLinuxCapabilities(opts)
     },
     compileSpec: compileOrThrow,
     compileRequest(request, authority) {

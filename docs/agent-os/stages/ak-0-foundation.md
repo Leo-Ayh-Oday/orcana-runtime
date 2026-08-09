@@ -1,7 +1,7 @@
 # AK-0 Kernel Constitution / Foundation
 
 **Task ID:** `AK0-FND-001`
-**状态:** `FIX_READY_FOR_REAUDIT`
+**状态:** `ACCEPTED`
 **基线 / 回滚点:** `76a90ef143d97b0b0466cc118d511a3ea1f78323`
 **专用分支:** `feat/agent-os`
 
@@ -97,4 +97,7 @@ AK-0 全部新增文件均可通过回退阶段提交恢复到基线；不迁移
 - 第二轮修复增加全域 `authorityAssignmentViolations`、unexpected/missing edge 报告、Execution Fabric→Graph 全边拒绝与 canonical data runtime freeze。
 - 最终主代理复验：`bun test tests/kernel/authority-graph.test.ts tests/gate04_authority.test.ts` 为 13 pass / 0 fail；`bun run typecheck` 通过；`bun run build` 通过；`git diff --check` 通过。
 - `architecture.md` 仅对三处 Task State 增加 non-authoritative Graph projection/reference 限定；修复后 SHA-256 为 `ad8fbd2ac32605792ecfc0309301246648c1628c9d7e8da442dca17c67a4a84e`。
-- 修复提交与复审结论在下一次审计关闭记录中补入。
+- 审计修复提交：`a939b26ea16694e8d8a61a259615b2c433501440`；父提交：`cf36ee6461a3552b2b3ba95c6b4238f0c34791e9`。
+- 独立只读复审结论：`PASS`，无未关闭 findings；复审逐项验证两轮审计发现、最终白名单、提交链和 clean worktree。
+- 残余风险：`evaluateAuthorityConformance` 在 AK-0 仅由 conformance tests 使用，尚未接入生产 gate；外部 JSON 的运行时 schema 验证属于后续接入范围。
+- 分层状态：本地定向/回归测试、typecheck、build 已通过；hosted CI 因外部 billing lock 未执行；live/provider 未执行；未 merge main、未 push、未发布。

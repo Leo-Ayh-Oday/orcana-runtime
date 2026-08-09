@@ -43,7 +43,12 @@ interface CasLinkRow {
 }
 
 interface AuthoritativeCasReference {
-  readonly ownerType: "world_object" | "world_artifact" | "world_service" | "snapshot"
+  readonly ownerType:
+    | "world_object"
+    | "world_artifact"
+    | "world_service"
+    | "world_commit"
+    | "snapshot"
   readonly ownerId: string
   readonly digest: CasDigest
   readonly worldId: string
@@ -66,6 +71,12 @@ interface SnapshotReferenceRow {
   capabilityStateDigest: string
   serviceStateDigest: string
   artifactStateDigest: string
+}
+
+interface WorldCommitReferenceRow {
+  worldId: string
+  commitId: string
+  deltaDigest: string
 }
 
 const MANIFEST_MEDIA_TYPE = "application/vnd.orcana.manifest+json"
@@ -873,6 +884,20 @@ export class WorldCas {
     appendMaterialized("world_object", "world_objects", "object_id", "content_ref")
     appendMaterialized("world_artifact", "world_artifacts", "artifact_id", "content_ref")
     appendMaterialized("world_service", "world_services", "service_id", "definition_digest")
+
+    const commits = dbAll<WorldCommitReferenceRow>(
+      this.db,
+      `SELECT world_id AS worldId, commit_id AS commitId, delta_digest AS deltaDigest
+       FROM world_commits`,
+    )
+    for (const commit of commits) {
+      references.push({
+        ownerType: "world_commit",
+        ownerId: commit.commitId,
+        digest: commit.deltaDigest as CasDigest,
+        worldId: commit.worldId,
+      })
+    }
 
     const snapshots = dbAll<SnapshotReferenceRow>(
       this.db,

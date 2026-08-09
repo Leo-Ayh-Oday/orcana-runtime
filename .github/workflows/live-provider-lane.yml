@@ -1,0 +1,57 @@
+name: Live Provider Lane
+
+# The seven quarantined tests make paid, networked DeepSeek calls. They are
+# intentionally outside push/PR CI and run only after an owner explicitly
+# acknowledges cost and configures the repository secret.
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge_cost:
+        description: Run paid live-provider evaluation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deepseek-live:
+    if: ${{ inputs.acknowledge_cost }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Require live-provider secret
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+            echo "::error::DEEPSEEK_API_KEY repository secret is not configured"
+            exit 78
+          fi
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run all quarantined live-provider tests
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: bun run test:quarantined

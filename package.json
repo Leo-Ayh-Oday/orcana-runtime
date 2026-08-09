@@ -70,6 +70,8 @@
     "test:watch": "node scripts/run-tests.cjs --watch",
     "bench:mini": "bun run evals/mini-benchmark.ts --report",
     "eval:linux": "bun run evals/linux-sandbox-eval.ts",
+    "ci:cgroup": "bun test tests/runtime/linux/cgroup.test.ts tests/runtime/linux/eval-requirements.test.ts && bun run eval:linux --require=cgroup",
+    "test:quarantined": "bun test tests/code_as_action.test.ts tests/e2e_fullstack_flow.test.ts tests/e2e_user_flow.test.ts tests/fullstack_depth.test.ts tests/knowledge_pipeline.test.ts tests/thinking_depth.test.ts tests/thinking_quality.test.ts",
     "eval:readiness": "bun run evals/readiness/runner.ts",
     "eval:readiness:core": "bun run evals/readiness/runner.ts --suite core --strict",
     "eval:readiness:live": "bun run evals/readiness/runner.ts --suite live --strict",

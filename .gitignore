@@ -3,8 +3,12 @@ dist/
 .env
 *.log
 .codegraph/
-.wolf/
-.wolf/**/*
+**/.wolf/
+!/.wolf/
+/.wolf/*
+!/.wolf/OPENWOLF.md
+!/.wolf/anatomy.md
+!/.wolf/cerebrum.md
 
 # Dev scripts — not part of the distributed package
 scripts/_splash_preview.ts

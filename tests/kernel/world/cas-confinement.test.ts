@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -16,7 +18,7 @@ import {
   sha256Digest,
   WorldStore,
 } from "../../../src/kernel/world"
-import { createTestWorldStore } from "./helpers"
+import { createTestWorldStore, removeTestWorldRoot } from "./helpers"
 
 describe("AK-1 CAS filesystem confinement", () => {
   test("a configured World root symlink is rejected before subdirectories are created", () => {
@@ -50,7 +52,7 @@ describe("AK-1 CAS filesystem confinement", () => {
         expect(() => new WorldStore(root)).toThrow()
         expect(readFileSync(join(outside, "sentinel"), "utf8")).toBe("outside")
       } finally {
-        rmSync(root, { recursive: true, force: true })
+        removeTestWorldRoot(root)
         rmSync(outside, { recursive: true, force: true })
       }
     }
@@ -68,7 +70,7 @@ describe("AK-1 CAS filesystem confinement", () => {
       expect(existsSync(`${outsideDatabase}-wal`)).toBe(false)
       expect(existsSync(`${outsideDatabase}-shm`)).toBe(false)
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTestWorldRoot(root)
       rmSync(outside, { recursive: true, force: true })
     }
   })
@@ -81,6 +83,7 @@ describe("AK-1 CAS filesystem confinement", () => {
       try {
         const seed = new WorldStore(root)
         seed.close()
+        chmodSync(root, 0o700)
         rmSync(join(root, `world.db${suffix}`), { force: true })
         writeFileSync(sentinel, "must survive")
         symlinkSync(sentinel, join(root, `world.db${suffix}`), "file")
@@ -88,7 +91,7 @@ describe("AK-1 CAS filesystem confinement", () => {
         expect(() => new WorldStore(root)).toThrow()
         expect(readFileSync(sentinel, "utf8")).toBe("must survive")
       } finally {
-        rmSync(root, { recursive: true, force: true })
+        removeTestWorldRoot(root)
         rmSync(outside, { recursive: true, force: true })
       }
     }
@@ -114,8 +117,31 @@ describe("AK-1 CAS filesystem confinement", () => {
       expect(existsSync(join(root, "world.db"))).toBe(true)
       expect(existsSync(join(outside, "escaped.db"))).toBe(false)
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTestWorldRoot(root)
       rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test("closing one concurrent Store never unlocks another Store's WorldDB entries", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-world-db-multi-open-"))
+    let first: WorldStore | undefined
+    let second: WorldStore | undefined
+    try {
+      first = new WorldStore(root)
+      second = new WorldStore(root)
+      first.close()
+      first = undefined
+
+      expect(statSync(root).mode & 0o222).toBe(0)
+      expect(() => writeFileSync(join(root, "rogue-entry"), "blocked")).toThrow()
+      expect(second.verifyIntegrity()).toEqual([])
+      second.close()
+      second = undefined
+      expect(statSync(root).mode & 0o222).toBe(0)
+    } finally {
+      first?.close()
+      second?.close()
+      removeTestWorldRoot(root)
     }
   })
 
@@ -167,6 +193,8 @@ describe("AK-1 CAS filesystem confinement", () => {
       }
     } finally {
       store?.close()
+      removeTestWorldRoot(originalRoot)
+      removeTestWorldRoot(root)
       rmSync(parent, { recursive: true, force: true })
     }
   })

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn, type ChildProcess } from "node:child_process"
 import { WorldStore } from "../../../src/kernel/world"
+import { removeTestWorldRoot } from "./helpers"
 
 const CHILD = join(import.meta.dir, "cas-concurrency-child.ts")
 
@@ -81,7 +82,7 @@ describe("AK-1 CAS transaction concurrency", () => {
     } finally {
       if (linker?.exitCode === null) linker.kill()
       if (collector?.exitCode === null) collector.kill()
-      rmSync(root, { recursive: true, force: true })
+      removeTestWorldRoot(root)
     }
   })
 })

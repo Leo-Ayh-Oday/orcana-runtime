@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { rmSync, writeFileSync } from "node:fs"
+import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
   canonicalDigest,
@@ -10,7 +10,7 @@ import {
   WorldStore,
   type WorldCommitRequest,
 } from "../../../src/kernel/world"
-import { createTestWorldStore } from "./helpers"
+import { createTestWorldStore, removeTestWorldRoot } from "./helpers"
 
 describe("AK-1 WorldStore", () => {
   test("creates the WorldDB schema and revision-zero world atomically", () => {
@@ -341,7 +341,7 @@ describe("AK-1 WorldStore", () => {
       expect(() => new WorldStore(fixture.root)).toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
     } finally {
       if (!closed) fixture.store.close()
-      rmSync(fixture.root, { recursive: true, force: true })
+      removeTestWorldRoot(fixture.root)
     }
   })
 
@@ -361,7 +361,7 @@ describe("AK-1 WorldStore", () => {
       try {
         expect(() => new WorldStore(fixture.root)).toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
       } finally {
-        rmSync(fixture.root, { recursive: true, force: true })
+        removeTestWorldRoot(fixture.root)
       }
     }
   })
@@ -539,7 +539,7 @@ describe("AK-1 WorldStore", () => {
         reopened.close()
       }
     } finally {
-      rmSync(fixture.root, { recursive: true, force: true })
+      removeTestWorldRoot(fixture.root)
     }
   })
 })

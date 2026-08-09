@@ -4,10 +4,15 @@ import {
   constants,
   fchmodSync,
   fstatSync,
+  ftruncateSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
+  rmSync,
+  writeSync,
 } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { Database } from "bun:sqlite"
@@ -39,6 +44,8 @@ import { WorldLedger } from "./ledger"
 import {
   assertWorldSchemaCompatible,
   initializeOrValidateWorldSchema,
+  WORLD_SCHEMA_FINGERPRINT,
+  WORLD_SCHEMA_VERSION,
 } from "./schema"
 import { WorldSnapshotManager } from "./snapshot"
 
@@ -395,6 +402,220 @@ function initializeWorldDatabase(db: Database, installedAt: number): void {
   })
 }
 
+function createInitialWorldDatabaseImage(installedAt: number): Buffer {
+  const database = new Database(":memory:")
+  try {
+    database.exec("PRAGMA foreign_keys = ON")
+    withImmediateTransaction(database, () => {
+      initializeOrValidateWorldSchema(database, installedAt)
+    })
+    const image = Buffer.from(database.serialize())
+    // SQLite persists WAL mode in header bytes 18 and 19. Preparing the image
+    // before the authority directory becomes non-writable avoids a later
+    // journal deletion/recreation through an unchecked pathname.
+    image[18] = 2
+    image[19] = 2
+    return image
+  } finally {
+    database.close()
+  }
+}
+
+function replaceFileContents(fd: number, content: Uint8Array): void {
+  ftruncateSync(fd, 0)
+  let offset = 0
+  while (offset < content.byteLength) {
+    const written = writeSync(fd, content, offset, content.byteLength - offset, offset)
+    if (written <= 0) throw new Error("WorldDB bootstrap write made no progress")
+    offset += written
+  }
+  fsyncSync(fd)
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return !isFsError(error, "ESRCH")
+  }
+}
+
+function readBootstrapLockPid(path: string): number | undefined {
+  let fd: number
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (error) {
+    if (isFsError(error, "ENOENT")) return undefined
+    throw error
+  }
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error("WorldDB bootstrap lock is not a file")
+    const value = Number(readFileSync(fd, "utf8").trim())
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error("WorldDB bootstrap lock owner is invalid")
+    }
+    return value
+  } finally {
+    closeSync(fd)
+  }
+}
+
+const WORLD_DB_BOOTSTRAP_MARKER =
+  `${WORLD_SCHEMA_VERSION}:${WORLD_SCHEMA_FINGERPRINT}\n`
+
+function bootstrapMarkerExists(path: string): boolean {
+  let fd: number
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch (error) {
+    if (isFsError(error, "ENOENT")) return false
+    throw error
+  }
+  try {
+    const stat = fstatSync(fd)
+    // Atomic publication uses one temporary hard link. A concurrent opener or
+    // crash may observe that second name until recovery removes it.
+    if (!stat.isFile() || stat.nlink < 1 || stat.nlink > 2) {
+      throw new Error("WorldDB bootstrap marker is not a trusted regular file")
+    }
+    if (readFileSync(fd, "utf8") !== WORLD_DB_BOOTSTRAP_MARKER) {
+      throw new Error("WORLD_DB_BOOTSTRAP_MARKER_INVALID")
+    }
+    return true
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function createBootstrapMarker(recoveryFd: number, markerPath: string): void {
+  const temporaryName = `worlddb-bootstrap-marker.${process.pid}.${randomUUID()}.tmp`
+  const temporaryPath = fdPath(recoveryFd, temporaryName)
+  const temporaryFd = openSync(
+    temporaryPath,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  )
+  try {
+    const marker = Buffer.from(WORLD_DB_BOOTSTRAP_MARKER, "utf8")
+    if (writeSync(temporaryFd, marker, 0, marker.byteLength, 0) !== marker.byteLength) {
+      throw new Error("WorldDB bootstrap marker write was incomplete")
+    }
+    fsyncSync(temporaryFd)
+    linkSync(temporaryPath, markerPath)
+    fsyncSync(recoveryFd)
+  } finally {
+    closeSync(temporaryFd)
+    rmSync(temporaryPath, { force: true })
+    fsyncSync(recoveryFd)
+  }
+}
+
+function ensureWorldDatabaseBootstrapped(
+  rootFd: number,
+  databaseFd: number,
+  installedAt: number,
+  timeoutMs = 5_000,
+): void {
+  const recoveryFd = openDirectoryNoFollow(fdPath(rootFd, "recovery"))
+  const lockPath = fdPath(recoveryFd, "worlddb-bootstrap.lock")
+  const markerPath = fdPath(recoveryFd, "worlddb-bootstrap.complete")
+  const deadline = Date.now() + timeoutMs
+  const waiter = new Int32Array(new SharedArrayBuffer(4))
+  let mayRecoverIncompleteBootstrap = fstatSync(databaseFd).size === 0
+  try {
+    for (;;) {
+      if (bootstrapMarkerExists(markerPath)) {
+        if (fstatSync(databaseFd).size === 0) {
+          throw new Error("WORLD_DB_BOOTSTRAP_MARKER_WITH_EMPTY_DATABASE")
+        }
+        return
+      }
+
+      const existingOwnerPid = readBootstrapLockPid(lockPath)
+      if (existingOwnerPid !== undefined) {
+        if (!processIsAlive(existingOwnerPid)) {
+          mayRecoverIncompleteBootstrap = true
+          rmSync(lockPath)
+          fsyncSync(recoveryFd)
+          continue
+        }
+        if (Date.now() >= deadline) throw new Error("WORLD_DB_BOOTSTRAP_BUSY")
+        Atomics.wait(waiter, 0, 0, 10)
+        continue
+      }
+      if (fstatSync(databaseFd).size > 0 && !mayRecoverIncompleteBootstrap) {
+        throw new Error("WORLD_DB_BOOTSTRAP_MARKER_MISSING")
+      }
+
+      const temporaryName = `worlddb-bootstrap.${process.pid}.${randomUUID()}.tmp`
+      const temporaryPath = fdPath(recoveryFd, temporaryName)
+      const temporaryFd = openSync(
+        temporaryPath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600,
+      )
+      let acquired = false
+      try {
+        const owner = Buffer.from(`${process.pid}\n`, "utf8")
+        if (writeSync(temporaryFd, owner, 0, owner.byteLength, 0) !== owner.byteLength) {
+          throw new Error("WorldDB bootstrap lock write was incomplete")
+        }
+        fsyncSync(temporaryFd)
+        try {
+          linkSync(temporaryPath, lockPath)
+          acquired = true
+          fsyncSync(recoveryFd)
+        } catch (error) {
+          if (!isFsError(error, "EEXIST")) throw error
+        }
+      } catch (error) {
+        if (acquired) {
+          try {
+            rmSync(lockPath)
+            fsyncSync(recoveryFd)
+          } catch {
+            // Preserve the acquisition failure. A leftover lock includes this
+            // process id and is never mistaken for a completed bootstrap.
+          }
+        }
+        throw error
+      } finally {
+        closeSync(temporaryFd)
+        rmSync(temporaryPath, { force: true })
+      }
+
+      if (acquired) {
+        try {
+          if (bootstrapMarkerExists(markerPath)) {
+            if (fstatSync(databaseFd).size === 0) {
+              throw new Error("WORLD_DB_BOOTSTRAP_MARKER_WITH_EMPTY_DATABASE")
+            }
+            return
+          }
+          if (fstatSync(databaseFd).size > 0 && !mayRecoverIncompleteBootstrap) {
+            throw new Error("WORLD_DB_BOOTSTRAP_MARKER_MISSING")
+          }
+          try {
+            replaceFileContents(databaseFd, createInitialWorldDatabaseImage(installedAt))
+          } catch (error) {
+            ftruncateSync(databaseFd, 0)
+            fsyncSync(databaseFd)
+            throw error
+          }
+          createBootstrapMarker(recoveryFd, markerPath)
+        } finally {
+          rmSync(lockPath, { force: true })
+          fsyncSync(recoveryFd)
+        }
+        return
+      }
+    }
+  } finally {
+    closeSync(recoveryFd)
+  }
+}
+
 interface VerifiedSqliteEntry {
   readonly name: string
   readonly fd: number
@@ -444,6 +665,7 @@ function assertSqliteEntryIdentity(rootFd: number, entry: VerifiedSqliteEntry): 
 }
 
 export class WorldStore {
+  readonly configuredRoot: string
   readonly root: string
   readonly databasePath: string
   readonly ledger: WorldLedger
@@ -462,9 +684,9 @@ export class WorldStore {
     this.faultInjector = options.faultInjector
     const configuredRoot = resolve(root)
     this.rootFd = openOrCreateDurableWorldRoot(configuredRoot)
-    this.root = configuredRoot
+    this.configuredRoot = configuredRoot
+    this.root = fdPath(this.rootFd)
     try {
-      fchmodSync(this.rootFd, 0o700)
       for (const directory of ["ledger", "snapshots", "projections", "recovery", "cas"]) {
         ensureDurableRootDirectory(this.rootFd, directory)
       }
@@ -474,36 +696,6 @@ export class WorldStore {
     }
     const databaseFdPath = fdPath(this.rootFd, "world.db")
     this.databasePath = databaseFdPath
-    const initialEntries: VerifiedSqliteEntry[] = []
-    let needsBootstrap = false
-    try {
-      for (const name of SQLITE_ENTRIES) {
-        const entry = openVerifiedSqliteEntry(this.rootFd, name)
-        initialEntries.push(entry)
-        if (name === "world.db") needsBootstrap = fstatSync(entry.fd).size === 0
-      }
-      fsyncSync(this.rootFd)
-    } catch (error) {
-      fchmodSync(this.rootFd, 0o700)
-      closeSync(this.rootFd)
-      throw error
-    } finally {
-      for (const entry of initialEntries) closeSync(entry.fd)
-    }
-    if (needsBootstrap) {
-      let bootstrap: Database | undefined
-      try {
-        bootstrap = new Database(databaseFdPath)
-        initializeWorldDatabase(bootstrap, this.now())
-      } catch (error) {
-        bootstrap?.close()
-        fchmodSync(this.rootFd, 0o700)
-        closeSync(this.rootFd)
-        throw error
-      }
-      bootstrap?.close()
-    }
-
     const sqliteEntries: VerifiedSqliteEntry[] = []
     let database: Database | undefined
     try {
@@ -514,11 +706,13 @@ export class WorldStore {
       fchmodSync(this.rootFd, 0o500)
       for (const entry of sqliteEntries) assertSqliteEntryIdentity(this.rootFd, entry)
       this.faultInjector?.("after_world_db_entries_locked")
+      const mainEntry = sqliteEntries.find(entry => entry.name === "world.db")!
+      ensureWorldDatabaseBootstrapped(this.rootFd, mainEntry.fd, this.now())
+      for (const entry of sqliteEntries) assertSqliteEntryIdentity(this.rootFd, entry)
       database = new Database(databaseFdPath)
       for (const entry of sqliteEntries) assertSqliteEntryIdentity(this.rootFd, entry)
     } catch (error) {
       database?.close()
-      fchmodSync(this.rootFd, 0o700)
       closeSync(this.rootFd)
       throw error
     } finally {
@@ -530,7 +724,6 @@ export class WorldStore {
       initializeWorldDatabase(this.db, this.now())
     } catch (error) {
       this.db.close()
-      fchmodSync(this.rootFd, 0o700)
       closeSync(this.rootFd)
       throw error
     }
@@ -564,7 +757,6 @@ export class WorldStore {
     } catch (error) {
       cas?.close()
       this.db.close()
-      fchmodSync(this.rootFd, 0o700)
       closeSync(this.rootFd)
       throw error
     }
@@ -575,7 +767,6 @@ export class WorldStore {
     this.closed = true
     this.cas.close()
     this.db.close()
-    fchmodSync(this.rootFd, 0o700)
     closeSync(this.rootFd)
   }
 

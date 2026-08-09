@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -9,6 +9,7 @@ import {
   sha256Digest,
   WorldStore,
 } from "../../../src/kernel/world"
+import { removeTestWorldRoot } from "./helpers"
 
 const CHILD = join(import.meta.dir, "crash-child.ts")
 
@@ -47,7 +48,7 @@ describe("AK-1 process crash recovery", () => {
           reopened.close()
         }
       } finally {
-        rmSync(root, { recursive: true, force: true })
+        removeTestWorldRoot(root)
       }
     }
   })
@@ -68,7 +69,7 @@ describe("AK-1 process crash recovery", () => {
         reopened.close()
       }
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTestWorldRoot(root)
     }
   })
 
@@ -90,7 +91,7 @@ describe("AK-1 process crash recovery", () => {
           reopened.close()
         }
       } finally {
-        rmSync(root, { recursive: true, force: true })
+        removeTestWorldRoot(root)
       }
     }
   })
@@ -114,7 +115,7 @@ describe("AK-1 process crash recovery", () => {
         reopened.close()
       }
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeTestWorldRoot(root)
     }
   })
 
@@ -136,7 +137,7 @@ describe("AK-1 process crash recovery", () => {
           reopened.close()
         }
       } finally {
-        rmSync(root, { recursive: true, force: true })
+        removeTestWorldRoot(root)
       }
     }
   })

@@ -323,6 +323,31 @@ describe("LF-4: delegation", () => {
     }
   })
 
+  test("buildDelegationCandidates accepts /proc/self/cgroup relative paths", () => {
+    const candidates = buildDelegationCandidates(
+      "/home/runner",
+      1001,
+      "/sys/fs/cgroup",
+      "/system.slice/orcana-ci.service",
+    )
+    expect(candidates[0]).toEqual({
+      dir: "/sys/fs/cgroup/system.slice/orcana-ci.service",
+      source: "systemd-system",
+    })
+    // 系统边界本身不得被误报为委托候选。
+    expect(candidates).not.toContainEqual({ dir: "/sys/fs/cgroup/system.slice", source: "systemd-system" })
+  })
+
+  test("buildDelegationCandidates still accepts full cgroupfs paths", () => {
+    const candidates = buildDelegationCandidates(
+      "/home/runner",
+      1001,
+      "/sys/fs/cgroup",
+      "/sys/fs/cgroup/system.slice/orcana-ci.service",
+    )
+    expect(candidates[0]?.dir).toBe("/sys/fs/cgroup/system.slice/orcana-ci.service")
+  })
+
   test("delegationAvailable is false when not writable", () => {
     expect(delegationAvailable({ root: BASE, base: "", source: "none", controllers: [], writable: false })).toBe(false)
     expect(delegationAvailable({ root: BASE, base: "/x", source: "systemd-user", controllers: [], writable: true })).toBe(true)

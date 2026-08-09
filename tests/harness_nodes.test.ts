@@ -1,7 +1,7 @@
-import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { afterEach, describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
 import { buildTools, Result } from "../src/tools/registry"
 import { createNodeExecutionContext, createDefaultNodePolicyContext, createMinimalContextSlice } from "../src/harness/nodes/context"
@@ -23,6 +23,13 @@ import { addEvidence, generateEvidenceId } from "../src/agent/evidence-ledger"
 
 // H11 part A: node runtime contracts, sequential runner, FunctionNode —
 // lifecycle events, cancellation, node context, single-use enforcement.
+
+const nodeProjectRoots = new Set<string>()
+
+afterEach(() => {
+  for (const root of nodeProjectRoots) rmSync(root, { recursive: true, force: true })
+  nodeProjectRoots.clear()
+})
 
 class ProbeThenTextProvider implements LLMProvider {
   rounds = 0
@@ -52,6 +59,7 @@ function probeTool() {
 /** Build a real AgentRun + node context (assembleRunScope, run-level ledger). */
 function buildNodeContext(budgetLimits?: Record<string, number>): { context: NodeExecutionContext; run: AgentRun; projectRoot: string } {
   const projectRoot = mkdtempSync(join(tmpdir(), "h11-node-"))
+  nodeProjectRoots.add(projectRoot)
   const runId = `run-${projectRoot.split("/").pop()}`
   const controller = new AbortController()
   const scope = assembleRunScope({ runId, sessionId: "sess-node", projectRoot, controller })
@@ -90,7 +98,10 @@ function registerWriteCapability(context: NodeExecutionContext, file: string): v
     {
       async execute(input) {
         const params = input as { path?: string; content?: string }
-        writeFileSync(params.path ?? file, params.content ?? "new")
+        const target = params.path
+          ? (isAbsolute(params.path) ? params.path : resolve(context.runScope.projectRoot, params.path))
+          : file
+        writeFileSync(target, params.content ?? "new")
         return { ok: true, output: { success: true, content: "written", metadata: { patchTransactionId: "ptxn_mock" } } }
       },
     },
@@ -252,6 +263,7 @@ describe("H11 ToolNode", () => {
     const node = createToolNode({ id: "write", policyContext: allowGate("mock_write") })
     const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: { path: "a.txt", content: "new" } })
     expect(result.status).toBe("succeeded")
+    expect(readFileSync(join(projectRoot, "a.txt"), "utf-8")).toBe("new")
     const patches = await context.artifacts.findByKind("patch")
     expect(patches).toHaveLength(1)
     expect(patches[0]!.producedBy).toBe("mock_write")

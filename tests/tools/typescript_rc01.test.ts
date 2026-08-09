@@ -116,6 +116,7 @@ exit 1
     const r = await withTestAuthority(dir, () => runTypeScriptNoEmit(dir))
     expect(r.status).toBe("failed")
     expect(r.issues).toBeGreaterThan(0)
+    expect(r.output).toContain("tsc exited with code 1")
   })
 
   test("error TS1234 counted as issues", async () => {

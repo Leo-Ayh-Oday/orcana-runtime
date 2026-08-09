@@ -199,6 +199,21 @@ describe("AK-1 World CAS", () => {
         /not canonically encoded/,
       )
       expect(fixture.store.cas.list()).toHaveLength(countBefore)
+
+      const child = fixture.store.cas.put(Buffer.from("utf8 child"), "text/plain")
+      const validUtf8 = Buffer.from(canonicalJson({
+        schemaVersion: 1,
+        type: "directory",
+        entries: [{ name: "�", kind: "file", digest: child.digest }],
+      }))
+      const replacementOffset = validUtf8.indexOf(Buffer.from("�", "utf8"))
+      expect(replacementOffset).toBeGreaterThanOrEqual(0)
+      const invalidUtf8 = Buffer.from(validUtf8)
+      invalidUtf8[replacementOffset] = 0xff
+      expect(() => fixture.store.cas.putManifest(invalidUtf8, [child.digest])).toThrow(
+        /not valid UTF-8/,
+      )
+      expect(fixture.store.cas.record(child.digest)?.refCount).toBe(0)
     } finally {
       fixture.cleanup()
     }

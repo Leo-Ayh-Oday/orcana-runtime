@@ -12,6 +12,8 @@ export interface TestWorldStore {
 export function removeTestWorldRoot(root: string): void {
   if (!existsSync(root)) return
   chmodSync(root, 0o700)
+  const recovery = join(root, "recovery")
+  if (existsSync(recovery)) chmodSync(recovery, 0o700)
   rmSync(root, { recursive: true, force: true })
 }
 

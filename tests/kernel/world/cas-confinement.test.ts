@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import {
   chmodSync,
   existsSync,
@@ -72,6 +73,19 @@ describe("AK-1 CAS filesystem confinement", () => {
     } finally {
       removeTestWorldRoot(root)
       rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test("bootstrap metadata FIFOs fail closed without blocking", () => {
+    for (const name of ["worlddb-bootstrap.lock", "worlddb-bootstrap.state"]) {
+      const root = mkdtempSync(join(tmpdir(), "orcana-world-bootstrap-fifo-"))
+      try {
+        mkdirSync(join(root, "recovery"))
+        expect(spawnSync("mkfifo", [join(root, "recovery", name)]).status).toBe(0)
+        expect(() => new WorldStore(root)).toThrow(/single-link regular file/)
+      } finally {
+        removeTestWorldRoot(root)
+      }
     }
   })
 
@@ -218,6 +232,21 @@ describe("AK-1 CAS filesystem confinement", () => {
     } finally {
       fixture.cleanup()
       rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  test("CAS object FIFOs fail closed without blocking", () => {
+    const fixture = createTestWorldStore()
+    try {
+      const content = Buffer.from("fifo content")
+      const digest = sha256Digest(content)
+      const hex = digest.slice("sha256:".length)
+      const objectPath = join(fixture.root, "cas", "sha256", hex.slice(0, 2), hex)
+      mkdirSync(dirname(objectPath), { recursive: true })
+      expect(spawnSync("mkfifo", [objectPath]).status).toBe(0)
+      expect(() => fixture.store.cas.put(content, "text/plain")).toThrow(/not a regular file/)
+    } finally {
+      fixture.cleanup()
     }
   })
 

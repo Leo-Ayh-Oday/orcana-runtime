@@ -241,6 +241,8 @@ export type WorldFaultPoint =
   | "before_cas_link_insert"
   | "after_gc_file_fsync_before_metadata_commit"
   | "after_world_db_entries_locked"
+  | "after_world_db_bootstrap_intent_fsync"
+  | "after_world_db_bootstrap_image_fsync"
   | "after_snapshot_manifest_before_insert"
   | "after_snapshot_insert_before_commit"
 

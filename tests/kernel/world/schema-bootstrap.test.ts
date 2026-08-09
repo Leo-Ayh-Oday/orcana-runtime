@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn, type ChildProcess } from "node:child_process"
@@ -53,26 +53,75 @@ describe("AK-1 WorldDB schema bootstrap", () => {
     }
   })
 
-  test("a stale bootstrap lock recovers a partially written first database", () => {
-    const root = mkdtempSync(join(tmpdir(), "orcana-world-schema-crash-"))
-    try {
-      mkdirSync(join(root, "recovery"))
-      writeFileSync(join(root, "world.db"), "partial sqlite image")
-      writeFileSync(join(root, "world.db-wal"), "")
-      writeFileSync(join(root, "world.db-shm"), "")
-      writeFileSync(join(root, "world.db-journal"), "")
-      writeFileSync(join(root, "recovery", "worlddb-bootstrap.lock"), "999999\n")
-
-      const store = new WorldStore(root)
+  for (const faultPoint of [
+    "after_world_db_bootstrap_intent_fsync",
+    "after_world_db_bootstrap_image_fsync",
+  ] as const) {
+    test(`an OS-released bootstrap lock recovers ${faultPoint}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "orcana-world-schema-crash-"))
+      let child: ChildProcess | undefined
+      const recoveryChildren: ChildProcess[] = []
       try {
-        expect(store.verifyIntegrity()).toEqual([])
-        expect(existsSync(join(root, "recovery", "worlddb-bootstrap.complete"))).toBe(true)
-        expect(existsSync(join(root, "recovery", "worlddb-bootstrap.lock"))).toBe(false)
-        expect(readFileSync(join(root, "world.db")).subarray(0, 15).toString()).toBe(
-          "SQLite format 3",
-        )
+        child = spawn(process.execPath, [CHILD, root, faultPoint], {
+          cwd: join(import.meta.dir, "../../.."),
+          stdio: ["ignore", "ignore", "pipe"],
+        })
+        expect(await waitForExit(child)).toEqual({ code: 91, stderr: "" })
+
+        const recoveryExits: Array<Promise<{ code: number | null; stderr: string }>> = []
+        for (let index = 0; index < 4; index += 1) {
+          const recoveryChild = spawn(process.execPath, [CHILD, root], {
+            cwd: join(import.meta.dir, "../../.."),
+            stdio: ["ignore", "ignore", "pipe"],
+          })
+          recoveryChildren.push(recoveryChild)
+          recoveryExits.push(waitForExit(recoveryChild))
+        }
+        expect(await Promise.all(recoveryExits)).toEqual(Array.from({ length: 4 }, () => ({
+          code: 0,
+          stderr: "",
+        })))
+
+        const store = new WorldStore(root)
+        try {
+          expect(store.verifyIntegrity()).toEqual([])
+          expect(existsSync(join(root, "recovery", "worlddb-bootstrap.lock"))).toBe(true)
+          const state = readFileSync(
+            join(root, "recovery", "worlddb-bootstrap.state"),
+            "utf8",
+          ).trim().split("\n")
+          expect(state).toHaveLength(2)
+          expect(state.map(line => JSON.parse(line).phase)).toEqual(["writing", "complete"])
+          expect(readFileSync(join(root, "world.db")).subarray(0, 15).toString()).toBe(
+            "SQLite format 3",
+          )
+        } finally {
+          store.close()
+        }
       } finally {
-        store.close()
+        if (child?.exitCode === null) child.kill()
+        for (const recoveryChild of recoveryChildren) {
+          if (recoveryChild.exitCode === null) recoveryChild.kill()
+        }
+        removeTestWorldRoot(root)
+      }
+    })
+  }
+
+  test("arbitrary stale PID text never authorizes committed WorldDB replacement", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-world-schema-stale-text-"))
+    try {
+      const store = new WorldStore(root)
+      store.createWorld({ worldId: "w1", owner: "user:owner" })
+      store.close()
+
+      writeFileSync(join(root, "recovery", "worlddb-bootstrap.lock"), "999999\n")
+      const reopened = new WorldStore(root)
+      try {
+        expect(reopened.getWorld("w1")?.worldId).toBe("w1")
+        expect(reopened.verifyIntegrity()).toEqual([])
+      } finally {
+        reopened.close()
       }
     } finally {
       removeTestWorldRoot(root)
@@ -84,7 +133,7 @@ describe("AK-1 WorldDB schema bootstrap", () => {
     const unproven = Buffer.from("unproven database bytes")
     try {
       writeFileSync(join(root, "world.db"), unproven)
-      expect(() => new WorldStore(root)).toThrow(/WORLD_DB_BOOTSTRAP_MARKER_MISSING/)
+      expect(() => new WorldStore(root)).toThrow(/WORLD_DB_BOOTSTRAP_STATE_MISSING/)
       expect(readFileSync(join(root, "world.db"))).toEqual(unproven)
     } finally {
       removeTestWorldRoot(root)

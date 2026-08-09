@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { Database } from "bun:sqlite"
-import { canonicalDigest, canonicalJson, parseCanonicalJson } from "./canonical"
-import { WorldCas } from "./cas"
+import {
+  canonicalDigest,
+  canonicalJson,
+  compareCanonicalStrings,
+  parseCanonicalJson,
+} from "./canonical"
+import { encodeCasOwnerId, WorldCas } from "./cas"
 import type {
   AgentWorld,
   CasDigest,
@@ -12,6 +17,7 @@ import type {
   WorldCommitReceipt,
   WorldCommitRequest,
   WorldFaultPoint,
+  WorldEvent,
   WorldIntegrityIssue,
   WorldMutation,
   WorldObject,
@@ -92,9 +98,60 @@ interface WorldCommitRow {
   newRevision: string
   actor: string
   deltaDigest: string
+  materializedStateDigest: string
   executionReceiptIdsJson: string
   effectReceiptIdsJson: string
   committedAt: number
+}
+
+interface MaterializedStateImage {
+  world: {
+    worldId: string
+    currentRevision: string
+    currentBranchId: string
+    rootObjectId: string
+    status: AgentWorld["status"]
+    createdAt: number
+    updatedAt: number
+  }
+  branch: {
+    branchId: string
+    parentBranchId?: string
+    baseRevision: string
+    headRevision: string
+    owner: string
+    purpose: string
+    status: WorldBranch["status"]
+    createdAt: number
+  }
+  objects: Array<{
+    objectId: string
+    objectType: WorldObject["objectType"]
+    path?: string
+    contentRef?: CasDigest
+    metadata: Readonly<Record<string, unknown>>
+    updatedRevision: string
+    createdAt: number
+    updatedAt: number
+  }>
+  artifacts: Array<{
+    artifactId: string
+    mediaType: string
+    contentRef: CasDigest
+    metadata: Readonly<Record<string, unknown>>
+    updatedRevision: string
+    createdAt: number
+    updatedAt: number
+  }>
+  services: Array<{
+    serviceId: string
+    status: string
+    definitionDigest?: CasDigest
+    metadata: Readonly<Record<string, unknown>>
+    updatedRevision: string
+    createdAt: number
+    updatedAt: number
+  }>
 }
 
 export interface WorldStoreOptions {
@@ -190,6 +247,7 @@ function receiptFromRow(row: WorldCommitRow): WorldCommitReceipt {
     newRevision: BigInt(row.newRevision),
     actor: row.actor,
     deltaDigest: row.deltaDigest as CasDigest,
+    materializedStateDigest: row.materializedStateDigest as CasDigest,
     executionReceiptIds: Object.freeze(parseCanonicalJson<string[]>(row.executionReceiptIdsJson)),
     effectReceiptIds: Object.freeze(parseCanonicalJson<string[]>(row.effectReceiptIdsJson)),
     committedAt: row.committedAt,
@@ -197,7 +255,18 @@ function receiptFromRow(row: WorldCommitRow): WorldCommitReceipt {
 }
 
 function objectOwnerId(worldId: string, branchId: string, objectId: string): string {
-  return `${worldId}:${branchId}:${objectId}`
+  return encodeCasOwnerId([worldId, branchId, objectId])
+}
+
+function assertNoReservedMetadata(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  reservedKeys: readonly string[],
+): void {
+  for (const key of reservedKeys) {
+    if (metadata && Object.hasOwn(metadata, key)) {
+      throw new Error(`metadata key is reserved by WorldDB: ${key}`)
+    }
+  }
 }
 
 export class WorldStore {
@@ -224,15 +293,27 @@ export class WorldStore {
     this.db.exec("PRAGMA synchronous = FULL")
     this.db.exec("PRAGMA busy_timeout = 5000")
     this.db.exec(WORLD_SCHEMA)
-    dbRun(
+    const installedVersions = dbAll<{ schemaVersion: number }>(
       this.db,
-      `INSERT INTO world_schema_meta (schema_version, installed_at)
-       VALUES (?, ?) ON CONFLICT(schema_version) DO NOTHING`,
-      WORLD_SCHEMA_VERSION,
-      this.now(),
-    )
+      "SELECT schema_version AS schemaVersion FROM world_schema_meta ORDER BY schema_version",
+    ).map(row => row.schemaVersion)
+    if (installedVersions.length === 0) {
+      dbRun(
+        this.db,
+        "INSERT INTO world_schema_meta (schema_version, installed_at) VALUES (?, ?)",
+        WORLD_SCHEMA_VERSION,
+        this.now(),
+      )
+    } else if (
+      installedVersions.length !== 1 ||
+      installedVersions[0] !== WORLD_SCHEMA_VERSION
+    ) {
+      const message = `WORLD_SCHEMA_INCOMPATIBLE: expected ${WORLD_SCHEMA_VERSION}, found ${installedVersions.join(",")}`
+      this.db.close()
+      throw new Error(message)
+    }
     this.ledger = new WorldLedger(this.db)
-    this.cas = new WorldCas(this.db, root, this.now)
+    this.cas = new WorldCas(this.db, root, this.now, this.faultInjector)
     this.snapshots = new WorldSnapshotManager(
       this.db,
       this.cas,
@@ -246,6 +327,7 @@ export class WorldStore {
       },
       this.now,
       () => this.idFactory("event"),
+      this.faultInjector,
     )
   }
 
@@ -291,6 +373,7 @@ export class WorldStore {
         branchId,
         at,
       )
+      const materializedStateDigest = this.materializedStateDigest(worldId, branchId)
       this.ledger.appendWithinTransaction({
         eventId: this.idFactory("event"),
         worldId,
@@ -298,7 +381,11 @@ export class WorldStore {
         revision: 0n,
         eventType: "world.created",
         actor: input.owner,
-        payload: { rootObjectId, purpose: input.purpose ?? "initial world" },
+        payload: {
+          rootObjectId,
+          purpose: input.purpose ?? "initial world",
+          materializedStateDigest,
+        },
         occurredAt: at,
       })
       return this.getWorld(worldId)!
@@ -391,6 +478,146 @@ export class WorldStore {
     return this.snapshots.create(worldId, branchId)
   }
 
+  private materializedStateImage(worldId: string, branchId: string): MaterializedStateImage {
+    const world = this.getWorld(worldId)
+    const branch = this.getBranch(worldId, branchId)
+    if (!world || !branch) throw new Error(`unknown world branch: ${worldId}/${branchId}`)
+    return {
+      world: {
+        worldId: world.worldId,
+        currentRevision: world.currentRevision.toString(),
+        currentBranchId: world.currentBranchId,
+        rootObjectId: world.rootObjectId,
+        status: world.status,
+        createdAt: world.createdAt,
+        updatedAt: world.updatedAt,
+      },
+      branch: {
+        branchId: branch.branchId,
+        parentBranchId: branch.parentBranchId,
+        baseRevision: branch.baseRevision.toString(),
+        headRevision: branch.headRevision.toString(),
+        owner: branch.owner,
+        purpose: branch.purpose,
+        status: branch.status,
+        createdAt: branch.createdAt,
+      },
+      objects: this.listObjects(worldId, branchId)
+        .map(object => ({
+          objectId: object.objectId,
+          objectType: object.objectType,
+          path: object.path,
+          contentRef: object.contentRef,
+          metadata: object.metadata,
+          updatedRevision: object.updatedRevision.toString(),
+          createdAt: object.createdAt,
+          updatedAt: object.updatedAt,
+        }))
+        .sort((left, right) => compareCanonicalStrings(left.objectId, right.objectId)),
+      artifacts: this.listArtifacts(worldId, branchId)
+        .map(artifact => ({
+          artifactId: artifact.artifactId,
+          mediaType: artifact.mediaType,
+          contentRef: artifact.contentRef,
+          metadata: artifact.metadata,
+          updatedRevision: artifact.updatedRevision.toString(),
+          createdAt: artifact.createdAt,
+          updatedAt: artifact.updatedAt,
+        }))
+        .sort((left, right) => compareCanonicalStrings(left.artifactId, right.artifactId)),
+      services: this.listServices(worldId, branchId)
+        .map(service => ({
+          serviceId: service.serviceId,
+          status: service.status,
+          definitionDigest: service.definitionDigest,
+          metadata: service.metadata,
+          updatedRevision: service.updatedRevision.toString(),
+          createdAt: service.createdAt,
+          updatedAt: service.updatedAt,
+        }))
+        .sort((left, right) => compareCanonicalStrings(left.serviceId, right.serviceId)),
+    }
+  }
+
+  private materializedStateDigest(worldId: string, branchId: string): CasDigest {
+    return canonicalDigest(this.materializedStateImage(worldId, branchId))
+  }
+
+  private replayMaterializedEvent(
+    state: MaterializedStateImage,
+    event: WorldEvent,
+    revision: bigint,
+  ): void {
+    const mutation = event.payload as WorldMutation | { type: "world.corrupted"; detail: string }
+    const updatedRevision = revision.toString()
+    switch (mutation.type) {
+      case "object.put": {
+        const existing = state.objects.find(item => item.objectId === mutation.objectId)
+        const next: MaterializedStateImage["objects"][number] = {
+          objectId: mutation.objectId,
+          objectType: mutation.objectType,
+          path: mutation.path,
+          contentRef: mutation.contentRef,
+          metadata: mutation.metadata ?? {},
+          updatedRevision,
+          createdAt: existing?.createdAt ?? event.occurredAt,
+          updatedAt: event.occurredAt,
+        }
+        state.objects = [
+          ...state.objects.filter(item => item.objectId !== mutation.objectId),
+          next,
+        ].sort((left, right) => compareCanonicalStrings(left.objectId, right.objectId))
+        break
+      }
+      case "object.delete":
+        state.objects = state.objects.filter(item => item.objectId !== mutation.objectId)
+        break
+      case "artifact.put": {
+        const existing = state.artifacts.find(item => item.artifactId === mutation.artifactId)
+        const next: MaterializedStateImage["artifacts"][number] = {
+          artifactId: mutation.artifactId,
+          mediaType: mutation.mediaType,
+          contentRef: mutation.contentRef,
+          metadata: mutation.metadata ?? {},
+          updatedRevision,
+          createdAt: existing?.createdAt ?? event.occurredAt,
+          updatedAt: event.occurredAt,
+        }
+        state.artifacts = [
+          ...state.artifacts.filter(item => item.artifactId !== mutation.artifactId),
+          next,
+        ].sort((left, right) => compareCanonicalStrings(left.artifactId, right.artifactId))
+        break
+      }
+      case "artifact.delete":
+        state.artifacts = state.artifacts.filter(item => item.artifactId !== mutation.artifactId)
+        break
+      case "service.set": {
+        const existing = state.services.find(item => item.serviceId === mutation.serviceId)
+        const next: MaterializedStateImage["services"][number] = {
+          serviceId: mutation.serviceId,
+          status: mutation.status,
+          definitionDigest: mutation.definitionDigest,
+          metadata: mutation.metadata ?? {},
+          updatedRevision,
+          createdAt: existing?.createdAt ?? event.occurredAt,
+          updatedAt: event.occurredAt,
+        }
+        state.services = [
+          ...state.services.filter(item => item.serviceId !== mutation.serviceId),
+          next,
+        ].sort((left, right) => compareCanonicalStrings(left.serviceId, right.serviceId))
+        break
+      }
+      case "service.delete":
+        state.services = state.services.filter(item => item.serviceId !== mutation.serviceId)
+        break
+      case "world.corrupted":
+        state.world.status = "corrupted"
+        break
+    }
+  }
+
   compareAndCommit(request: WorldCommitRequest): WorldCommitReceipt {
     if (request.mutations.length === 0) throw new Error("World commit requires at least one mutation")
     const commitId = request.commitId ?? this.idFactory("commit")
@@ -419,6 +646,7 @@ export class WorldStore {
       const branch = this.getBranch(request.worldId, request.branchId)
       if (!world || !branch) throw new Error(`unknown world branch: ${request.worldId}/${request.branchId}`)
       if (world.status === "corrupted") throw new WorldCorruptionError([])
+      if (world.status !== "active") throw new Error(`world is not active: ${world.status}`)
       if (branch.status !== "active") throw new Error(`branch is not active: ${request.branchId}`)
       if (world.currentBranchId !== request.branchId) {
         throw new Error(`AK-1 only commits the current branch: ${request.branchId}`)
@@ -493,12 +721,18 @@ export class WorldStore {
         )
       }
 
+      const materializedStateDigest = this.materializedStateDigest(
+        request.worldId,
+        request.branchId,
+      )
+
       dbRun(
         this.db,
         `INSERT INTO world_commits (
            commit_id, request_digest, world_id, branch_id, base_revision, new_revision,
-           actor, delta_digest, execution_receipt_ids_json, effect_receipt_ids_json, committed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           actor, delta_digest, materialized_state_digest,
+           execution_receipt_ids_json, effect_receipt_ids_json, committed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         commitId,
         requestDigest,
         request.worldId,
@@ -507,6 +741,7 @@ export class WorldStore {
         newRevision.toString(),
         request.actor,
         deltaDigest,
+        materializedStateDigest,
         canonicalJson(executionReceiptIds),
         canonicalJson(effectReceiptIds),
         committedAt,
@@ -537,6 +772,7 @@ export class WorldStore {
         newRevision,
         actor: request.actor,
         deltaDigest,
+        materializedStateDigest,
         executionReceiptIds: Object.freeze(executionReceiptIds),
         effectReceiptIds: Object.freeze(effectReceiptIds),
         committedAt,
@@ -550,7 +786,18 @@ export class WorldStore {
   verifyIntegrity(): WorldIntegrityIssue[] {
     const issues: WorldIntegrityIssue[] = [...this.cas.verifyIntegrity()]
     for (const world of this.listWorlds()) {
-      for (const event of this.ledger.list(world.worldId)) {
+      let events: WorldEvent[]
+      try {
+        events = this.ledger.list(world.worldId)
+      } catch (error) {
+        issues.push({
+          code: "LEDGER_DB_DIVERGENCE",
+          worldId: world.worldId,
+          detail: `ledger decode failed: ${error instanceof Error ? error.message : String(error)}`,
+        })
+        continue
+      }
+      for (const event of events) {
         if (canonicalDigest(event.payload) !== event.payloadDigest) {
           issues.push({
             code: "LEDGER_DB_DIVERGENCE",
@@ -568,13 +815,13 @@ export class WorldStore {
         })
         continue
       }
-      if (world.currentRevision === 0n) continue
       const commits = dbAll<WorldCommitRow>(
         this.db,
         `SELECT commit_id AS commitId, request_digest AS requestDigest,
                 world_id AS worldId, branch_id AS branchId,
                 base_revision AS baseRevision, new_revision AS newRevision,
                 actor, delta_digest AS deltaDigest,
+                materialized_state_digest AS materializedStateDigest,
                 execution_receipt_ids_json AS executionReceiptIdsJson,
                 effect_receipt_ids_json AS effectReceiptIdsJson,
                 committed_at AS committedAt
@@ -586,6 +833,124 @@ export class WorldStore {
         const rightRevision = BigInt(right.newRevision)
         return leftRevision < rightRevision ? -1 : leftRevision > rightRevision ? 1 : 0
       })
+      const commitIds = new Set(commits.map(commit => commit.commitId))
+      const genesisEvents = events.filter(event =>
+        event.commitId === undefined && event.eventType === "world.created",
+      )
+      if (
+        genesisEvents.length !== 1 ||
+        genesisEvents[0]?.revision !== 0n ||
+        genesisEvents[0]?.branchId !== world.currentBranchId
+      ) {
+        issues.push({
+          code: "LEDGER_DB_DIVERGENCE",
+          worldId: world.worldId,
+          detail: `expected one revision-zero world.created event, found ${genesisEvents.length}`,
+        })
+      }
+      const genesis = genesisEvents.length === 1 ? genesisEvents[0] : undefined
+      const genesisPayload = genesis?.payload as {
+        rootObjectId?: unknown
+        purpose?: unknown
+        materializedStateDigest?: unknown
+      } | undefined
+      let replayState: MaterializedStateImage | undefined
+      if (
+        genesis &&
+        typeof genesisPayload?.rootObjectId === "string" &&
+        typeof genesisPayload.purpose === "string"
+      ) {
+        replayState = {
+          world: {
+            worldId: world.worldId,
+            currentRevision: "0",
+            currentBranchId: world.currentBranchId,
+            rootObjectId: genesisPayload.rootObjectId,
+            status: "active",
+            createdAt: genesis.occurredAt,
+            updatedAt: genesis.occurredAt,
+          },
+          branch: {
+            branchId: world.currentBranchId,
+            baseRevision: "0",
+            headRevision: "0",
+            owner: genesis.actor,
+            purpose: genesisPayload.purpose,
+            status: "active",
+            createdAt: genesis.occurredAt,
+          },
+          objects: [],
+          artifacts: [],
+          services: [],
+        }
+        if (canonicalDigest(replayState) !== genesisPayload.materializedStateDigest) {
+          issues.push({
+            code: "LEDGER_DB_DIVERGENCE",
+            worldId: world.worldId,
+            detail: "revision-zero materialized digest does not match world.created",
+          })
+        }
+      }
+      const snapshotEvents = events.filter(event =>
+        event.commitId === undefined && event.eventType === "world.snapshot.created",
+      )
+      const snapshots = this.snapshots.list(world.worldId, world.currentBranchId)
+      for (const snapshot of snapshots) {
+        const matching = snapshotEvents.filter(event => {
+          const payload = event.payload as { snapshotId?: unknown; manifestDigest?: unknown }
+          return event.objectId === snapshot.snapshotId &&
+            event.revision === snapshot.revision &&
+            payload.snapshotId === snapshot.snapshotId &&
+            payload.manifestDigest === snapshot.manifestDigest
+        })
+        if (matching.length !== 1) {
+          issues.push({
+            code: "LEDGER_DB_DIVERGENCE",
+            worldId: world.worldId,
+            detail: `snapshot ${snapshot.snapshotId} has ${matching.length} matching ledger events`,
+          })
+        }
+      }
+      for (const event of snapshotEvents) {
+        const payload = event.payload as { snapshotId?: unknown; manifestDigest?: unknown }
+        const matching = snapshots.filter(snapshot =>
+          event.objectId === snapshot.snapshotId &&
+          event.revision === snapshot.revision &&
+          payload.snapshotId === snapshot.snapshotId &&
+          payload.manifestDigest === snapshot.manifestDigest,
+        )
+        if (matching.length !== 1) {
+          issues.push({
+            code: "LEDGER_DB_DIVERGENCE",
+            worldId: world.worldId,
+            detail: `snapshot event ${event.eventId} has no unique snapshot row`,
+          })
+        }
+      }
+      for (const event of events) {
+        if (event.commitId && !commitIds.has(event.commitId)) {
+          issues.push({
+            code: "LEDGER_DB_DIVERGENCE",
+            worldId: world.worldId,
+            detail: `event ${event.eventId} references unknown commit ${event.commitId}`,
+          })
+        } else if (
+          !event.commitId &&
+          event.eventType !== "world.created" &&
+          event.eventType !== "world.snapshot.created" &&
+          !(
+            event.eventType === "world.quarantined" &&
+            event.actor === "system:recovery" &&
+            world.status === "corrupted"
+          )
+        ) {
+          issues.push({
+            code: "LEDGER_DB_DIVERGENCE",
+            worldId: world.worldId,
+            detail: `event ${event.eventId} has no governed commit/snapshot semantics`,
+          })
+        }
+      }
       let expectedRevision = 1n
       for (const commit of commits) {
         const baseRevision = BigInt(commit.baseRevision)
@@ -599,14 +964,17 @@ export class WorldStore {
         }
         expectedRevision = newRevision + 1n
 
-        const commitEvents = this.ledger.eventsForCommit(commit.commitId)
+        const commitEvents = events.filter(event => event.commitId === commit.commitId)
         const invalidEvent = commitEvents.find(event =>
           event.worldId !== world.worldId ||
           event.branchId !== world.currentBranchId ||
           event.revision !== newRevision ||
+          event.actor !== commit.actor ||
+          event.occurredAt !== commit.committedAt ||
           canonicalDigest(event.payload) !== event.payloadDigest,
         )
         const finalEvents = commitEvents.filter(event => event.eventType === "world.commit")
+        const mutationEvents = commitEvents.filter(event => event.eventType !== "world.commit")
         const payload = finalEvents[0]?.payload as {
           baseRevision?: string
           newRevision?: string
@@ -614,15 +982,47 @@ export class WorldStore {
           mutationCount?: number
         } | undefined
         const mutationCount = payload?.mutationCount
+        const invalidMutationEvent = mutationEvents.find(event => {
+          const mutation = event.payload as { type?: unknown }
+          const expectedEventType = mutation.type === "object.put"
+            ? "world.object.updated"
+            : mutation.type === "object.delete"
+              ? "world.object.deleted"
+              : mutation.type === "artifact.put"
+                ? "world.artifact.updated"
+                : mutation.type === "artifact.delete"
+                  ? "world.artifact.deleted"
+                  : mutation.type === "service.set"
+                    ? "world.service.updated"
+                    : mutation.type === "service.delete"
+                      ? "world.service.deleted"
+                      : mutation.type === "world.corrupted"
+                        ? "world.corrupted"
+                        : undefined
+          const expectedObjectId = "objectId" in mutation
+            ? mutation.objectId
+            : "artifactId" in mutation
+              ? mutation.artifactId
+              : "serviceId" in mutation
+                ? mutation.serviceId
+                : undefined
+          return expectedEventType === undefined ||
+            event.eventType !== expectedEventType ||
+            event.objectId !== expectedObjectId
+        })
         if (
           invalidEvent ||
+          invalidMutationEvent ||
           finalEvents.length !== 1 ||
           !Number.isSafeInteger(mutationCount) ||
           (mutationCount ?? -1) < 0 ||
           commitEvents.length !== (mutationCount ?? -1) + 1 ||
           payload?.baseRevision !== commit.baseRevision ||
           payload?.newRevision !== commit.newRevision ||
-          payload?.deltaDigest !== commit.deltaDigest
+          payload?.deltaDigest !== commit.deltaDigest ||
+          canonicalDigest(mutationEvents.map(event => event.payload)) !== commit.deltaDigest ||
+          finalEvents[0]?.actor !== commit.actor ||
+          finalEvents[0]?.occurredAt !== commit.committedAt
         ) {
           issues.push({
             code: "LEDGER_DB_DIVERGENCE",
@@ -630,12 +1030,51 @@ export class WorldStore {
             detail: `commit ${commit.commitId} ledger evidence does not match its receipt`,
           })
         }
+        if (replayState && !invalidMutationEvent) {
+          for (const event of mutationEvents) {
+            this.replayMaterializedEvent(replayState, event, newRevision)
+          }
+          replayState.world.currentRevision = commit.newRevision
+          replayState.world.updatedAt = commit.committedAt
+          replayState.branch.headRevision = commit.newRevision
+          const replayDigest = canonicalDigest(replayState)
+          if (replayDigest !== commit.materializedStateDigest) {
+            issues.push({
+              code: "LEDGER_DB_DIVERGENCE",
+              worldId: world.worldId,
+              detail: `commit ${commit.commitId} materialized digest does not replay from ledger`,
+            })
+          }
+        }
       }
       if (expectedRevision - 1n !== world.currentRevision) {
         issues.push({
           code: "LEDGER_DB_DIVERGENCE",
           worldId: world.worldId,
           detail: `commit chain ends at ${expectedRevision - 1n}, head is ${world.currentRevision}`,
+        })
+      }
+      const expectedMaterializedDigest = world.currentRevision === 0n
+        ? (genesisEvents[0]?.payload as { materializedStateDigest?: unknown } | undefined)
+          ?.materializedStateDigest
+        : commits.find(commit => BigInt(commit.newRevision) === world.currentRevision)
+          ?.materializedStateDigest
+      const actualMaterializedDigest = this.materializedStateDigest(
+        world.worldId,
+        world.currentBranchId,
+      )
+      if (expectedMaterializedDigest !== actualMaterializedDigest) {
+        issues.push({
+          code: "LEDGER_DB_DIVERGENCE",
+          worldId: world.worldId,
+          detail: `materialized state ${actualMaterializedDigest} does not match revision receipt ${String(expectedMaterializedDigest)}`,
+        })
+      }
+      if (replayState && canonicalDigest(replayState) !== actualMaterializedDigest) {
+        issues.push({
+          code: "LEDGER_DB_DIVERGENCE",
+          worldId: world.worldId,
+          detail: "current materialized state does not match deterministic ledger replay",
         })
       }
     }
@@ -652,7 +1091,8 @@ export class WorldStore {
       const newRevision = baseRevision + 1n
       const at = this.now()
       const commitId = this.idFactory("commit")
-      const deltaDigest = canonicalDigest({ status: "corrupted", detail })
+      const corruptionMutation = { type: "world.corrupted", detail } as const
+      const deltaDigest = canonicalDigest([corruptionMutation])
       const requestDigest = canonicalDigest({ worldId, detail, baseRevision: baseRevision.toString() })
       dbRun(
         this.db,
@@ -673,12 +1113,17 @@ export class WorldStore {
         world.currentBranchId,
         baseRevision.toString(),
       )
+      const materializedStateDigest = this.materializedStateDigest(
+        worldId,
+        world.currentBranchId,
+      )
       dbRun(
         this.db,
         `INSERT INTO world_commits (
            commit_id, request_digest, world_id, branch_id, base_revision, new_revision,
-           actor, delta_digest, execution_receipt_ids_json, effect_receipt_ids_json, committed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'system:recovery', ?, '[]', '[]', ?)`,
+           actor, delta_digest, materialized_state_digest,
+           execution_receipt_ids_json, effect_receipt_ids_json, committed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'system:recovery', ?, ?, '[]', '[]', ?)`,
         commitId,
         requestDigest,
         worldId,
@@ -686,6 +1131,7 @@ export class WorldStore {
         baseRevision.toString(),
         newRevision.toString(),
         deltaDigest,
+        materializedStateDigest,
         at,
       )
       this.ledger.appendWithinTransaction({
@@ -696,7 +1142,7 @@ export class WorldStore {
         commitId,
         eventType: "world.corrupted",
         actor: "system:recovery",
-        payload: { detail },
+        payload: corruptionMutation,
         occurredAt: at,
       })
       this.ledger.appendWithinTransaction({
@@ -718,6 +1164,31 @@ export class WorldStore {
     })
   }
 
+  quarantineWorldFromRecovery(worldId: string, detail: string): void {
+    withImmediateTransaction(this.db, () => {
+      const world = this.getWorld(worldId)
+      if (!world || world.status === "corrupted") return
+      const at = this.now()
+      dbRun(
+        this.db,
+        `UPDATE world_meta SET status = 'corrupted', updated_at = ?
+         WHERE world_id = ? AND status != 'corrupted'`,
+        at,
+        worldId,
+      )
+      this.ledger.appendWithinTransaction({
+        eventId: this.idFactory("event"),
+        worldId,
+        branchId: world.currentBranchId,
+        revision: world.currentRevision,
+        eventType: "world.quarantined",
+        actor: "system:recovery",
+        payload: { detail },
+        occurredAt: at,
+      })
+    })
+  }
+
   private getCommitRow(commitId: string): WorldCommitRow | undefined {
     return dbGet<WorldCommitRow>(
       this.db,
@@ -725,6 +1196,7 @@ export class WorldStore {
               world_id AS worldId, branch_id AS branchId,
               base_revision AS baseRevision, new_revision AS newRevision,
               actor, delta_digest AS deltaDigest,
+              materialized_state_digest AS materializedStateDigest,
               execution_receipt_ids_json AS executionReceiptIdsJson,
               effect_receipt_ids_json AS effectReceiptIdsJson,
               committed_at AS committedAt
@@ -808,6 +1280,7 @@ export class WorldStore {
         return "world.object.deleted"
       }
       case "artifact.put": {
+        assertNoReservedMetadata(mutation.metadata, ["artifactId", "mediaType", "contentRef"])
         if (!this.cas.has(mutation.contentRef)) {
           throw new Error(`artifact references missing CAS content: ${mutation.contentRef}`)
         }
@@ -870,6 +1343,11 @@ export class WorldStore {
         return "world.artifact.deleted"
       }
       case "service.set": {
+        assertNoReservedMetadata(mutation.metadata, [
+          "serviceId",
+          "status",
+          "definitionDigest",
+        ])
         if (mutation.definitionDigest && !this.cas.has(mutation.definitionDigest)) {
           throw new Error(`service references missing CAS definition: ${mutation.definitionDigest}`)
         }

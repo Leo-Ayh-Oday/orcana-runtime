@@ -1,7 +1,7 @@
 # AK-1 Durable Agent World
 
 **Task ID:** `AK1-WORLD-001`
-**状态:** `CANDIDATE_AUDIT_PENDING`
+**状态:** `FIXED_REAUDIT_PENDING`
 **基线 / 回滚点:** `60bff0515214197b297993faebb53bb4858938c3`
 **专用分支:** `feat/agent-os`
 
@@ -86,7 +86,7 @@ AK-1 仅新增 `src/kernel/world/**`、`tests/kernel/world/**` 与本阶段记�
 
 ### FACT — 主代理验证
 
-- `bun test tests/kernel/world`：`16 pass / 0 fail / 67 expect`。
+- 初始候选 `93bb7c553bb353c13baf9c0e004eb453fed2169c`：`bun test tests/kernel/world` 为 `16 pass / 0 fail / 67 expect`。
 - `bun run typecheck`：通过。
 - `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
 - `bun run build`：通过。
@@ -105,3 +105,39 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ```
 
 这是进入独立只读审计前的候选结论，不是阶段最终验收。实现提交、独立审计发现、主代理修复与复验将在后续提交中追加。
+
+### FACT — 独立审计
+
+- 独立 Agent 对 `93bb7c553bb353c13baf9c0e004eb453fed2169c` 给出 `CHANGES_REQUIRED`。
+- Git 身份、parent、16 文件白名单、clean worktree、`git diff --check` 均通过。
+- 阻塞发现：2 Critical、6 High；残余发现：3 Medium。审计按约束未运行测试、构建或服务。
+
+阻塞项及主代理复核结果：
+
+1. CAS owner 冒号拼接可碰撞：确认，改为 canonical tuple encoding，并加入双 World/branch 反例。
+2. `linkMany()`/`gc()` TOCTOU：确认，CAS put/link/unlink/GC/recovery 全部纳入同一 SQLite `BEGIN IMMEDIATE` 串行化边界。
+3. 完整性检查未枚举 materialized/snapshot roots：确认，改为从 WorldDB 权威行构造 roots，逐一验证 link/registration/file/hash。
+4. refCount GC 无法清除环：确认，改为 root-based mark-and-sweep，并覆盖 self/双节点 cycle 与 ghost root。
+5. ledger 未绑定 materialized state、NULL-commit 伪事件可绕过：确认，每 revision receipt 保存 materialized-state digest；完整性检查确定性 replay 全部 mutation、校验当前 materialized image，并约束 genesis/snapshot/quarantine 事件。
+6. 同 revision 可有多个 snapshot 且排序依赖 ICU：确认，数据库唯一键改为 `(world_id, branch_id, revision)`，排序改为明确 UTF-16 code-unit order，并加入 Unicode 用例。
+7. metadata 可覆盖 service/artifact 权威字段：确认，保留键在 commit 时拒绝，snapshot 中权威字段最后写入。
+8. crash 测试只是同进程 throw：确认，新增 Bun 子进程硬退出 harness，覆盖 materialization/ledger/DB-commit-response、CAS temp/rename/metadata、snapshot manifest/insert 窗口。
+
+残余项关闭：
+
+- metadata bigint 改为 fail-closed，要求调用方显式编码为 string；不再静默改变类型。
+- schema version 提升为 2，打开未知版本时关闭连接并报 `WORLD_SCHEMA_INCOMPATIBLE`。
+- recovery 对非 CAS 的 ledger/revision 问题也将受影响 World quarantine 为 `corrupted`，不能继续 commit。
+
+### FACT — 修复后主代理验证
+
+- `bun run typecheck`：通过。
+- `bun test tests/kernel/world`：`27 pass / 0 fail / 134 expect`，包含真实子进程 crash/reopen/recover。
+- `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
+- `bun run build`：通过。
+- `git diff --check`：通过。
+- hosted CI 因既有账号 billing lock 未执行；live/provider 测试未执行且不计为通过。
+
+### INFERENCE — 修复候选门评估
+
+六项 AK-1 gate 在本地实现与反例测试中为 0；该结论仍需独立 Agent 对修复提交只读复审后才能转为阶段最终验收。

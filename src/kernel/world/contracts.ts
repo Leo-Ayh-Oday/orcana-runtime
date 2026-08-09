@@ -135,6 +135,7 @@ export interface WorldCommitReceipt {
   readonly newRevision: WorldRevision
   readonly actor: string
   readonly deltaDigest: CasDigest
+  readonly materializedStateDigest: CasDigest
   readonly executionReceiptIds: readonly string[]
   readonly effectReceiptIds: readonly string[]
   readonly committedAt: number
@@ -232,6 +233,11 @@ export type WorldFaultPoint =
   | "after_materialization_before_ledger"
   | "after_ledger_before_commit"
   | "after_commit_before_response"
+  | "after_cas_temp_fsync"
+  | "after_cas_rename_before_metadata"
+  | "after_cas_metadata_before_return"
+  | "after_snapshot_manifest_before_insert"
+  | "after_snapshot_insert_before_commit"
 
 export interface WorldIntegrityIssue {
   readonly code:
@@ -239,6 +245,8 @@ export interface WorldIntegrityIssue {
     | "LEDGER_DB_DIVERGENCE"
     | "CAS_MISSING_REFERENCED_OBJECT"
     | "CAS_CONTENT_CORRUPT"
+    | "CAS_REFERENCE_DIVERGENCE"
+    | "UNREACHABLE_OBJECT_LEAK"
   readonly worldId?: string
   readonly detail: string
 }
@@ -271,7 +279,11 @@ export class WorldCorruptionError extends Error {
   readonly code = "WORLD_CORRUPTED"
 
   constructor(readonly issues: readonly WorldIntegrityIssue[]) {
-    super(`WORLD_CORRUPTED: ${issues.map(issue => issue.code).join(", ")}`)
+    super(
+      issues.length > 0
+        ? `WORLD_CORRUPTED: ${issues.map(issue => issue.code).join(", ")}`
+        : "WORLD_CORRUPTED: persisted World status is corrupted",
+    )
     this.name = "WorldCorruptionError"
   }
 }

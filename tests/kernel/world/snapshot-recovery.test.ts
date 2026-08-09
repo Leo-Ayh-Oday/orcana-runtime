@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import { existsSync, rmSync } from "node:fs"
 import {
   assertWorldRecovered,
   createFileManifest,
+  encodeCasOwnerId,
   recoverWorldStore,
 } from "../../../src/kernel/world"
 import { createTestWorldStore } from "./helpers"
@@ -63,6 +65,31 @@ describe("AK-1 deterministic World snapshot", () => {
         revision: "1",
         filesystemDigest: first.filesystemDigest,
       }))
+      const serviceSection = JSON.parse(
+        fixture.store.cas.get(first.serviceStateDigest).toString(),
+      )
+      const artifactSection = JSON.parse(
+        fixture.store.cas.get(first.artifactStateDigest).toString(),
+      )
+      expect(serviceSection.entries[0].metadata.status).toBe("ready")
+      expect(artifactSection.entries[0].metadata.mediaType).toBe("text/plain")
+
+      const db = new Database(fixture.store.databasePath)
+      try {
+        expect(() => db.run(
+          `INSERT INTO world_snapshots (
+             snapshot_id, world_id, branch_id, revision, manifest_digest,
+             filesystem_digest, memory_digest, task_state_digest,
+             capability_state_digest, service_state_digest, artifact_state_digest, created_at
+           ) SELECT 'snapshot:forged', world_id, branch_id, revision,
+                    manifest_digest, filesystem_digest, memory_digest, task_state_digest,
+                    capability_state_digest, service_state_digest, artifact_state_digest, created_at
+             FROM world_snapshots WHERE snapshot_id = ?`,
+          [first.snapshotId],
+        )).toThrow()
+      } finally {
+        db.close()
+      }
     } finally {
       fixture.cleanup()
     }
@@ -91,6 +118,42 @@ describe("AK-1 deterministic World snapshot", () => {
       expect(second.revision).toBe(2n)
       expect(second.snapshotId).not.toBe(first.snapshotId)
       expect(second.manifestDigest).not.toBe(first.manifestDigest)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("reserved service and artifact metadata cannot shadow authoritative fields", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      expect(() => fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        mutations: [{
+          type: "service.set",
+          serviceId: "reviewer",
+          status: "ready",
+          metadata: { status: "stopped" },
+        }],
+      })).toThrow(/metadata key is reserved/)
+      const artifact = fixture.store.cas.put(Buffer.from("artifact"), "text/plain")
+      expect(() => fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        mutations: [{
+          type: "artifact.put",
+          artifactId: "report",
+          mediaType: "text/plain",
+          contentRef: artifact.digest,
+          metadata: { mediaType: "application/forged" },
+        }],
+      })).toThrow(/metadata key is reserved/)
+      expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
     } finally {
       fixture.cleanup()
     }
@@ -140,6 +203,46 @@ describe("AK-1 recovery", () => {
       expect(report.corruptedWorldIds).toEqual(["w1"])
       expect(fixture.store.getWorld("w1")?.status).toBe("corrupted")
       expect(() => assertWorldRecovered(report)).toThrow(/WORLD_CORRUPTED/)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("a missing authoritative root link blocks GC and preserves recoverable bytes", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      const file = createFileManifest(fixture.store.cas, Buffer.from("preserve me"), "text/plain")
+      fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        mutations: [{
+          type: "object.put",
+          objectId: "file",
+          objectType: "file",
+          contentRef: file.digest,
+        }],
+      })
+      const db = new Database(fixture.store.databasePath)
+      try {
+        db.run(
+          "DELETE FROM cas_links WHERE owner_type = ? AND owner_id = ? AND digest = ?",
+          ["world_object", encodeCasOwnerId(["w1", "main", "file"]), file.digest],
+        )
+      } finally {
+        db.close()
+      }
+
+      const report = recoverWorldStore(fixture.store)
+      expect(report.integrityIssues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "CAS_REFERENCE_DIVERGENCE" }),
+      ]))
+      expect(report.removedUnreachableObjects).not.toContain(file.digest)
+      expect(fixture.store.cas.record(file.digest)).toBeDefined()
+      expect(existsSync(fixture.store.cas.resolveObjectPath(file.digest))).toBe(true)
+      expect(fixture.store.getWorld("w1")?.status).toBe("corrupted")
     } finally {
       fixture.cleanup()
     }

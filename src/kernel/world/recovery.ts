@@ -5,21 +5,23 @@ import { WorldStore } from "./store"
 export function recoverWorldStore(store: WorldStore): WorldRecoveryReport {
   const casReport = store.cas.recover()
   const integrityIssues = store.verifyIntegrity()
-  const hasCasCorruption = integrityIssues.some(issue =>
-    issue.code === "CAS_MISSING_REFERENCED_OBJECT" || issue.code === "CAS_CONTENT_CORRUPT",
-  )
   const corruptedWorldIds: string[] = []
 
-  if (hasCasCorruption) {
-    const detail = integrityIssues
-      .filter(issue =>
-        issue.code === "CAS_MISSING_REFERENCED_OBJECT" || issue.code === "CAS_CONTENT_CORRUPT",
-      )
-      .map(issue => issue.detail)
-      .join("; ")
-    for (const world of store.listWorlds()) {
-      if (world.status === "corrupted") continue
-      store.markCorruptedFromRecovery(world.worldId, detail)
+  const globalIssues = integrityIssues.filter(issue => issue.worldId === undefined)
+  for (const world of store.listWorlds()) {
+    if (world.status === "corrupted") continue
+    const worldIssues = integrityIssues.filter(issue => issue.worldId === world.worldId)
+    const relevant = [...globalIssues, ...worldIssues]
+    if (relevant.length === 0) continue
+    const detail = relevant.map(issue => `${issue.code}: ${issue.detail}`).join("; ")
+    const onlyCasIssues = relevant.every(issue =>
+      issue.code === "CAS_MISSING_REFERENCED_OBJECT" ||
+      issue.code === "CAS_CONTENT_CORRUPT" ||
+      issue.code === "CAS_REFERENCE_DIVERGENCE",
+    )
+    if (onlyCasIssues) store.markCorruptedFromRecovery(world.worldId, detail)
+    else store.quarantineWorldFromRecovery(world.worldId, detail)
+    if (store.getWorld(world.worldId)?.status === "corrupted") {
       corruptedWorldIds.push(world.worldId)
     }
   }

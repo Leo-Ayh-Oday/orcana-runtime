@@ -31,6 +31,8 @@ import type {
   WorldCommitRequest,
   WorldFaultPoint,
   WorldEvent,
+  WorldDeltaMutation,
+  WorldDeltaManifest,
   WorldIntegrityIssue,
   WorldMutation,
   WorldObject,
@@ -349,6 +351,24 @@ function validateWorldMutation(mutation: WorldMutation, index: number): void {
       return
     default:
       throw new Error(`${prefix} has an unsupported type`)
+  }
+}
+
+const WORLD_DELTA_MEDIA_TYPE = "application/vnd.orcana.world-delta+json"
+
+function worldDeltaManifest(
+  worldId: string,
+  branchId: string,
+  baseRevision: bigint,
+  mutations: readonly WorldDeltaMutation[],
+): WorldDeltaManifest {
+  return {
+    schemaVersion: 1,
+    type: "world-delta",
+    worldId,
+    branchId,
+    baseRevision: baseRevision.toString(),
+    mutations,
   }
 }
 
@@ -1206,7 +1226,13 @@ export class WorldStore {
       effectReceiptIds,
       commitId,
     })
-    const deltaDigest = canonicalDigest(mutations)
+    const deltaBytes = Buffer.from(canonicalJson(worldDeltaManifest(
+      request.worldId,
+      request.branchId,
+      request.baseRevision,
+      mutations,
+    )), "utf8")
+    const deltaDigest = sha256Digest(deltaBytes)
     const requestDigest = canonicalDigest({
       worldId: request.worldId,
       branchId: request.branchId,
@@ -1225,6 +1251,14 @@ export class WorldStore {
         if (existing.requestDigest !== requestDigest) {
           throw new Error(`commit idempotency conflict: ${commitId}`)
         }
+        if (existing.deltaDigest !== deltaDigest) {
+          throw new Error(`commit delta divergence: ${commitId}`)
+        }
+        const deltaRecord = this.cas.put(deltaBytes, WORLD_DELTA_MEDIA_TYPE)
+        if (deltaRecord.digest !== deltaDigest) {
+          throw new Error(`World delta CAS digest mismatch: ${commitId}`)
+        }
+        this.cas.link("world_commit", commitId, deltaDigest)
         return receiptFromRow(existing)
       }
 
@@ -1247,6 +1281,11 @@ export class WorldStore {
           request.baseRevision,
           branch.headRevision,
         )
+      }
+
+      const deltaRecord = this.cas.put(deltaBytes, WORLD_DELTA_MEDIA_TYPE)
+      if (deltaRecord.digest !== deltaDigest) {
+        throw new Error(`World delta CAS digest mismatch: ${commitId}`)
       }
 
       const newRevision = request.baseRevision + 1n
@@ -1332,6 +1371,7 @@ export class WorldStore {
         canonicalJson(effectReceiptIds),
         committedAt,
       )
+      this.cas.link("world_commit", commitId, deltaDigest)
       this.ledger.appendWithinTransaction({
         eventId: this.idFactory("event"),
         worldId: request.worldId,
@@ -1637,7 +1677,12 @@ export class WorldStore {
           payload?.baseRevision !== commit.baseRevision ||
           payload?.newRevision !== commit.newRevision ||
           payload?.deltaDigest !== commit.deltaDigest ||
-          canonicalDigest(mutationEvents.map(event => event.payload)) !== commit.deltaDigest ||
+          sha256Digest(canonicalJson(worldDeltaManifest(
+            commit.worldId,
+            commit.branchId,
+            BigInt(commit.baseRevision),
+            mutationEvents.map(event => event.payload as WorldDeltaMutation),
+          ))) !== commit.deltaDigest ||
           finalEvents[0]?.actor !== commit.actor ||
           finalEvents[0]?.occurredAt !== commit.committedAt
         ) {
@@ -1710,7 +1755,17 @@ export class WorldStore {
       const at = this.now()
       const commitId = this.idFactory("commit")
       const corruptionMutation = { type: "world.corrupted", detail } as const
-      const deltaDigest = canonicalDigest([corruptionMutation])
+      const deltaBytes = Buffer.from(canonicalJson(worldDeltaManifest(
+        worldId,
+        world.currentBranchId,
+        baseRevision,
+        [corruptionMutation],
+      )), "utf8")
+      const deltaDigest = sha256Digest(deltaBytes)
+      const deltaRecord = this.cas.put(deltaBytes, WORLD_DELTA_MEDIA_TYPE)
+      if (deltaRecord.digest !== deltaDigest) {
+        throw new Error(`World delta CAS digest mismatch: ${commitId}`)
+      }
       const requestDigest = canonicalDigest({ worldId, detail, baseRevision: baseRevision.toString() })
       dbRun(
         this.db,
@@ -1752,6 +1807,7 @@ export class WorldStore {
         materializedStateDigest,
         at,
       )
+      this.cas.link("world_commit", commitId, deltaDigest)
       this.ledger.appendWithinTransaction({
         eventId: this.idFactory("event"),
         worldId,

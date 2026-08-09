@@ -119,6 +119,22 @@ export type WorldMutation =
       readonly serviceId: string
     }
 
+export interface WorldCorruptionMutation {
+  readonly type: "world.corrupted"
+  readonly detail: string
+}
+
+export type WorldDeltaMutation = WorldMutation | WorldCorruptionMutation
+
+export interface WorldDeltaManifest {
+  readonly schemaVersion: 1
+  readonly type: "world-delta"
+  readonly worldId: string
+  readonly branchId: string
+  readonly baseRevision: string
+  readonly mutations: readonly WorldDeltaMutation[]
+}
+
 export interface WorldCommitRequest {
   readonly worldId: string
   readonly branchId: string

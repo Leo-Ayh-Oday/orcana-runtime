@@ -4,6 +4,7 @@ import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
   canonicalDigest,
+  canonicalJson,
   encodeCasOwnerId,
   recoverWorldStore,
   WORLD_OBJECT_TYPES,
@@ -99,6 +100,28 @@ describe("AK-1 WorldStore", () => {
         "world.commit",
       ])
       expect(fixture.store.verifyIntegrity()).toEqual([])
+      const deltaManifest = {
+        schemaVersion: 1,
+        type: "world-delta",
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: "0",
+        mutations: [{
+          type: "object.put",
+          objectId: "src/index.ts",
+          objectType: "file",
+          path: "src/index.ts",
+          contentRef: content.digest,
+          metadata: { language: "typescript" },
+        }],
+      }
+      expect(fixture.store.cas.get(receipt.deltaDigest).toString("utf8")).toBe(
+        canonicalJson(deltaManifest),
+      )
+      expect(fixture.store.cas.linksForOwner("world_commit", receipt.commitId)).toEqual([
+        expect.objectContaining({ digest: receipt.deltaDigest }),
+      ])
+      expect(fixture.store.cas.gc()).not.toContain(receipt.deltaDigest)
     } finally {
       fixture.cleanup()
     }
@@ -146,6 +169,51 @@ describe("AK-1 WorldStore", () => {
       expect(peer.verifyIntegrity()).toEqual([])
     } finally {
       peer?.close()
+      fixture.cleanup()
+    }
+  })
+
+  test("idempotent commit replay repairs a missing authoritative delta link", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      const request = {
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        commitId: "commit-delta-repair",
+        mutations: [{
+          type: "service.set" as const,
+          serviceId: "indexer",
+          status: "ready",
+        }],
+      }
+      const committed = fixture.store.compareAndCommit(request)
+      const db = new Database(fixture.store.databasePath)
+      try {
+        db.run(
+          `DELETE FROM cas_links
+           WHERE owner_type = 'world_commit' AND owner_id = ? AND digest = ?`,
+          [committed.commitId, committed.deltaDigest],
+        )
+        db.run("UPDATE cas_objects SET ref_count = 0 WHERE digest = ?", committed.deltaDigest)
+      } finally {
+        db.close()
+      }
+      expect(fixture.store.verifyIntegrity()).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: "CAS_REFERENCE_DIVERGENCE",
+          detail: expect.stringContaining("missing root link world_commit"),
+        }),
+      ]))
+
+      expect(fixture.store.compareAndCommit(request)).toEqual(committed)
+      expect(fixture.store.verifyIntegrity()).toEqual([])
+      expect(fixture.store.cas.linksForOwner("world_commit", committed.commitId)).toEqual([
+        expect.objectContaining({ digest: committed.deltaDigest }),
+      ])
+    } finally {
       fixture.cleanup()
     }
   })

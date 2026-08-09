@@ -488,6 +488,11 @@ describe("LF-2: broker execution", () => {
     expect(events).toEqual([])
   })
 
+  linuxOnly("unit-test brokers require explicit cgroup injection", () => {
+    expect(process.env.NODE_ENV).toBe("test")
+    expect(createLinuxBroker({ mode: "enabled" }).cgroupBase()).toBeUndefined()
+  })
+
   linuxOnly("strict spec without backend availability fails closed", () => {
     const spec = baseSpec({ profile: "untrusted", isolation: { minimum: "container", preferredBackend: "podman", allowDegradation: false } })
     const compiled = compileCellSpec(spec)

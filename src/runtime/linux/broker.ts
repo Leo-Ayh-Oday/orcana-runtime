@@ -198,7 +198,13 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   // cgroup：仅在有真实委托时启用（无委托 → cgroupPath 为空，严格任务已在
   // selectBackend 层拒绝；P0-4 修复前绝不假装资源限制生效）。
   const delegated = detectDelegatedRoot()
-  const cgroup = options.cgroup ?? (delegated.writable ? new CgroupManager({ base: delegated.base }) : undefined)
+  // 单元测试默认不接入宿主真实 cgroup：测试必须显式注入 mock manager；
+  // 真实内核路径由 cgroup.test 与 eval:linux 的 delegated lane 覆盖。这样
+  // 测试超时/进程中断不会在宿主留下 run-* 空目录。
+  const autoCgroup = process.env.NODE_ENV !== "test" && caps.cgroup.delegated && delegated.writable
+    ? new CgroupManager({ base: delegated.base })
+    : undefined
+  const cgroup = options.cgroup ?? autoCgroup
   const locks = new IsolationDomainLock()
 
   const compileOrThrow = (spec: ExecutionCellSpec): ExecutionCellSpec => {

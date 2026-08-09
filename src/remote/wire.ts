@@ -144,3 +144,34 @@ export function decodeMessage(bytes: Buffer): { ok: true; msg: SignedMessage } |
 export function identityFingerprint(publicKeyPem: string): string {
   return createHash("sha256").update(publicKeyPem).digest("hex")
 }
+
+/** M1：nonce 防重放注册表 —— 相同的消息整体重放必须拒绝。
+ *  按 (senderId, nonce) 记录已见 nonce；窗口裁剪避免无限增长。 */
+export class ReplayGuard {
+  private seen = new Map<string, Set<string>>()
+  private readonly maxNoncesPerSender = 10_000
+
+  /** 记录并检查 nonce：新 nonce → 接受；重复 → 拒绝。 */
+  check(senderId: string, nonce: string): { ok: true } | { ok: false; reason: string } {
+    let set = this.seen.get(senderId)
+    if (!set) {
+      set = new Set()
+      this.seen.set(senderId, set)
+    }
+    if (set.has(nonce)) {
+      return { ok: false, reason: `replay detected: nonce ${nonce} already seen for ${senderId}` }
+    }
+    set.add(nonce)
+    if (set.size > this.maxNoncesPerSender) {
+      // 裁剪最旧的 50%（简单实现：重建集合保留后一半）
+      const sorted = [...set]
+      this.seen.set(senderId, new Set(sorted.slice(sorted.length / 2)))
+    }
+    return { ok: true }
+  }
+
+  /** 发送者 nonce 计数（测试/诊断）。 */
+  countFor(senderId: string): number {
+    return this.seen.get(senderId)?.size ?? 0
+  }
+}

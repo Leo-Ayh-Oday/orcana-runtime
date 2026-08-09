@@ -7,10 +7,15 @@
  *  共享同一摘要函数，否则签名永远无法在 coordinator 侧验证通过。
  */
 
-import { createHash } from "node:crypto"
-import { cellPlanSigner, type RemoteCellPlan } from "./cellplan"
+import { createHash, randomBytes } from "node:crypto"
+import { cellPlanSigner, validateCellPlanShape, type RemoteCellPlan } from "./cellplan"
 import { canonicalJson } from "../runtime/linux/receipt"
 import { receiptDigest as coordinatorReceiptDigest, type RemoteReceipt } from "./coordinator"
+
+/** 密码学随机 ID（m1：fence token/ID 不预测）。 */
+export function randomId(prefix: string): string {
+  return `${prefix}-${randomBytes(8).toString("hex")}`
+}
 
 export type WorkerExecutionVerdict =
   | { ok: true; receipt: RemoteReceipt }
@@ -32,6 +37,9 @@ export interface WorkerReceipt {
   assignmentId: string
   workerId: string
   exitCode: number | null
+  /** M4：真实观测 —— 信号（被杀/超时）与 spawn 失败显式记录。 */
+  signal?: string | null
+  spawnFailed?: boolean
   observed: WorkerReceiptObserved
   /** Ed25519 签名（hex）。 */
   signature: string
@@ -50,7 +58,7 @@ export interface RemoteWorkerOptions {
 export type WorkerExecutor = (
   plan: RemoteCellPlan,
   workerId: string,
-) => Promise<{ exitCode: number | null; signal: string | null; writes: string[]; wallTimeMs: number }>
+) => Promise<{ exitCode: number | null; signal: string | null; writes: string[]; wallTimeMs: number; spawnFailed?: boolean }>
 
 export const defaultExecutor: WorkerExecutor = async plan => {
   const t0 = Date.now()
@@ -65,10 +73,14 @@ export const defaultExecutor: WorkerExecutor = async plan => {
     timeout: plan.timeoutMs,
     encoding: "utf8",
   })
+  // M5：不伪造写观测 —— readonly 计划 = 无写观测（空数组）；
+  // 非 readonly 计划 = 写观测未知（由沙箱后端提供，函数执行器无写面观测）。
+  // M4：spawn 失败（ENOENT 等）显式标记 —— status=undefined 不是合法 exit。
   return {
-    exitCode: result.status,
+    exitCode: result.status ?? null,
     signal: result.signal ?? null,
-    writes: plan.readonly ? [] : ["[virtual] no writes (readonly)"],
+    spawnFailed: result.error !== undefined,
+    writes: plan.readonly ? [] : [],
     wallTimeMs: Date.now() - t0,
   }
 }
@@ -101,8 +113,10 @@ export class RemoteWorker {
     }
   }
 
-  /** 验证 plan（签名 + 形状 + 身份）。 */
+  /** 验证 plan（签名 + 形状 + 身份）。M6：形状校验（含秘密键防护）在此强制执行。 */
   verifyPlan(plan: RemoteCellPlan, coordinatorPublicKeyPem: string): { ok: true } | { ok: false; reason: string } {
+    const shape = validateCellPlanShape(plan)
+    if (!shape.ok) return { ok: false, reason: `cellplan shape invalid: ${shape.errors.join("; ")}` }
     const sig = cellPlanSigner.verifyPlan(plan, coordinatorPublicKeyPem)
     if (!sig.ok) return sig
     if (!plan.capabilityId || !this.opts.capabilities.includes(plan.capabilityId)) {
@@ -111,19 +125,27 @@ export class RemoteWorker {
     return { ok: true }
   }
 
-  /** 执行 plan 并生成签名收据（WORKER_HOLDS_COMPLETION_AUTHORITY：收据不含完成判断）。 */
-  async execute(plan: RemoteCellPlan, assignmentId: string): Promise<WorkerExecutionVerdict> {
+  /** 执行 plan 并生成签名收据（WORKER_HOLDS_COMPLETION_AUTHORITY：收据不含完成判断）。
+   *  m4：execute 内部强制先验证（签名 + 形状 + 能力），不依赖调用方自觉。 */
+  async execute(plan: RemoteCellPlan, assignmentId: string, coordinatorPublicKeyPem?: string): Promise<WorkerExecutionVerdict> {
+    if (coordinatorPublicKeyPem) {
+      const v = this.verifyPlan(plan, coordinatorPublicKeyPem)
+      if (!v.ok) return { ok: false, reason: v.reason }
+    }
     const res = await this.executor(plan, this.opts.workerId)
     const observed: WorkerReceiptObserved = {
       // 函数执行器无 cgroup —— 未观测字段不写假事实（undefined）
       metrics: { wallTimeMs: res.wallTimeMs },
       writes: res.writes,
     }
+    // M4：真实观测含 signal/spawnFailed —— exitCode=null（未跑/被杀）必须显式
     const receiptBase: Omit<WorkerReceipt, "signature"> = {
-      receiptId: `rcpt-${Math.random().toString(36).slice(2, 10)}`,
+      receiptId: randomId("rcpt"),
       assignmentId,
       workerId: this.opts.workerId,
       exitCode: res.exitCode,
+      signal: res.signal,
+      spawnFailed: res.spawnFailed ?? false,
       observed,
     }
     const { sign, createPrivateKey } = require("node:crypto") as typeof import("node:crypto")

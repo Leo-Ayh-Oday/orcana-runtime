@@ -57,9 +57,9 @@ export function landlockUsable(caps: LinuxCapabilities): { ok: boolean; reason?:
 /** seccomp profile：允许的系统调用面（保守子集 + 白名单语言运行时）。 */
 export interface SeccompProfile {
   defaultAction: "SCMP_ACT_ERRNO" | "SCMP_ACT_ALLOW"
-  allowSyscalls: string[]
+  allowSyscalls: readonly string[]
   /** 明确拒绝的危险调用（即使允许列表包含）。 */
-  denySyscalls: string[]
+  denySyscalls: readonly string[]
   /** 目标语言运行时（不同语言不同白名单 —— 不共享列表）。 */
   target?: string
 }

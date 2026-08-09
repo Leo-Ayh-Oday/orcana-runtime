@@ -9,17 +9,42 @@ function canonicalValue(value: unknown, ancestors: Set<object>): string {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("canonical JSON rejects non-finite numbers")
+    if (Object.is(value, -0)) throw new Error("canonical JSON rejects negative zero")
     return JSON.stringify(value)
   }
   if (typeof value === "boolean" || typeof value === "string") return JSON.stringify(value)
   if (Array.isArray(value)) {
     if (ancestors.has(value)) throw new Error("canonical JSON rejects cyclic arrays")
+    if (Object.getOwnPropertySymbols(value).length > 0) {
+      throw new Error("canonical JSON rejects array symbol properties")
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value) as Record<string, PropertyDescriptor>
+    const lengthDescriptor = descriptors.length
+    if (!lengthDescriptor || lengthDescriptor.get || lengthDescriptor.set) {
+      throw new Error("canonical JSON rejects abnormal array length")
+    }
+    const length = lengthDescriptor.value
+    if (!Number.isSafeInteger(length) || length < 0) {
+      throw new Error("canonical JSON rejects abnormal array length")
+    }
+    const descriptorKeys = Object.keys(descriptors)
+    if (descriptorKeys.length !== length + 1 || descriptorKeys.some(key => {
+      if (key === "length") return false
+      const index = Number(key)
+      return !Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key
+    })) {
+      throw new Error("canonical JSON rejects extra array properties")
+    }
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[String(index)]
+      if (!descriptor || descriptor.get || descriptor.set || !descriptor.enumerable) {
+        throw new Error("canonical JSON requires dense array data properties")
+      }
+    }
     ancestors.add(value)
     try {
-      return `[${Array.from(
-        { length: value.length },
-        (_, index) => canonicalValue(value[index], ancestors),
-      ).join(",")}]`
+      return `[${Array.from({ length }, (_, index) =>
+        canonicalValue(descriptors[String(index)]!.value, ancestors)).join(",")}]`
     } finally {
       ancestors.delete(value)
     }

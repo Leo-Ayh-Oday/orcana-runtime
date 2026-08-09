@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto"
 import {
   closeSync,
-  existsSync,
+  constants,
+  fstatSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
-  statSync,
   writeSync,
 } from "node:fs"
-import { dirname, join } from "node:path"
+import { join, resolve } from "node:path"
 import type { Database } from "bun:sqlite"
 import { canonicalJson, compareCanonicalStrings, sha256Digest } from "./canonical"
 import type {
@@ -23,6 +25,7 @@ import type {
   WorldIntegrityIssue,
 } from "./contracts"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
+import { assertWorldSchemaCompatible } from "./schema"
 
 interface CasObjectRow {
   digest: string
@@ -110,26 +113,25 @@ export function encodeCasOwnerId(parts: readonly string[]): string {
   return canonicalJson(parts)
 }
 
-function fsyncDirectory(path: string): void {
-  const fd = openSync(path, "r")
-  try {
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
+function isFsError(error: unknown, code: string): boolean {
+  return error instanceof Error && "code" in error && error.code === code
 }
 
-function ensureDurableDirectory(path: string): void {
-  if (existsSync(path)) return
-  const parent = dirname(path)
-  ensureDurableDirectory(parent)
-  try {
-    mkdirSync(path, { mode: 0o700 })
-  } catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error
+function descriptorPath(fd: number, entry?: string): string {
+  const root = `/proc/self/fd/${fd}`
+  return entry === undefined ? root : join(root, entry)
+}
+
+function openDirectoryNoFollow(path: string): number {
+  const fd = openSync(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  )
+  if (!fstatSync(fd).isDirectory()) {
+    closeSync(fd)
+    throw new CasIntegrityError(`CAS path is not a directory: ${path}`)
   }
-  fsyncDirectory(path)
-  fsyncDirectory(parent)
+  return fd
 }
 
 function writeAll(fd: number, bytes: Buffer): void {
@@ -144,6 +146,7 @@ function writeAll(fd: number, bytes: Buffer): void {
 export class WorldCas {
   readonly objectsRoot: string
   readonly stagingRoot: string
+  private readonly trustedRoot: string
 
   constructor(
     private readonly db: Database,
@@ -151,10 +154,132 @@ export class WorldCas {
     private readonly now: () => number = () => Date.now(),
     private readonly faultInjector?: (point: WorldFaultPoint) => void,
   ) {
-    this.objectsRoot = join(root, "cas", "sha256")
-    this.stagingRoot = join(root, "recovery", "cas-staging")
-    ensureDurableDirectory(this.objectsRoot)
-    ensureDurableDirectory(this.stagingRoot)
+    const configuredRoot = resolve(root)
+    const rootStat = lstatSync(configuredRoot)
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      throw new CasIntegrityError(`CAS root must be a real directory: ${configuredRoot}`)
+    }
+    this.trustedRoot = realpathSync(configuredRoot)
+    this.objectsRoot = join(this.trustedRoot, "cas", "sha256")
+    this.stagingRoot = join(this.trustedRoot, "recovery", "cas-staging")
+    const objectsFd = this.openTrustedDirectory(["cas", "sha256"], true)
+    try {
+      const stagingFd = this.openTrustedDirectory(["recovery", "cas-staging"], true)
+      closeSync(stagingFd)
+    } finally {
+      closeSync(objectsFd)
+    }
+  }
+
+  private openTrustedDirectory(segments: readonly string[], create: boolean): number {
+    let currentFd = openDirectoryNoFollow(this.trustedRoot)
+    try {
+      for (const segment of segments) {
+        if (!segment || segment === "." || segment === ".." || /[\\/]/.test(segment)) {
+          throw new CasIntegrityError(`invalid CAS directory segment: ${segment}`)
+        }
+        const entryPath = descriptorPath(currentFd, segment)
+        let created = false
+        if (create) {
+          try {
+            mkdirSync(entryPath, { mode: 0o700 })
+            created = true
+          } catch (error) {
+            if (!isFsError(error, "EEXIST")) throw error
+          }
+        }
+        const nextFd = openDirectoryNoFollow(entryPath)
+        if (created) {
+          fsyncSync(nextFd)
+          fsyncSync(currentFd)
+        }
+        closeSync(currentFd)
+        currentFd = nextFd
+      }
+      return currentFd
+    } catch (error) {
+      closeSync(currentFd)
+      throw error
+    }
+  }
+
+  private openDigestDirectory(digest: CasDigest, create: boolean): number {
+    const hex = digestHex(digest)
+    const objectsFd = this.openTrustedDirectory(["cas", "sha256"], false)
+    try {
+      const prefix = hex.slice(0, 2)
+      const prefixPath = descriptorPath(objectsFd, prefix)
+      let created = false
+      if (create) {
+        try {
+          mkdirSync(prefixPath, { mode: 0o700 })
+          created = true
+        } catch (error) {
+          if (!isFsError(error, "EEXIST")) throw error
+        }
+      }
+      const prefixFd = openDirectoryNoFollow(prefixPath)
+      if (created) {
+        fsyncSync(prefixFd)
+        fsyncSync(objectsFd)
+      }
+      return prefixFd
+    } finally {
+      closeSync(objectsFd)
+    }
+  }
+
+  private readObjectFile(digest: CasDigest): Buffer {
+    const hex = digestHex(digest)
+    let prefixFd: number
+    try {
+      prefixFd = this.openDigestDirectory(digest, false)
+    } catch (error) {
+      if (isFsError(error, "ENOENT")) {
+        throw new CasIntegrityError(`CAS object file is missing: ${digest}`)
+      }
+      throw new CasIntegrityError(`CAS object path is unsafe: ${digest}: ${String(error)}`)
+    }
+    try {
+      let fileFd: number
+      try {
+        fileFd = openSync(
+          descriptorPath(prefixFd, hex),
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+        )
+      } catch (error) {
+        if (isFsError(error, "ENOENT")) {
+          throw new CasIntegrityError(`CAS object file is missing: ${digest}`)
+        }
+        throw new CasIntegrityError(`CAS object path is unsafe: ${digest}: ${String(error)}`)
+      }
+      try {
+        if (!fstatSync(fileFd).isFile()) {
+          throw new CasIntegrityError(`CAS object path is not a regular file: ${digest}`)
+        }
+        return readFileSync(fileFd)
+      } finally {
+        closeSync(fileFd)
+      }
+    } finally {
+      closeSync(prefixFd)
+    }
+  }
+
+  private removeObjectFile(digest: CasDigest): void {
+    const hex = digestHex(digest)
+    const prefixFd = this.openDigestDirectory(digest, false)
+    try {
+      const path = descriptorPath(prefixFd, hex)
+      const stat = lstatSync(path)
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new CasIntegrityError(`refusing to remove unsafe CAS object path: ${digest}`)
+      }
+      rmSync(path)
+      fsyncSync(prefixFd)
+    } finally {
+      closeSync(prefixFd)
+    }
   }
 
   resolveObjectPath(digest: CasDigest): string {
@@ -166,29 +291,61 @@ export class WorldCas {
     return withImmediateTransaction(this.db, () => {
       const bytes = Buffer.from(content)
       const digest = sha256Digest(bytes)
-      const destination = this.resolveObjectPath(digest)
-      const parent = dirname(destination)
-      ensureDurableDirectory(parent)
-
-      if (existsSync(destination)) {
-        const existingBytes = readFileSync(destination)
-        if (sha256Digest(existingBytes) !== digest || !existingBytes.equals(bytes)) {
-          throw new CasIntegrityError(`CAS collision or corrupt existing object: ${digest}`)
-        }
-      } else {
-        const temporary = join(this.stagingRoot, `${digestHex(digest)}.${process.pid}.${randomUUID()}.tmp`)
-        const fd = openSync(temporary, "wx", 0o600)
+      const hex = digestHex(digest)
+      const prefixFd = this.openDigestDirectory(digest, true)
+      let stagingFd: number
+      try {
+        stagingFd = this.openTrustedDirectory(["recovery", "cas-staging"], false)
+      } catch (error) {
+        closeSync(prefixFd)
+        throw error
+      }
+      try {
+        const destination = descriptorPath(prefixFd, hex)
+        let existingBytes: Buffer | undefined
         try {
-          writeAll(fd, bytes)
-          fsyncSync(fd)
-          this.faultInjector?.("after_cas_temp_fsync")
-        } finally {
-          closeSync(fd)
+          const existingFd = openSync(
+            destination,
+            constants.O_RDONLY | constants.O_NOFOLLOW,
+          )
+          try {
+            if (!fstatSync(existingFd).isFile()) {
+              throw new CasIntegrityError(`CAS object path is not a regular file: ${digest}`)
+            }
+            existingBytes = readFileSync(existingFd)
+          } finally {
+            closeSync(existingFd)
+          }
+        } catch (error) {
+          if (!isFsError(error, "ENOENT")) throw error
         }
-        renameSync(temporary, destination)
-        fsyncDirectory(parent)
-        fsyncDirectory(this.stagingRoot)
-        this.faultInjector?.("after_cas_rename_before_metadata")
+        if (existingBytes !== undefined) {
+          if (sha256Digest(existingBytes) !== digest || !existingBytes.equals(bytes)) {
+            throw new CasIntegrityError(`CAS collision or corrupt existing object: ${digest}`)
+          }
+        } else {
+          const temporaryName = `${hex}.${process.pid}.${randomUUID()}.tmp`
+          const temporary = descriptorPath(stagingFd, temporaryName)
+          const fd = openSync(
+            temporary,
+            constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+            0o600,
+          )
+          try {
+            writeAll(fd, bytes)
+            fsyncSync(fd)
+            this.faultInjector?.("after_cas_temp_fsync")
+          } finally {
+            closeSync(fd)
+          }
+          renameSync(temporary, destination)
+          fsyncSync(prefixFd)
+          fsyncSync(stagingFd)
+          this.faultInjector?.("after_cas_rename_before_metadata")
+        }
+      } finally {
+        closeSync(prefixFd)
+        closeSync(stagingFd)
       }
 
       dbRun(
@@ -223,16 +380,19 @@ export class WorldCas {
   }
 
   has(digest: CasDigest): boolean {
-    const record = this.record(digest)
-    return record !== undefined && existsSync(this.resolveObjectPath(digest))
+    try {
+      this.get(digest)
+      return true
+    } catch (error) {
+      if (error instanceof CasIntegrityError) return false
+      throw error
+    }
   }
 
   get(digest: CasDigest): Buffer {
     const record = this.record(digest)
     if (!record) throw new CasIntegrityError(`CAS object is not registered: ${digest}`)
-    const path = this.resolveObjectPath(digest)
-    if (!existsSync(path)) throw new CasIntegrityError(`CAS object file is missing: ${digest}`)
-    const content = readFileSync(path)
+    const content = this.readObjectFile(digest)
     if (content.byteLength !== record.size || sha256Digest(content) !== digest) {
       throw new CasIntegrityError(`CAS object content is corrupt: ${digest}`)
     }
@@ -422,18 +582,23 @@ export class WorldCas {
   }
 
   private manifestReferenceIssues(record: CasObjectRecord, content: Buffer): WorldIntegrityIssue[] {
+    if (record.mediaType !== "application/vnd.orcana.manifest+json") return []
     let manifest: Record<string, unknown>
     try {
       manifest = JSON.parse(content.toString("utf8")) as Record<string, unknown>
     } catch {
-      return []
+      return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid manifest JSON ${record.digest}` }]
     }
-    if (!manifest || typeof manifest !== "object" || manifest.schemaVersion !== 1) return []
+    if (!manifest || typeof manifest !== "object" || manifest.schemaVersion !== 1) {
+      return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid manifest envelope ${record.digest}` }]
+    }
     const recognizedType = manifest.type === "file" ||
       manifest.type === "directory" ||
       manifest.type === "world-section" ||
       manifest.type === "world"
-    if (!recognizedType) return []
+    if (!recognizedType) {
+      return [{ code: "CAS_CONTENT_CORRUPT", detail: `unknown manifest type ${record.digest}` }]
+    }
     const declared: string[] = []
     if (manifest.type === "file") {
       if (!Array.isArray(manifest.chunks)) {
@@ -499,6 +664,7 @@ export class WorldCas {
 
   gc(): CasDigest[] {
     return withImmediateTransaction(this.db, () => {
+      assertWorldSchemaCompatible(this.db)
       const blocking = this.verifyIntegrity().filter(issue => issue.code !== "UNREACHABLE_OBJECT_LEAK")
       if (blocking.length > 0) {
         throw new CasIntegrityError(`CAS GC refused on integrity failure: ${blocking.map(issue => issue.code).join(", ")}`)
@@ -509,7 +675,7 @@ export class WorldCas {
         .filter(digest => !reachable.has(digest))
         .sort(compareCanonicalStrings)
       for (const digest of removed) {
-        rmSync(this.resolveObjectPath(digest), { force: true })
+        this.removeObjectFile(digest)
         dbRun(this.db, "DELETE FROM cas_links WHERE digest = ?", digest)
         dbRun(
           this.db,
@@ -551,19 +717,14 @@ export class WorldCas {
         issues.push({ code: "CAS_MISSING_REFERENCED_OBJECT", detail: `unregistered ${digest}` })
         continue
       }
-      const path = this.resolveObjectPath(record.digest)
-      if (!existsSync(path)) {
+      let content: Buffer
+      try {
+        content = this.get(record.digest)
+      } catch (error) {
+        const missing = error instanceof CasIntegrityError && error.message.includes("is missing")
         issues.push({
-          code: "CAS_MISSING_REFERENCED_OBJECT",
-          detail: `missing ${record.digest}`,
-        })
-        continue
-      }
-      const content = readFileSync(path)
-      if (content.byteLength !== record.size || sha256Digest(content) !== record.digest) {
-        issues.push({
-          code: "CAS_CONTENT_CORRUPT",
-          detail: `corrupt ${record.digest}`,
+          code: missing ? "CAS_MISSING_REFERENCED_OBJECT" : "CAS_CONTENT_CORRUPT",
+          detail: `${missing ? "missing" : "corrupt or unsafe"} ${record.digest}`,
         })
         continue
       }
@@ -591,58 +752,106 @@ export class WorldCas {
 
   recover(): CasRecoveryResult {
     return withImmediateTransaction(this.db, () => {
-      const removedTemporaryFiles: string[] = []
-      for (const file of readdirSync(this.stagingRoot)) {
-        const path = join(this.stagingRoot, file)
-        if (statSync(path).isFile()) {
-          rmSync(path, { force: true })
-          removedTemporaryFiles.push(path)
+      assertWorldSchemaCompatible(this.db)
+      const stagingFd = this.openTrustedDirectory(["recovery", "cas-staging"], false)
+      const objectsFd = this.openTrustedDirectory(["cas", "sha256"], false)
+      try {
+        const temporaryFiles = readdirSync(descriptorPath(stagingFd))
+        for (const file of temporaryFiles) {
+          const stat = lstatSync(descriptorPath(stagingFd, file))
+          if (stat.isSymbolicLink() || !stat.isFile()) {
+            throw new CasIntegrityError(`unsafe CAS staging entry: ${file}`)
+          }
         }
-      }
 
-      const registered = new Set(this.list().map(record => digestHex(record.digest)))
-      const protectedUnregistered = new Set<string>()
-      for (const reference of this.authoritativeReferences()) {
-        try {
-          protectedUnregistered.add(digestHex(reference.digest))
-        } catch {
-          // verifyIntegrity will report the invalid/missing authoritative reference.
+        const registered = new Set(this.list().map(record => digestHex(record.digest)))
+        const protectedUnregistered = new Set<string>()
+        for (const reference of this.authoritativeReferences()) {
+          try {
+            protectedUnregistered.add(digestHex(reference.digest))
+          } catch {
+            // verifyIntegrity will report the invalid/missing authoritative reference.
+          }
         }
-      }
-      const fileOnlyCandidates: Array<{ path: string; digest: CasDigest }> = []
-      for (const prefix of readdirSync(this.objectsRoot)) {
-        const prefixPath = join(this.objectsRoot, prefix)
-        if (!statSync(prefixPath).isDirectory()) continue
-        for (const file of readdirSync(prefixPath)) {
-          if (
-            !/^[a-f0-9]{64}$/.test(file) ||
-            registered.has(file) ||
-            protectedUnregistered.has(file)
-          ) continue
-          fileOnlyCandidates.push({
-            path: join(prefixPath, file),
-            digest: `sha256:${file}`,
-          })
+        const fileOnlyCandidates: Array<{ file: string; digest: CasDigest }> = []
+        for (const prefix of readdirSync(descriptorPath(objectsFd))) {
+          if (!/^[a-f0-9]{2}$/.test(prefix)) {
+            throw new CasIntegrityError(`unsafe CAS prefix entry: ${prefix}`)
+          }
+          const prefixPath = descriptorPath(objectsFd, prefix)
+          const prefixStat = lstatSync(prefixPath)
+          if (prefixStat.isSymbolicLink() || !prefixStat.isDirectory()) {
+            throw new CasIntegrityError(`unsafe CAS prefix path: ${prefix}`)
+          }
+          const prefixFd = openDirectoryNoFollow(prefixPath)
+          try {
+            for (const file of readdirSync(descriptorPath(prefixFd))) {
+              const stat = lstatSync(descriptorPath(prefixFd, file))
+              if (
+                !/^[a-f0-9]{64}$/.test(file) ||
+                !file.startsWith(prefix) ||
+                stat.isSymbolicLink() ||
+                !stat.isFile()
+              ) {
+                throw new CasIntegrityError(`unsafe CAS object entry: ${prefix}/${file}`)
+              }
+              if (registered.has(file) || protectedUnregistered.has(file)) continue
+              fileOnlyCandidates.push({
+                file,
+                digest: `sha256:${file}`,
+              })
+            }
+          } finally {
+            closeSync(prefixFd)
+          }
         }
-      }
 
-      const repairedRefCounts = this.reconcileRefCounts()
-      const beforeGc = this.verifyIntegrity()
-      const blocking = beforeGc.filter(issue => issue.code !== "UNREACHABLE_OBJECT_LEAK")
-      const removedFileOnly: CasDigest[] = []
-      if (blocking.length === 0) {
-        for (const candidate of fileOnlyCandidates) {
-          rmSync(candidate.path, { force: true })
-          removedFileOnly.push(candidate.digest)
+        const removedTemporaryFiles: string[] = []
+        for (const file of temporaryFiles) {
+          const path = descriptorPath(stagingFd, file)
+          const stat = lstatSync(path)
+          if (stat.isSymbolicLink() || !stat.isFile()) {
+            throw new CasIntegrityError(`unsafe CAS staging entry: ${file}`)
+          }
+          rmSync(path)
+          removedTemporaryFiles.push(join(this.stagingRoot, file))
         }
-      }
-      const removedUnreachableObjects = blocking.length === 0 ? this.gc() : []
-      const integrityIssues = this.verifyIntegrity()
-      return {
-        removedTemporaryFiles,
-        removedUnreachableObjects: [...removedFileOnly, ...removedUnreachableObjects],
-        repairedRefCounts,
-        integrityIssues,
+        if (removedTemporaryFiles.length > 0) fsyncSync(stagingFd)
+
+        const repairedRefCounts = this.reconcileRefCounts()
+        const beforeGc = this.verifyIntegrity()
+        const blocking = beforeGc.filter(issue => issue.code !== "UNREACHABLE_OBJECT_LEAK")
+        const removedFileOnly: CasDigest[] = []
+        if (blocking.length === 0) {
+          for (const candidate of fileOnlyCandidates) {
+            const prefixFd = this.openDigestDirectory(candidate.digest, false)
+            try {
+              const path = descriptorPath(prefixFd, candidate.file)
+              const stat = lstatSync(path)
+              if (stat.isSymbolicLink() || !stat.isFile()) {
+                throw new CasIntegrityError(
+                  `refusing to remove unsafe CAS file-only path: ${candidate.digest}`,
+                )
+              }
+              rmSync(path)
+              fsyncSync(prefixFd)
+              removedFileOnly.push(candidate.digest)
+            } finally {
+              closeSync(prefixFd)
+            }
+          }
+        }
+        const removedUnreachableObjects = blocking.length === 0 ? this.gc() : []
+        const integrityIssues = this.verifyIntegrity()
+        return {
+          removedTemporaryFiles,
+          removedUnreachableObjects: [...removedFileOnly, ...removedUnreachableObjects],
+          repairedRefCounts,
+          integrityIssues,
+        }
+      } finally {
+        closeSync(stagingFd)
+        closeSync(objectsFd)
       }
     })
   }

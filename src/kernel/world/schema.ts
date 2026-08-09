@@ -1,15 +1,25 @@
 import type { Database } from "bun:sqlite"
 import { canonicalDigest } from "./canonical"
 import type { CasDigest } from "./contracts"
-import { dbAll } from "./database"
+import { dbAll, dbRun } from "./database"
 
-export const WORLD_SCHEMA_VERSION = 2
+export const WORLD_SCHEMA_VERSION = 3
 
 interface SchemaObjectRow {
   type: "table" | "index" | "trigger"
   name: string
   tableName: string
   sql: string
+}
+
+function worldSchemaObjectNames(db: Database): string[] {
+  return dbAll<{ name: string }>(
+    db,
+    `SELECT name FROM sqlite_master
+     WHERE type IN ('table', 'index', 'trigger')
+       AND name NOT LIKE 'sqlite_%'
+       AND sql IS NOT NULL`,
+  ).map(row => row.name)
 }
 
 export function worldSchemaFingerprint(db: Database): CasDigest {
@@ -32,6 +42,52 @@ export function worldSchemaFingerprint(db: Database): CasDigest {
 
 export const WORLD_SCHEMA_FINGERPRINT: CasDigest =
   "sha256:797d29aa4819a89e2e19ed0a98f3f404b4501354e7fd8c34be67fb427006159d"
+
+export function assertWorldSchemaCompatible(db: Database): void {
+  const installedObjects = worldSchemaObjectNames(db)
+  if (!installedObjects.includes("world_schema_meta")) {
+    throw new Error("WORLD_SCHEMA_INCOMPATIBLE: schema metadata table is missing")
+  }
+  const installedVersions = dbAll<{ schemaVersion: number }>(
+    db,
+    "SELECT schema_version AS schemaVersion FROM world_schema_meta ORDER BY schema_version",
+  ).map(row => row.schemaVersion)
+  if (
+    installedVersions.length !== 1 ||
+    installedVersions[0] !== WORLD_SCHEMA_VERSION
+  ) {
+    throw new Error(
+      `WORLD_SCHEMA_INCOMPATIBLE: expected ${WORLD_SCHEMA_VERSION}, found ${installedVersions.join(",") || "none"}`,
+    )
+  }
+  const fingerprint = worldSchemaFingerprint(db)
+  if (fingerprint !== WORLD_SCHEMA_FINGERPRINT) {
+    throw new Error(
+      `WORLD_SCHEMA_INCOMPATIBLE: expected fingerprint ${WORLD_SCHEMA_FINGERPRINT}, found ${fingerprint}`,
+    )
+  }
+}
+
+export function initializeOrValidateWorldSchema(db: Database, installedAt: number): void {
+  const installedObjects = worldSchemaObjectNames(db)
+  if (installedObjects.length > 0) {
+    assertWorldSchemaCompatible(db)
+    return
+  }
+  db.exec(WORLD_SCHEMA)
+  dbRun(
+    db,
+    "INSERT INTO world_schema_meta (schema_version, installed_at) VALUES (?, ?)",
+    WORLD_SCHEMA_VERSION,
+    installedAt,
+  )
+  const fingerprint = worldSchemaFingerprint(db)
+  if (fingerprint !== WORLD_SCHEMA_FINGERPRINT) {
+    throw new Error(
+      `WORLD_SCHEMA_BUILD_MISMATCH: expected ${WORLD_SCHEMA_FINGERPRINT}, found ${fingerprint}`,
+    )
+  }
+}
 
 export const WORLD_SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_schema_meta (

@@ -25,7 +25,7 @@ import { ResourceLedger } from "../src/runtime/linux/scheduler/resource-ledger"
 import { IsolationDomainLock } from "../src/runtime/linux/workspace/isolation-lock"
 import { PortLeaseManager, validateBindAddress } from "../src/runtime/linux/workspace/cache-port"
 import { AgentDomainManager } from "../src/runtime/linux/workspace/agent-domain"
-import { CgroupManager, type CgroupFs } from "../src/runtime/linux/cgroup/manager"
+import { CgroupManager, hierarchyPaths, type CgroupFs } from "../src/runtime/linux/cgroup/manager"
 import { detectDelegatedRoot } from "../src/runtime/linux/cgroup/delegation"
 import { readCgroupMetrics } from "../src/runtime/linux/cgroup/metrics"
 import { buildEgressPolicy, checkEgressHop, checkEgressRedirect, dnsRebindingGuard } from "../src/runtime/linux/network-policy"
@@ -139,6 +139,13 @@ async function waitCgroupEmptyAsync(manager: CgroupManager, path: string, timeou
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   return manager.pidsCurrent(path) === 0
+}
+
+function removeEvalCgroupRun(manager: CgroupManager, runId: string): void {
+  const runPath = hierarchyPaths(manager.base, runId, undefined, "cleanup").run
+  if (!manager.removeRun(runPath)) {
+    throw new Error(`CGROUP_LEAK: failed to remove eval run ${runPath}`)
+  }
 }
 
 export async function runLinuxSandboxEval(): Promise<EvalReport> {
@@ -365,7 +372,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
         ? { pass: true, reason: `oom_kill=${oomEvents.oom_kill} oom=${oomEvents.oom}` }
         : { pass: false, reason: "内存炸弹未被限制（进程存活且无 OOM 事件）" }
     } finally {
-      manager.removeCell(cell)
+      removeEvalCgroupRun(manager, "lx")
     }
   })
   await add("LX-017", "Fork Bomb（PIDS_LIMIT_ENFORCED，真实 fork）", async () => {
@@ -402,7 +409,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
         ? { pass: true, reason: `pids.current=${current} 受限且归零(${elapsed}ms)` }
         : { pass: false, reason: `fork bomb 未受限 current=${current} killed=${killed} stopped=${stopped}` }
     } finally {
-      manager.removeCell(cell)
+      removeEvalCgroupRun(manager, "lx")
     }
   })
   await add("LX-018", "CPU Hog（cpu.max 节流，真实负载）", async () => {
@@ -430,14 +437,14 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       }
       await new Promise(r => setTimeout(r, 2500))
       const metrics = readCgroupMetrics(cell, manager.fs)
-      manager.kill(cell)
-      manager.waitEmpty(cell)
+      const killed = manager.kill(cell).killed
+      const stopped = killed && await waitCgroupEmptyAsync(manager, cell)
       // cpu.max=50% → 2.5s 内节流时间应显著（≥ 200ms）
-      return (metrics.cpuThrottledUsec ?? 0) >= 200_000
+      return (metrics.cpuThrottledUsec ?? 0) >= 200_000 && killed && stopped
         ? { pass: true, reason: `throttled=${metrics.cpuThrottledUsec}us` }
-        : { pass: false, reason: `cpu.max 未生效 throttled=${metrics.cpuThrottledUsec}us` }
+        : { pass: false, reason: `cpu.max 未生效 throttled=${metrics.cpuThrottledUsec}us killed=${killed} stopped=${stopped}` }
     } finally {
-      manager.removeCell(cell)
+      removeEvalCgroupRun(manager, "lx")
     }
   })
   await add("LX-019", "OOM 事件指标（真实内核事件读取）", async () => {
@@ -456,7 +463,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
         ? { pass: true, reason: `cpu=${metrics.cpuUsageUsec}us oom_kill=${metrics.oomKills}` }
         : { pass: false, reason: "metrics 读取失败" }
     } finally {
-      manager.removeCell(cell)
+      removeEvalCgroupRun(manager, "lx")
     }
   })
   await add("LX-020", "超时（PROCESS_TIMEOUT）", async () => {
@@ -692,7 +699,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   await add("LX-036", "Receipt → Evidence → Completion Gate 端到端（真实执行链）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
     const { createEvidenceLedger, ingestSandboxReceipt, hasEvidence } = await import("../src/agent/evidence-ledger")
-    const { collectProcessRun } = await import("../src/runtime/process-executor")
+    const { cleanupProcessRun, collectProcessRun } = await import("../src/runtime/process-executor")
     const ledger = createEvidenceLedger()
     // 真实执行：collectProcessRun 携带真实 Receipt。PR-9 后 Linux enabled 执行
     // 必须处于可信执行权威下（AgentRunScope 注册工作区）——真实 mkdtemp
@@ -719,6 +726,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
         return collectProcessRun({ command: "/bin/true", args: [], timeoutMs: 15_000, runId: "lx036-run" })
       })
     } finally {
+      await cleanupProcessRun("lx036-run")
       rmSync(ws, { recursive: true, force: true })
     }
     if (!outcome?.receipt) return { pass: false, reason: "执行链未产出 Receipt" }
@@ -767,6 +775,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       await p1
       return rejected ? { pass: true, reason: "同路径并发被锁拒绝（MAIN_WORKSPACE_MULTI_WRITER: 0）" } : { pass: false, reason: "同路径并发未被拒绝" }
     } finally {
+      await broker.cleanupRun("lx037-run")
       rmSync(wt, { recursive: true, force: true })
     }
   })

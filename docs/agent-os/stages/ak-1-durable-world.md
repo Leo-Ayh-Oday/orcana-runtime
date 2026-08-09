@@ -141,3 +141,36 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 修复候选门评估
 
 六项 AK-1 gate 在本地实现与反例测试中为 0；该结论仍需独立 Agent 对修复提交只读复审后才能转为阶段最终验收。
+
+### FACT — 第二轮独立复审
+
+- 独立 Agent 对 `b8660343070e7490b347b8ef19c1f13d606c578e` 给出 `CHANGES_REQUIRED`，并确认首轮 8 个阻塞项全部关闭。
+- 新阻塞发现：1 Critical、2 High。
+  1. manifest 引用验证信任可变的 `cas_objects.media_type`，篡改媒体类型并删除 manifest edge 后可能错误 GC 真实 chunk；
+  2. schema 打开逻辑只校验版本行，不校验既有库的完整结构，空版本或伪造当前版本可能被接受；
+  3. 首个 digest prefix 目录创建后未 fsync 父目录，断电窗口可能丢失已提交 CAS 路径。
+- 残余发现：旧 `contentRef` 路径只用 `has()`、canonical metadata 域不是严格可逆 JSON、缺少真实双进程 link-vs-GC 屏障测试。
+- 审计 Agent 保持只读，未修改文件、提交或启动服务。
+
+### FACT — 第二轮修复
+
+- 修复提交为 `4b7ddbe4374d0ba2f6459252c6e7bf2cf5a466d1`，parent 为 `b8660343070e7490b347b8ef19c1f13d606c578e`。
+- manifest 类型现在从 immutable content 的 `schemaVersion/type` 识别，不再依赖数据库媒体类型；CAS metadata/link 更新由数据库 trigger 拒绝。
+- 新库的 schema DDL、版本写入与 fingerprint 校验在同一 `BEGIN IMMEDIATE` 中完成；既有库必须同时匹配唯一版本和完整 table/index/trigger fingerprint，禁止自愈未知结构。
+- CAS 目录创建逐级 fsync 新目录及父目录；rename 后同时 fsync destination parent 和 staging source directory。
+- object/artifact/service 的所有 `contentRef` 在 commit 前执行完整 bytes/hash 校验，包括 digest 未变化的 metadata-only update。
+- canonical JSON 拒绝 `undefined`、稀疏数组、bigint、非 plain object、symbol key、accessor、non-enumerable property 与 cycle；内部可选状态用显式 `null` 或省略字段表示。
+- 新增真实双 Bun 子进程竞争测试：link transaction 在验证与 insert 间持有写锁，recovery/GC 在其提交前不能越过，提交后内容和 authoritative link 保留。
+
+### FACT — 第二轮修复后主代理验证
+
+- `bun test tests/kernel/world`：`31 pass / 0 fail / 160 expect`。
+- `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- `git diff --check`：通过。
+- hosted CI 仍因既有账号 billing lock 未执行；live/provider 测试未执行且不计为通过。
+
+### INFERENCE — 第二轮修复候选门评估
+
+第二轮 3 个阻塞项和 3 个残余项均有实现闭锁与直接反例测试；AK-1 状态保持 `FIXED_REAUDIT_PENDING`，必须由独立 Agent 对包含本记录的最终候选 HEAD 再次只读复审后才能关闭阶段。

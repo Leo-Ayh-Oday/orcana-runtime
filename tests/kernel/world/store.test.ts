@@ -9,6 +9,7 @@ import {
   WORLD_OBJECT_TYPES,
   WorldConflictError,
   WorldStore,
+  type CreateWorldInput,
   type WorldCommitRequest,
   type WorldMutation,
 } from "../../../src/kernel/world"
@@ -430,6 +431,55 @@ describe("AK-1 WorldStore", () => {
       }
       expect(arrayAccessorCalls).toBe(0)
       expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("createWorld rejects runtime values that SQLite would coerce", () => {
+    const fixture = createTestWorldStore()
+    try {
+      const invalidInputs = [
+        { worldId: 42, owner: "user:owner" },
+        { worldId: "invalid-branch", branchId: 42, owner: "user:owner" },
+        { worldId: "invalid-root", rootObjectId: 42, owner: "user:owner" },
+        { worldId: "invalid-owner", owner: 42 },
+        { worldId: "invalid-purpose", owner: "user:owner", purpose: 42 },
+      ] as unknown as CreateWorldInput[]
+      for (const input of invalidInputs) {
+        expect(() => fixture.store.createWorld(input)).toThrow(/must be a non-empty string/)
+      }
+      expect(fixture.store.listWorlds()).toEqual([])
+      expect(fixture.store.verifyIntegrity()).toEqual([])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("malformed world.created payload is an explicit integrity failure", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      const genesis = fixture.store.ledger.list("w1")[0]!
+      const payload = genesis.payload as Record<string, unknown>
+      const malformedPayload = { ...payload, rootObjectId: 42 }
+      const db = new Database(fixture.store.databasePath)
+      try {
+        db.run("DROP TRIGGER world_events_append_only_update")
+        db.run(
+          `UPDATE world_events SET payload_digest = ?, payload_json = ?
+           WHERE event_id = ?`,
+          [canonicalDigest(malformedPayload), JSON.stringify(malformedPayload), genesis.eventId],
+        )
+      } finally {
+        db.close()
+      }
+      expect(fixture.store.verifyIntegrity()).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          code: "LEDGER_DB_DIVERGENCE",
+          detail: "world.created payload is malformed",
+        }),
+      ]))
     } finally {
       fixture.cleanup()
     }

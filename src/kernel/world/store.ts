@@ -889,12 +889,16 @@ export class WorldStore {
   }
 
   createWorld(input: CreateWorldInput): AgentWorld {
-    const worldId = input.worldId ?? this.idFactory("world")
-    const branchId = input.branchId ?? "main"
-    const rootObjectId = input.rootObjectId ?? "root"
-    if (!worldId || !branchId || !rootObjectId || !input.owner) {
-      throw new Error("world, branch, root object, and owner must be non-empty")
-    }
+    const worldId = input.worldId === undefined ? this.idFactory("world") : input.worldId
+    const branchId = input.branchId === undefined ? "main" : input.branchId
+    const rootObjectId = input.rootObjectId === undefined ? "root" : input.rootObjectId
+    const owner = input.owner
+    const purpose = input.purpose === undefined ? "initial world" : input.purpose
+    assertNonEmptyString(worldId, "world")
+    assertNonEmptyString(branchId, "branch")
+    assertNonEmptyString(rootObjectId, "root object")
+    assertNonEmptyString(owner, "owner")
+    assertNonEmptyString(purpose, "purpose")
     const at = this.now()
 
     return withImmediateTransaction(this.db, () => {
@@ -917,8 +921,8 @@ export class WorldStore {
          ) VALUES (?, ?, NULL, '0', ?, ?, 'active', ?)`,
         worldId,
         branchId,
-        input.owner,
-        input.purpose ?? "initial world",
+        owner,
+        purpose,
         at,
       )
       dbRun(
@@ -935,10 +939,10 @@ export class WorldStore {
         branchId,
         revision: 0n,
         eventType: "world.created",
-        actor: input.owner,
+        actor: owner,
         payload: {
           rootObjectId,
-          purpose: input.purpose ?? "initial world",
+          purpose,
           materializedStateDigest,
         },
         occurredAt: at,
@@ -1437,17 +1441,47 @@ export class WorldStore {
         materializedStateDigest?: unknown
       } | undefined
       let replayState: MaterializedStateImage | undefined
+      const genesisPayloadKeys =
+        typeof genesisPayload === "object" &&
+        genesisPayload !== null &&
+        !Array.isArray(genesisPayload)
+          ? Object.keys(genesisPayload).sort(compareCanonicalStrings)
+          : []
+      const validGenesisPayload =
+        genesisPayloadKeys.length === 3 &&
+        genesisPayloadKeys[0] === "materializedStateDigest" &&
+        genesisPayloadKeys[1] === "purpose" &&
+        genesisPayloadKeys[2] === "rootObjectId" &&
+        typeof genesisPayload?.rootObjectId === "string" &&
+        genesisPayload.rootObjectId.length > 0 &&
+        typeof genesisPayload.purpose === "string" &&
+        genesisPayload.purpose.length > 0 &&
+        typeof genesisPayload.materializedStateDigest === "string" &&
+        /^sha256:[a-f0-9]{64}$/.test(genesisPayload.materializedStateDigest) &&
+        typeof genesis?.actor === "string" &&
+        genesis.actor.length > 0
+      if (genesis && !validGenesisPayload) {
+        issues.push({
+          code: "LEDGER_DB_DIVERGENCE",
+          worldId: world.worldId,
+          detail: "world.created payload is malformed",
+        })
+      }
       if (
         genesis &&
-        typeof genesisPayload?.rootObjectId === "string" &&
-        typeof genesisPayload.purpose === "string"
+        validGenesisPayload
       ) {
+        const validPayload = genesisPayload as {
+          rootObjectId: string
+          purpose: string
+          materializedStateDigest: string
+        }
         replayState = {
           world: {
             worldId: world.worldId,
             currentRevision: "0",
             currentBranchId: world.currentBranchId,
-            rootObjectId: genesisPayload.rootObjectId,
+            rootObjectId: validPayload.rootObjectId,
             status: "active",
             createdAt: genesis.occurredAt,
             updatedAt: genesis.occurredAt,
@@ -1458,7 +1492,7 @@ export class WorldStore {
             baseRevision: "0",
             headRevision: "0",
             owner: genesis.actor,
-            purpose: genesisPayload.purpose,
+            purpose: validPayload.purpose,
             status: "active",
             createdAt: genesis.occurredAt,
           },
@@ -1466,7 +1500,7 @@ export class WorldStore {
           artifacts: [],
           services: [],
         }
-        if (canonicalDigest(replayState) !== genesisPayload.materializedStateDigest) {
+        if (canonicalDigest(replayState) !== validPayload.materializedStateDigest) {
           issues.push({
             code: "LEDGER_DB_DIVERGENCE",
             worldId: world.worldId,

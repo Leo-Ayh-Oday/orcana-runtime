@@ -1,7 +1,7 @@
 # AK-0 Kernel Constitution / Foundation
 
 **Task ID:** `AK0-FND-001`
-**状态:** `CANDIDATE_READY_FOR_AUDIT`
+**状态:** `FIX_READY_FOR_REAUDIT`
 **基线 / 回滚点:** `76a90ef143d97b0b0466cc118d511a3ea1f78323`
 **专用分支:** `feat/agent-os`
 
@@ -24,6 +24,15 @@ SECOND_TASK_AUTHORITY             = 0
 SECOND_WORLD_AUTHORITY            = 0
 TOOL_AS_AUTHORITY                 = 0
 EXECUTION_COMPLETES_GRAPH_DIRECT  = 0
+```
+
+并要求 canonical conformance report：
+
+```text
+authorityAssignmentViolations = []
+unexpectedEdges               = []
+missingRequiredEdges          = []
+forbiddenRelations            = []
 ```
 
 同时要求：
@@ -74,4 +83,18 @@ AK-0 全部新增文件均可通过回退阶段提交恢复到基线；不迁移
 
 ## 验证与审计证据
 
-阶段候选提交、审计发现、修复与残余风险在审计关闭提交中补录。
+- 候选提交：`cf36ee6461a3552b2b3ba95c6b4238f0c34791e9`；父提交：`76a90ef143d97b0b0466cc118d511a3ea1f78323`。
+- 独立只读审计结论：`CHANGES_REQUIRED`。
+- High：`SECOND_TASK_AUTHORITY` 未覆盖 Task definition/dependency；确认成立。
+- High：`SECOND_WORLD_AUTHORITY` 未覆盖 Execution Fabric 等非 Kernel World mutation edge；确认成立。
+- High：`TOOL_AS_AUTHORITY` 使用不完整 privileged-operation denylist；确认成立。
+- Medium：反例测试未覆盖可表达的绕过路径；确认成立。
+- Low：`Task State` 在 World 中的文字可能被误解为权威状态；确认成立。
+- 修复策略：Task 三域与 task edge fail-closed；World mutation 与 Tool edge 使用精确 allowlist；建模 `remote_worker`；增加表驱动 owner/edge mutation tests；明确 Task projection 为 non-authoritative。
+- 审计 Agent 未修改文件、未运行测试或启动服务；主 Agent 负责修复与复验。
+- 第二名独立只读代码审计结论：`FAIL`；独立复现上述 3 个 High，并新增 Medium：任何 Execution Fabric→Graph edge 都应 fail-closed、canonical authority 常量需要运行时冻结、全 authority domain 需要结构自检。
+- 第一轮审计修复后 Bun 运行测试为 10 pass / 0 fail，但 typecheck 因 readonly tuple 断言失败；该轮不计为通过，继续修复。
+- 第二轮修复增加全域 `authorityAssignmentViolations`、unexpected/missing edge 报告、Execution Fabric→Graph 全边拒绝与 canonical data runtime freeze。
+- 最终主代理复验：`bun test tests/kernel/authority-graph.test.ts tests/gate04_authority.test.ts` 为 13 pass / 0 fail；`bun run typecheck` 通过；`bun run build` 通过；`git diff --check` 通过。
+- `architecture.md` 仅对三处 Task State 增加 non-authoritative Graph projection/reference 限定；修复后 SHA-256 为 `ad8fbd2ac32605792ecfc0309301246648c1628c9d7e8da442dca17c67a4a84e`。
+- 修复提交与复审结论在下一次审计关闭记录中补入。

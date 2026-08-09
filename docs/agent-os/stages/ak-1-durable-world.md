@@ -313,3 +313,40 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第六轮修复候选门评估
 
 第六轮 3 个 High 和 2 个 residual 已由同事务 manifest parser/reference derivation、进程间 bootstrap 证明协议、永不恢复的顶层 root write lock 与 pinned locator 闭锁。AK-1 仍保持 `FIXED_REAUDIT_PENDING`，必须对包含本记录的固定候选 HEAD 进行独立只读复审。
+
+### FACT — 第七轮独立复审
+
+- 独立 Agent 对 `36e62a6dbff11acec006f3df4ad1d0b702c35bb7` 给出 `CHANGES_REQUIRED`，确认第六轮 manifest full-schema/reference derivation、root lifetime lock、pinned locator 与 CAS prefix fd 关闭已成立。
+- 新阻塞发现：4 High。
+  1. 任意 dead-PID lock 文件会授权覆盖无 marker 的非空 WorldDB，可直接丢失已提交 World；
+  2. stale lock 的 check/unlink pathname 存在 ABA/TOCTOU，两个恢复者可互删新 live lock 并发写 DB；
+  3. hard-link completion marker 在 directory fsync 前已可见，第二进程可把未 durable marker 当作完成；
+  4. World mutation 允许空 `objectId`/`path`，但 snapshot manifest parser 拒绝，导致已提交 World 无法 snapshot。
+- 新残余发现：2 Medium。manifest parser 使用非 fatal UTF-8 decode；bootstrap metadata 与 CAS object FIFO 在 `fstat` 前可阻塞同步 open。
+- 审计 Agent 保持只读，未修改文件、运行测试/构建或启动服务；HEAD、parent、白名单、diff-check 与 clean status 均通过。
+
+### FACT — 第七轮修复
+
+- 修复提交为 `0192aa5532d5fc2776f72c9c4e10ac9f6a40ad26`，parent 为 `36e62a6dbff11acec006f3df4ad1d0b702c35bb7`。
+- 移除 PID file takeover 与 hard-link completion marker；新增 Linux `flock(2)` 独占锁，锁所有权由 kernel 绑定 fd 并在进程退出时自动释放，不再存在 stale pathname unlink。
+- bootstrap provenance 改为固定 single-link state inode 上的 append-only `writing -> complete` log；每条记录绑定 initial image digest、installed time、schema version/fingerprint 并单独 fsync。
+- 恢复只在 durable `writing` 存在、重建镜像 digest 一致且当前 DB bytes 是该初始镜像的完整前缀时进行；任意 lock 内容不作 provenance，非空无 state 或 state/DB 分叉始终 fail-closed。
+- `complete` 只在 initial DB image fsync 后追加并 fsync，其后才释放 flock；部分 state record 依据最后完整 newline 截断后恢复，不存在可见但未 durable 的 completion 名称。
+- `recovery/` 在预建 CAS staging、lock 与 state 后永久设为 `0500`；固定 entry 使用 `O_NOFOLLOW | O_NONBLOCK`、single-link regular-file 验证。CAS object read/existing-object probe 同样加入 `O_NONBLOCK`。
+- manifest bytes 使用 fatal UTF-8 decoder 并要求 UTF-8 roundtrip bytes 一致。
+- `createWorld()` 拒绝空 root object；`compareAndCommit()` 在任何 transaction/materialization 前拒绝空 World/branch/actor/commit/receipt ID，以及所有无法被 snapshot manifest 表达的空 mutation identifier/path/mediaType/status。
+- 新增真实子进程在 bootstrap intent fsync 后与 image fsync 后硬退出，每个崩溃根由 4 个并发恢复进程收敛；同时覆盖 stale PID text 无权、无 provenance 非空 DB、非法 UTF-8、FIFO 和 mutation/snapshot contract。
+
+### FACT — 第七轮修复后主代理验证
+
+- `bun test tests/kernel/world`：`55 pass / 0 fail / 288 expect`。
+- `bun test tests/kernel`：`65 pass / 0 fail / 371 expect`。
+- `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- `git diff --check`：通过。
+- hosted CI 仍因既有账号 billing lock 未执行；live/provider 测试未执行且不计为通过。
+
+### INFERENCE — 第七轮修复候选门评估
+
+第七轮 4 个 High 与 2 个 Medium 已分别由 kernel-released flock、durable append-only bootstrap provenance、snapshot-compatible mutation validation、fatal UTF-8 与 nonblocking regular-file probes 闭锁。AK-1 仍保持 `FIXED_REAUDIT_PENDING`，等待独立 Agent 对包含本记录的固定候选 HEAD 只读复审。

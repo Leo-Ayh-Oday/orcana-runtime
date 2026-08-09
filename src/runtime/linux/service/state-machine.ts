@@ -37,7 +37,8 @@ export const SERVICE_TRANSITIONS: Readonly<Record<ServiceState, ReadonlySet<Serv
   DECLARED: new Set(["STARTING", "START_FAILED"]),
   STARTING: new Set(["PROCESS_RUNNING", "START_FAILED", "STOPPING"]),
   PROCESS_RUNNING: new Set(["READINESS_PENDING", "READY", "START_FAILED", "STOPPING", "RESTARTING"]),
-  READINESS_PENDING: new Set(["READY", "HEALTH_FAILED", "START_FAILED", "STOPPING"]),
+  // M4（LR2-5 审核）：READINESS_PENDING 期间进程死亡 → 重启（不卡探测）
+  READINESS_PENDING: new Set(["READY", "HEALTH_FAILED", "START_FAILED", "STOPPING", "RESTARTING"]),
   READY: new Set(["DEGRADED", "STOPPING", "RESTARTING", "LEASE_EXPIRED", "OWNER_LOST"]),
   DEGRADED: new Set(["READY", "RESTARTING", "STOPPING", "LEASE_EXPIRED", "OWNER_LOST"]),
   RESTARTING: new Set(["PROCESS_RUNNING", "RESTART_EXHAUSTED", "STOPPING", "START_FAILED"]),
@@ -89,7 +90,15 @@ export class ServiceStateMachine {
   }
 
   /** 强制迁移（异常终态入口 —— 如外部 lease 到期直接置 LEASE_EXPIRED）。 */
-  force(to: ServiceState, reason: string): void {
+  /** 强制迁移（异常终态入口 —— 如外部 lease 到期直接置 LEASE_EXPIRED）。
+   *  m9（LR2-5 审核）：守卫 —— 目标必须是异常终态，且当前非终态
+   *  （终态不可再 force；表外迁移不得污染事件流）。 */
+  force(to: ServiceState, reason: string): boolean {
+    const ABNORMAL = new Set<ServiceState>([
+      "START_FAILED", "HEALTH_FAILED", "LEASE_EXPIRED", "OWNER_LOST", "PORT_CONFLICT", "RESTART_EXHAUSTED",
+    ])
+    if (!ABNORMAL.has(to)) return false
+    if (this.isTerminal) return false
     this.history.push({
       sequence: ++this.sequence,
       serviceId: this.serviceId,
@@ -99,6 +108,7 @@ export class ServiceStateMachine {
       at: this.now(),
     })
     this.state = to
+    return true
   }
 
   get isTerminal(): boolean {

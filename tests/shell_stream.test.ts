@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { shellStream } from "../src/tools/shell"
 import {
   createRuntimeExecutionContext,
@@ -6,6 +6,10 @@ import {
   setExecutionAuthority,
 } from "../src/runtime/execution-context"
 import type { TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
+import { installHostAuditProcessBroker, resetProcessBroker } from "./helpers/linux-process-test-broker"
+
+beforeAll(installHostAuditProcessBroker)
+afterAll(resetProcessBroker)
 
 function restoreEnv(key: string, value: string | undefined) {
   if (value === undefined) delete process.env[key]

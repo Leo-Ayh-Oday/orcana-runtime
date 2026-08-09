@@ -8,6 +8,7 @@
 
 import { existsSync, readdirSync, writeFileSync, mkdirSync, readFileSync, rmdirSync } from "node:fs"
 import { join } from "node:path"
+import { spawnSync } from "node:child_process"
 import type { CgroupFs } from "./manager"
 
 export interface DelegatedRoot {
@@ -64,17 +65,41 @@ export interface VerifiedCgroupDelegation {
   processMigrationVerified: boolean
 }
 
+const CHILD_MIGRATION_PROBE = `
+const { readFileSync, writeFileSync } = require("node:fs")
+const { join } = require("node:path")
+const leaf = process.argv[process.argv.length - 1]
+writeFileSync(join(leaf, "cgroup.procs"), String(process.pid))
+process.stdout.write(readFileSync("/proc/self/cgroup", "utf8"))
+`
+
+/** Verify migration with a short-lived child so the caller is never moved or frozen. */
+export function probeChildProcessMigration(leaf: string, probe: string): boolean {
+  try {
+    const result = spawnSync(process.execPath, ["-e", CHILD_MIGRATION_PROBE, leaf], {
+      encoding: "utf8",
+      env: {},
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 2_000,
+      killSignal: "SIGKILL",
+    })
+    return result.status === 0 && result.stdout.includes(`${probe}/leaf`)
+  } catch {
+    return false
+  }
+}
+
 /**
  * LNXF-R2 10.1：委托真实探针（7 步，同步实现）——
  *  1. create temporary parent
  *  2. enable cpu/memory/pids subtree_control（父层授权链）
  *  3. create leaf
- *  4. 写限额属性：memory.high（软限，可写性验证且迁移自身无 OOM 风险）/
+ *  4. 写限额属性：memory.high（软限）/
  *     pids.max（1024）/ cpu.max（1 核）
- *  5-6. 迁移验证（尽力而为）：把当前进程临时迁入 leaf → /proc/self/cgroup
- *      确认 → 迁回。同步 API 无法在子进程存活期间迁移（单线程死结），
- *      自身迁移受源 cgroup 可写性限制 —— 本机 WSL2 控制台进程挂 root
- *      属主 /init.scope 时迁移 EACCES（45eba78 已知场景），此时
+ *  5-6. 迁移验证（尽力而为）：启动短命子进程，由子进程把自身迁入 leaf，
+ *      读取 /proc/self/cgroup 确认后退出。调用者永不迁移，避免 transient
+ *      scope 被删除后无法迁回，更不能冻结调用者。子进程迁移仍受源 cgroup
+ *      可写性限制 —— WSL2 /init.scope 场景会 EACCES，此时
  *      processMigrationVerified=false 如实记录，不判委托失败（enable/
  *      限额/清理协议仍已验证）。
  *  7. 补充 cgroup.freeze 接口验证（写 1 → 0，控制器实际生效证据）+
@@ -91,33 +116,13 @@ export function verifyCgroupDelegation(base: string, source: DelegatedRoot["sour
     // 1-2. temp parent + enable（父层授权链验证）
     mkdirSync(probe, { recursive: true })
     writeFileSync(join(probe, "cgroup.subtree_control"), "+cpu +memory +pids")
-    // 3-4. leaf + 限额写（memory.high 软限 —— 自身迁移无 OOM 风险）
+    // 3-4. leaf + 限额写（memory.high 软限）
     mkdirSync(leaf)
     writeFileSync(join(leaf, "memory.high"), "1073741824")
     writeFileSync(join(leaf, "pids.max"), "1024")
     writeFileSync(join(leaf, "cpu.max"), "100000 100000")
-    // 5-6. 自身迁移验证（尽力而为）：迁入 → 确认 → 迁回
-    const origCg = readFileSync("/proc/self/cgroup", "utf8")
-      .split("\n").map(l => l.trim()).filter(Boolean)
-      .map(l => l.split(":")[2] ?? "")
-      .find(p => p && p !== "/") ?? ""
-    try {
-      writeFileSync(join(leaf, "cgroup.procs"), String(process.pid))
-      const moved = readFileSync("/proc/self/cgroup", "utf8")
-      if (moved.includes(`${probe}/leaf`)) {
-        processMigrationVerified = true
-        // 迁回原 cgroup（失败则进程留 leaf —— 无硬内存限额，短时无害）
-        if (origCg) {
-          try {
-            writeFileSync(join("/sys/fs/cgroup", origCg, "cgroup.procs"), String(process.pid))
-          } catch {
-            /* best-effort */
-          }
-        }
-      }
-    } catch {
-      // 源 cgroup 不可写（/init.scope 等）→ 迁移不可验证，如实 false
-    }
+    // 5-6. 子进程迁移验证（尽力而为）：调用者绝不进入 probe leaf。
+    processMigrationVerified = probeChildProcessMigration(leaf, probe)
     // 7a. freeze 接口验证（空 cgroup 允许冻结/解冻）
     writeFileSync(join(leaf, "cgroup.freeze"), "1")
     writeFileSync(join(leaf, "cgroup.freeze"), "0")

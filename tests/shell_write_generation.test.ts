@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -13,6 +13,10 @@ import {
   setExecutionAuthority,
 } from "../src/runtime/execution-context"
 import type { TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
+import { installHostAuditProcessBroker, resetProcessBroker } from "./helpers/linux-process-test-broker"
+
+beforeAll(installHostAuditProcessBroker)
+afterAll(resetProcessBroker)
 
 const tempDirs: string[] = []
 

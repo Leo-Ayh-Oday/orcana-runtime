@@ -186,6 +186,15 @@ function terminateWindowsTree(proc: { pid?: number }): void {
 
 let linuxBroker: LinuxExecutionBroker | null = null
 
+/** Test-only dependency injection. It keeps tool-contract tests independent
+ *  from whichever optional Linux backends happen to be installed locally. */
+export function setLinuxProcessBrokerForTests(value: LinuxExecutionBroker | null): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("setLinuxProcessBrokerForTests requires NODE_ENV=test")
+  }
+  linuxBroker = value
+}
+
 function broker(): LinuxExecutionBroker {
   if (!linuxBroker) linuxBroker = createLinuxBroker({ mode: "enabled" })
   return linuxBroker

@@ -9,10 +9,10 @@
 
 import { describe, expect, test } from "bun:test"
 import { platform } from "node:os"
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { compileBwrapArgv, DEFAULT_ROOT_LAYOUT, createBubblewrapBackend, BWRAP_FORBIDDEN_MOUNTS, loopbackWrapper } from "../../../src/runtime/linux/backends/bubblewrap"
+import { compileBwrapArgv, DEFAULT_ROOT_LAYOUT, createBubblewrapBackend, BWRAP_FORBIDDEN_MOUNTS, guestWorkspacePath, loopbackWrapper } from "../../../src/runtime/linux/backends/bubblewrap"
 import { probeLinuxCapabilities } from "../../../src/runtime/linux/capability-probe"
 import { runSupervised } from "../../../src/runtime/linux/process/supervisor"
 import { buildExplicitEnvironment } from "../../../src/runtime/linux/environment"
@@ -27,7 +27,7 @@ function baseSpec(overrides: Partial<ExecutionCellSpec> = {}): ExecutionCellSpec
     command: { executable: "/bin/true", args: [], cwd: "/tmp", stdin: "closed" },
     profile: "build",
     isolation: { minimum: "namespace", preferredBackend: "bubblewrap", allowDegradation: false },
-    filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/tmp/lnxf-wt" },
+    filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/tmp" },
     network: { mode: "none" },
     environment: { variables: {}, inheritHost: false, locale: "C.UTF-8", pathEntries: [] },
     secrets: [],
@@ -55,7 +55,7 @@ describe("LF-3: bwrap argv compiler", () => {
     // 空 Home
     expect(argv).toContain("/home/orcana")
     // Worktree 挂载
-    expect(argv).toContain("/tmp/lnxf-wt")
+    expect(argv).toContain("/tmp")
     expect(argv).toContain("/workspace")
     // chdir
     expect(argv).toContain("--chdir")
@@ -90,6 +90,12 @@ describe("LF-3: bwrap argv compiler", () => {
     expect(none).toContain("--unshare-net")
     const loopback = compileBwrapArgv(baseSpec({ network: { mode: "loopback" } }), caps)
     expect(loopback).toContain("--unshare-net")
+  })
+
+  test("workspace host paths map to their /workspace guest paths", () => {
+    expect(guestWorkspacePath("/repo/sub/tool", "/repo")).toBe("/workspace/sub/tool")
+    expect(guestWorkspacePath("/repo", "/repo")).toBe("/workspace")
+    expect(guestWorkspacePath("/other/tool", "/repo")).toBeUndefined()
   })
 })
 
@@ -151,6 +157,32 @@ describe("PR-4: bwrap production wiring", () => {
     // 沙盒内部 cwd 由 --chdir /workspace 决定
     expect(compiled.argv).toContain("--chdir")
     expect(compiled.argv[compiled.argv.indexOf("--chdir") + 1]).toBe("/workspace")
+  })
+
+  linuxOnly("compile maps nested cwd, local executable, and workspace path args", () => {
+    const backend = createBubblewrapBackend()
+    const wt = mkdtempSync(join(tmpdir(), "lnxf-map-"))
+    const sub = join(wt, "sub")
+    const executable = join(wt, "tool")
+    const input = join(wt, "input.txt")
+    mkdirSync(sub)
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n")
+    chmodSync(executable, 0o755)
+    writeFileSync(input, "ok")
+    try {
+      const spec = baseSpec({
+        command: { executable, args: [input, "/bin/true"], cwd: sub, stdin: "closed" },
+        filesystem: { ...baseSpec().filesystem, worktreeRoot: wt },
+      })
+      const compiled = backend.compile(spec, caps)
+      expect(compiled.argv).toContain("/workspace/tool")
+      expect(compiled.argv).toContain("/workspace/input.txt")
+      expect(compiled.argv).toContain("/bin/true")
+      expect(compiled.argv[compiled.argv.indexOf("--chdir") + 1]).toBe("/workspace/sub")
+      expect(compiled.cwd).toBe(sub)
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
   })
 
   linuxOnly("supervisor passes seccomp file as FD 3 (readable via <&3)", async () => {
@@ -286,7 +318,10 @@ describe("LF-3: true sandbox (runs only when bwrap installed)", () => {
   bwrapTest("receipt records the sandbox execution", async () => {
     const backend = createBubblewrapBackend()
     const wt = mkdtempSync(join(tmpdir(), "lnxf-wt-"))
-    const spec = baseSpec({ filesystem: { ...baseSpec().filesystem, worktreeRoot: wt } })
+    const spec = baseSpec({
+      command: { ...baseSpec().command, cwd: wt },
+      filesystem: { ...baseSpec().filesystem, worktreeRoot: wt },
+    })
     let receiptSeen = false
     for await (const event of backend.run(spec, { capabilities: caps })) {
       if (event.type === "cell.receipt") {
@@ -297,6 +332,32 @@ describe("LF-3: true sandbox (runs only when bwrap installed)", () => {
       }
     }
     expect(receiptSeen).toBe(true)
+  })
+
+  bwrapTest("nested cwd and workspace-local executable run at mapped guest paths", async () => {
+    const backend = createBubblewrapBackend()
+    const wt = mkdtempSync(join(tmpdir(), "lnxf-wt-map-"))
+    const sub = join(wt, "sub")
+    const executable = join(wt, "tool")
+    const input = join(wt, "input.txt")
+    mkdirSync(sub)
+    writeFileSync(executable, "#!/bin/sh\nprintf '%s\\n' \"$PWD\"\ncat \"$1\"\n")
+    chmodSync(executable, 0o755)
+    writeFileSync(input, "MAPPED_OK\n")
+    try {
+      const spec = baseSpec({
+        command: { executable, args: [input], cwd: sub, stdin: "closed" },
+        filesystem: { ...baseSpec().filesystem, worktreeRoot: wt },
+      })
+      const events: string[] = []
+      for await (const event of backend.run(spec, { capabilities: caps })) {
+        if (event.type === "cell.stdout") events.push(event.data)
+      }
+      expect(events.join("")).toContain("/workspace/sub")
+      expect(events.join("")).toContain("MAPPED_OK")
+    } finally {
+      rmSync(wt, { recursive: true, force: true })
+    }
   })
 })
 

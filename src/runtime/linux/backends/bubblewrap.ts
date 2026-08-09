@@ -27,6 +27,7 @@ import { validateCellSpec } from "../policy-compiler"
 import { SYSTEM_READONLY_PATHS } from "../policy-compiler"
 import { snapshotWorkspace, pathGuardDiff, classifyUnexpectedWrites } from "./pathguard"
 import { existsSync } from "node:fs"
+import { posix } from "node:path"
 import { LinuxExecutionError } from "../errors"
 
 /** 默认根布局（plan §10.2）—— ro 系统路径。 */
@@ -66,6 +67,19 @@ export interface BwrapCompileOptions {
   /** loopback 模式：netns 内显式拉起 lo（none 模式不注入）。 */
   loopbackOnly?: boolean
   seccompFile?: string
+}
+
+/** Translate an absolute host path inside the authorized worktree to the
+ *  corresponding path in the bwrap mount. Paths outside the worktree are
+ *  left unmapped so system executables such as /bin/sh remain usable. */
+export function guestWorkspacePath(hostPath: string, worktreeRoot: string): string | undefined {
+  if (!posix.isAbsolute(hostPath) || !posix.isAbsolute(worktreeRoot)) return undefined
+  const root = posix.resolve(worktreeRoot)
+  const absolute = posix.resolve(hostPath)
+  const rel = posix.relative(root, absolute)
+  if (rel === "") return "/workspace"
+  if (rel === ".." || rel.startsWith("../") || posix.isAbsolute(rel)) return undefined
+  return posix.join("/workspace", rel)
 }
 
 const GB = 1024 * 1024 * 1024
@@ -136,8 +150,13 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
     argv.push("--seccomp", "3")
   }
 
-  // 工作目录：沙盒内部 /workspace（宿主 spawn cwd 在 CompiledExecution.cwd）。
-  argv.push("--chdir", "/workspace")
+  // 工作目录保持相对 worktree 的语义；宿主 spawn cwd 仍由
+  // CompiledExecution.cwd 单独承载。
+  const guestCwd = worktree ? guestWorkspacePath(spec.command.cwd, worktree) : undefined
+  if (!guestCwd) {
+    throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `bubblewrap cwd is outside worktree: ${spec.command.cwd}`)
+  }
+  argv.push("--chdir", guestCwd)
 
   return argv
 }
@@ -202,6 +221,10 @@ export function createBubblewrapBackend(): ExecutionBackend {
       if (!existsSync(spec.command.cwd)) {
         throw new LinuxExecutionError("PROCESS_START_FAILED", `host cwd does not exist: ${spec.command.cwd}`)
       }
+      const worktreeRoot = spec.filesystem.worktreeRoot
+      if (!worktreeRoot || !guestWorkspacePath(spec.command.cwd, worktreeRoot)) {
+        throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `bubblewrap cwd is outside worktree: ${spec.command.cwd}`)
+      }
       const env = buildExplicitEnvironment({
         policy: {
           baseProfile: "minimal",
@@ -239,8 +262,8 @@ export function createBubblewrapBackend(): ExecutionBackend {
       })
       // 编译不依赖 binary 存在（执行时由 run 层校验）；PATH 解析兜底。
       const bwrapPath = caps.bubblewrap.path ?? "bwrap"
-      const targetExec = spec.command.executable
-      const targetArgs = spec.command.args
+      const targetExec = guestWorkspacePath(spec.command.executable, worktreeRoot) ?? spec.command.executable
+      const targetArgs = spec.command.args.map(arg => guestWorkspacePath(arg, worktreeRoot) ?? arg)
       const entry = spec.network.mode === "loopback"
         ? loopbackWrapper(caps, targetExec, targetArgs)
         : { executable: targetExec, args: targetArgs }
@@ -248,7 +271,7 @@ export function createBubblewrapBackend(): ExecutionBackend {
         backend: "bubblewrap",
         argv: [bwrapPath, ...argv, entry.executable, ...entry.args],
         env: env.env,
-        // PR-4：宿主 spawn cwd（真实存在）；沙盒内部 cwd 由 --chdir /workspace 决定。
+        // PR-4：宿主 spawn cwd（真实存在）；沙盒内部 cwd 保持 worktree 相对路径。
         cwd: spec.command.cwd,
         seccompFdPath: materialization?.seccompFile,
       }

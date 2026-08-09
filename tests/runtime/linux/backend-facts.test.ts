@@ -20,7 +20,7 @@ function spec(overrides: Partial<ExecutionCellSpec> = {}): ExecutionCellSpec {
     command: { executable: "/bin/true", args: [], cwd: "/tmp", stdin: "closed" },
     profile: "inspect",
     isolation: { minimum: "namespace", preferredBackend: "bubblewrap", allowDegradation: true },
-    filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt" },
+    filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/tmp" },
     network: { mode: "none" },
     environment: { variables: { FOO: "bar" }, inheritHost: false, locale: "C.UTF-8", pathEntries: [] },
     secrets: [],

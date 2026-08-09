@@ -12,8 +12,8 @@ import { describe, expect, test } from "bun:test"
 import { platform } from "node:os"
 import { join } from "node:path"
 import { CgroupManager, hierarchyPaths, type CgroupFs } from "../../../src/runtime/linux/cgroup/manager"
-import { detectDelegatedRoot, enableControllers, delegationAvailable, buildDelegationCandidates } from "../../../src/runtime/linux/cgroup/delegation"
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs"
+import { detectDelegatedRoot, enableControllers, delegationAvailable, buildDelegationCandidates, probeChildProcessMigration } from "../../../src/runtime/linux/cgroup/delegation"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { readCgroupMetrics, cleanupRunCgroups, scanOrcanaScopes } from "../../../src/runtime/linux/cgroup/metrics"
 
@@ -256,6 +256,21 @@ describe("PR-5: cgroup lifecycle protocol", () => {
 })
 
 describe("LF-4: delegation", () => {
+  test("migration probe moves a child process, never the caller", () => {
+    const root = mkdtempSync(join(tmpdir(), "cgroup-child-probe-"))
+    const leaf = join(root, "leaf")
+    mkdirSync(leaf)
+    writeFileSync(join(leaf, "cgroup.procs"), "")
+    try {
+      expect(probeChildProcessMigration(leaf, root)).toBe(false)
+      const probedPid = readFileSync(join(leaf, "cgroup.procs"), "utf8").trim()
+      expect(probedPid).toMatch(/^\d+$/)
+      expect(probedPid).not.toBe(String(process.pid))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   linuxOnly("delegation probe returns explicit source", () => {
     const delegated = detectDelegatedRoot()
     expect(["systemd-user", "systemd-system", "container-runtime", "manual", "none"]).toContain(delegated.source)

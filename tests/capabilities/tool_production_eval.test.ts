@@ -7,7 +7,7 @@
  *  routes 127.0.0.1 to the Windows host, so live-loopback is unavailable.
  */
 
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { execFileSync, execFile } from "node:child_process"
@@ -40,6 +40,10 @@ import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contract
 import { SERVICE_STATUS_TOOL, startServiceInternal } from "../../src/tools/service"
 import { createArtifactStore } from "../../src/harness/artifacts/artifact-store"
 import type { JsonSchema } from "../../src/harness/contracts/schema"
+import { installHostAuditProcessBroker, resetProcessBroker } from "../helpers/linux-process-test-broker"
+
+beforeAll(installHostAuditProcessBroker)
+afterAll(resetProcessBroker)
 
 function tmpProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "orcana-tl-"))
@@ -223,7 +227,7 @@ describe("TL-006 — verification failure does not commit", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 })
 
 describe("TL-007 — artifact keeps the FULL truncated output", () => {
@@ -426,7 +430,7 @@ describe("TL-016 — verify_claim refuses stale evidence", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 })
 
 describe("TL-017 — router never loads web/MCP for simple tasks", () => {

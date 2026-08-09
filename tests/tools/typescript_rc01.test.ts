@@ -1,6 +1,6 @@
 /** RC-01 故障矩阵：runTypeScriptNoEmit 六态契约。 */
 
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, writeFileSync, mkdirSync, chmodSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -11,6 +11,10 @@ import {
   setExecutionAuthority,
 } from "../../src/runtime/execution-context"
 import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contracts"
+import { installHostAuditProcessBroker, resetProcessBroker } from "../helpers/linux-process-test-broker"
+
+beforeAll(installHostAuditProcessBroker)
+afterAll(resetProcessBroker)
 
 /** runTypeScriptNoEmit 走 managed Linux executor —— 无 trusted authority
  *  fail-closed（R2 PR-9）。hostRoot 传执行目录（fixture），与工具 cwd 对齐。 */

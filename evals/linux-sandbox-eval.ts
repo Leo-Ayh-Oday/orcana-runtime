@@ -131,6 +131,16 @@ function killBombTree(pid: number | undefined): void {
   terminateTree(pid, { graceMs: 150, attempts: 3 })
 }
 
+/** Let the runtime reap killed children while waiting for a real cgroup to drain. */
+async function waitCgroupEmptyAsync(manager: CgroupManager, path: string, timeoutMs = 3_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (manager.pidsCurrent(path) === 0) return true
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  return manager.pidsCurrent(path) === 0
+}
+
 export async function runLinuxSandboxEval(): Promise<EvalReport> {
   const caps = probeLinuxCapabilities()
   const isLinux = platform() === "linux"
@@ -385,12 +395,12 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       await new Promise(r => setTimeout(r, 1500))
       const current = manager.pidsCurrent(cell)
       // pids.max=16 → 进程必须被限制住（current ≤ max + 少量）
-      manager.kill(cell)
-      const stopped = manager.waitEmpty(cell)
+      const killed = manager.kill(cell).killed
+      const stopped = killed && await waitCgroupEmptyAsync(manager, cell)
       const elapsed = Date.now() - start
-      return (current <= 32 && stopped)
+      return (current <= 32 && killed && stopped)
         ? { pass: true, reason: `pids.current=${current} 受限且归零(${elapsed}ms)` }
-        : { pass: false, reason: `fork bomb 未受限 current=${current} stopped=${stopped}` }
+        : { pass: false, reason: `fork bomb 未受限 current=${current} killed=${killed} stopped=${stopped}` }
     } finally {
       manager.removeCell(cell)
     }
@@ -496,7 +506,7 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
   await add("LX-024", "双 Fork（daemon 检测）", async () => {
     if (!isLinux) return { skip: true, reason: "非 Linux" }
     const result = await runSupervised({
-      executable: "/bin/sh", args: ["-c", "setsid sh -c 'sleep 0.3' & exit 0"], cwd: "/tmp",
+      executable: "/bin/sh", args: ["-c", "setsid sh -c 'sleep 0.3' & sleep 0.15; exit 0"], cwd: "/tmp",
       env: { PATH: "/usr/bin:/bin", HOME: "/home/orcana" },
       limits: { stdoutMaxBytes: 1024, stderrMaxBytes: 1024 }, wallTimeMs: 10_000, detectDaemon: true,
     })
@@ -735,6 +745,10 @@ export async function runLinuxSandboxEval(): Promise<EvalReport> {
       const hold = spec({
         command: { executable: "/bin/sh", args: ["-c", "sleep 3"], cwd: wt, stdin: "closed" },
         filesystem: { ...spec().filesystem, worktreeRoot: wt },
+        // The generic eval fixture uses a 1 KiB memory ceiling. With a real
+        // cgroup that kills the holder before the competing writer arrives,
+        // so the scenario never exercises lock contention.
+        resources: { ...spec().resources, memoryMaxBytes: 64 * 1024 * 1024 },
         identity: { cellId: "lx037-1", runId: "lx037-run", nodeRunId: "lx037:n1", attempt: 1 },
       })
       const p1 = (async () => { for await (const _ of broker.execute(hold)) { /* drain */ } })()

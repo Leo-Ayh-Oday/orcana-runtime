@@ -1,7 +1,7 @@
 /** RC-16 G12: process tool timeout parsing must be guarded — negative or
  *  non-finite values fall back to the default instead of killing instantly. */
 
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { RUN_PROCESS_TOOL } from "../../src/tools/process"
 import {
   createRuntimeExecutionContext,
@@ -9,6 +9,10 @@ import {
   setExecutionAuthority,
 } from "../../src/runtime/execution-context"
 import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contracts"
+import { installHostAuditProcessBroker, resetProcessBroker } from "../helpers/linux-process-test-broker"
+
+beforeAll(installHostAuditProcessBroker)
+afterAll(resetProcessBroker)
 
 /** Linux execution is fail-closed without a trusted authority (R2 PR-9). */
 async function withAuthority<T>(fn: () => T | Promise<T>): Promise<T> {

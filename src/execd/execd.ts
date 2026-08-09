@@ -13,6 +13,7 @@ import { LeaseManager } from "./lease-manager"
 import { Recovery } from "./recovery"
 import { ExecdServer, type ExecdServerDeps } from "./server"
 import { createLinuxBroker, type LinuxExecutionBroker } from "../runtime/linux/broker"
+import { envApprovalTokenProvider, type ApprovalTokenProvider } from "./approval"
 
 /** M3：租约过期扫描间隔（daemon 常驻定时器）。 */
 const LEASE_SWEEP_INTERVAL_MS = 30_000
@@ -22,6 +23,8 @@ export interface ExecdOptions {
   statePath: string
   workspaceHostRoot: string
   broker?: LinuxExecutionBroker
+  /** L2-D：approval token 源（缺省读 env —— fail closed）。 */
+  approval?: ApprovalTokenProvider
 }
 
 export interface Execd {
@@ -76,7 +79,7 @@ export function createExecd(opts: ExecdOptions): Execd {
     releaseLease: leaseId => Promise.resolve(leaseManager.release(leaseId)),
     listRecoverableRuns: () => cellManager.listRecoverableRuns(),
   }
-  const server = new ExecdServer(deps)
+  const server = new ExecdServer(deps, undefined, undefined, opts.approval ?? envApprovalTokenProvider())
 
   // 事件广播接线：CellManager/Recovery 的 publish → server 广播。
   cellManager.setPublisher((event, sequence) => server.publishEvent({ ...event, cellId: event.cellId ?? "" }, sequence))

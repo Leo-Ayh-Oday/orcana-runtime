@@ -30,15 +30,15 @@ function cell(overrides: Partial<CellRecord> = {}): CellRecord {
 }
 
 describe("StateStore (L1-B)", () => {
-  test("schema creates all 13 tables", () => {
+  test("schema creates all 14 tables", () => {
     const { store, dir } = openStore()
     try {
       const tables = store.db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()
       const names = tables.map(t => t.name).sort()
       expect(names).toEqual([
         "cache_locks", "cell_attempts", "cell_events", "cells", "cleanup_actions",
-        "domains", "idempotency_keys", "leases", "port_leases", "receipts",
-        "reservations", "runs", "service_cells",
+        "domains", "execution_handles", "idempotency_keys", "leases", "port_leases",
+        "receipts", "reservations", "runs", "service_cells",
       ])
     } finally {
       store.close()

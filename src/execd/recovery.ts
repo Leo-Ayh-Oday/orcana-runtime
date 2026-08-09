@@ -116,13 +116,24 @@ export class Recovery {
             this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "START_FAILED" } }, state.latestEventSequence())
             return { to: "START_FAILED", reason: "cgroup absent (never started or already cleaned)" }
           }
+          case "UNKNOWN": {
+            // M1：cgroup 存在但 events 读不了（并发删除/权限）→ 保持
+            // RUNNING 待重试（不谎报终态 —— 进程树可能仍活着）。
+            state.withTransaction(() => {
+              state.transition(cell.cellId, attemptId, "RUNNING", { from: "RUNNING", reasonCode: "cgroup-events-unreadable-retry", actor: "recovery", at })
+            })
+            this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "RUNNING", takeover: "UNKNOWN" } }, state.latestEventSequence())
+            return { to: "RUNNING", reason: "cgroup exists but events unreadable; keep RUNNING for retry" }
+          }
         }
       }
       case "EXIT_OBSERVED": {
         // 无 Receipt → Recovery Receipt（unobserved 收据：只记录已知事实）。
+        // N2：receiptDigest 用 cellId+attemptId 幂等键 —— 反复重启不重复写。
+        const receiptDigest = `recovery-${cell.cellId}-${attemptId}`
         state.withTransaction(() => {
           state.commitReceipt({
-            receiptDigest: `recovery-${cell.cellId}-${at}`,
+            receiptDigest,
             cellId: cell.cellId,
             runId: cell.runId,
             receiptJson: JSON.stringify({

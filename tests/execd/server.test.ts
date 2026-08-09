@@ -25,6 +25,7 @@ function testDeps(state: StateStore, overrides: Partial<ExecdServerDeps> = {}): 
     renewLease: async leaseId => ({ expiresAt: Date.now() + 1000 }),
     releaseLease: async () => {},
     listRecoverableRuns: () => [],
+    attachLogs: () => ({ cellId: "", kind: "stdout", data: "", totalBytes: 0, eof: true }),
     ...overrides,
   }
 }
@@ -217,6 +218,7 @@ describe("execd server (L1-C)", () => {
     const sockPath = join(dir, "execd.sock")
     const server = new ExecdServer(
       { ...testDeps(state), sockPath },
+      undefined,
       undefined,
       undefined,
       () => ({ pid: 12345, uid: (process.getuid?.() ?? 0) + 1, gid: -1 }), // 异 uid

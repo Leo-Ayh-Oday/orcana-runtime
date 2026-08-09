@@ -55,6 +55,7 @@ export type TakeoverVerdict =
   | { state: "RECOVERED"; reason: string; populated: true }
   | { state: "EXITED"; reason: string; populated: false }
   | { state: "ABSENT"; reason: string }
+  | { state: "UNKNOWN"; reason: string }
 
 /** 解析 cgroup.events 的 populated 行（文件缺失/解析失败 → undefined）。 */
 export function parsePopulated(events: string | undefined): boolean | undefined {
@@ -66,7 +67,9 @@ export function parsePopulated(events: string | undefined): boolean | undefined 
   return value === "1"
 }
 
-/** 接管判定：cgroup 存在性 + populated。 */
+/** 接管判定：cgroup 存在性 + populated。
+ *  M1：cgroup 存在但 events 读取/解析失败 → UNKNOWN（进程树可能仍活着
+ *  —— 不得谎报 START_FAILED 孤儿化；由上层保持 RUNNING 待重试）。 */
 export function determineTakeover(handle: ExecutionHandle, fs: CgroupProbeFs = REAL_CGROUP_PROBE_FS): TakeoverVerdict {
   if (!fs.exists(handle.cgroupPath)) {
     return { state: "ABSENT", reason: `cgroup not found: ${handle.cgroupPath}` }
@@ -74,7 +77,7 @@ export function determineTakeover(handle: ExecutionHandle, fs: CgroupProbeFs = R
   const events = fs.readCgroupEvents(handle.cgroupPath)
   const populated = parsePopulated(events)
   if (populated === undefined) {
-    return { state: "ABSENT", reason: `cgroup.events unreadable: ${handle.cgroupPath}` }
+    return { state: "UNKNOWN", reason: `cgroup.events unreadable: ${handle.cgroupPath}` }
   }
   if (populated) {
     return { state: "RECOVERED", reason: `cgroup populated: ${handle.cgroupPath}`, populated: true }

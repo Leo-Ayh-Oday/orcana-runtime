@@ -36,10 +36,10 @@ describe("L2-A: determineTakeover", () => {
     expect(v.state).toBe("ABSENT")
   })
 
-  test("cgroup.events unreadable → ABSENT (fail closed)", () => {
+  test("cgroup.events unreadable → UNKNOWN (fail closed, keep RUNNING)", () => {
     const fs = memCgroupFs({ "/sys/fs/cgroup/run-1/cell-1": {} })
     const v = determineTakeover(handle("/sys/fs/cgroup/run-1/cell-1"), fs)
-    expect(v.state).toBe("ABSENT")
+    expect(v.state).toBe("UNKNOWN")
   })
 
   test("parsePopulated: valid / invalid / missing", () => {
@@ -124,6 +124,15 @@ describe("L2-A: Recovery takeover (RUNNING cells)", () => {
     const recovery = new Recovery({ state, publish: () => {} })
     const report = recovery.run()
     expect(report.recovered[0]?.to).toBe("LOST")
+  })
+
+  test("RUNNING + cgroup events unreadable → stays RUNNING (UNKNOWN retry)", () => {
+    const { state, recovery } = setupWithRunningCell(undefined, true)
+    // 覆盖：cgroup 目录存在但 events 缺失 → UNKNOWN（不是 START_FAILED）
+    const fs = memCgroupFs({ "/sys/fs/cgroup/run-1/cell-1": {} })
+    const rec2 = new Recovery({ state, probeFs: fs, publish: () => {} })
+    rec2.run()
+    expect(state.getCell("cell-1")?.currentState).toBe("RUNNING")
   })
 
   test("takeover is idempotent (repeated scan same result)", () => {

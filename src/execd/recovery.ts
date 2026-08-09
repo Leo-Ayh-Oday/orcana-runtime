@@ -1,27 +1,30 @@
-/** LR2-1（L1-F）：Recovery —— 启动恢复（非终态 Attempt 扫描）。
+/** LR2-1v2（L2-A）：Recovery —— 启动恢复（非终态 Attempt 扫描 + 接管）。
  *
- *  恢复动作表（主计划 LR2-1 §7，v1 适配）：
- *  - ACCEPTED / POLICY_COMPILED / RUNNING：execd 崩溃 → broker 内存态
- *    丢失，进程无法接管（v1 不要求 execd 崩溃后 Cell 继续运行）→ LOST
- *    （原因如实记录：execd restarted, process untracked）；
- *  - EXIT_OBSERVED：无 Receipt → 从现存观测生成 Recovery Receipt
- *    （unobserved 收据 —— 只记录已知事实，未知字段 unknown）；
- *  - RECEIPT_COMMITTED：无 Evidence 绑定 → 广播 recovery 事件（通知
- *    上层重绑定）；
- *  - CLEANUP_PENDING：幂等继续清理（v1 无运行中资源 → 直接 CLEANED）；
- *  - SIDE_EFFECT_UNKNOWN：外部副作用节点 —— 不得盲跑；标记 + 广播，
- *    等待 reconcile（查询外部系统 → commit/retry/human intervention）。
+ *  恢复动作表（主计划 LR2-1 §7，v2 适配）：
+ *  - RUNNING + 有执行句柄（cgroup）→ 探活接管：
+ *    - cgroup populated=1 → 进程树仍活着 → 保持 RUNNING（重新接管监控，
+ *      取消/超时走 cgroup 路径 —— EXECD_RESTART_LOSES_RUNNING_CELL = 0）；
+ *    - cgroup populated=0 → 树已退出 → 收敛 EXIT_OBSERVED；
+ *    - cgroup 不存在 → 收敛 START_FAILED（未启动/已清理）。
+ *  - ACCEPTED / POLICY_COMPILED（无句柄）→ LOST（如实记录）；
+ *  - EXIT_OBSERVED：无 Receipt → Recovery Receipt（unobserved）；
+ *  - RECEIPT_COMMITTED：无 Evidence → 广播重绑定；
+ *  - CLEANUP_PENDING：幂等继续清理；
+ *  - SIDE_EFFECT_UNKNOWN：不盲跑（UNKNOWN_SIDE_EFFECT_BLIND_RETRY = 0）。
  *
  *  同 boot 崩溃恢复：SAME_BOOT_CRASH_UNRECOVERED = 0 —— 每次启动扫描
  *  全部非终态 Attempt 并收敛（同一开机内的多次崩溃同样处理）。
  */
 
 import { StateStore, type CellRecord, type CellState } from "./state/store"
+import { determineTakeover, type CgroupProbeFs, REAL_CGROUP_PROBE_FS } from "./handle"
 
 export interface RecoveryOptions {
   state: StateStore
   /** 事件广播（server.publishEvent）。 */
   publish: (event: { kind: string; cellId: string; runId?: string; payload?: unknown }, sequence: number) => void
+  /** cgroup 探活 fs（测试注入；默认真实）。 */
+  probeFs?: CgroupProbeFs
   now?: () => number
 }
 
@@ -31,7 +34,11 @@ export interface RecoveryReport {
 }
 
 export class Recovery {
-  constructor(private readonly opts: RecoveryOptions) {}
+  private readonly probeFs: CgroupProbeFs
+
+  constructor(private readonly opts: RecoveryOptions) {
+    this.probeFs = opts.probeFs ?? REAL_CGROUP_PROBE_FS
+  }
 
   private get now(): number {
     return this.opts.now?.() ?? Date.now()
@@ -54,16 +61,62 @@ export class Recovery {
     const at = this.now
     switch (cell.currentState) {
       case "ACCEPTED":
-      case "POLICY_COMPILED":
-      case "RUNNING": {
-        // execd 重启 → 进程无法接管（broker 内存态丢失）。v1 如实标记
-        // LOST（不假装恢复）—— 计划 §7 的"重新接管监控"依赖跨进程
-        // 执行句柄，属 execd v2 范围。
+      case "POLICY_COMPILED": {
+        // 未启动到 cgroup 阶段（无句柄可接管）→ LOST（如实记录）。
         state.withTransaction(() => {
           state.transition(cell.cellId, attemptId, "LOST", { from: cell.currentState, reasonCode: "execd-restart-untracked", actor: "recovery", at })
         })
         this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: cell.currentState, to: "LOST" } }, state.latestEventSequence())
-        return { to: "LOST", reason: "execd restarted, process untracked" }
+        return { to: "LOST", reason: "execd restarted before cgroup creation" }
+      }
+      case "RUNNING": {
+        // L2-A：有执行句柄 → cgroup 探活接管；无句柄 → LOST（v1 语义）。
+        const handles = state.listHandlesByCell(cell.cellId)
+        if (handles.length === 0) {
+          state.withTransaction(() => {
+            state.transition(cell.cellId, attemptId, "LOST", { from: "RUNNING", reasonCode: "execd-restart-no-handle", actor: "recovery", at })
+          })
+          this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "LOST" } }, state.latestEventSequence())
+          return { to: "LOST", reason: "RUNNING without execution handle (untracked)" }
+        }
+        const handle = handles[0]!
+        const takeover = determineTakeover({
+          handleId: handle.handleId,
+          cellId: cell.cellId,
+          runId: cell.runId,
+          attemptId,
+          cgroupPath: handle.cgroupPath,
+          startedAt: handle.startedAt,
+        }, this.probeFs)
+        // 句柄记录接管结果（幂等：重复扫描更新同一行）。
+        state.upsertExecutionHandle({
+          handleId: handle.handleId, cellId: cell.cellId, runId: cell.runId, attemptId,
+          cgroupPath: handle.cgroupPath, startedAt: handle.startedAt, takeover: takeover.state,
+        })
+        switch (takeover.state) {
+          case "RECOVERED": {
+            // 进程树仍活着：保持 RUNNING（重新接管监控）。
+            state.withTransaction(() => {
+              state.transition(cell.cellId, attemptId, "RUNNING", { from: "RUNNING", reasonCode: "execd-restart-takeover", actor: "recovery", at })
+            })
+            this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "RUNNING", takeover: "RECOVERED" } }, state.latestEventSequence())
+            return { to: "RUNNING", reason: `recovered via cgroup: ${handle.cgroupPath}` }
+          }
+          case "EXITED": {
+            state.withTransaction(() => {
+              state.transition(cell.cellId, attemptId, "EXIT_OBSERVED", { from: "RUNNING", reasonCode: "cgroup-empty-after-restart", actor: "recovery", at })
+            })
+            this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "EXIT_OBSERVED" } }, state.latestEventSequence())
+            return { to: "EXIT_OBSERVED", reason: "cgroup empty (process tree exited during restart)" }
+          }
+          case "ABSENT": {
+            state.withTransaction(() => {
+              state.transition(cell.cellId, attemptId, "START_FAILED", { from: "RUNNING", reasonCode: "cgroup-absent-after-restart", actor: "recovery", at })
+            })
+            this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "START_FAILED" } }, state.latestEventSequence())
+            return { to: "START_FAILED", reason: "cgroup absent (never started or already cleaned)" }
+          }
+        }
       }
       case "EXIT_OBSERVED": {
         // 无 Receipt → Recovery Receipt（unobserved 收据：只记录已知事实）。

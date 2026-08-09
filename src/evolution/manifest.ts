@@ -81,6 +81,26 @@ export function validateManifestInput(input: EvolutionManifestInput): { ok: true
   if (!input.scorer?.scorerDigest || !input.scorer?.correctnessRulesDigest) {
     errors.push("scorer contract missing scorerDigest/correctnessRulesDigest")
   }
+  // M2：environment 必填 + 字段类型校验（候选不得控制环境构造）。
+  const env = input.environment
+  if (!env || typeof env !== "object") {
+    errors.push("environment facts required")
+  } else {
+    const envErrors: string[] = []
+    // 摘要类字段必须 64 hex
+    const digestEnv: Array<keyof EnvironmentFacts> = ["sourceDigest", "lockfileDigest", "toolchainDigest", "rootfsDigest", "kernelCapabilityDigest", "cellSpecDigest", "networkPolicyDigest", "resourcePolicyDigest", "benchmarkManifestDigest"]
+    for (const k of digestEnv) {
+      const v = env[k]
+      if (v !== undefined && (typeof v !== "string" || v.length !== 64)) envErrors.push(`environment.${k} must be full sha256 (64 hex)`)
+    }
+    if (env.sourceDigest === undefined) envErrors.push("environment.sourceDigest must be a non-empty string")
+    if (env.benchmarkManifestDigest === undefined) envErrors.push("environment.benchmarkManifestDigest must be a non-empty string")
+    // 版本类字段必须非空字符串
+    if (typeof env.evaluatorVersion !== "string" || env.evaluatorVersion.length === 0) {
+      envErrors.push("environment.evaluatorVersion must be a non-empty string")
+    }
+    if (envErrors.length > 0) errors.push(...envErrors)
+  }
   if (!input.baselineRef) errors.push("baselineRef required")
   if (!input.evaluatorVersion) errors.push("evaluatorVersion required")
   const crit = input.promotionCriteria
@@ -89,6 +109,12 @@ export function validateManifestInput(input: EvolutionManifestInput): { ok: true
   }
   if (!crit || typeof crit.canaryWatchWindowMs !== "number" || crit.canaryWatchWindowMs < 0) {
     errors.push("promotionCriteria.canaryWatchWindowMs must be >= 0")
+  }
+  // M2：criteria 布尔字段类型校验（字符串 "false" 为 truthy 会静默改变晋升语义）。
+  if (crit) {
+    for (const k of ["requireZeroRegression", "requireSecurityGateNonRegression", "requireNoHiddenFailure"] as const) {
+      if (typeof crit[k] !== "boolean") errors.push(`promotionCriteria.${k} must be a boolean`)
+    }
   }
   if (errors.length > 0) return { ok: false, errors }
   return { ok: true, manifest: buildManifest(input) }
@@ -109,7 +135,9 @@ function buildManifest(input: EvolutionManifestInput): EvolutionManifest {
   return { ...base, manifestId: digestOf(base) }
 }
 
-/** 内容寻址幂等：同输入 → 同 manifestId。 */
+/** 内容寻址幂等：同输入 → 同 manifestId。
+ *  M3：environmentDigest 由 environment 派生 —— 与持久化字段一致性由
+ *  parseManifest 强制（见下）。 */
 export function manifestIdOf(input: EvolutionManifestInput): string {
   return digestOf({
     schemaVersion: MANIFEST_SCHEMA_VERSION,
@@ -137,6 +165,11 @@ export function parseManifest(json: string): { ok: true; manifest: EvolutionMani
       evaluatorVersion: parsed.evaluatorVersion,
     })
     if (!validation.ok) return { ok: false, error: `invalid manifest: ${validation.errors.join("; ")}` }
+    // M3：持久化 environmentDigest 必须与 environment facts 重算一致
+    // （该字段是 runReplay 漂移判定的消费字段 —— 篡改它等于绕过清单契约）。
+    if (parsed.environmentDigest !== computeEnvironmentDigest(parsed.environment)) {
+      return { ok: false, error: "environmentDigest does not match environment facts" }
+    }
     if (parsed.manifestId !== manifestIdOf({
       benchmarkSet: parsed.benchmarkSet,
       scorer: parsed.scorer,

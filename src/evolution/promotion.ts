@@ -36,6 +36,8 @@ export interface PromotionRecord {
   candidateRef: string
   /** 晋升后的基线更新引用（仅 PROMOTED 后设置）。 */
   promotedBaselineRef?: string
+  /** 回归监视记录（watchRegressions 落账 —— CANARY_REGRESSION_UNWATCHED）。 */
+  watch?: { checkedAt: string; windowMs: number; newRegressions: number; regressed: boolean }
   /** 晋级时间线。 */
   transitions: Array<{ from: PromotionState | null; to: PromotionState; at: string; reason: string }>
 }
@@ -50,10 +52,11 @@ const ALLOWED_FROM: Record<PromotionState, ReadonlySet<PromotionState>> = {
   EVALUATED: new Set(["CANARY", "CANARY_FAILED", "REJECTED_CRITERIA", "SECURITY_REGRESSION", "PERF_REGRESSION", "EVALUATOR_CHANGED"]),
   CANARY: new Set(["APPROVED", "HUMAN_DECLINED", "CANARY_FAILED", "EVALUATOR_CHANGED"]),
   APPROVED: new Set(["PROMOTED", "HUMAN_DECLINED"]),
+  // 终态（VALID_TERMINAL）：无出边 —— 重新提案必须 createPromotion 新记录
   PROMOTED: new Set(),
-  REJECTED_CRITERIA: new Set(["PROPOSED"]), // 可重新提案（新 manifest/candidate）
-  SECURITY_REGRESSION: new Set(["PROPOSED"]),
-  PERF_REGRESSION: new Set(["PROPOSED"]),
+  REJECTED_CRITERIA: new Set(),
+  SECURITY_REGRESSION: new Set(),
+  PERF_REGRESSION: new Set(),
   CANARY_FAILED: new Set(["CANARY"]), // 修复后可重试 canary
   HUMAN_DECLINED: new Set(["CANARY"]), // 人工驳回后可重新提交 canary
   EVALUATOR_CHANGED: new Set(),
@@ -77,7 +80,9 @@ export interface EvaluationEvidence {
   actualEvaluatorVersion: string
 }
 
-/** 完整评估入口：重放差异 + 安全 + 性能 三合一。 */
+/** 完整评估入口：重放差异 + 安全 + 性能 三合一。
+ *  消费清单 criteria：requireSecurityGateNonRegression=false 时安全评估
+ *  不强制（记录但不阻断 —— 候选可显式放宽）。 */
 export function evaluateCandidate(record: PromotionRecord, manifest: EvolutionManifest, evidence: EvaluationEvidence): PromotionRecord {
   assertState(record, "PROPOSED")
   if (evidence.actualEvaluatorVersion !== manifest.evaluatorVersion) {
@@ -86,7 +91,7 @@ export function evaluateCandidate(record: PromotionRecord, manifest: EvolutionMa
   if (!evidence.differential.replayPassable) {
     return transition(record, "REJECTED_CRITERIA", `replay blockers: ${evidence.differential.blockers.join("; ")}`)
   }
-  if (!evidence.security.ok) {
+  if (manifest.promotionCriteria.requireSecurityGateNonRegression && !evidence.security.ok) {
     return transition(record, "SECURITY_REGRESSION", evidence.security.reason)
   }
   if (!evidence.performance.ok) {
@@ -131,12 +136,19 @@ export function promote(record: PromotionRecord, newBaselineRef: string): Promot
 }
 
 /** Regression Watch：晋升后监视窗口内新回归 → 记录（不自动撤销晋升，
- *  但暴露给上层触发降级流程）。 */
+ *  但暴露给上层触发降级流程；结果落进 PromotionRecord.watch）。 */
 export function watchRegressions(record: PromotionRecord, newRegressions: number, windowMs: number): { regressed: boolean; reason?: string } {
   if (record.state !== "PROMOTED") {
     return { regressed: false, reason: "not promoted; watch applies only to promoted candidates" }
   }
-  if (newRegressions > 0) {
+  const regressed = newRegressions > 0
+  record.watch = {
+    checkedAt: new Date().toISOString(),
+    windowMs,
+    newRegressions,
+    regressed,
+  }
+  if (regressed) {
     return { regressed: true, reason: `${newRegressions} new regression(s) within ${windowMs}ms watch window` }
   }
   return { regressed: false }

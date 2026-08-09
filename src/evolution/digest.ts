@@ -41,7 +41,8 @@ export function computeEnvironmentDigest(facts: EnvironmentFacts): string {
   })
 }
 
-/** 环境漂移检测：两份环境事实摘要是否一致（除允许差异字段）。 */
+/** 环境漂移检测：两份环境事实摘要是否一致（除允许差异字段）。
+ *  双向对比 —— 候选独有键（基线没有的字段）也算漂移。 */
 export function environmentDrift(
   baseline: EnvironmentFacts,
   candidate: EnvironmentFacts,
@@ -49,7 +50,8 @@ export function environmentDrift(
 ): { drift: boolean; differingFields: Array<keyof EnvironmentFacts> } {
   const allow = new Set(opts.allowFields ?? [])
   const differing: Array<keyof EnvironmentFacts> = []
-  for (const key of Object.keys(baseline) as Array<keyof EnvironmentFacts>) {
+  const keys = new Set([...Object.keys(baseline), ...Object.keys(candidate)] as Array<keyof EnvironmentFacts>)
+  for (const key of keys) {
     if (allow.has(key)) continue
     if (baseline[key] !== candidate[key]) differing.push(key)
   }

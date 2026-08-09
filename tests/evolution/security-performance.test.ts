@@ -37,6 +37,17 @@ describe("P6-C: Security Gate", () => {
     const c = snapshotOf({ CLEANUP_RESOURCE_LEAK: 1 })
     expect(compareSecurityGates(b, c).ok).toBe(false)
   })
+
+  test("M6: candidate MISSING a baseline gate → rejected (unevaluated ≠ safe)", () => {
+    const b = snapshotOf({ DIRECT_PRODUCT_PROCESS_BYPASS: 5 })
+    const c = snapshotOf({}) // 安全评估工具失效/移除 → 无数据
+    const v = compareSecurityGates(b, c)
+    expect(v.ok).toBe(false)
+    if (!v.ok) {
+      expect(v.regressedGates[0]?.gate).toBe("DIRECT_PRODUCT_PROCESS_BYPASS")
+      expect(v.reason).toContain("UNEVAULATED")
+    }
+  })
 })
 
 describe("P6-C: Performance", () => {
@@ -86,10 +97,32 @@ describe("P6-C: Performance", () => {
     expect(v.ok).toBe(false)
   })
 
-  test("candidate-only bench ignored (no baseline to compare)", () => {
+  test("candidate-only bench is not a regression (baseline benches still all evaluated)", () => {
     const base = computePerfBaseline("existing", [10, 10])
-    const v = comparePerfBaselines([base], [{ benchName: "new-bench", valueMs: 9999 }], { maxRegressionRatio: 0.1 })
+    const v = comparePerfBaselines([base], [
+      { benchName: "existing", valueMs: 9 },
+      { benchName: "existing", valueMs: 10 },
+      { benchName: "new-bench", valueMs: 9999 },
+    ], { maxRegressionRatio: 0.1 })
     expect(v.ok).toBe(true)
+  })
+
+  test("M7: baseline bench missing from candidate → rejected (perf skipping)", () => {
+    const base = computePerfBaseline("must-run", [10, 10])
+    const v = comparePerfBaselines([base], [{ benchName: "other", valueMs: 1 }], { maxRegressionRatio: 0.1 })
+    expect(v.ok).toBe(false)
+    if (!v.ok) expect(v.reason).toContain("must-run")
+  })
+
+  test("M7: empty candidate samples → rejected (no data ≠ pass)", () => {
+    const base = computePerfBaseline("x", [10, 10])
+    const v = comparePerfBaselines([base], [], { maxRegressionRatio: 0.1 })
+    expect(v.ok).toBe(false)
+    if (!v.ok) expect(v.reason).toContain("no samples")
+  })
+
+  test("empty baselines rejected", () => {
+    expect(() => comparePerfBaselines([], [{ benchName: "x", valueMs: 1 }], { maxRegressionRatio: 0.1 })).toThrow(/baseline/)
   })
 
   test("invalid maxRegressionRatio rejected", () => {

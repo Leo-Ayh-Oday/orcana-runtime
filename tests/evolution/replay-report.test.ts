@@ -11,6 +11,8 @@ import { buildEnvironmentFacts } from "../../src/evolution/digest"
 
 const sha = (s: string) => require("node:crypto").createHash("sha256").update(s).digest("hex")
 
+const pass: ReplayExecutor = async c => ({ caseId: c.id, inputDigest: c.inputDigest, outcome: "passed", durationMs: 1, environmentDigest: sha("env") })
+
 function env() {
   return buildEnvironmentFacts({
     sourceDigest: sha("src"),
@@ -63,6 +65,7 @@ describe("P6-B: runReplay", () => {
       manifest: m,
       baselineSourceRef: "base-commit",
       candidateSourceRef: "cand-commit",
+      candidateEnvironment: env(),
       executor: async (c, side) => {
         seen.push(`${side}:${c.id}`)
         return { caseId: c.id, inputDigest: c.inputDigest, outcome: "passed", durationMs: 1, environmentDigest: sha("env") }
@@ -94,6 +97,46 @@ describe("P6-B: runReplay", () => {
       },
     })).rejects.toThrow(/environment drift/)
     expect(called).toBe(false)
+  })
+
+  test("M4: allowCandidateEnvironmentDiff permits source only (candidate's own commit)", async () => {
+    const m = manifest()
+    const candEnv = env()
+    candEnv.sourceDigest = sha("candidate-src") // 候选自身的提交
+    let called = false
+    const { baseline, candidate } = await runReplay({
+      manifest: m,
+      baselineSourceRef: "b",
+      candidateSourceRef: "c",
+      candidateEnvironment: candEnv,
+      allowCandidateEnvironmentDiff: ["sourceDigest"],
+      executor: async c => {
+        called = true
+        return { caseId: c.id, inputDigest: c.inputDigest, outcome: "passed", durationMs: 1, environmentDigest: sha("env") }
+      },
+    })
+    expect(called).toBe(true)
+    expect(baseline.results).toHaveLength(3)
+    expect(candidate.results).toHaveLength(3)
+  })
+
+  test("M4: allow field not in manifest environment → rejected", async () => {
+    const m = manifest()
+    await expect(runReplay({
+      manifest: m,
+      baselineSourceRef: "b",
+      candidateSourceRef: "c",
+      candidateEnvironment: env(),
+      allowCandidateEnvironmentDiff: ["rootfsDigest"], // 清单环境没有该字段
+      executor: pass,
+    })).rejects.toThrow(/not in manifest environment/)
+  })
+
+  test("M4: candidateEnvironment is required (no silent skip)", async () => {
+    const m = manifest()
+    // 契约：候选环境必填（类型层面强制）——运行时绕过必须抛错而非静默通过
+    const opts = { manifest: m, baselineSourceRef: "b", candidateSourceRef: "c", executor: pass } as unknown as Parameters<typeof runReplay>[0]
+    await expect(runReplay(opts)).rejects.toThrow()
   })
 })
 
@@ -156,19 +199,65 @@ describe("P6-B: DifferentialReport", () => {
     expect(rep.replayPassable).toBe(true)
   })
 
-  test("NEW_FAILURE: candidate fails case that baseline passed → blocked as hidden failure", () => {
+  test("NEW_FAILURE (baseline-only): candidate drops a baseline case → hidden failure blocks", () => {
     const m = manifest()
     const base = [1, 2].map(i => ({ caseId: `c${i}`, inputDigest: sha(`i${i}`), outcome: "passed" as const, durationMs: 1, environmentDigest: sha("e") }))
-    // c2 在候选侧不存在 → 视为新增失败/缺失
+    // c2 在候选侧不存在 → 隐藏失败（NEW_FAILURE）
     const cand = base.slice(0, 1)
     const rep = buildDifferentialReport(
       { side: "baseline", manifestId: m.manifestId, sourceRef: "b", results: base, startedAt: "" },
       { side: "candidate", manifestId: m.manifestId, sourceRef: "c", results: cand, startedAt: "" },
       { requireZeroRegression: true, requireNoHiddenFailure: true },
     )
-    expect(rep.mismatches).toBe(1)
+    expect(rep.newFailures).toBe(1)
     expect(rep.replayPassable).toBe(false)
-    expect(rep.blockers.join()).toContain("case set mismatch")
+    expect(rep.blockers.join()).toContain("HIDDEN_FAILURE")
+  })
+
+  test("NEW_FAILURE (candidate-only): candidate adds a failing case → blocked", () => {
+    const m = manifest()
+    const base = [1].map(i => ({ caseId: `c${i}`, inputDigest: sha(`i${i}`), outcome: "passed" as const, durationMs: 1, environmentDigest: sha("e") }))
+    const cand = [
+      ...base,
+      { caseId: "c2", inputDigest: sha("i2"), outcome: "failed" as const, durationMs: 1, environmentDigest: sha("e"), detail: "new failure" },
+    ]
+    const rep = buildDifferentialReport(
+      { side: "baseline", manifestId: m.manifestId, sourceRef: "b", results: base, startedAt: "" },
+      { side: "candidate", manifestId: m.manifestId, sourceRef: "c", results: cand, startedAt: "" },
+      { requireZeroRegression: true, requireNoHiddenFailure: true },
+    )
+    expect(rep.newFailures).toBe(1)
+    expect(rep.replayPassable).toBe(false)
+    expect(rep.blockers.join()).toContain("HIDDEN_FAILURE")
+  })
+
+  test("candidate-only PASSING case is neutral (not a failure)", () => {
+    const m = manifest()
+    const base = [1].map(i => ({ caseId: `c${i}`, inputDigest: sha(`i${i}`), outcome: "passed" as const, durationMs: 1, environmentDigest: sha("e") }))
+    const cand = [
+      ...base,
+      { caseId: "c2", inputDigest: sha("i2"), outcome: "passed" as const, durationMs: 1, environmentDigest: sha("e") },
+    ]
+    const rep = buildDifferentialReport(
+      { side: "baseline", manifestId: m.manifestId, sourceRef: "b", results: base, startedAt: "" },
+      { side: "candidate", manifestId: m.manifestId, sourceRef: "c", results: cand, startedAt: "" },
+      { requireZeroRegression: true, requireNoHiddenFailure: true },
+    )
+    expect(rep.newFailures).toBe(0)
+    expect(rep.replayPassable).toBe(true)
+  })
+
+  test("requireNoHiddenFailure=false: baseline-only missing case is neutral", () => {
+    const m = manifest()
+    const base = [1, 2].map(i => ({ caseId: `c${i}`, inputDigest: sha(`i${i}`), outcome: "passed" as const, durationMs: 1, environmentDigest: sha("e") }))
+    const cand = base.slice(0, 1)
+    const rep = buildDifferentialReport(
+      { side: "baseline", manifestId: m.manifestId, sourceRef: "b", results: base, startedAt: "" },
+      { side: "candidate", manifestId: m.manifestId, sourceRef: "c", results: cand, startedAt: "" },
+      { requireZeroRegression: true, requireNoHiddenFailure: false },
+    )
+    expect(rep.newFailures).toBe(0)
+    expect(rep.replayPassable).toBe(true)
   })
 
   test("different manifests → throw", () => {
@@ -186,6 +275,7 @@ describe("P6-B: DifferentialReport", () => {
       manifest: m,
       baselineSourceRef: "base-commit",
       candidateSourceRef: "cand-commit",
+      candidateEnvironment: env(),
       executor: executorWith({
         c1: { b: "passed", c: "passed" },
         c2: { b: "passed", c: "failed" },

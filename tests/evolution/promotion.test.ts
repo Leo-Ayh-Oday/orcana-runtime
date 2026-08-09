@@ -169,4 +169,29 @@ describe("P6-D: Promotion pipeline", () => {
     const perf = computePerfBaseline("replay", [10, 20, 30])
     expect(perf.p50Ms).toBe(20)
   })
+
+  test("MINOR: requireSecurityGateNonRegression=false consumes criteria (records but does not block)", () => {
+    const m = manifest()
+    const relaxed = { ...m, promotionCriteria: { ...m.promotionCriteria, requireSecurityGateNonRegression: false } }
+    let rec = createPromotion(relaxed, "cand")
+    rec = evaluateCandidate(rec, relaxed, {
+      ...greenEvidence(),
+      security: { ok: false, reason: "gate regression", regressedGates: [{ gate: "X", baseline: 0, candidate: 1 }] },
+    })
+    expect(rec.state).toBe("EVALUATED") // 显式放宽：安全不阻断
+  })
+
+  test("MINOR: watchRegressions records into PromotionRecord.watch", () => {
+    const m = manifest()
+    let rec = createPromotion(m, "cand")
+    rec = evaluateCandidate(rec, m, greenEvidence())
+    rec = runCanary(rec, { ok: true, newRegressions: 0 })
+    rec = humanApprove(rec, true)
+    rec = promote(rec, "nb")
+    const w = watchRegressions(rec, 2, 30_000)
+    expect(w.regressed).toBe(true)
+    expect(rec.watch?.regressed).toBe(true)
+    expect(rec.watch?.newRegressions).toBe(2)
+    expect(rec.watch?.windowMs).toBe(30_000)
+  })
 })

@@ -6,7 +6,7 @@
  */
 
 import type { EvolutionManifest, ReplayCaseRef } from "./manifest"
-import { assertEnvironmentMatchesManifest, computeEnvironmentDigest, type EnvironmentFacts } from "./digest"
+import { environmentDrift, computeEnvironmentDigest, type EnvironmentFacts } from "./digest"
 
 export type ReplayOutcome = "passed" | "failed" | "errored" | "skipped"
 
@@ -42,22 +42,30 @@ export type ReplayExecutor = (
 
 export interface ReplayOptions {
   executor: ReplayExecutor
-  /** 严格环境：候选环境必须与清单声明一致（默认 true）。 */
-  requireEnvironmentMatch?: boolean
-  /** 候选侧允许差异的环境字段（默认仅 sourceDigest —— 候选自身的提交）。 */
+  /** 候选环境（M4：漂移检测开启时必填 —— 省略 = 直接拒绝，
+   *  不允许"不检测"静默路径）。 */
+  candidateEnvironment: EnvironmentFacts
+  /** 候选侧允许差异的环境字段（默认仅 sourceDigest —— 候选自身的提交；
+   *  其余字段漂移 → 拒绝）。 */
   allowCandidateEnvironmentDiff?: Array<keyof EnvironmentFacts>
   manifest: EvolutionManifest
   baselineSourceRef: string
   candidateSourceRef: string
-  candidateEnvironment?: EnvironmentFacts
 }
 
-/** 重放两遍：基线 + 候选。环境漂移未声明时直接拒绝。 */
+/** 重放两遍：基线 + 候选。候选环境与清单环境逐字段对比（允许差异字段
+ *  之外的任何漂移 → 拒绝 —— ENVIRONMENT_DRIFT_UNDETECTED = 0）。 */
 export async function runReplay(opts: ReplayOptions): Promise<{ baseline: ReplayRun; candidate: ReplayRun }> {
-  const requireMatch = opts.requireEnvironmentMatch ?? true
-  if (requireMatch && opts.candidateEnvironment) {
-    const check = assertEnvironmentMatchesManifest(opts.manifest.environmentDigest, opts.candidateEnvironment)
-    if (!check.ok) throw new Error(`candidate environment drift: ${check.reason}`)
+  const allow = opts.allowCandidateEnvironmentDiff ?? ["sourceDigest"]
+  // 允许字段必须在清单环境里有定义（防"允许了不存在的字段"绕过）
+  for (const f of allow) {
+    if (opts.manifest.environment[f] === undefined) {
+      throw new Error(`allowCandidateEnvironmentDiff field not in manifest environment: ${f}`)
+    }
+  }
+  const { drift, differingFields } = environmentDrift(opts.manifest.environment, opts.candidateEnvironment, { allowFields: allow })
+  if (drift) {
+    throw new Error(`candidate environment drift in fields: ${differingFields.join(", ")}`)
   }
   const startedAt = new Date().toISOString()
   const baselineResults: ReplayCaseResult[] = []

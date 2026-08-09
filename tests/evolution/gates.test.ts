@@ -92,7 +92,7 @@ describe("LR2-6 Gates", () => {
     expect(rec.state).toBe("REJECTED_CRITERIA")
   })
 
-  test("HIDDEN_FAILURE_PROMOTED = 0: new failure (case removed) blocks promotion", () => {
+  test("HIDDEN_FAILURE_PROMOTED = 0: candidate drops a baseline case → blocks promotion", () => {
     const m = validateManifestInput(input())
     if (!m.ok) throw new Error("setup")
     const diff = buildDifferentialReport(
@@ -108,7 +108,29 @@ describe("LR2-6 Gates", () => {
       actualEvaluatorVersion: "eval-1.0",
     })
     expect(rec.state).toBe("REJECTED_CRITERIA")
-    expect(rec.transitions.at(-1)?.reason).toContain("mismatch")
+    expect(rec.transitions.at(-1)?.reason).toContain("HIDDEN_FAILURE")
+  })
+
+  test("HIDDEN_FAILURE_PROMOTED = 0: candidate adds a FAILING case → blocks promotion", () => {
+    const m = validateManifestInput(input())
+    if (!m.ok) throw new Error("setup")
+    const diff = buildDifferentialReport(
+      { side: "baseline", manifestId: m.manifest.manifestId, sourceRef: "b", results: [{ caseId: "c1", inputDigest: sha("i1"), outcome: "passed", durationMs: 1, environmentDigest: sha("e") }], startedAt: "" },
+      { side: "candidate", manifestId: m.manifest.manifestId, sourceRef: "c", results: [
+        { caseId: "c1", inputDigest: sha("i1"), outcome: "passed", durationMs: 1, environmentDigest: sha("e") },
+        { caseId: "c2", inputDigest: sha("i2"), outcome: "failed", durationMs: 1, environmentDigest: sha("e"), detail: "new failing case" },
+      ], startedAt: "" },
+      { requireZeroRegression: true, requireNoHiddenFailure: true },
+    )
+    let rec = createPromotion(m.manifest, "c")
+    rec = evaluateCandidate(rec, m.manifest, {
+      differential: diff,
+      security: { ok: true, reason: "ok" },
+      performance: { ok: true, reason: "ok" },
+      actualEvaluatorVersion: "eval-1.0",
+    })
+    expect(rec.state).toBe("REJECTED_CRITERIA")
+    expect(rec.transitions.at(-1)?.reason).toContain("HIDDEN_FAILURE")
   })
 
   test("SECURITY_GATE_REGRESSION = 0: gate increase blocks promotion", () => {
@@ -130,7 +152,7 @@ describe("LR2-6 Gates", () => {
   test("CANDIDATE_WRITES_BASELINE = 0: baseline only updated via promote()", async () => {
     const m = validateManifestInput(input())
     if (!m.ok) throw new Error("setup")
-    const { baseline, candidate } = await runReplay({ manifest: m.manifest, baselineSourceRef: "b", candidateSourceRef: "c", executor: passExecutor })
+    const { baseline, candidate } = await runReplay({ manifest: m.manifest, baselineSourceRef: "b", candidateSourceRef: "c", candidateEnvironment: facts(), executor: passExecutor })
     const diff = buildDifferentialReport(baseline, candidate, { requireZeroRegression: true, requireNoHiddenFailure: true })
     let rec = createPromotion(m.manifest, "c")
     rec = evaluateCandidate(rec, m.manifest, { differential: diff, security: { ok: true, reason: "ok" }, performance: { ok: true, reason: "ok" }, actualEvaluatorVersion: "eval-1.0" })

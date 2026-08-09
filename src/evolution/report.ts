@@ -43,15 +43,40 @@ function classify(baseline: ReplayCaseResult, candidate: ReplayCaseResult): Case
       ? "REGRESSION"
       : !passed(baseline.outcome) && passed(candidate.outcome)
         ? "IMPROVED"
-        : !passed(baseline.outcome) && !passed(candidate.outcome)
-          ? "UNCHANGED_FAIL"
-          : "MISMATCH"
+        : "UNCHANGED_FAIL"
   return {
     caseId: baseline.caseId,
     baselineOutcome: baseline.outcome,
     candidateOutcome: candidate.outcome,
     diffClass,
     detail: !passed(candidate.outcome) ? candidate.detail : undefined,
+  }
+}
+
+/** 基线独有 case（候选侧缺失）：异常缺失 —— 按 requireNoHiddenFailure
+ *  判定（缺失 = 候选隐藏了该 case 的失败）。 */
+function classifyBaselineOnly(baseline: ReplayCaseResult, hiddenIsBlocker: boolean): CaseDiff {
+  const diffClass: DiffClass = hiddenIsBlocker ? "NEW_FAILURE" : "MISMATCH"
+  return {
+    caseId: baseline.caseId,
+    baselineOutcome: baseline.outcome,
+    candidateOutcome: "skipped",
+    diffClass,
+    detail: "case missing on candidate side",
+  }
+}
+
+/** 候选独有 case（基线没有）：若候选侧失败 → NEW_FAILURE（新增失败
+ *  样本，隐藏失败）；通过 → 中性（候选新增 case 不算回归）。 */
+function classifyCandidateOnly(candidate: ReplayCaseResult): CaseDiff {
+  const passed = candidate.outcome === "passed"
+  const diffClass: DiffClass = passed ? "MISMATCH" : "NEW_FAILURE"
+  return {
+    caseId: candidate.caseId,
+    baselineOutcome: "skipped",
+    candidateOutcome: candidate.outcome,
+    diffClass,
+    detail: !passed ? `new failure on candidate-only case: ${candidate.detail ?? ""}` : "case added on candidate side",
   }
 }
 
@@ -64,15 +89,22 @@ export function buildDifferentialReport(
   if (baseline.manifestId !== candidate.manifestId) {
     throw new Error("differential report requires same manifest for both sides")
   }
-  const byId = new Map(candidate.results.map(r => [r.caseId, r]))
+  const candById = new Map(candidate.results.map(r => [r.caseId, r]))
   const caseDiffs: CaseDiff[] = []
+  // 双向遍历：union of caseIds —— 基线独有（候选缺失）+ 候选独有（新增）
   for (const b of baseline.results) {
-    const c = byId.get(b.caseId)
+    const c = candById.get(b.caseId)
     if (!c) {
-      caseDiffs.push({ caseId: b.caseId, baselineOutcome: b.outcome, candidateOutcome: "skipped", diffClass: "MISMATCH" })
+      // 候选隐藏了基线 case：失败样本隐藏 → NEW_FAILURE blocker
+      caseDiffs.push(classifyBaselineOnly(b, criteria.requireNoHiddenFailure))
       continue
     }
     caseDiffs.push(classify(b, c))
+  }
+  const baselineIds = new Set(baseline.results.map(r => r.caseId))
+  for (const c of candidate.results) {
+    if (baselineIds.has(c.caseId)) continue
+    caseDiffs.push(classifyCandidateOnly(c))
   }
   const count = (cls: DiffClass) => caseDiffs.filter(d => d.diffClass === cls).length
   const regressions = count("REGRESSION")
@@ -82,7 +114,6 @@ export function buildDifferentialReport(
   const blockers: string[] = []
   if (criteria.requireZeroRegression && regressions > 0) blockers.push(`REGRESSION_PROMOTED: ${regressions} case(s) regressed`)
   if (criteria.requireNoHiddenFailure && newFailures > 0) blockers.push(`HIDDEN_FAILURE_PROMOTED: ${newFailures} new failure(s)`)
-  if (count("MISMATCH") > 0) blockers.push(`case set mismatch between sides: ${count("MISMATCH")}`)
 
   return {
     manifestId: baseline.manifestId,

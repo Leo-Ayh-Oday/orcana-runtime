@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync } from "node:fs"
-import { join } from "node:path"
+import { lstatSync, mkdirSync } from "node:fs"
+import { join, resolve } from "node:path"
 import { Database } from "bun:sqlite"
 import {
   canonicalDigest,
@@ -28,10 +28,7 @@ import { WorldConflictError, WorldCorruptionError } from "./contracts"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { WorldLedger } from "./ledger"
 import {
-  WORLD_SCHEMA,
-  WORLD_SCHEMA_FINGERPRINT,
-  WORLD_SCHEMA_VERSION,
-  worldSchemaFingerprint,
+  initializeOrValidateWorldSchema,
 } from "./schema"
 import { WorldSnapshotManager } from "./snapshot"
 
@@ -274,7 +271,23 @@ function assertNoReservedMetadata(
   }
 }
 
+function enableWalWithBusyRetry(db: Database, timeoutMs = 5_000): void {
+  const deadline = Date.now() + timeoutMs
+  const waiter = new Int32Array(new SharedArrayBuffer(4))
+  for (;;) {
+    try {
+      db.exec("PRAGMA journal_mode = WAL")
+      return
+    } catch (error) {
+      const busy = error instanceof Error && "code" in error && error.code === "SQLITE_BUSY"
+      if (!busy || Date.now() >= deadline) throw error
+      Atomics.wait(waiter, 0, 0, 10)
+    }
+  }
+}
+
 export class WorldStore {
+  readonly root: string
   readonly databasePath: string
   readonly ledger: WorldLedger
   readonly cas: WorldCas
@@ -284,88 +297,56 @@ export class WorldStore {
   private readonly idFactory: (kind: "world" | "event" | "commit") => string
   private readonly faultInjector?: (point: WorldFaultPoint) => void
 
-  constructor(readonly root: string, options: Omit<WorldStoreOptions, "root"> = {}) {
+  constructor(root: string, options: Omit<WorldStoreOptions, "root"> = {}) {
     this.now = options.now ?? (() => Date.now())
     this.idFactory = options.idFactory ?? (kind => `${kind}-${randomUUID()}`)
     this.faultInjector = options.faultInjector
-    for (const directory of ["ledger", "snapshots", "projections", "recovery"]) {
-      mkdirSync(join(root, directory), { recursive: true, mode: 0o700 })
+    const configuredRoot = resolve(root)
+    mkdirSync(configuredRoot, { recursive: true, mode: 0o700 })
+    const rootStat = lstatSync(configuredRoot)
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      throw new Error(`World root must be a real directory: ${configuredRoot}`)
     }
-    this.databasePath = join(root, "world.db")
+    this.root = configuredRoot
+    for (const directory of ["ledger", "snapshots", "projections", "recovery"]) {
+      mkdirSync(join(configuredRoot, directory), { recursive: true, mode: 0o700 })
+    }
+    this.databasePath = join(configuredRoot, "world.db")
     this.db = new Database(this.databasePath)
     this.db.exec("PRAGMA foreign_keys = ON")
-    this.db.exec("PRAGMA journal_mode = WAL")
-    this.db.exec("PRAGMA synchronous = FULL")
     this.db.exec("PRAGMA busy_timeout = 5000")
-    const installedObjects = dbAll<{ name: string }>(
-      this.db,
-      `SELECT name FROM sqlite_master
-       WHERE type IN ('table', 'index', 'trigger')
-         AND name NOT LIKE 'sqlite_%'
-         AND sql IS NOT NULL`,
-    )
+    enableWalWithBusyRetry(this.db)
+    this.db.exec("PRAGMA synchronous = FULL")
     try {
-      if (installedObjects.length === 0) {
-        withImmediateTransaction(this.db, () => {
-          this.db.exec(WORLD_SCHEMA)
-          dbRun(
-            this.db,
-            "INSERT INTO world_schema_meta (schema_version, installed_at) VALUES (?, ?)",
-            WORLD_SCHEMA_VERSION,
-            this.now(),
-          )
-          const fingerprint = worldSchemaFingerprint(this.db)
-          if (fingerprint !== WORLD_SCHEMA_FINGERPRINT) {
-            throw new Error(
-              `WORLD_SCHEMA_BUILD_MISMATCH: expected ${WORLD_SCHEMA_FINGERPRINT}, found ${fingerprint}`,
-            )
-          }
-        })
-      } else {
-        const hasSchemaMeta = installedObjects.some(object => object.name === "world_schema_meta")
-        if (!hasSchemaMeta) {
-          throw new Error("WORLD_SCHEMA_INCOMPATIBLE: schema metadata table is missing")
-        }
-        const installedVersions = dbAll<{ schemaVersion: number }>(
-          this.db,
-          "SELECT schema_version AS schemaVersion FROM world_schema_meta ORDER BY schema_version",
-        ).map(row => row.schemaVersion)
-        if (
-          installedVersions.length !== 1 ||
-          installedVersions[0] !== WORLD_SCHEMA_VERSION
-        ) {
-          throw new Error(
-            `WORLD_SCHEMA_INCOMPATIBLE: expected ${WORLD_SCHEMA_VERSION}, found ${installedVersions.join(",") || "none"}`,
-          )
-        }
-        const fingerprint = worldSchemaFingerprint(this.db)
-        if (fingerprint !== WORLD_SCHEMA_FINGERPRINT) {
-          throw new Error(
-            `WORLD_SCHEMA_INCOMPATIBLE: expected fingerprint ${WORLD_SCHEMA_FINGERPRINT}, found ${fingerprint}`,
-          )
-        }
-      }
+      withImmediateTransaction(this.db, () => {
+        initializeOrValidateWorldSchema(this.db, this.now())
+      })
     } catch (error) {
       this.db.close()
       throw error
     }
     this.ledger = new WorldLedger(this.db)
-    this.cas = new WorldCas(this.db, root, this.now, this.faultInjector)
-    this.snapshots = new WorldSnapshotManager(
-      this.db,
-      this.cas,
-      this.ledger,
-      {
-        getWorld: worldId => this.getWorld(worldId),
-        getBranch: (worldId, branchId) => this.getBranch(worldId, branchId),
-        listObjects: (worldId, branchId) => this.listObjects(worldId, branchId),
-        listArtifacts: (worldId, branchId) => this.listArtifacts(worldId, branchId),
-        listServices: (worldId, branchId) => this.listServices(worldId, branchId),
-      },
-      this.now,
-      () => this.idFactory("event"),
-      this.faultInjector,
-    )
+    try {
+      this.cas = new WorldCas(this.db, configuredRoot, this.now, this.faultInjector)
+      this.snapshots = new WorldSnapshotManager(
+        this.db,
+        this.cas,
+        this.ledger,
+        {
+          getWorld: worldId => this.getWorld(worldId),
+          getBranch: (worldId, branchId) => this.getBranch(worldId, branchId),
+          listObjects: (worldId, branchId) => this.listObjects(worldId, branchId),
+          listArtifacts: (worldId, branchId) => this.listArtifacts(worldId, branchId),
+          listServices: (worldId, branchId) => this.listServices(worldId, branchId),
+        },
+        this.now,
+        () => this.idFactory("event"),
+        this.faultInjector,
+      )
+    } catch (error) {
+      this.db.close()
+      throw error
+    }
   }
 
   close(): void {
@@ -655,15 +636,33 @@ export class WorldStore {
     }
   }
 
-  compareAndCommit(request: WorldCommitRequest): WorldCommitReceipt {
-    if (request.mutations.length === 0) throw new Error("World commit requires at least one mutation")
-    const commitId = request.commitId ?? this.idFactory("commit")
-    const executionReceiptIds = [...(request.executionReceiptIds ?? [])]
-    const effectReceiptIds = [...(request.effectReceiptIds ?? [])]
-    const deltaDigest = canonicalDigest(request.mutations)
+  compareAndCommit(input: WorldCommitRequest): WorldCommitReceipt {
+    const mutations = parseCanonicalJson<WorldMutation[]>(canonicalJson(input.mutations))
+    if (mutations.length === 0) throw new Error("World commit requires at least one mutation")
+    const commitId = input.commitId ?? this.idFactory("commit")
+    const executionReceiptIds = parseCanonicalJson<string[]>(
+      canonicalJson(input.executionReceiptIds ?? []),
+    )
+    const effectReceiptIds = parseCanonicalJson<string[]>(
+      canonicalJson(input.effectReceiptIds ?? []),
+    )
+    const request = Object.freeze({
+      worldId: input.worldId,
+      branchId: input.branchId,
+      baseRevision: input.baseRevision,
+      actor: input.actor,
+      mutations,
+      executionReceiptIds,
+      effectReceiptIds,
+      commitId,
+    })
+    const deltaDigest = canonicalDigest(mutations)
     const requestDigest = canonicalDigest({
-      ...request,
+      worldId: request.worldId,
+      branchId: request.branchId,
+      mutations,
       baseRevision: request.baseRevision.toString(),
+      actor: request.actor,
       commitId,
       executionReceiptIds,
       effectReceiptIds,
@@ -702,7 +701,7 @@ export class WorldStore {
 
       const newRevision = request.baseRevision + 1n
       const committedAt = this.now()
-      for (const mutation of request.mutations) {
+      for (const mutation of mutations) {
         const eventType = this.applyMutation(
           request.worldId,
           request.branchId,
@@ -795,7 +794,7 @@ export class WorldStore {
           baseRevision: request.baseRevision.toString(),
           newRevision: newRevision.toString(),
           deltaDigest,
-          mutationCount: request.mutations.length,
+          mutationCount: mutations.length,
         },
         occurredAt: committedAt,
       })

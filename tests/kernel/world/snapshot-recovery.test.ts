@@ -248,7 +248,40 @@ describe("AK-1 recovery", () => {
     }
   })
 
-  test("manifest edges are verified from immutable content even if media metadata is tampered", () => {
+  test("ordinary JSON that resembles a manifest remains ordinary World content", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      fixture.store.createWorld({ worldId: "w2", owner: "user:owner" })
+      const lookalike = fixture.store.cas.put(Buffer.from(JSON.stringify({
+        schemaVersion: 1,
+        type: "directory",
+        entries: [{ digest: `sha256:${"f".repeat(64)}` }],
+      })), "application/json")
+      fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:a",
+        mutations: [{
+          type: "artifact.put",
+          artifactId: "lookalike",
+          mediaType: "application/json",
+          contentRef: lookalike.digest,
+        }],
+      })
+
+      const report = recoverWorldStore(fixture.store)
+      assertWorldRecovered(report)
+      expect(fixture.store.getWorld("w1")?.status).toBe("active")
+      expect(fixture.store.getWorld("w2")?.status).toBe("active")
+      expect(fixture.store.cas.get(lookalike.digest).toString()).toContain("directory")
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("schema tampering blocks recovery before a hidden manifest edge can drive GC", () => {
     const fixture = createTestWorldStore()
     try {
       fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
@@ -283,17 +316,11 @@ describe("AK-1 recovery", () => {
         db.close()
       }
 
-      const report = recoverWorldStore(fixture.store)
-      expect(report.integrityIssues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          code: "CAS_REFERENCE_DIVERGENCE",
-          detail: expect.stringContaining(file.digest),
-        }),
-      ]))
-      expect(report.removedUnreachableObjects).not.toContain(chunkDigest)
+      expect(() => fixture.store.cas.gc()).toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
+      expect(() => recoverWorldStore(fixture.store)).toThrow(/WORLD_SCHEMA_INCOMPATIBLE/)
       expect(fixture.store.cas.record(chunkDigest)).toBeDefined()
       expect(existsSync(fixture.store.cas.resolveObjectPath(chunkDigest))).toBe(true)
-      expect(fixture.store.getWorld("w1")?.status).toBe("corrupted")
+      expect(fixture.store.getWorld("w1")?.status).toBe("active")
     } finally {
       fixture.cleanup()
     }

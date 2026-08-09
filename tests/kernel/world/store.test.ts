@@ -377,15 +377,39 @@ describe("AK-1 WorldStore", () => {
           throw new Error("accessor must not execute")
         },
       })
+      let arrayAccessorCalls = 0
+      const arrayAccessor: unknown[] = []
+      Object.defineProperty(arrayAccessor, "0", {
+        enumerable: true,
+        configurable: true,
+        get: () => {
+          arrayAccessorCalls += 1
+          return arrayAccessorCalls
+        },
+      })
+      const arrayWithExtraProperty = [1] as unknown[] & { extra?: string }
+      arrayWithExtraProperty.extra = "not-json"
+      const arrayWithSymbol = [1]
+      Object.defineProperty(arrayWithSymbol, Symbol("extra"), { value: true })
+      const arrayWithHiddenElement = [1]
+      Object.defineProperty(arrayWithHiddenElement, "0", {
+        value: 1,
+        enumerable: false,
+      })
       const invalidValues: unknown[] = [
         undefined,
         1n,
+        -0,
         new Date(0),
         new Map([["key", "value"]]),
         new Uint8Array([1]),
         cyclic,
         accessor,
         Array(1),
+        arrayAccessor,
+        arrayWithExtraProperty,
+        arrayWithSymbol,
+        arrayWithHiddenElement,
       ]
       for (const unsafe of invalidValues) {
         expect(() => fixture.store.compareAndCommit({
@@ -401,6 +425,7 @@ describe("AK-1 WorldStore", () => {
           }],
         })).toThrow(/canonical JSON/)
       }
+      expect(arrayAccessorCalls).toBe(0)
       expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
     } finally {
       fixture.cleanup()

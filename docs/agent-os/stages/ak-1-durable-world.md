@@ -386,3 +386,31 @@ CRASH_LOSES_COMMITTED_WORLD    = 0
 ### INFERENCE — 第八轮修复候选门评估
 
 第七轮复审的 2 个 High 与 2 个残余风险均已由 pinned-sidecar bootstrap validation、snapshot-compatible runtime validation、post-chmod directory fsync 和 errno-aware monotonic flock 闭锁。阶段状态仍为 `FIXED_REAUDIT_PENDING`；必须在全程无任何主代理 mutation 的干净 worktree 上完成新的独立只读复审，才可关闭 AK-1。
+
+### FACT — 第八轮独立复审
+
+- 独立 Agent 对 `398f13544fa02bd500613f3fbb0518d7922bc507` 完成 clean-start/clean-end 全程不变的只读复审，给出 `CHANGES_REQUIRED`。
+- 第八轮 sidecar provenance、runtime mutation/snapshot contract、errno-aware flock 与 post-chmod fsync 均被静态确认关闭。
+- 新增 1 个阻断 High：`createWorld()` 仅以 truthiness 检查输入，普通 JavaScript 可传入 truthy number；SQLite TEXT affinity 会把 materialized root 转为字符串，而 genesis ledger 保留数字。`verifyIntegrity()` 对 malformed genesis 只跳过 replay、不报 issue，可能错误返回零问题。
+- 审计残余风险：bootstrap state torn record、错误 prefix/digest/fingerprint 尚无直接测试注入；`libc.so.6` + `__errno_location` 限定当前实现为 glibc Linux。当前权威 Ubuntu 环境满足该约束，musl 支持不在 AK-1 范围内。
+
+### FACT — 第九轮修复
+
+- 修复提交为 `3bd4bcedeb45e4e5b562e1e730665f60e398e445`，parent 为 `398f13544fa02bd500613f3fbb0518d7922bc507`；只修改 `src/kernel/world/store.ts` 与 `tests/kernel/world/store.test.ts`。
+- `createWorld()` 仅把 `undefined` 视为省略值；规范化后的 `worldId`、`branchId`、`rootObjectId`、`owner`、`purpose` 在 transaction 前全部执行 runtime non-empty string validation，并在 WorldDB 与 genesis ledger 间复用同一组值。
+- `verifyIntegrity()` 要求 `world.created` payload 具有 exact keys、non-empty root/purpose、合法 materialized digest 与 non-empty actor；任何 malformed genesis 都显式产生 `LEDGER_DB_DIVERGENCE`，不再静默关闭 deterministic replay。
+- 新增五类普通 JavaScript number 输入反例，覆盖 world、branch、root、owner、purpose，并证明 WorldDB 未创建任何 World；另篡改 genesis payload 为 numeric root 且同步更新 payload digest，验证完整性检查仍明确失败。
+
+### FACT — 第九轮修复后主代理验证
+
+- 定向 `bun test tests/kernel/world/store.test.ts`：`16 pass / 0 fail / 90 expect`。
+- `bun test tests/kernel`：`72 pass / 0 fail / 399 expect`。
+- `bun test tests/execd/state-store.test.ts tests/runtime/linux/cache/cas.test.ts`：`17 pass / 0 fail / 47 expect`。
+- `bun run typecheck`：通过。
+- `bun run build`：通过。
+- `git diff --check`：通过；测试依赖 symlink 已删除，代码提交后 worktree 干净。
+- hosted CI 仍被既有账号 billing lock 阻塞为 0 steps；live/provider 测试未运行且不计为通过。
+
+### INFERENCE — 第九轮修复候选门评估
+
+第八轮独立复审的唯一 High 已由 pre-transaction normalized string validation 与 explicit malformed-genesis integrity failure 闭锁。AK-1 仍为 `FIXED_REAUDIT_PENDING`；需要新的 clean-start/clean-end 独立只读复审确认后才能关闭。

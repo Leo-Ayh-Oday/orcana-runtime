@@ -119,6 +119,19 @@ function fsyncDirectory(path: string): void {
   }
 }
 
+function ensureDurableDirectory(path: string): void {
+  if (existsSync(path)) return
+  const parent = dirname(path)
+  ensureDurableDirectory(parent)
+  try {
+    mkdirSync(path, { mode: 0o700 })
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error
+  }
+  fsyncDirectory(path)
+  fsyncDirectory(parent)
+}
+
 function writeAll(fd: number, bytes: Buffer): void {
   let offset = 0
   while (offset < bytes.byteLength) {
@@ -140,8 +153,8 @@ export class WorldCas {
   ) {
     this.objectsRoot = join(root, "cas", "sha256")
     this.stagingRoot = join(root, "recovery", "cas-staging")
-    mkdirSync(this.objectsRoot, { recursive: true, mode: 0o700 })
-    mkdirSync(this.stagingRoot, { recursive: true, mode: 0o700 })
+    ensureDurableDirectory(this.objectsRoot)
+    ensureDurableDirectory(this.stagingRoot)
   }
 
   resolveObjectPath(digest: CasDigest): string {
@@ -155,7 +168,7 @@ export class WorldCas {
       const digest = sha256Digest(bytes)
       const destination = this.resolveObjectPath(digest)
       const parent = dirname(destination)
-      mkdirSync(parent, { recursive: true, mode: 0o700 })
+      ensureDurableDirectory(parent)
 
       if (existsSync(destination)) {
         const existingBytes = readFileSync(destination)
@@ -174,6 +187,7 @@ export class WorldCas {
         }
         renameSync(temporary, destination)
         fsyncDirectory(parent)
+        fsyncDirectory(this.stagingRoot)
         this.faultInjector?.("after_cas_rename_before_metadata")
       }
 
@@ -243,6 +257,7 @@ export class WorldCas {
           throw error
         }
       }
+      if (uniqueDigests.length > 0) this.faultInjector?.("before_cas_link_insert")
       for (const digest of uniqueDigests) {
         const inserted = dbRun(
           this.db,
@@ -407,27 +422,47 @@ export class WorldCas {
   }
 
   private manifestReferenceIssues(record: CasObjectRecord, content: Buffer): WorldIntegrityIssue[] {
-    if (record.mediaType !== "application/vnd.orcana.manifest+json") return []
     let manifest: Record<string, unknown>
     try {
       manifest = JSON.parse(content.toString("utf8")) as Record<string, unknown>
     } catch {
-      return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid manifest JSON ${record.digest}` }]
+      return []
     }
+    if (!manifest || typeof manifest !== "object" || manifest.schemaVersion !== 1) return []
+    const recognizedType = manifest.type === "file" ||
+      manifest.type === "directory" ||
+      manifest.type === "world-section" ||
+      manifest.type === "world"
+    if (!recognizedType) return []
     const declared: string[] = []
-    if (manifest.type === "file" && Array.isArray(manifest.chunks)) {
+    if (manifest.type === "file") {
+      if (!Array.isArray(manifest.chunks)) {
+        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid file manifest ${record.digest}` }]
+      }
       for (const chunk of manifest.chunks) {
         if (chunk && typeof chunk === "object" && typeof (chunk as { digest?: unknown }).digest === "string") {
           declared.push((chunk as { digest: string }).digest)
         }
       }
-    } else if (manifest.type === "directory" && Array.isArray(manifest.entries)) {
+      if (declared.length !== manifest.chunks.length) {
+        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid file manifest ${record.digest}` }]
+      }
+    } else if (manifest.type === "directory") {
+      if (!Array.isArray(manifest.entries)) {
+        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid directory manifest ${record.digest}` }]
+      }
       for (const entry of manifest.entries) {
         if (entry && typeof entry === "object" && typeof (entry as { digest?: unknown }).digest === "string") {
           declared.push((entry as { digest: string }).digest)
         }
       }
-    } else if (manifest.type === "world-section" && Array.isArray(manifest.entries)) {
+      if (declared.length !== manifest.entries.length) {
+        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid directory manifest ${record.digest}` }]
+      }
+    } else if (manifest.type === "world-section") {
+      if (!Array.isArray(manifest.entries)) {
+        return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid section manifest ${record.digest}` }]
+      }
       for (const entry of manifest.entries) {
         const contentRef = entry && typeof entry === "object"
           ? (entry as { contentRef?: unknown }).contentRef
@@ -443,7 +478,10 @@ export class WorldCas {
         "serviceStateDigest",
         "artifactStateDigest",
       ]) {
-        if (typeof manifest[field] === "string") declared.push(manifest[field] as string)
+        if (typeof manifest[field] !== "string") {
+          return [{ code: "CAS_CONTENT_CORRUPT", detail: `invalid world manifest ${record.digest}` }]
+        }
+        declared.push(manifest[field] as string)
       }
     }
     const expected = [...new Set(declared)].sort(compareCanonicalStrings)

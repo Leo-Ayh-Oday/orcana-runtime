@@ -236,6 +236,7 @@ export type WorldFaultPoint =
   | "after_cas_temp_fsync"
   | "after_cas_rename_before_metadata"
   | "after_cas_metadata_before_return"
+  | "before_cas_link_insert"
   | "after_snapshot_manifest_before_insert"
   | "after_snapshot_insert_before_commit"
 

@@ -27,7 +27,12 @@ import type {
 import { WorldConflictError, WorldCorruptionError } from "./contracts"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { WorldLedger } from "./ledger"
-import { WORLD_SCHEMA, WORLD_SCHEMA_VERSION } from "./schema"
+import {
+  WORLD_SCHEMA,
+  WORLD_SCHEMA_FINGERPRINT,
+  WORLD_SCHEMA_VERSION,
+  worldSchemaFingerprint,
+} from "./schema"
 import { WorldSnapshotManager } from "./snapshot"
 
 interface WorldMetaRow {
@@ -116,7 +121,7 @@ interface MaterializedStateImage {
   }
   branch: {
     branchId: string
-    parentBranchId?: string
+    parentBranchId: string | null
     baseRevision: string
     headRevision: string
     owner: string
@@ -127,8 +132,8 @@ interface MaterializedStateImage {
   objects: Array<{
     objectId: string
     objectType: WorldObject["objectType"]
-    path?: string
-    contentRef?: CasDigest
+    path: string | null
+    contentRef: CasDigest | null
     metadata: Readonly<Record<string, unknown>>
     updatedRevision: string
     createdAt: number
@@ -146,7 +151,7 @@ interface MaterializedStateImage {
   services: Array<{
     serviceId: string
     status: string
-    definitionDigest?: CasDigest
+    definitionDigest: CasDigest | null
     metadata: Readonly<Record<string, unknown>>
     updatedRevision: string
     createdAt: number
@@ -292,25 +297,57 @@ export class WorldStore {
     this.db.exec("PRAGMA journal_mode = WAL")
     this.db.exec("PRAGMA synchronous = FULL")
     this.db.exec("PRAGMA busy_timeout = 5000")
-    this.db.exec(WORLD_SCHEMA)
-    const installedVersions = dbAll<{ schemaVersion: number }>(
+    const installedObjects = dbAll<{ name: string }>(
       this.db,
-      "SELECT schema_version AS schemaVersion FROM world_schema_meta ORDER BY schema_version",
-    ).map(row => row.schemaVersion)
-    if (installedVersions.length === 0) {
-      dbRun(
-        this.db,
-        "INSERT INTO world_schema_meta (schema_version, installed_at) VALUES (?, ?)",
-        WORLD_SCHEMA_VERSION,
-        this.now(),
-      )
-    } else if (
-      installedVersions.length !== 1 ||
-      installedVersions[0] !== WORLD_SCHEMA_VERSION
-    ) {
-      const message = `WORLD_SCHEMA_INCOMPATIBLE: expected ${WORLD_SCHEMA_VERSION}, found ${installedVersions.join(",")}`
+      `SELECT name FROM sqlite_master
+       WHERE type IN ('table', 'index', 'trigger')
+         AND name NOT LIKE 'sqlite_%'
+         AND sql IS NOT NULL`,
+    )
+    try {
+      if (installedObjects.length === 0) {
+        withImmediateTransaction(this.db, () => {
+          this.db.exec(WORLD_SCHEMA)
+          dbRun(
+            this.db,
+            "INSERT INTO world_schema_meta (schema_version, installed_at) VALUES (?, ?)",
+            WORLD_SCHEMA_VERSION,
+            this.now(),
+          )
+          const fingerprint = worldSchemaFingerprint(this.db)
+          if (fingerprint !== WORLD_SCHEMA_FINGERPRINT) {
+            throw new Error(
+              `WORLD_SCHEMA_BUILD_MISMATCH: expected ${WORLD_SCHEMA_FINGERPRINT}, found ${fingerprint}`,
+            )
+          }
+        })
+      } else {
+        const hasSchemaMeta = installedObjects.some(object => object.name === "world_schema_meta")
+        if (!hasSchemaMeta) {
+          throw new Error("WORLD_SCHEMA_INCOMPATIBLE: schema metadata table is missing")
+        }
+        const installedVersions = dbAll<{ schemaVersion: number }>(
+          this.db,
+          "SELECT schema_version AS schemaVersion FROM world_schema_meta ORDER BY schema_version",
+        ).map(row => row.schemaVersion)
+        if (
+          installedVersions.length !== 1 ||
+          installedVersions[0] !== WORLD_SCHEMA_VERSION
+        ) {
+          throw new Error(
+            `WORLD_SCHEMA_INCOMPATIBLE: expected ${WORLD_SCHEMA_VERSION}, found ${installedVersions.join(",") || "none"}`,
+          )
+        }
+        const fingerprint = worldSchemaFingerprint(this.db)
+        if (fingerprint !== WORLD_SCHEMA_FINGERPRINT) {
+          throw new Error(
+            `WORLD_SCHEMA_INCOMPATIBLE: expected fingerprint ${WORLD_SCHEMA_FINGERPRINT}, found ${fingerprint}`,
+          )
+        }
+      }
+    } catch (error) {
       this.db.close()
-      throw new Error(message)
+      throw error
     }
     this.ledger = new WorldLedger(this.db)
     this.cas = new WorldCas(this.db, root, this.now, this.faultInjector)
@@ -494,7 +531,7 @@ export class WorldStore {
       },
       branch: {
         branchId: branch.branchId,
-        parentBranchId: branch.parentBranchId,
+        parentBranchId: branch.parentBranchId ?? null,
         baseRevision: branch.baseRevision.toString(),
         headRevision: branch.headRevision.toString(),
         owner: branch.owner,
@@ -506,8 +543,8 @@ export class WorldStore {
         .map(object => ({
           objectId: object.objectId,
           objectType: object.objectType,
-          path: object.path,
-          contentRef: object.contentRef,
+          path: object.path ?? null,
+          contentRef: object.contentRef ?? null,
           metadata: object.metadata,
           updatedRevision: object.updatedRevision.toString(),
           createdAt: object.createdAt,
@@ -529,7 +566,7 @@ export class WorldStore {
         .map(service => ({
           serviceId: service.serviceId,
           status: service.status,
-          definitionDigest: service.definitionDigest,
+          definitionDigest: service.definitionDigest ?? null,
           metadata: service.metadata,
           updatedRevision: service.updatedRevision.toString(),
           createdAt: service.createdAt,
@@ -556,8 +593,8 @@ export class WorldStore {
         const next: MaterializedStateImage["objects"][number] = {
           objectId: mutation.objectId,
           objectType: mutation.objectType,
-          path: mutation.path,
-          contentRef: mutation.contentRef,
+          path: mutation.path ?? null,
+          contentRef: mutation.contentRef ?? null,
           metadata: mutation.metadata ?? {},
           updatedRevision,
           createdAt: existing?.createdAt ?? event.occurredAt,
@@ -597,7 +634,7 @@ export class WorldStore {
         const next: MaterializedStateImage["services"][number] = {
           serviceId: mutation.serviceId,
           status: mutation.status,
-          definitionDigest: mutation.definitionDigest,
+          definitionDigest: mutation.definitionDigest ?? null,
           metadata: mutation.metadata ?? {},
           updatedRevision,
           createdAt: existing?.createdAt ?? event.occurredAt,
@@ -872,6 +909,7 @@ export class WorldStore {
           },
           branch: {
             branchId: world.currentBranchId,
+            parentBranchId: null,
             baseRevision: "0",
             headRevision: "0",
             owner: genesis.actor,
@@ -1214,9 +1252,7 @@ export class WorldStore {
   ): string {
     switch (mutation.type) {
       case "object.put": {
-        if (mutation.contentRef && !this.cas.has(mutation.contentRef)) {
-          throw new Error(`object references missing CAS content: ${mutation.contentRef}`)
-        }
+        if (mutation.contentRef) this.cas.get(mutation.contentRef)
         const ownerId = objectOwnerId(worldId, branchId, mutation.objectId)
         const existing = dbGet<{ contentRef: string | null; createdAt: number }>(
           this.db,
@@ -1281,9 +1317,7 @@ export class WorldStore {
       }
       case "artifact.put": {
         assertNoReservedMetadata(mutation.metadata, ["artifactId", "mediaType", "contentRef"])
-        if (!this.cas.has(mutation.contentRef)) {
-          throw new Error(`artifact references missing CAS content: ${mutation.contentRef}`)
-        }
+        this.cas.get(mutation.contentRef)
         const ownerId = objectOwnerId(worldId, branchId, mutation.artifactId)
         const existing = dbGet<{ contentRef: string; createdAt: number }>(
           this.db,
@@ -1348,9 +1382,7 @@ export class WorldStore {
           "status",
           "definitionDigest",
         ])
-        if (mutation.definitionDigest && !this.cas.has(mutation.definitionDigest)) {
-          throw new Error(`service references missing CAS definition: ${mutation.definitionDigest}`)
-        }
+        if (mutation.definitionDigest) this.cas.get(mutation.definitionDigest)
         const ownerId = objectOwnerId(worldId, branchId, mutation.serviceId)
         const existing = dbGet<{ definitionDigest: string | null; createdAt: number }>(
           this.db,

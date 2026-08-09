@@ -138,6 +138,9 @@ export interface LinuxExecutionBroker {
   ledger(): ResourceLedger
   /** PR-6: 统一运行时上下文（Graph 调度与 Broker 共享单一账本/锁/缓存）。 */
   runtimeContext(): ExecutionRuntimeContext
+  /** execd v2（L2-A）：cgroup 委托基路径（无委托 → undefined）。
+   *  供执行句柄记录计算 cell 专属 cgroup 路径。 */
+  cgroupBase(): string | undefined
 }
 
 /** 全进程共享的 broker 实例（能力探测缓存）。 */
@@ -820,6 +823,9 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     },
     runtimeContext() {
       return { ledger, locks, domainManager, cacheManager, stateStore }
+    },
+    cgroupBase() {
+      return cgroup?.base
     },
   }
 }

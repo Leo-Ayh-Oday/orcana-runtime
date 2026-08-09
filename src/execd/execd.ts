@@ -6,12 +6,14 @@
  */
 
 import { mkdirSync } from "node:fs"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
+import { tmpdir } from "node:os"
 import { StateStore } from "./state/store"
 import { CellManager } from "./cell-manager"
 import { LeaseManager } from "./lease-manager"
 import { Recovery } from "./recovery"
 import { ExecdServer, type ExecdServerDeps } from "./server"
+import { LogStore } from "./log-store"
 import { createLinuxBroker, type LinuxExecutionBroker } from "../runtime/linux/broker"
 import { envApprovalTokenProvider, type ApprovalTokenProvider } from "./approval"
 
@@ -25,6 +27,8 @@ export interface ExecdOptions {
   broker?: LinuxExecutionBroker
   /** L2-D：approval token 源（缺省读 env —— fail closed）。 */
   approval?: ApprovalTokenProvider
+  /** L2-B：大对象日志根目录（缺省 $TMPDIR/orcana-execd/logs）。 */
+  logRoot?: string
 }
 
 export interface Execd {
@@ -45,10 +49,20 @@ export function createExecd(opts: ExecdOptions): Execd {
   const state = new StateStore(opts.statePath)
   const broker = opts.broker ?? createLinuxBroker({ mode: "enabled" })
 
+  // L2-B（B2 修复）：大对象日志落盘（AttachLogs 回放源；索引在 SQLite）。
+  const logStore = new LogStore({
+    logRoot: opts.logRoot ?? join(join(tmpdir(), "orcana-execd"), "logs"),
+    index: {
+      upsert: row => state.upsertLogIndex(row),
+      get: (cellId, kind) => state.getLogIndex(cellId, kind) as import("./log-store").LogIndexRow | undefined,
+      remove: cellId => state.deleteLogIndex(cellId),
+    },  })
+
   const cellManager = new CellManager({
     state,
     broker,
     workspaceHostRoot: opts.workspaceHostRoot,
+    logStore,
     publish: () => { /* 事件广播由 server 组装后接线 */ },
   })
   const leaseManager = new LeaseManager({
@@ -78,6 +92,7 @@ export function createExecd(opts: ExecdOptions): Execd {
     renewLease: (leaseId, ttlMs) => Promise.resolve(leaseManager.renew(leaseId, ttlMs)),
     releaseLease: leaseId => Promise.resolve(leaseManager.release(leaseId)),
     listRecoverableRuns: () => cellManager.listRecoverableRuns(),
+    attachLogs: (cellId, kind, offset) => logStore.attach(cellId, kind, offset),
   }
   const server = new ExecdServer(deps, undefined, undefined, opts.approval ?? envApprovalTokenProvider())
 

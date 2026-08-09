@@ -206,6 +206,13 @@ CREATE TABLE IF NOT EXISTS execution_handles (
   started_at INTEGER NOT NULL,
   takeover TEXT
 );
+CREATE TABLE IF NOT EXISTS log_index (
+  cell_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  length_bytes INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (cell_id, kind)
+);
 CREATE INDEX IF NOT EXISTS idx_handles_cell ON execution_handles(cell_id);
 CREATE INDEX IF NOT EXISTS idx_cell_events_cell ON cell_events(cell_id, event_sequence);
 CREATE INDEX IF NOT EXISTS idx_cells_run ON cells(run_id);
@@ -460,6 +467,27 @@ export class StateStore {
 
   deleteExecutionHandle(handleId: string): void {
     this.run("DELETE FROM execution_handles WHERE handle_id = ?", handleId)
+  }
+
+  // ── log index（L2-B）──
+
+  upsertLogIndex(row: { cellId: string; kind: string; lengthBytes: number; updatedAt: number }): void {
+    this.run(
+      `INSERT INTO log_index (cell_id, kind, length_bytes, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(cell_id, kind) DO UPDATE SET length_bytes = excluded.length_bytes, updated_at = excluded.updated_at`,
+      row.cellId, row.kind, row.lengthBytes, row.updatedAt,
+    )
+  }
+
+  getLogIndex(cellId: string, kind: string): { cellId: string; kind: string; lengthBytes: number; updatedAt: number } | undefined {
+    return this.get<{ cellId: string; kind: string; lengthBytes: number; updatedAt: number }>(
+      "SELECT cell_id AS cellId, kind, length_bytes AS lengthBytes, updated_at AS updatedAt FROM log_index WHERE cell_id = ? AND kind = ?",
+      cellId, kind,
+    )
+  }
+
+  deleteLogIndex(cellId: string): void {
+    this.run("DELETE FROM log_index WHERE cell_id = ?", cellId)
   }
 
   // ── idempotency ──

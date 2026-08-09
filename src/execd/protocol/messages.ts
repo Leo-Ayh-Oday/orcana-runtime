@@ -30,7 +30,7 @@ export type Request =
   | ({ method: "AcquireLease"; payload: { runId: string; ttlMs: number } } & RequestBase)
   | ({ method: "RenewLease"; payload: { leaseId: string; ttlMs: number } } & RequestBase)
   | ({ method: "ReleaseLease"; payload: { leaseId: string } } & RequestBase)
-  | ({ method: "AttachLogs"; payload: { cellId: string; sinceSequence?: number } } & RequestBase)
+  | ({ method: "AttachLogs"; payload: { cellId: string; kind?: "stdout" | "stderr"; offset?: number } } & RequestBase)
   | ({ method: "ListRecoverableRuns"; payload: Record<string, never> } & RequestBase)
 
 /** SubmitCell：复用 ExecutionIntent 的业务形状（LR2-0D 契约）。 */

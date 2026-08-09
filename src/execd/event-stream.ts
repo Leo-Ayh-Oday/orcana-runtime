@@ -4,6 +4,8 @@
  *  - 每订阅 live 队列有界（maxQueued，默认 4096 事件）；
  *  - 超限 → 订阅者标记 lagged（不再实时推送 —— 事件不丢：落库历史
  *    可补读），调用方看到 lagged 后用 state.eventsForCell 补历史；
+ *  - 落后清除 = 追平最新已发布序号（不是补读起点 —— 否则 ack(1) 就
+ *    过早清除，事件 2..N 仍缺失）；
  *  - drain 返回 lagged 标记（EVENT_QUEUE_UNBOUNDED = 0、
  *    SLOW_CONSUMER_EVENT_LOSS = 0：队列有界且不丢事件，只切换通道）。
  */
@@ -20,6 +22,8 @@ export interface EventSubscription {
   lagged: boolean
   /** 落后时补读的起始序号（= 已确认序号 + 1）。 */
   resumeFromSequence: number
+  /** 该订阅见过的最新已发布序号（落后清除必须追平它）。 */
+  latestPublished: number
 }
 
 export interface EventStreamOptions {
@@ -32,6 +36,8 @@ export class EventStream {
   private readonly maxQueued: number
 
   constructor(opts: EventStreamOptions = {}) {
+    // N5：maxQueued ≤ 0 非法（否则首次 publish 即触发落后，订阅退化为纯轮询）
+    if ((opts.maxQueued ?? 4096) <= 0) throw new Error(`maxQueued must be > 0, got ${opts.maxQueued}`)
     this.maxQueued = opts.maxQueued ?? 4096
   }
 
@@ -45,6 +51,7 @@ export class EventStream {
       live: [],
       lagged: false,
       resumeFromSequence: sinceSequence,
+      latestPublished: sinceSequence,
     }
     this.subscriptions.set(cellId, sub)
     return sub
@@ -59,6 +66,7 @@ export class EventStream {
     const full: ServerEvent = { type: "event", eventSequence: sequence, ...event, at }
     for (const sub of this.subscriptions.values()) {
       if (sub.cellId !== event.cellId) continue
+      if (sequence > sub.latestPublished) sub.latestPublished = sequence
       if (sequence > sub.lastAcknowledged && !sub.lagged) {
         if (sub.live.length >= this.maxQueued) {
           // L2-C：队列满 → 落后（实时通道停，事件不丢 —— 落库可补读）。
@@ -73,12 +81,18 @@ export class EventStream {
     return full
   }
 
-  /** 订阅者确认已消费到该序号（推进断点基线；清落后标记 —— 之后
-   *  可恢复实时通道）。 */
+  /** 订阅者确认已消费到该序号（推进断点基线；追平最新发布后清落后）。
+   *  M4：落后时不允许直接 ack 越过补读窗口（未补读历史就推进断点会
+   *  永久丢失实时通道的事件 —— 调用方必须先补读再逐事件 ack）。 */
   acknowledge(sub: EventSubscription, sequence: number): void {
+    if (sub.lagged) {
+      // 未补读就跳越补读窗口 → 拒绝（lastAcknowledged 不动，事件可找回）
+      if (sequence > sub.lastAcknowledged + 1 && sequence <= sub.latestPublished) return
+    }
     if (sequence > sub.lastAcknowledged) sub.lastAcknowledged = sequence
     sub.live = sub.live.filter(e => e.eventSequence > sequence)
-    if (sub.lagged && sequence >= sub.resumeFromSequence) {
+    if (sub.lagged && sub.lastAcknowledged >= sub.latestPublished) {
+      // 追平最新发布 → 落后清除，实时通道恢复
       sub.lagged = false
       sub.resumeFromSequence = sub.lastAcknowledged + 1
     }

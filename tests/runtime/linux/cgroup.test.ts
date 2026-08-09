@@ -335,33 +335,41 @@ describe("LF-4: true kernel (runs only with a writable delegated cgroup)", () =>
 
   kernelTest("real cgroup tree is created, limited and killed", async () => {
     const manager = new CgroupManager({ base: delegated.base })
+    const runId = `lxf4-${process.pid}`
     // 必须先 createRun：真实内核下 orcana.scope/run 层要在 subtree_control
     // 授权控制器，cell 才会有 memory.max/pids.max 属性（mock fs 自动补全，
     // 真实 cgroupfs 不会 —— 2026-08-07 委托根修复后实测）。
-    manager.createRun(`lxf4-${process.pid}`)
-    const cell = manager.createCell(`lxf4-${process.pid}`, undefined, "mem", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 8 })
+    manager.createRun(runId)
+    const cell = manager.createCell(runId, undefined, "mem", { memoryMaxBytes: 64 * 1024 * 1024, pidsMax: 8 })
     // 放进一个 sleep 进程
     const { spawn } = await import("node:child_process")
     const proc = spawn("/bin/sleep", ["10"], { stdio: "ignore" })
+    const closed = new Promise<void>(resolve => proc.once("close", () => resolve()))
     let attachBlocked = false
     try {
-      manager.attach(proc.pid ?? 0, cell)
-    } catch (error) {
-      // WSL2 主机约束（nsdelegate + 控制台进程挂 root 属主 /init.scope）：
-      // 进程迁移要求写者可写"源 cgroup"的 cgroup.procs —— root 属主源不可写
-      // → EACCES。生产路径由 broker attachFailure 降级声明，此处跳过断言。
-      if ((error as NodeJS.ErrnoException).code === "EACCES") {
-        attachBlocked = true
-        proc.kill()
-      } else throw error
+      try {
+        manager.attach(proc.pid ?? 0, cell)
+      } catch (error) {
+        // WSL2 主机约束（nsdelegate + 控制台进程挂 root 属主 /init.scope）：
+        // 进程迁移要求写者可写"源 cgroup"的 cgroup.procs —— root 属主源不可写
+        // → EACCES。生产路径由 broker attachFailure 降级声明，此处跳过断言。
+        if ((error as NodeJS.ErrnoException).code === "EACCES") {
+          attachBlocked = true
+          proc.kill()
+        } else throw error
+      }
+      if (!attachBlocked) {
+        expect(manager.pidsCurrent(cell)).toBeGreaterThanOrEqual(1)
+        expect(manager.memoryCurrent(cell)).toBeGreaterThanOrEqual(0)
+        expect(manager.kill(cell).killed).toBe(true)
+      }
+      await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 2_000))])
+      if (!attachBlocked) expect(manager.pidsCurrent(cell)).toBe(0)
+    } finally {
+      try { proc.kill("SIGKILL") } catch { /* already gone */ }
+      await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 2_000))])
+      const runPath = hierarchyPaths(manager.base, runId, undefined, "cleanup").run
+      expect(manager.removeRun(runPath)).toBe(true)
     }
-    if (!attachBlocked) {
-      expect(manager.pidsCurrent(cell)).toBeGreaterThanOrEqual(1)
-      expect(manager.memoryCurrent(cell)).toBeGreaterThanOrEqual(0)
-      expect(manager.kill(cell).killed).toBe(true)
-      await new Promise(r => setTimeout(r, 150))
-      expect(manager.pidsCurrent(cell)).toBe(0)
-    }
-    manager.removeCell(cell)
   })
 })

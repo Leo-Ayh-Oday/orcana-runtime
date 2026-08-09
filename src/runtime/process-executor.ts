@@ -200,6 +200,12 @@ function broker(): LinuxExecutionBroker {
   return linuxBroker
 }
 
+/** Run-end cleanup for consumers that execute through the process facade. */
+export async function cleanupProcessRun(runId: string): Promise<{ removed: number; servicesCleaned: number; portsCleaned: number }> {
+  if (process.platform !== "linux") return { removed: 0, servicesCleaned: 0, portsCleaned: 0 }
+  return broker().cleanupRun(runId)
+}
+
 export async function* executeProcess(request: ProcessRequest): AsyncGenerator<ProcessEvent> {
   if (request.abortSignal?.aborted) {
     yield { type: "exit", exitCode: null, signal: "aborted", at: Date.now() }

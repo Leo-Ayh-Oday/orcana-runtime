@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite"
 import { existsSync, rmSync } from "node:fs"
 import {
   assertWorldRecovered,
+  canonicalJson,
   createFileManifest,
   encodeCasOwnerId,
   recoverWorldStore,
@@ -10,6 +11,38 @@ import {
 import { createTestWorldStore } from "./helpers"
 
 describe("AK-1 deterministic World snapshot", () => {
+  test("snapshot creation promotes pre-existing ordinary section bytes", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      for (const section of [
+        "filesystem",
+        "memory-and-world-objects",
+        "task-projection-non-authoritative",
+        "capability-state",
+        "services",
+        "artifacts",
+      ]) {
+        const record = fixture.store.cas.put(Buffer.from(canonicalJson({
+          schemaVersion: 1,
+          type: "world-section",
+          section,
+          entries: [],
+        })), "application/json")
+        expect(record.isManifest).toBe(false)
+      }
+
+      const snapshot = fixture.store.createSnapshot("w1", "main")
+      expect(fixture.store.cas.record(snapshot.filesystemDigest)).toEqual(expect.objectContaining({
+        isManifest: true,
+        mediaTypes: ["application/json", "application/vnd.orcana.manifest+json"],
+      }))
+      expect(fixture.store.verifyIntegrity()).toEqual([])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
   test("the same World revision produces the same immutable snapshot", () => {
     const fixture = createTestWorldStore()
     try {

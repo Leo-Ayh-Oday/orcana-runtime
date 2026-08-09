@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import {
   closeSync,
   constants,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   lstatSync,
@@ -347,8 +348,13 @@ function openOrCreateDurableWorldRoot(configuredRoot: string): number {
         if (!isFsError(error, "EEXIST")) throw error
       }
       const nextFd = openDirectoryNoFollow(fdPath(currentFd, name))
-      fsyncSync(nextFd)
-      fsyncSync(currentFd)
+      try {
+        fsyncSync(nextFd)
+        fsyncSync(currentFd)
+      } catch (error) {
+        closeSync(nextFd)
+        throw error
+      }
       closeSync(currentFd)
       currentFd = nextFd
     }
@@ -379,6 +385,64 @@ function ensureDurableRootDirectory(rootFd: number, name: string): void {
   }
 }
 
+function initializeWorldDatabase(db: Database, installedAt: number): void {
+  db.exec("PRAGMA foreign_keys = ON")
+  db.exec("PRAGMA busy_timeout = 5000")
+  enableWalWithBusyRetry(db)
+  db.exec("PRAGMA synchronous = FULL")
+  withImmediateTransaction(db, () => {
+    initializeOrValidateWorldSchema(db, installedAt)
+  })
+}
+
+interface VerifiedSqliteEntry {
+  readonly name: string
+  readonly fd: number
+  readonly dev: number
+  readonly ino: number
+}
+
+const SQLITE_ENTRIES = [
+  "world.db",
+  "world.db-wal",
+  "world.db-shm",
+  "world.db-journal",
+] as const
+
+function openVerifiedSqliteEntry(rootFd: number, name: string): VerifiedSqliteEntry {
+  const path = fdPath(rootFd, name)
+  const fd = openSync(
+    path,
+    constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
+    0o600,
+  )
+  try {
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.nlink !== 1) {
+      throw new Error(`WorldDB entry must be a single-link regular file: ${name}`)
+    }
+    fsyncSync(fd)
+    return { name, fd, dev: stat.dev, ino: stat.ino }
+  } catch (error) {
+    closeSync(fd)
+    throw error
+  }
+}
+
+function assertSqliteEntryIdentity(rootFd: number, entry: VerifiedSqliteEntry): void {
+  const path = fdPath(rootFd, entry.name)
+  const stat = lstatSync(path)
+  if (
+    stat.isSymbolicLink() ||
+    !stat.isFile() ||
+    stat.nlink !== 1 ||
+    stat.dev !== entry.dev ||
+    stat.ino !== entry.ino
+  ) {
+    throw new Error(`WORLD_DB_IDENTITY_CHANGED: ${entry.name}`)
+  }
+}
+
 export class WorldStore {
   readonly root: string
   readonly databasePath: string
@@ -400,56 +464,73 @@ export class WorldStore {
     this.rootFd = openOrCreateDurableWorldRoot(configuredRoot)
     this.root = configuredRoot
     try {
-      for (const directory of ["ledger", "snapshots", "projections", "recovery"]) {
+      fchmodSync(this.rootFd, 0o700)
+      for (const directory of ["ledger", "snapshots", "projections", "recovery", "cas"]) {
         ensureDurableRootDirectory(this.rootFd, directory)
       }
     } catch (error) {
       closeSync(this.rootFd)
       throw error
     }
-    this.databasePath = join(configuredRoot, "world.db")
     const databaseFdPath = fdPath(this.rootFd, "world.db")
-    let verifiedDatabaseFd: number | undefined
-    let database: Database | undefined
+    this.databasePath = databaseFdPath
+    const initialEntries: VerifiedSqliteEntry[] = []
+    let needsBootstrap = false
     try {
-      verifiedDatabaseFd = openSync(
-        databaseFdPath,
-        constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
-        0o600,
-      )
-      const verified = fstatSync(verifiedDatabaseFd)
-      if (!verified.isFile()) throw new Error(`WorldDB must be a regular file: ${this.databasePath}`)
-      fsyncSync(verifiedDatabaseFd)
-      fsyncSync(this.rootFd)
-      database = new Database(databaseFdPath)
-      const opened = lstatSync(databaseFdPath)
-      if (
-        opened.isSymbolicLink() ||
-        !opened.isFile() ||
-        opened.dev !== verified.dev ||
-        opened.ino !== verified.ino
-      ) {
-        throw new Error(`WORLD_DB_IDENTITY_CHANGED: ${this.databasePath}`)
+      for (const name of SQLITE_ENTRIES) {
+        const entry = openVerifiedSqliteEntry(this.rootFd, name)
+        initialEntries.push(entry)
+        if (name === "world.db") needsBootstrap = fstatSync(entry.fd).size === 0
       }
+      fsyncSync(this.rootFd)
     } catch (error) {
-      database?.close()
+      fchmodSync(this.rootFd, 0o700)
       closeSync(this.rootFd)
       throw error
     } finally {
-      if (verifiedDatabaseFd !== undefined) closeSync(verifiedDatabaseFd)
+      for (const entry of initialEntries) closeSync(entry.fd)
+    }
+    if (needsBootstrap) {
+      let bootstrap: Database | undefined
+      try {
+        bootstrap = new Database(databaseFdPath)
+        initializeWorldDatabase(bootstrap, this.now())
+      } catch (error) {
+        bootstrap?.close()
+        fchmodSync(this.rootFd, 0o700)
+        closeSync(this.rootFd)
+        throw error
+      }
+      bootstrap?.close()
+    }
+
+    const sqliteEntries: VerifiedSqliteEntry[] = []
+    let database: Database | undefined
+    try {
+      for (const name of SQLITE_ENTRIES) {
+        sqliteEntries.push(openVerifiedSqliteEntry(this.rootFd, name))
+      }
+      fsyncSync(this.rootFd)
+      fchmodSync(this.rootFd, 0o500)
+      for (const entry of sqliteEntries) assertSqliteEntryIdentity(this.rootFd, entry)
+      this.faultInjector?.("after_world_db_entries_locked")
+      database = new Database(databaseFdPath)
+      for (const entry of sqliteEntries) assertSqliteEntryIdentity(this.rootFd, entry)
+    } catch (error) {
+      database?.close()
+      fchmodSync(this.rootFd, 0o700)
+      closeSync(this.rootFd)
+      throw error
+    } finally {
+      for (const entry of sqliteEntries) closeSync(entry.fd)
     }
     if (!database) throw new Error(`failed to open WorldDB: ${this.databasePath}`)
     this.db = database
     try {
-      this.db.exec("PRAGMA foreign_keys = ON")
-      this.db.exec("PRAGMA busy_timeout = 5000")
-      enableWalWithBusyRetry(this.db)
-      this.db.exec("PRAGMA synchronous = FULL")
-      withImmediateTransaction(this.db, () => {
-        initializeOrValidateWorldSchema(this.db, this.now())
-      })
+      initializeWorldDatabase(this.db, this.now())
     } catch (error) {
       this.db.close()
+      fchmodSync(this.rootFd, 0o700)
       closeSync(this.rootFd)
       throw error
     }
@@ -483,6 +564,7 @@ export class WorldStore {
     } catch (error) {
       cas?.close()
       this.db.close()
+      fchmodSync(this.rootFd, 0o700)
       closeSync(this.rootFd)
       throw error
     }
@@ -493,6 +575,7 @@ export class WorldStore {
     this.closed = true
     this.cas.close()
     this.db.close()
+    fchmodSync(this.rootFd, 0o700)
     closeSync(this.rootFd)
   }
 

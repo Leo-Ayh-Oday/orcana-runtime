@@ -36,8 +36,7 @@ function storeManifest<T>(
   referencedDigests: readonly CasDigest[],
 ): StoredManifest<T> {
   const content = Buffer.from(canonicalJson(manifest), "utf8")
-  const record = cas.put(content, "application/vnd.orcana.manifest+json")
-  cas.linkMany("cas_object", record.digest, referencedDigests)
+  const record = cas.putManifest(content, referencedDigests)
   return { digest: record.digest, manifest }
 }
 

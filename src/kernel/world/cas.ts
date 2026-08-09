@@ -9,7 +9,6 @@ import {
   openSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   renameSync,
   rmSync,
   writeSync,
@@ -31,6 +30,7 @@ interface CasObjectRow {
   digest: string
   size: number
   mediaType: string
+  isManifest: number
   createdAt: number
   refCount: number
 }
@@ -68,6 +68,8 @@ interface SnapshotReferenceRow {
   artifactStateDigest: string
 }
 
+const MANIFEST_MEDIA_TYPE = "application/vnd.orcana.manifest+json"
+
 export interface CasRecoveryResult {
   readonly removedTemporaryFiles: readonly string[]
   readonly removedUnreachableObjects: readonly CasDigest[]
@@ -84,11 +86,13 @@ export class CasIntegrityError extends Error {
   }
 }
 
-function toRecord(row: CasObjectRow): CasObjectRecord {
+function toRecord(row: CasObjectRow, mediaTypes: readonly string[]): CasObjectRecord {
   return {
     digest: row.digest as CasDigest,
     size: row.size,
     mediaType: row.mediaType,
+    mediaTypes: Object.freeze([...mediaTypes]),
+    isManifest: row.isManifest === 1,
     createdAt: row.createdAt,
     refCount: row.refCount,
   }
@@ -146,7 +150,6 @@ function writeAll(fd: number, bytes: Buffer): void {
 export class WorldCas {
   readonly objectsRoot: string
   readonly stagingRoot: string
-  private readonly trustedRoot: string
   private readonly rootFd: number
   private closed = false
 
@@ -172,9 +175,8 @@ export class WorldCas {
         constants.O_RDONLY | constants.O_DIRECTORY,
       )
     }
-    this.trustedRoot = realpathSync(descriptorPath(this.rootFd))
-    this.objectsRoot = join(this.trustedRoot, "cas", "sha256")
-    this.stagingRoot = join(this.trustedRoot, "recovery", "cas-staging")
+    this.objectsRoot = descriptorPath(this.rootFd, join("cas", "sha256"))
+    this.stagingRoot = descriptorPath(this.rootFd, join("recovery", "cas-staging"))
     try {
       const objectsFd = this.openTrustedDirectory(["cas", "sha256"], true)
       try {
@@ -216,9 +218,14 @@ export class WorldCas {
           }
         }
         const nextFd = openDirectoryNoFollow(entryPath)
-        if (created) {
-          fsyncSync(nextFd)
-          fsyncSync(currentFd)
+        try {
+          if (created) {
+            fsyncSync(nextFd)
+            fsyncSync(currentFd)
+          }
+        } catch (error) {
+          closeSync(nextFd)
+          throw error
         }
         if (ownsCurrent) closeSync(currentFd)
         currentFd = nextFd
@@ -328,6 +335,7 @@ export class WorldCas {
   }
 
   put(content: Uint8Array, mediaType = "application/octet-stream"): CasObjectRecord {
+    if (!mediaType) throw new Error("CAS media type must be non-empty")
     return withImmediateTransaction(this.db, () => {
       const bytes = Buffer.from(content)
       const digest = sha256Digest(bytes)
@@ -390,17 +398,22 @@ export class WorldCas {
 
       dbRun(
         this.db,
-        `INSERT INTO cas_objects (digest, size, media_type, created_at, ref_count)
-         VALUES (?, ?, ?, ?, 0)
+        `INSERT INTO cas_objects (digest, size, media_type, is_manifest, created_at, ref_count)
+         VALUES (?, ?, ?, 0, ?, 0)
          ON CONFLICT(digest) DO NOTHING`,
         digest,
         bytes.byteLength,
         mediaType,
         this.now(),
       )
+      this.recordMediaRole(digest, mediaType)
 
       const record = this.record(digest)
-      if (!record || record.size !== bytes.byteLength || record.mediaType !== mediaType) {
+      if (
+        !record ||
+        record.size !== bytes.byteLength ||
+        !record.mediaTypes.includes(mediaType)
+      ) {
         throw new CasIntegrityError(`CAS metadata mismatch: ${digest}`)
       }
       this.faultInjector?.("after_cas_metadata_before_return")
@@ -408,15 +421,71 @@ export class WorldCas {
     })
   }
 
+  putManifest(
+    content: Uint8Array,
+    referencedDigests: readonly CasDigest[],
+  ): CasObjectRecord {
+    const bytes = Buffer.from(content)
+    const digest = sha256Digest(bytes)
+    return withImmediateTransaction(this.db, () => {
+      let record = this.record(digest)
+      if (record) {
+        const existing = this.get(digest)
+        if (!existing.equals(bytes)) {
+          throw new CasIntegrityError(`CAS collision or corrupt existing manifest: ${digest}`)
+        }
+      } else {
+        record = this.put(bytes, MANIFEST_MEDIA_TYPE)
+      }
+
+      this.recordMediaRole(digest, MANIFEST_MEDIA_TYPE)
+
+      if (!record.isManifest) {
+        dbRun(
+          this.db,
+          "UPDATE cas_objects SET is_manifest = 1 WHERE digest = ? AND is_manifest = 0",
+          digest,
+        )
+      }
+      this.linkMany("cas_object", digest, referencedDigests)
+      const attested = this.record(digest)
+      if (!attested?.isManifest) {
+        throw new CasIntegrityError(`CAS manifest attestation failed: ${digest}`)
+      }
+      return attested
+    })
+  }
+
   record(digest: CasDigest): CasObjectRecord | undefined {
     digestHex(digest)
     const row = dbGet<CasObjectRow>(
       this.db,
-      `SELECT digest, size, media_type AS mediaType, created_at AS createdAt, ref_count AS refCount
+      `SELECT digest, size, media_type AS mediaType, is_manifest AS isManifest,
+              created_at AS createdAt, ref_count AS refCount
        FROM cas_objects WHERE digest = ?`,
       digest,
     )
-    return row ? toRecord(row) : undefined
+    return row ? toRecord(row, this.mediaRoles(digest)) : undefined
+  }
+
+  private recordMediaRole(digest: CasDigest, mediaType: string): void {
+    dbRun(
+      this.db,
+      `INSERT INTO cas_media_roles (digest, media_type, created_at)
+       VALUES (?, ?, ?) ON CONFLICT(digest, media_type) DO NOTHING`,
+      digest,
+      mediaType,
+      this.now(),
+    )
+  }
+
+  private mediaRoles(digest: CasDigest): string[] {
+    return dbAll<{ mediaType: string }>(
+      this.db,
+      `SELECT media_type AS mediaType FROM cas_media_roles
+       WHERE digest = ?`,
+      digest,
+    ).map(row => row.mediaType).sort(compareCanonicalStrings)
   }
 
   has(digest: CasDigest): boolean {
@@ -516,9 +585,10 @@ export class WorldCas {
   list(): CasObjectRecord[] {
     return dbAll<CasObjectRow>(
       this.db,
-      `SELECT digest, size, media_type AS mediaType, created_at AS createdAt, ref_count AS refCount
+      `SELECT digest, size, media_type AS mediaType, is_manifest AS isManifest,
+              created_at AS createdAt, ref_count AS refCount
        FROM cas_objects ORDER BY digest`,
-    ).map(toRecord)
+    ).map(row => toRecord(row, this.mediaRoles(row.digest as CasDigest)))
   }
 
   reconcileRefCounts(): CasDigest[] {
@@ -526,7 +596,8 @@ export class WorldCas {
     withImmediateTransaction(this.db, () => {
       const rows = dbAll<CasObjectRow>(
         this.db,
-        `SELECT o.digest, o.size, o.media_type AS mediaType, o.created_at AS createdAt,
+        `SELECT o.digest, o.size, o.media_type AS mediaType, o.is_manifest AS isManifest,
+                o.created_at AS createdAt,
                 o.ref_count AS refCount
          FROM cas_objects o ORDER BY o.digest`,
       )
@@ -622,7 +693,7 @@ export class WorldCas {
   }
 
   private manifestReferenceIssues(record: CasObjectRecord, content: Buffer): WorldIntegrityIssue[] {
-    if (record.mediaType !== "application/vnd.orcana.manifest+json") return []
+    if (!record.isManifest) return []
     let manifest: Record<string, unknown>
     try {
       manifest = JSON.parse(content.toString("utf8")) as Record<string, unknown>
@@ -723,6 +794,7 @@ export class WorldCas {
           "DELETE FROM cas_links WHERE owner_type = 'cas_object' AND owner_id = ?",
           digest,
         )
+        dbRun(this.db, "DELETE FROM cas_media_roles WHERE digest = ?", digest)
         dbRun(this.db, "DELETE FROM cas_objects WHERE digest = ?", digest)
       }
       this.reconcileRefCounts()
@@ -773,6 +845,18 @@ export class WorldCas {
     }
 
     for (const record of this.list()) {
+      if (!record.mediaTypes.includes(record.mediaType)) {
+        issues.push({
+          code: "CAS_REFERENCE_DIVERGENCE",
+          detail: `missing primary media role ${record.digest}: ${record.mediaType}`,
+        })
+      }
+      if (record.isManifest && !record.mediaTypes.includes(MANIFEST_MEDIA_TYPE)) {
+        issues.push({
+          code: "CAS_REFERENCE_DIVERGENCE",
+          detail: `missing manifest media role ${record.digest}`,
+        })
+      }
       const actualCount = dbGet<{ count: number }>(
         this.db,
         "SELECT COUNT(*) AS count FROM cas_links WHERE digest = ?",

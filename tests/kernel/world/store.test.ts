@@ -34,6 +34,7 @@ describe("AK-1 WorldStore", () => {
           .map(row => row.name)
         expect(names).toEqual([
           "cas_links",
+          "cas_media_roles",
           "cas_objects",
           "world_artifacts",
           "world_branches",

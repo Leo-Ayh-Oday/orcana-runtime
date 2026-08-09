@@ -3,7 +3,7 @@ import { canonicalDigest } from "./canonical"
 import type { CasDigest } from "./contracts"
 import { dbAll, dbRun } from "./database"
 
-export const WORLD_SCHEMA_VERSION = 3
+export const WORLD_SCHEMA_VERSION = 4
 
 interface SchemaObjectRow {
   type: "table" | "index" | "trigger"
@@ -41,7 +41,7 @@ export function worldSchemaFingerprint(db: Database): CasDigest {
 }
 
 export const WORLD_SCHEMA_FINGERPRINT: CasDigest =
-  "sha256:797d29aa4819a89e2e19ed0a98f3f404b4501354e7fd8c34be67fb427006159d"
+  "sha256:e166a4904d61cd84f6503d3895be4119645d95add38e00844365f08f3a53da24"
 
 export function assertWorldSchemaCompatible(db: Database): void {
   const installedObjects = worldSchemaObjectNames(db)
@@ -224,8 +224,17 @@ CREATE TABLE IF NOT EXISTS cas_objects (
   digest TEXT PRIMARY KEY,
   size INTEGER NOT NULL,
   media_type TEXT NOT NULL,
+  is_manifest INTEGER NOT NULL DEFAULT 0 CHECK(is_manifest IN (0, 1)),
   created_at INTEGER NOT NULL,
   ref_count INTEGER NOT NULL DEFAULT 0 CHECK(ref_count >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS cas_media_roles (
+  digest TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (digest, media_type),
+  FOREIGN KEY (digest) REFERENCES cas_objects(digest)
 );
 
 CREATE TABLE IF NOT EXISTS cas_links (
@@ -268,6 +277,19 @@ CREATE TRIGGER IF NOT EXISTS cas_objects_immutable_metadata
 BEFORE UPDATE OF digest, size, media_type, created_at ON cas_objects
 BEGIN
   SELECT RAISE(ABORT, 'CAS_OBJECT_METADATA_IMMUTABLE');
+END;
+
+CREATE TRIGGER IF NOT EXISTS cas_objects_manifest_monotonic
+BEFORE UPDATE OF is_manifest ON cas_objects
+WHEN NOT (OLD.is_manifest = 0 AND NEW.is_manifest = 1)
+BEGIN
+  SELECT RAISE(ABORT, 'CAS_MANIFEST_ATTESTATION_IMMUTABLE');
+END;
+
+CREATE TRIGGER IF NOT EXISTS cas_media_roles_immutable_update
+BEFORE UPDATE ON cas_media_roles
+BEGIN
+  SELECT RAISE(ABORT, 'CAS_MEDIA_ROLE_IMMUTABLE');
 END;
 
 CREATE TRIGGER IF NOT EXISTS cas_links_immutable_update

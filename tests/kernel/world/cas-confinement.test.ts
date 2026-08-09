@@ -73,6 +73,52 @@ describe("AK-1 CAS filesystem confinement", () => {
     }
   })
 
+  test("SQLite WAL, SHM, and journal symlinks are rejected without touching targets", () => {
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      const root = mkdtempSync(join(tmpdir(), "orcana-world-sidecar-root-"))
+      const outside = mkdtempSync(join(tmpdir(), "orcana-world-sidecar-outside-"))
+      const sentinel = join(outside, "sentinel")
+      try {
+        const seed = new WorldStore(root)
+        seed.close()
+        rmSync(join(root, `world.db${suffix}`), { force: true })
+        writeFileSync(sentinel, "must survive")
+        symlinkSync(sentinel, join(root, `world.db${suffix}`), "file")
+
+        expect(() => new WorldStore(root)).toThrow()
+        expect(readFileSync(sentinel, "utf8")).toBe("must survive")
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+        rmSync(outside, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test("WorldDB entries cannot be replaced after no-follow verification and parent lock", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-world-db-race-root-"))
+    const outside = mkdtempSync(join(tmpdir(), "orcana-world-db-race-outside-"))
+    let observed = false
+    try {
+      const store = new WorldStore(root, {
+        faultInjector: point => {
+          if (point !== "after_world_db_entries_locked") return
+          observed = true
+          expect(() => renameSync(
+            join(root, "world.db"),
+            join(outside, "escaped.db"),
+          )).toThrow()
+        },
+      })
+      store.close()
+      expect(observed).toBe(true)
+      expect(existsSync(join(root, "world.db"))).toBe(true)
+      expect(existsSync(join(outside, "escaped.db"))).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
   test("an open store remains pinned to a durably-created World root after pathname replacement", () => {
     const parent = mkdtempSync(join(tmpdir(), "orcana-world-root-replace-"))
     const root = join(parent, "world")

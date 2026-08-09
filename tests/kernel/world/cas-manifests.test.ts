@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import { writeFileSync } from "node:fs"
 import {
+  canonicalJson,
   createDirectoryManifest,
   createFileManifest,
   createWorldManifest,
@@ -76,9 +78,78 @@ describe("AK-1 World CAS", () => {
         serviceStateDigest: left.digest,
         artifactStateDigest: left.digest,
       }
+      const ordinaryWorld = fixture.store.cas.put(
+        Buffer.from(canonicalJson(manifest)),
+        "application/json",
+      )
       expect(createWorldManifest(fixture.store.cas, manifest).digest).toBe(
         createWorldManifest(fixture.store.cas, { ...manifest }).digest,
       )
+      expect(fixture.store.cas.record(ordinaryWorld.digest)).toEqual(expect.objectContaining({
+        isManifest: true,
+        mediaTypes: ["application/json", "application/vnd.orcana.manifest+json"],
+      }))
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test("manifest attestation promotes identical ordinary bytes without MIME poisoning", () => {
+    const fixture = createTestWorldStore()
+    try {
+      fixture.store.createWorld({ worldId: "w1", owner: "user:owner" })
+      const ordinaryChunk = fixture.store.cas.put(Buffer.from("x"), "text/plain")
+      const file = createFileManifest(fixture.store.cas, Buffer.from("x"), "text/plain")
+      expect(file.manifest.chunks[0]?.digest).toBe(ordinaryChunk.digest)
+      expect(fixture.store.cas.record(ordinaryChunk.digest)?.mediaTypes).toEqual([
+        "application/octet-stream",
+        "text/plain",
+      ])
+      const content = Buffer.from(canonicalJson({
+        schemaVersion: 1,
+        type: "directory",
+        entries: [],
+      }))
+      const ordinary = fixture.store.cas.put(content, "application/json")
+      expect(ordinary.isManifest).toBe(false)
+
+      const manifest = createDirectoryManifest(fixture.store.cas, [])
+      expect(manifest.digest).toBe(ordinary.digest)
+      expect(fixture.store.cas.record(manifest.digest)).toEqual(expect.objectContaining({
+        mediaType: "application/json",
+        isManifest: true,
+      }))
+      fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:test",
+        mutations: [
+          {
+            type: "object.put",
+            objectId: "manifest",
+            objectType: "directory",
+            contentRef: manifest.digest,
+          },
+          {
+            type: "object.put",
+            objectId: "file-manifest",
+            objectType: "file",
+            contentRef: file.digest,
+          },
+        ],
+      })
+      expect(fixture.store.verifyIntegrity()).toEqual([])
+
+      const db = new Database(fixture.store.databasePath)
+      try {
+        expect(() => db.run(
+          "UPDATE cas_objects SET is_manifest = 0 WHERE digest = ?",
+          [manifest.digest],
+        )).toThrow(/CAS_MANIFEST_ATTESTATION_IMMUTABLE/)
+      } finally {
+        db.close()
+      }
     } finally {
       fixture.cleanup()
     }

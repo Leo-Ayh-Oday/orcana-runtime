@@ -6,6 +6,7 @@ import {
   canonicalDigest,
   encodeCasOwnerId,
   recoverWorldStore,
+  WORLD_OBJECT_TYPES,
   WorldConflictError,
   WorldStore,
   type WorldCommitRequest,
@@ -469,10 +470,77 @@ describe("AK-1 WorldStore", () => {
           mutations: [mutation],
         })).toThrow(/must be a non-empty string/)
       }
+
+      const structurallyInvalid = [
+        {
+          mutation: {
+            type: "object.put",
+            objectId: "invalid-type",
+            objectType: "",
+          } as unknown as WorldMutation,
+          error: /recognized WorldObjectType/,
+        },
+        {
+          mutation: {
+            type: "object.put",
+            objectId: "array-object-metadata",
+            objectType: "file",
+            metadata: [],
+          } as unknown as WorldMutation,
+          error: /metadata must be a plain record/,
+        },
+        {
+          mutation: {
+            type: "artifact.put",
+            artifactId: "array-artifact-metadata",
+            mediaType: "text/plain",
+            contentRef: content.digest,
+            metadata: [],
+          } as unknown as WorldMutation,
+          error: /metadata must be a plain record/,
+        },
+        {
+          mutation: {
+            type: "service.set",
+            serviceId: "array-service-metadata",
+            status: "ready",
+            metadata: [],
+          } as unknown as WorldMutation,
+          error: /metadata must be a plain record/,
+        },
+      ]
+      for (const [index, { mutation, error }] of structurallyInvalid.entries()) {
+        expect(() => fixture.store.compareAndCommit({
+          worldId: "w1",
+          branchId: "main",
+          baseRevision: 0n,
+          actor: "agent:test",
+          commitId: `structurally-invalid-${index}`,
+          mutations: [mutation],
+        })).toThrow(error)
+      }
       expect(fixture.store.getWorld("w1")?.currentRevision).toBe(0n)
       expect(fixture.store.snapshots.create("w1", "main")).toEqual(expect.objectContaining({
         worldId: "w1",
         revision: 0n,
+      }))
+
+      fixture.store.compareAndCommit({
+        worldId: "w1",
+        branchId: "main",
+        baseRevision: 0n,
+        actor: "agent:test",
+        commitId: "snapshot-compatible-object-types",
+        mutations: WORLD_OBJECT_TYPES.map(objectType => ({
+          type: "object.put" as const,
+          objectId: `valid-${objectType}`,
+          objectType,
+          metadata: { objectType },
+        })),
+      })
+      expect(fixture.store.snapshots.create("w1", "main")).toEqual(expect.objectContaining({
+        worldId: "w1",
+        revision: 1n,
       }))
     } finally {
       fixture.cleanup()

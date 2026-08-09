@@ -37,7 +37,11 @@ import type {
   WorldServiceState,
   WorldSnapshot,
 } from "./contracts"
-import { WorldConflictError, WorldCorruptionError } from "./contracts"
+import {
+  WORLD_OBJECT_TYPES,
+  WorldConflictError,
+  WorldCorruptionError,
+} from "./contracts"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { withExclusiveFileLock } from "./file-lock"
 import { WorldLedger } from "./ledger"
@@ -294,14 +298,35 @@ function assertNonEmptyString(value: unknown, name: string): asserts value is st
   }
 }
 
+const WORLD_OBJECT_TYPE_SET = new Set<string>(WORLD_OBJECT_TYPES)
+
+function assertWorldObjectType(value: unknown, name: string): void {
+  if (typeof value !== "string" || !WORLD_OBJECT_TYPE_SET.has(value)) {
+    throw new Error(`${name} must be a recognized WorldObjectType`)
+  }
+}
+
+function assertPlainMetadata(value: unknown, name: string): void {
+  if (value === undefined) return
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${name} must be a plain record`)
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error(`${name} must be a plain record`)
+  }
+}
+
 function validateWorldMutation(mutation: WorldMutation, index: number): void {
   const prefix = `World mutation ${index}`
   switch (mutation.type) {
     case "object.put":
       assertNonEmptyString(mutation.objectId, `${prefix} objectId`)
+      assertWorldObjectType(mutation.objectType, `${prefix} objectType`)
       if (mutation.path !== undefined) {
         assertNonEmptyString(mutation.path, `${prefix} path`)
       }
+      assertPlainMetadata(mutation.metadata, `${prefix} metadata`)
       return
     case "object.delete":
       assertNonEmptyString(mutation.objectId, `${prefix} objectId`)
@@ -309,6 +334,7 @@ function validateWorldMutation(mutation: WorldMutation, index: number): void {
     case "artifact.put":
       assertNonEmptyString(mutation.artifactId, `${prefix} artifactId`)
       assertNonEmptyString(mutation.mediaType, `${prefix} mediaType`)
+      assertPlainMetadata(mutation.metadata, `${prefix} metadata`)
       return
     case "artifact.delete":
       assertNonEmptyString(mutation.artifactId, `${prefix} artifactId`)
@@ -316,6 +342,7 @@ function validateWorldMutation(mutation: WorldMutation, index: number): void {
     case "service.set":
       assertNonEmptyString(mutation.serviceId, `${prefix} serviceId`)
       assertNonEmptyString(mutation.status, `${prefix} status`)
+      assertPlainMetadata(mutation.metadata, `${prefix} metadata`)
       return
     case "service.delete":
       assertNonEmptyString(mutation.serviceId, `${prefix} serviceId`)
@@ -584,11 +611,12 @@ function databaseMatchesInitialPrefix(databaseFd: number, image: Buffer): boolea
 function ensureWorldDatabaseBootstrapped(
   lockFd: number,
   stateFd: number,
-  databaseFd: number,
+  sqliteEntries: readonly VerifiedSqliteEntry[],
   installedAt: number,
   faultInjector?: (point: WorldFaultPoint) => void,
 ): void {
   withExclusiveFileLock(lockFd, () => {
+    const databaseFd = sqliteEntries.find(entry => entry.name === "world.db")!.fd
     const records = readBootstrapState(stateFd, databaseFd)
     const complete = records[1]
     if (complete) {
@@ -596,6 +624,12 @@ function ensureWorldDatabaseBootstrapped(
         throw new Error("WORLD_DB_BOOTSTRAP_COMPLETE_WITH_EMPTY_DATABASE")
       }
       return
+    }
+
+    for (const entry of sqliteEntries) {
+      if (entry.name !== "world.db" && fstatSync(entry.fd).size !== 0) {
+        throw new Error(`WORLD_DB_BOOTSTRAP_UNPROVEN_SIDECAR: ${entry.name}`)
+      }
     }
 
     const writing = records[0]
@@ -760,6 +794,7 @@ export class WorldStore {
         bootstrapStateFd = openVerifiedBootstrapEntry(recoveryFd, "worlddb-bootstrap.state")
         fsyncSync(recoveryFd)
         fchmodSync(recoveryFd, 0o500)
+        fsyncSync(recoveryFd)
       } finally {
         closeSync(recoveryFd)
       }
@@ -779,13 +814,13 @@ export class WorldStore {
       }
       fsyncSync(this.rootFd)
       fchmodSync(this.rootFd, 0o500)
+      fsyncSync(this.rootFd)
       for (const entry of sqliteEntries) assertSqliteEntryIdentity(this.rootFd, entry)
       this.faultInjector?.("after_world_db_entries_locked")
-      const mainEntry = sqliteEntries.find(entry => entry.name === "world.db")!
       ensureWorldDatabaseBootstrapped(
         bootstrapLockFd!,
         bootstrapStateFd!,
-        mainEntry.fd,
+        sqliteEntries,
         this.now(),
         this.faultInjector,
       )

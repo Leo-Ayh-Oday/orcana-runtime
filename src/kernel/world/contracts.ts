@@ -25,21 +25,24 @@ export interface WorldBranch {
   readonly createdAt: number
 }
 
-export type WorldObjectType =
-  | "file"
-  | "directory"
-  | "workspace"
-  | "artifact"
-  | "memory"
-  | "model"
-  | "service"
-  | "secret"
-  | "network_endpoint"
-  | "device"
-  | "execution"
-  | "human_attention"
-  | "task_projection"
-  | "capability_state"
+export const WORLD_OBJECT_TYPES = Object.freeze([
+  "file",
+  "directory",
+  "workspace",
+  "artifact",
+  "memory",
+  "model",
+  "service",
+  "secret",
+  "network_endpoint",
+  "device",
+  "execution",
+  "human_attention",
+  "task_projection",
+  "capability_state",
+] as const)
+
+export type WorldObjectType = (typeof WORLD_OBJECT_TYPES)[number]
 
 export type CasDigest = `sha256:${string}`
 

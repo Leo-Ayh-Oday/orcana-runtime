@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
+  linuxEvalCli,
   requiredCapabilityFailures,
+  type EvalReport,
+  type LinuxSandboxEvalOptions,
   type ScenarioResult,
 } from "../../../evals/linux-sandbox-eval"
 import type { LinuxCapabilities } from "../../../src/runtime/linux/contracts"
@@ -37,6 +40,27 @@ function result(id: string, status: ScenarioResult["status"] = "PASS"): Scenario
   return { id, name: id, status }
 }
 
+function report(
+  caps: LinuxCapabilities,
+  results: ScenarioResult[],
+  options: LinuxSandboxEvalOptions = {},
+): EvalReport {
+  const requiredCapabilities = [...(options.requiredCapabilities ?? [])]
+  return {
+    version: "test",
+    ranAt: 0,
+    platform: "linux",
+    capabilitiesDigest: "test",
+    results,
+    pass: results.filter(item => item.status === "PASS").length,
+    fail: results.filter(item => item.status === "FAIL").length,
+    skip: results.filter(item => item.status === "SKIP").length,
+    total: results.length,
+    requiredCapabilities,
+    requiredFailures: requiredCapabilityFailures(caps, results, requiredCapabilities),
+  }
+}
+
 describe("Linux eval capability-specific CI requirements", () => {
   test("bubblewrap lane rejects capability absence even if the policy scenario passes", () => {
     const caps = capabilities({ bubblewrap: { available: false, unprivilegedUsable: false } })
@@ -55,5 +79,18 @@ describe("Linux eval capability-specific CI requirements", () => {
     results[2] = result("LX-018", "SKIP")
     expect(requiredCapabilityFailures(capabilities(), results, ["cgroup"]))
       .toContain("cgroup: LX-018 did not PASS")
+  })
+
+  test("bubblewrap and podman CLI lanes tolerate unrelated cgroup skips", async () => {
+    const baseline = capabilities()
+    const caps = capabilities({
+      cgroup: { ...baseline.cgroup, delegated: false },
+    })
+    const cgroupSkips = ["LX-016", "LX-017", "LX-018", "LX-019"].map(id => result(id, "SKIP"))
+    const results = [result("LX-012"), result("LX-030"), ...cgroupSkips]
+    const runner = async (options?: LinuxSandboxEvalOptions) => report(caps, results, options)
+
+    expect(await linuxEvalCli(["--require=bubblewrap"], runner)).toBe(0)
+    expect(await linuxEvalCli(["--require=podman"], runner)).toBe(0)
   })
 })

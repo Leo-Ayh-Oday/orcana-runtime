@@ -207,6 +207,9 @@ export async function runLinuxSandboxEval(options: LinuxSandboxEvalOptions = {})
     } catch (error) {
       outcome = { pass: false, reason: error instanceof Error ? error.message : String(error) }
     }
+    if (outcome.pass === false && outcome.reason?.startsWith("CGROUP_DELEGATION_REQUIRED:")) {
+      outcome = { skip: true, reason: outcome.reason }
+    }
     const status: ScenarioResult["status"] = outcome.pass === true ? "PASS" : outcome.skip === true ? "SKIP" : "FAIL"
     results.push({ id, name, status, detail: outcome.reason })
   }
@@ -405,8 +408,9 @@ export async function runLinuxSandboxEval(options: LinuxSandboxEvalOptions = {})
       const allocator = [
         "import signal, time",
         "chunks = []",
+        "MAX_CHUNKS = 16",
         "def allocate(_signum, _frame):",
-        "    while True:",
+        "    for _ in range(MAX_CHUNKS):",
         "        block = bytearray(8 * 1024 * 1024)",
         "        for offset in range(0, len(block), 4096):",
         "            block[offset] = 1",
@@ -923,9 +927,12 @@ export async function runLinuxSandboxEval(options: LinuxSandboxEvalOptions = {})
  *  --strict：关键场景不允许 SKIP —— 任何 SKIP 都视为失败（供具备
  *  全部 bwrap/podman/cgroup 能力的真机使用）。
  *  --require：能力专属 lane 只要求对应真实后端及其场景必须 PASS。 */
-export async function linuxEvalCli(): Promise<number> {
-  const strict = process.argv.includes("--strict")
-  const requested = process.argv
+export async function linuxEvalCli(
+  args: readonly string[] = process.argv.slice(2),
+  runEval: (options?: LinuxSandboxEvalOptions) => Promise<EvalReport> = runLinuxSandboxEval,
+): Promise<number> {
+  const strict = args.includes("--strict")
+  const requested = args
     .filter(arg => arg.startsWith("--require="))
     .flatMap(arg => arg.slice("--require=".length).split(","))
     .filter(Boolean)
@@ -936,7 +943,7 @@ export async function linuxEvalCli(): Promise<number> {
     return 2
   }
   const requiredCapabilities = requested as RequiredLinuxCapability[]
-  const report = await runLinuxSandboxEval({ requiredCapabilities })
+  const report = await runEval({ requiredCapabilities })
   const requirementLabel = report.requiredCapabilities.length > 0
     ? ` [REQUIRE=${report.requiredCapabilities.join(",")}]`
     : ""

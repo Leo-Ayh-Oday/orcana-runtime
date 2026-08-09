@@ -160,6 +160,8 @@ export interface CasObjectRecord {
   readonly digest: CasDigest
   readonly size: number
   readonly mediaType: string
+  readonly mediaTypes: readonly string[]
+  readonly isManifest: boolean
   readonly createdAt: number
   readonly refCount: number
 }
@@ -238,6 +240,7 @@ export type WorldFaultPoint =
   | "after_cas_metadata_before_return"
   | "before_cas_link_insert"
   | "after_gc_file_fsync_before_metadata_commit"
+  | "after_world_db_entries_locked"
   | "after_snapshot_manifest_before_insert"
   | "after_snapshot_insert_before_commit"
 

@@ -28,8 +28,8 @@ import { streamProviderRoundEvents } from "../provider/round-runner"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../../provider/cost-policy"
 import {
   adaptiveCheckpointThreshold,
+  buildSessionCheckpoint,
   formatCheckpointSummary,
-  generateCheckpointId,
   recordCheckpointTaken,
   saveCheckpoint,
   shouldSkipCheckpointThisRound,
@@ -143,7 +143,9 @@ export async function* runAdaptiveCheckpoint(
       progress: planProgress(ctx.planStore.current),
     } : (ctx.planning.taskTracker ? { goal: ctx.planning.taskTracker.goal, steps: ctx.planning.taskTracker.steps.map(s => ({ id: s.id, status: s.status, title: s.title })) } : {})
     const taskSteps = ctx.planning.taskTracker?.steps.map(s => ({ id: s.id, status: s.status, title: s.title })) ?? []
-    const changedFiles = [...ctx.taskFiles]
+    // TB2-1: checkpoint 变更文件只含真正修改的文件（写工具成功），只读观察不算。
+    // （测试/旧 ctx 可能没有该字段——防御性回退。）
+    const changedFiles = [...(ctx.execution.modifiedFiles ?? [])]
     const coldMemorySHA = ctx.runState.conversation.stablePrefixHash
     const lastVerification = ctx.verificationState.lastTypecheck
       ? { kind: "typecheck", passed: ctx.verificationState.lastTypecheck.passed, command: "tsc --noEmit" }
@@ -151,42 +153,20 @@ export async function* runAdaptiveCheckpoint(
     const conversationTokens = ctx.preRoundCtx.contextBudgetPercent > 0
       ? Math.round(ctx.preRoundCtx.contextBudgetPercent * 1000)
       : 0
-
-    saveCheckpoint({
-      version: 1,
-      checkpointId: generateCheckpointId(),
+    const cp = buildSessionCheckpoint({
+      sessionId,
       round: ctx.round,
-      timestamp: Date.now(),
-      sessionId, // D3: 真实会话 id
       masterPlan,
       taskSteps,
       changedFiles,
-      fileSHAs: {},
       coldMemorySHA,
-      knowledgeCount: 0,
       lastVerification,
       conversationTokens,
-      prevRound: ctx.round,
-      summary: formatCheckpointSummary({
-        version: 1,
-        checkpointId: generateCheckpointId(),
-        round: ctx.round,
-        timestamp: Date.now(),
-        sessionId, // D3: 真实会话 id（summary 不再硬编码 "")
-        masterPlan: ctx.planning.taskTracker ? { goal: ctx.planning.taskTracker.goal, steps: ctx.planning.taskTracker.steps } : {},
-        taskSteps: ctx.planning.taskTracker?.steps ?? [],
-        changedFiles,
-        fileSHAs: {},
-        coldMemorySHA,
-        knowledgeCount: 0,
-        lastVerification,
-        conversationTokens: Math.round(ctx.preRoundCtx.contextBudgetPercent * 1000),
-        prevRound: ctx.round,
-        summary: ctx.planStore.current
-          ? `Round ${ctx.round}: ${planProgress(ctx.planStore.current)}, ${ctx.execution.modifiedFileCount} files, ${ctx.execution.toolErrors} errors`
-          : `Round ${ctx.round}: ${ctx.execution.modifiedFileCount} files, ${ctx.execution.toolErrors} errors`,
-      }),
+      summary: "",
     })
+    // summary 由 checkpoint 自身字段格式化（§1~§6 模板）。
+    cp.summary = formatCheckpointSummary(cp)
+    saveCheckpoint(cp)
     recordCheckpointTaken(ctx.round)
     ctx.runTrace?.record("checkpoint", { label: cpDecision.label, round: ctx.round, metrics })
   }

@@ -149,6 +149,8 @@ export async function* runRound(
         : "execution",
     // GATE-03: 无进展 streak >= 2 → ACTION_FIRST（思考压到 2K，本轮必须动工具）。
     actionFirst: ctx.progressGovernor.consecutiveNoProgress >= 2,
+    // TB2-1: 工具协议受约束恢复——thinking 预算进一步压低（只重发一个调用）。
+    protocolRecovery: execution.protocolRecoveryActive,
     autoMaxSignals: { consecutiveErrors: execution.consecutiveErrors, modifiedFiles: execution.modifiedFileCount },
   })
   const thinking = thinkingDecision.thinking
@@ -575,7 +577,7 @@ export async function* runRound(
       maxRounds: ctx.maxRounds,
       finalText,
       taskTracker: planning.taskTracker,
-      changedFiles: [...taskFiles],
+      changedFiles: [...execution.modifiedFiles],
       retryLedger: getRunRetryLedger(),
     })
     for (const message of recovery.messages) rawMessages.push(message)
@@ -585,7 +587,14 @@ export async function* runRound(
     yield stream({ type: "status", data: recovery.status })
     if (recovery.text) yield stream({ type: "text", data: recovery.text })
     yield trace("gate_decision", recovery.trace)
-    if (recovery.action === "continue") return { kind: "continue" }
+    if (recovery.action === "continue") {
+      // TB2-1: 工具协议错误受约束恢复——下一轮压低 thinking budget（重发
+      // 单一工具调用，禁止重新规划），恢复结束立即复位。
+      if (recovery.reduceThinking) {
+        yield patch({ execution: { protocolRecoveryActive: true } })
+      }
+      return { kind: "continue" }
+    }
     return { kind: "break", reason: "provider_failure" }
   }
 
@@ -599,7 +608,7 @@ export async function* runRound(
       taskTracker: planning.taskTracker,
       pendingRippleObligations: verificationState.rippleObligations,
       verificationResults: verificationState.lastResults,
-      changedFiles: [...taskFiles],
+      changedFiles: [...execution.modifiedFiles],
       taskHadWrite: execution.taskHadWrite,
       taskToolErrors: execution.toolErrors,
       taskModifiedFiles: execution.modifiedFileCount,
@@ -772,6 +781,11 @@ export async function* runRound(
   }))
   if (batchResult.aborted) return { kind: "return", reason: "tool_batch_aborted" }
 
+  // TB2-1: 受约束恢复结束——本轮成功执行了工具调用，复位 thinking 降级。
+  if (execution.protocolRecoveryActive && completedToolCalls.length > 0) {
+    yield patch({ execution: { protocolRecoveryActive: false } })
+  }
+
   // L5: VerificationCoordinator context — shared across the verification phase.
   const verificationCtx = {
     round,
@@ -845,21 +859,24 @@ export async function* runRound(
   // STALLED）。工具执行后清 blocked files 记录。
   ctx.sandbox.clearBlockedFiles()
 
-  // ── Revise plan: stuck detection → push back to planning ──
+  // ── Revise plan: only a plan step that ACTUALLY executed but failed may
+  // push back to planning. Provider-empty rounds (truncated with no tool
+  // calls) never trigger revise-plan — they are handled by GATE-03
+  // ProgressGovernor (action_first → replan_once → STALLED). ──
+  const providerEmptiedRound = providerRoundResult.stopReason === "truncated" && completedToolCalls.length === 0
   if (
     planning.taskTracker &&
     planning.taskTracker.phase === "building" &&
-    completedToolCalls.length === 0 &&
+    !providerEmptiedRound &&
+    completedToolCalls.length > 0 &&
     modifiedFilesThisRound.size === 0 &&
     verificationResultsThisRound.length === 0 &&
-    (execution.consecutiveErrors >= 3 || !planning.taskTracker.steps.some(s => s.status === "done"))
+    execution.consecutiveErrors >= 3
   ) {
     // Only use singleton revisePlan when MasterPlan is not active.
     // MasterPlan-level revisePlan (with frozen nodes) is deferred to PR 2.
     if (!planStore.current) {
-    const reason = execution.consecutiveErrors >= 3
-      ? `连续 ${execution.consecutiveErrors} 次工具错误`
-      : "步骤未推进，当前方案可能有问题"
+    const reason = `连续 ${execution.consecutiveErrors} 次工具错误`
     const reviseMsg = revisePlan(planning.taskTracker, reason)
     ctx.deferredGateMessages.push(reviseMsg)
     yield stream({ type: "status", data: `revise-plan: ${reason}` })
@@ -949,7 +966,10 @@ export async function* runRound(
     hadSearchTool: toolNames.some(t => /read_file|web_search|find_symbol|find_references|project_structure|glob|grep/.test(t)),
     hadWriteTool: toolNames.some(t => /write_file|edit_file|edit_fim/.test(t)),
     hadVerifyTool: toolNames.some(t => t === "shell" || t === "typescript"),
-    isDone: round + 1 >= ctx.maxRounds || verificationState.lastTypecheck?.passed === true || (verificationState.lastResults?.some(r => r.passed) ?? false),
+    // TB2-1: 轮次耗尽（round+1 >= maxRounds）永远不是完成——DONE 只能来自
+    // 完成门：typecheck 通过或验证结果有通过证据。预算耗尽由 finalizeRun
+    // 映射为 paused/incomplete。
+    isDone: verificationState.lastTypecheck?.passed === true || (verificationState.lastResults?.some(r => r.passed) ?? false),
     pendingRippleCount: verificationState.rippleObligations.length,
   })
   // Reset one-shot thinking upgrade
@@ -1085,7 +1105,7 @@ function buildProgressInput(
     committedToolCalls: completedToolCalls,
     toolResults: roundState.toolResults,
     verificationResults: roundState.verificationResults,
-    fileCount: ctx.taskFiles.size,
+    fileCount: ctx.execution.modifiedFiles.size,
     completedNodes: nodes.filter(n => n.status === "done").length,
     completedSteps: steps.filter(s => s.status === "done").length,
     currentNode: ctx.planStore.current?.current ?? "",

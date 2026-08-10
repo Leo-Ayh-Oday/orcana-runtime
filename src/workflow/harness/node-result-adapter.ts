@@ -58,5 +58,15 @@ export function adaptNodeResult(nodeResult: NodeResult, options: AdaptNodeResult
         error: nodeResult.error?.message ?? "harness node cancelled",
         errorKind: "cancelled",
       }
+    case "paused":
+      // TB2-1: 轮次耗尽/暂停 = incomplete，不是成功——workflow 侧映射为
+      // blocked（可恢复）而非 done。
+      return {
+        ...base,
+        status: "blocked",
+        output: null,
+        error: nodeResult.error?.message ?? "harness node paused (incomplete)",
+        errorKind: "node_paused",
+      }
   }
 }

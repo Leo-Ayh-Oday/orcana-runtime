@@ -41,6 +41,42 @@ export interface SessionCheckpoint {
   summary: string
 }
 
+/** TB2-1: checkpoint 构建入参（runAdaptiveCheckpoint 与 finalizeRun 强制保存共用）。 */
+export interface SessionCheckpointBuildInput {
+  sessionId: string
+  round: number
+  masterPlan: Record<string, unknown>
+  taskSteps: Array<{ id: string; status: string; title: string }>
+  changedFiles: string[]
+  fileSHAs?: Record<string, string>
+  coldMemorySHA: string
+  knowledgeCount?: number
+  lastVerification: { kind: string; passed: boolean; command: string } | null
+  conversationTokens: number
+  summary: string
+}
+
+/** 单一 checkpoint 构造点：统一字段与 checkpointId 生成。 */
+export function buildSessionCheckpoint(input: SessionCheckpointBuildInput): SessionCheckpoint {
+  return {
+    version: 1,
+    checkpointId: generateCheckpointId(),
+    round: input.round,
+    timestamp: Date.now(),
+    sessionId: input.sessionId,
+    masterPlan: input.masterPlan,
+    taskSteps: input.taskSteps,
+    changedFiles: input.changedFiles,
+    fileSHAs: input.fileSHAs ?? {},
+    coldMemorySHA: input.coldMemorySHA,
+    knowledgeCount: input.knowledgeCount ?? 0,
+    lastVerification: input.lastVerification,
+    conversationTokens: input.conversationTokens,
+    prevRound: input.round,
+    summary: input.summary,
+  }
+}
+
 /** Generate a unique checkpoint ID (12-char hex from timestamp + random). */
 export function generateCheckpointId(): string {
   return `${Date.now().toString(36)}_${createHash("sha256").update(String(Math.random())).digest("hex").slice(0, 6)}`
@@ -197,8 +233,9 @@ export function saveCheckpoint(cp: SessionCheckpoint): void {
     lastVerification: cp.lastVerification,
     conversationTokens: cp.conversationTokens,
     prevRound: cp.prevRound,
-    summary: cp.summary,
-    checkpointId: cp.checkpointId,
+    // TB2-1: checkpointId 经 summary 内嵌标记持久化（表结构不变），
+    // load 时由 recordToCheckpoint 还原——Resume 句柄可跨进程往返。
+    summary: withCheckpointIdMarker(cp.summary, cp.checkpointId),
   })
   // Close fallback store (not the active one)
   if (!activeStores.has(cp.sessionId)) store.close()
@@ -217,12 +254,14 @@ export function lastCheckpoint(sessionId: string): SessionCheckpoint | null {
 }
 
 function recordToCheckpoint(rec: CheckpointRecord): SessionCheckpoint {
+  // TB2-1: checkpointId 从 summary 内嵌标记还原（旧记录无标记 → 合成兜底）。
+  const { checkpointId, summary } = extractCheckpointIdMarker(rec.summary ?? "")
   return {
     version: 1,
     round: rec.roundNum,
     timestamp: rec.timestamp,
     sessionId: rec.sessionId,
-    checkpointId: rec.checkpointId ?? `${rec.sessionId}_r${rec.roundNum}`,
+    checkpointId: checkpointId ?? rec.checkpointId ?? `${rec.sessionId}_r${rec.roundNum}`,
     masterPlan: rec.masterPlan ?? {},
     taskSteps: rec.taskSteps ?? [],
     changedFiles: rec.changedFiles,
@@ -232,8 +271,22 @@ function recordToCheckpoint(rec: CheckpointRecord): SessionCheckpoint {
     lastVerification: rec.lastVerification,
     conversationTokens: rec.conversationTokens,
     prevRound: rec.prevRound,
-    summary: rec.summary,
+    summary,
   }
+}
+
+// ── checkpointId 内嵌标记（表结构不变的前提下跨进程往返 Resume 句柄） ──
+
+const CHECKPOINT_ID_MARKER = /^\[checkpointId:([^\]]+)\]\n?/
+
+function withCheckpointIdMarker(summary: string, checkpointId: string): string {
+  return CHECKPOINT_ID_MARKER.test(summary) ? summary : `[checkpointId:${checkpointId}]\n${summary}`
+}
+
+function extractCheckpointIdMarker(summary: string): { checkpointId?: string; summary: string } {
+  const match = CHECKPOINT_ID_MARKER.exec(summary)
+  if (!match) return { summary }
+  return { checkpointId: match[1], summary: summary.slice(match[0].length) }
 }
 
 // ═══════════════════════════════════════════════════════════

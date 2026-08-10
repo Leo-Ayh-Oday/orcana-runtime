@@ -27,8 +27,10 @@ import type { VerificationResult } from "../../verification/result"
 
 export type NodeKind = "function" | "tool" | "llm_agent" | "verification" | "human"
 
-/** GEP §5.4 NodeRunStatus, serial subset (no ready/skipped in H11). */
-export type NodeRunStatus = "pending" | "running" | "succeeded" | "failed" | "blocked" | "cancelled"
+/** GEP §5.4 NodeRunStatus, serial subset (no ready/skipped in H11).
+ *  `paused` = stopped-but-resumable (round budget exhausted / awaiting user) —
+ *  never a success terminal (TB2-1). */
+export type NodeRunStatus = "pending" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "paused"
 
 export interface NodeUsage {
   modelCalls: number
@@ -53,9 +55,10 @@ export interface NodeRunError {
   cause?: unknown
 }
 
-/** GEP §5.5 NodeResult, aligned + cancelled. */
+/** GEP §5.5 NodeResult, aligned + cancelled. `paused` = incomplete
+ *  (round budget exhausted) — the scheduler must never treat it as success. */
 export interface NodeResult<T = unknown> {
-  status: "succeeded" | "failed" | "blocked" | "cancelled"
+  status: "succeeded" | "failed" | "blocked" | "cancelled" | "paused"
   output?: T
   evidence: EvidenceEntry[]
   diagnostics: NodeDiagnostic[]

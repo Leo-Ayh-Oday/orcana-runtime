@@ -49,6 +49,7 @@ import { HookSystem } from "../hooks"
 import { findPendingClarification } from "../agent/clarification"
 import { createRuntime } from "../runtime/bootstrap"
 import type { MultiProvider } from "../provider/multi"
+import { classifyRunStatus, exitCodeForRunStatus, validateResumeCheckpoint, type RunTurnResult } from "./run-outcome"
 
 const formatK = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)
 const LITE_CONTEXT_MAX = 1_000_000
@@ -196,26 +197,37 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
           const currentColdMemorySHA = compactor.anchor ? sha256(buildStableAnchorContext(compactor)) : undefined
           const integrity = verifyCheckpoint(cp, currentColdMemorySHA)
           if (integrity.valid) {
-            resumeFromCheckpoint = cp
-            const stepsDone = cp.taskSteps.filter(s => s.status === "done").length
-            console.log(green(
-              `从检查点恢复 (round ${cp.round}, ${stepsDone}/${cp.taskSteps.length} 步骤, ${cp.changedFiles.length} 文件)`
-            ))
+            // TB2-1: 恢复前校验任务步骤/当前步骤/修改文件自洽性；失败必须
+            // 显式 RESUME_REJECTED，不得静默当作新任务。
+            const resumeValidation = validateResumeCheckpoint(cp)
+            if (resumeValidation.ok) {
+              resumeFromCheckpoint = cp
+              const stepsDone = cp.taskSteps.filter(s => s.status === "done").length
+              console.log(green(
+                `从检查点恢复 (round ${cp.round}, ${stepsDone}/${cp.taskSteps.length} 步骤, ${cp.changedFiles.length} 文件)`
+              ))
+            } else {
+              console.log(red(`RESUME_REJECTED: ${resumeValidation.reasons.join("; ")}`))
+              console.log(yellow("检查点被拒——从对话历史恢复（不加载检查点）"))
+            }
           } else if (!integrity.filesMatch) {
             console.log(yellow(
-              `检查点文件已变更 (${integrity.filesMismatched.length} 个不匹配)，从对话历史恢复`
+              `RESUME_REJECTED: 检查点文件已变更 (${integrity.filesMismatched.length} 个不匹配)，从对话历史恢复`
             ))
           } else {
-            console.log(yellow("检查点冷记忆已变更（锚上下文 SHA 校验失败），从对话历史恢复"))
+            console.log(yellow("RESUME_REJECTED: 检查点冷记忆已变更（锚上下文 SHA 校验失败），从对话历史恢复"))
           }
         }
         sessionId = resumeId
       } else {
-        console.log(yellow(`会话 ${resumeId} 不存在，创建新会话`))
+        // TB2-1: 恢复目标不存在不得静默新建任务——显式 RESUME_REJECTED。
+        console.log(red(`RESUME_REJECTED: 会话 ${resumeId} 不存在`))
+        console.log(yellow("将创建新会话"))
       }
     } catch (e) {
       if (e instanceof SessionCorruptedError) {
-        console.log(yellow(`会话 ${resumeId} 已损坏（${e.message}），创建新会话`))
+        console.log(red(`RESUME_REJECTED: 会话 ${resumeId} 已损坏（${e.message}）`))
+        console.log(yellow("将创建新会话"))
       } else {
         throw e
       }
@@ -234,9 +246,10 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
 
   if (cliPrompt) {
     process.stdout.write(`${dim(">")}  ${cliPrompt}\n\n`)
+    let turnResult: RunTurnResult | null = null
     try {
       if (shouldUseChatLite(cliPrompt) && !shouldSkipProviderPurpose("chat_lite")) await runLiteTurn(multiProvider, modelRouter, cliPrompt, history, compactor)
-      else await runTurn(runtime.harness, cliPrompt, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint, runtime.startRunTrace)
+      else turnResult = await runTurn(runtime.harness, cliPrompt, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint, runtime.startRunTrace)
     } finally {
       // D2 SINGLE_SHOT_MODE_PERSISTS: single-shot mode saves the session too.
       if (history.length) {
@@ -248,6 +261,14 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
         }
       }
       runtime.dispose()
+    }
+    // TB2-1: 单次模式未交付时退出码必须非零（0 完成 / 2 暂停 / 3 阻塞 / 4 失败）。
+    if (turnResult && turnResult.status !== "completed") {
+      process.exitCode = exitCodeForRunStatus(turnResult.status)
+      const hint = turnResult.checkpointId
+        ? `（checkpoint ${turnResult.checkpointId}，run ${turnResult.runId} 可恢复）`
+        : `（run ${turnResult.runId}）`
+      console.log(red(`[INCOMPLETE] ${turnResult.reason || turnResult.status}${hint}`))
     }
     return
   }
@@ -497,7 +518,7 @@ async function runTurn(
   sessionId: string,
   resumeFromCheckpoint: SessionCheckpoint | null,
   startRunTrace: (prompt: string) => { record(type: string, data?: unknown): void; runId: string; file: string },
-) {
+): Promise<RunTurnResult | null> {
   prevInput = 0
   prevOutput = 0
   let lastText = ""
@@ -510,6 +531,12 @@ async function runTurn(
   let cumulativeCacheCreation = 0
   let totalMs = 0
   let printedToolTrace = false
+
+  // TB2-1: run.* lifecycle events → 结构化结果（完成/暂停/阻塞/失败 + Resume 句柄）。
+  let capturedRunId = ""
+  let capturedStatus: import("../harness/contracts/run").RunStatus | null = null
+  let capturedReason = ""
+  let capturedCheckpointId = ""
 
   const isTTY = process.stdout.isTTY
   const frames = ["-", "\\", "|", "/"]
@@ -560,6 +587,18 @@ async function runTurn(
     planNeedsReinvoke = false
     for await (const event of harness.run(sessionId, { prompt, metadata })) {
       const payload = event.payload
+      // TB2-1: run.* lifecycle 事件（run.paused/run.blocked/run.completed…）
+      // 携带终态 + checkpointId，是退出码与 Resume 的唯一事实来源。
+      if ("status" in payload && typeof payload.status === "string") {
+        if (!capturedRunId) capturedRunId = event.runId
+        const lifecycleStatus = payload.status as import("../harness/contracts/run").RunStatus
+        if (lifecycleStatus !== "running" && lifecycleStatus !== "initializing" && lifecycleStatus !== "resuming" && lifecycleStatus !== "pausing") {
+          capturedStatus = lifecycleStatus
+          if ("reason" in payload && typeof payload.reason === "string") capturedReason = payload.reason
+          if ("checkpointId" in payload && typeof payload.checkpointId === "string" && payload.checkpointId) capturedCheckpointId = payload.checkpointId
+        }
+        continue
+      }
       if ("text" in payload) {
         stopTransientStatus()
         if (!streamedTextStarted) {
@@ -668,7 +707,7 @@ async function runTurn(
           planNeedsReinvoke = true
         } else if (normalized === "x" || normalized === "cancel") {
           process.stdout.write(red("计划已取消\n"))
-          return
+          return null
         } else {
           warmHistory.push({ role: "user", content: `用户要求修改计划：${answer}` })
           planNeedsReinvoke = true
@@ -727,4 +766,13 @@ async function runTurn(
   void maybeCreateM0(compactor, prompt)
   history.push({ role: "user", content: prompt })
   if (lastText) history.push({ role: "assistant", content: lastText })
+
+  // TB2-1: 结构化终态。捕获到 lifecycle 事件才返回结果（事件流中断时为 null）。
+  if (!capturedStatus) return null
+  return {
+    status: classifyRunStatus(capturedStatus),
+    runId: capturedRunId,
+    reason: capturedReason || capturedStatus,
+    checkpointId: capturedCheckpointId,
+  }
 }

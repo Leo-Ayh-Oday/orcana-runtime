@@ -40,6 +40,11 @@ export interface ThinkingProfile {
    * small budget so the round has room to emit an actual tool call.
    */
   actionFirst?: boolean
+  /**
+   * TB2-1: tool-protocol constrained recovery — the model must re-send ONE
+   * tool call with a minimal thinking budget (no replanning, no retries).
+   */
+  protocolRecovery?: boolean
 }
 
 export type ThinkingStage = "planning" | "execution" | "recovery" | "verification"
@@ -256,6 +261,8 @@ function applyResponseBudget(
   // GATE-03: ACTION_FIRST 模式下思考预算压到 2K——本轮必须发出工具调用，
   // 深度思考不是进展。
   if (profile?.actionFirst) reasoningCap = Math.min(reasoningCap, 2048)
+  // TB2-1: 工具协议受约束恢复——只重发一个工具调用，思考预算进一步压低。
+  if (profile?.protocolRecovery) reasoningCap = Math.min(reasoningCap, 1024)
   if (thinking.budget_tokens && thinking.budget_tokens > reasoningCap) {
     return { thinking: { ...thinking, budget_tokens: reasoningCap }, maxTokens }
   }

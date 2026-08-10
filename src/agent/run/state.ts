@@ -80,6 +80,8 @@ export function createAgentRunState(input: CreateAgentRunStateInput): AgentRunSt
       requestedMaxThinking: false,
       runtimeSelfEditFiles: new Set(),
       taskFiles: new Set(),
+      modifiedFiles: new Set(),
+      protocolRecoveryActive: false,
       lastToolNames: [],
       rippleBlockActive: false,
     },

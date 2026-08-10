@@ -249,3 +249,71 @@ describe("H11 acceptance: single agent as one LlmAgentNode", () => {
     expect(events[events.length - 1]).toMatchObject({ type: "node.status", status: "succeeded" })
   })
 })
+
+// ── TB2-1: round_budget 是 paused，不是 succeeded ──
+
+describe("TB2-1 LlmAgentNode round_budget ≠ succeeded", () => {
+  /** 每轮只请求工具、永不产出最终文本——轮次预算自然耗尽。 */
+  class AlwaysToolProvider implements LLMProvider {
+    rounds = 0
+    async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+      this.rounds++
+      yield { type: "tool_call", data: { id: `probe-${this.rounds}`, name: "baseline_probe", input: {} } }
+    }
+  }
+
+  async function runNodeWith(provider: LLMProvider, options: { maxRounds: number; prompt?: string; metadata?: Record<string, unknown> }) {
+    const projectRoot = "/tmp/h11-tb21-round-budget"
+    const runId = `run-tb21-${Math.random().toString(36).slice(2, 8)}`
+    const controller = new AbortController()
+    const scope = assembleRunScope({ runId, sessionId: `sess-tb21-${runId}`, projectRoot, controller })
+    const run: AgentRun = {
+      runId,
+      sessionId: scope.sessionId,
+      status: "running",
+      input: { prompt: options.prompt ?? "inspect the project state", maxRounds: options.maxRounds, metadata: options.metadata },
+      scope,
+      budget: createBudgetLedger(mergeRunBudget(undefined)),
+      createdAt: Date.now(),
+      eventSequence: 0,
+      schemaVersion: 1,
+    }
+    const capabilities = createCapabilityRegistry()
+    registerToolCapabilities(capabilities, probeTool())
+    const context = createNodeExecutionContext({ run, capabilities })
+    const node = createLlmAgentNode({ id: "agent-tb21", deps: { provider, tools: probeTool() } })
+    const { result } = await runNodeToResult(node, context, { prompt: options.prompt ?? "inspect the project state", maxRounds: options.maxRounds, metadata: options.metadata })
+    return result
+  }
+
+  test("轮次耗尽（无文本）→ node paused，不得 succeeded", async () => {
+    const provider = new AlwaysToolProvider()
+    const result = await runNodeWith(provider, { maxRounds: 2 })
+    expect(provider.rounds).toBe(2)
+    expect(result.status).toBe("paused")
+    expect(result.output?.outcome.kind).toBe("paused")
+    expect(result.output?.decision).toMatchObject({ kind: "break", reason: "round_budget" })
+    expect(result.diagnostics.some(d => d.code === "round_budget")).toBe(true)
+  })
+
+  test("轮次耗尽 + 暂停提示文本 → 仍 paused（文本不是交付成果）", async () => {
+    // 每轮先输出暂停文本、再请求工具：文本经 tool_call 边界冲刷到 node，
+    // 但轮次预算耗尽时节点必须 paused，不得因"有文本"而 succeeded。
+    class TextAndToolProvider implements LLMProvider {
+      rounds = 0
+      async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        this.rounds++
+        yield { type: "text", data: `暂停提示：第 ${this.rounds} 轮尚未完成。` }
+        yield { type: "tool_call", data: { id: `probe-${this.rounds}`, name: "baseline_probe", input: {} } }
+      }
+    }
+    const result = await runNodeWith(new TextAndToolProvider(), {
+      maxRounds: 2,
+      prompt: "继续执行检查点恢复后的任务：读取 src/a.ts 与 src/b.ts 的当前内容，验证第一步的修改仍然存在并检查缓存状态，然后完成第二步剩余工作，最后运行 bun run typecheck 与测试确认无回归。",
+    })
+    expect(result.output?.text).toContain("暂停提示")
+    // TB2-1: 有暂停文本但无交付 → 状态必须不是 succeeded。
+    expect(result.status).toBe("paused")
+    expect(result.output?.decision).toMatchObject({ kind: "break", reason: "round_budget" })
+  })
+})

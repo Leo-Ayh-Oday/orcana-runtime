@@ -45,6 +45,20 @@ export class InterruptStore {
       .filter(r => status === undefined || r.status === status)
   }
 
+  /** M10: atomically consume a waiting record (waiting → resuming). The
+   *  read-check-write runs entirely synchronously — a concurrent resume()
+   *  in the same process observes "resuming" and fails. Returns the
+   *  consumed record, or undefined when the record is absent or already
+   *  consumed/resolved/cancelled (DOUBLE_RESUME: 0). */
+  consume(interruptId: string): WorkflowInterruptRecord | undefined {
+    const record = this.get(interruptId)
+    if (!record) return undefined
+    if (record.status !== "waiting") return undefined
+    const next: WorkflowInterruptRecord = { ...record, status: "resuming" }
+    this.put(next)
+    return next
+  }
+
   update(interruptId: string, patch: Partial<WorkflowInterruptRecord>): WorkflowInterruptRecord | undefined {
     const record = this.get(interruptId)
     if (!record) return undefined

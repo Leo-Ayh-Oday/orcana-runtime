@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
+import { testAuthorityFallback } from "../../../src/runtime/linux/broker"
 import { ResourceLedger } from "../../../src/runtime/linux/scheduler/resource-ledger"
 import { CgroupManager, type CgroupFs } from "../../../src/runtime/linux/cgroup/manager"
 import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
@@ -69,6 +70,71 @@ async function collect(spec: ExecutionCellSpec, broker: ReturnType<typeof create
 }
 
 describe("R2 broker transaction", () => {
+  test("C5: sealed-file secrets leave no /tmp residue after execution", async () => {
+    const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { existsSync } = await import("node:fs")
+    const binding = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/reg", expiresAt: Date.now() + 60_000 })
+    const broker = createLinuxBroker({ mode: "enabled", secretValues: { [binding.id]: "s3cr3t" } })
+    const events = await collect(cellSpec({ secrets: [binding] }), broker)
+    expect(events.some(e => e.type === "cell.exit")).toBe(true)
+    // C5（SECRET_TEMP_RESIDUE）：执行结束 → sealed secret 宿主文件与 root
+    // 目录必须已删除（dispose 在事务 finally 触发，非"后端读取后清理"）
+    const root = join(tmpdir(), `orcana-secrets-${process.pid}`)
+    expect(existsSync(root)).toBe(false)
+  })
+
+  test("B7: receipt carries cleanupActions + secretRecords with verified revocation", async () => {
+    const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
+    const { mkdtempSync, rmSync, readdirSync, readFileSync } = await import("node:fs")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { RuntimeStateStore } = await import("../../../src/runtime/linux/recovery/state-store")
+    const binding = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/reg", expiresAt: Date.now() + 60_000 })
+    const root = mkdtempSync(join(tmpdir(), "orcana-gate02-b7-"))
+    try {
+      const store = new RuntimeStateStore({ root })
+      const broker = createLinuxBroker({ mode: "enabled", stateStore: store, secretValues: { [binding.id]: "s3cr3t" } })
+      await collect(cellSpec({ secrets: [binding] }), broker)
+      // 最终 Receipt 只持久化（stateStore.appendReceipt），事件流里的
+      // cell.receipt 是后端原始版本 —— 从 store 读合并后的审计 receipt。
+      const receiptsDir = join(root, "runs", "r1", "receipts")
+      const files = readdirSync(receiptsDir)
+      expect(files.length).toBeGreaterThan(0)
+      const receipt = JSON.parse(readFileSync(join(receiptsDir, files[0]!), "utf8")) as import("../../../src/runtime/linux/contracts").SandboxReceipt
+      // 统一清理动作：secret-file + secret-root（host-audit 无 seccomp 文件）
+      expect(receipt.cleanupActions?.length).toBeGreaterThan(0)
+      expect(receipt.cleanupActions!.some(a => a.kind === "secret-file" && a.ok)).toBe(true)
+      // secret 交付生命周期：revokedAt 已落 + cleanupVerified 为真（文件已删）
+      const records = receipt.secretRecords ?? []
+      expect(records).toHaveLength(1)
+      expect(records[0]!.leaseId).toBe(binding.id)
+      expect(records[0]!.delivery).toBe("sealed-file")
+      expect(records[0]!.revokedAt).toBeGreaterThan(0)
+      expect(records[0]!.cleanupVerified).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("C5: failed secret binding cleans partially written files", async () => {
+    const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { existsSync } = await import("node:fs")
+    // 先写有效 binding 再遇过期 binding → 绑定失败路径也必须清理已写文件
+    const good = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/good", expiresAt: Date.now() + 60_000 })
+    const expired = newSecretBinding({ purpose: "auth", delivery: "sealed-file", target: "/run/secrets/bad", expiresAt: Date.now() - 1000 })
+    const broker = createLinuxBroker({ mode: "enabled", secretValues: { [good.id]: "g", [expired.id]: "x" } })
+    await expect((async () => {
+      for await (const _ of broker.execute(cellSpec({ secrets: [good, expired] }))) { /* drain */ }
+    })()).rejects.toThrow(LinuxExecutionError)
+    const root = join(tmpdir(), `orcana-secrets-${process.pid}`)
+    expect(existsSync(root)).toBe(false)
+  })
+
+
   test("execute reserves resources and releases them after completion", async () => {
     const ledger = new ResourceLedger({ maxConcurrentCells: 2, capacity: { cpuQuota: 1000, memoryBytes: 1024 * 1024, pids: 100, networkSlots: 1, tempBytes: 1024 * 1024, concurrentCells: 2 } })
     const broker = createLinuxBroker({ mode: "enabled", ledger })
@@ -177,13 +243,14 @@ describe("R2 broker transaction", () => {
   test("PR-1: executeRequest compiles a CapabilityRequest and runs it", async () => {
     const broker = createLinuxBroker({ mode: "enabled" })
     const events: Array<{ type: string; [k: string]: unknown }> = []
+    const authority = testAuthorityFallback(process.cwd())
     for await (const e of broker.executeRequest({
       command: { executable: "/bin/true", args: [] },
       profile: "build",
-    })) events.push(e as unknown as { type: string; [k: string]: unknown })
+    }, { authority })) events.push(e as unknown as { type: string; [k: string]: unknown })
     expect(events.some(e => e.type === "cell.exit")).toBe(true)
     expect(events.some(e => e.type === "cell.receipt")).toBe(true)
-    // 身份由 Runtime 生成，非共享占位符
+    // 身份来自 Authority，非共享占位符
     expect((events[0] as { cellId?: string }).cellId?.startsWith("cell-")).toBe(true)
   })
 
@@ -200,7 +267,7 @@ describe("R2 broker transaction", () => {
     // 清理实测：host-audit 下进程组扫描（sleep 已退出 → 0）
     expect(receipt!.receipt.cleanup.processesRemaining).toBe(0)
     // 自摘要存在且与摘要字段匹配
-    expect(receipt!.receipt.receiptDigest.length).toBe(16)
+    expect(receipt!.receipt.receiptDigest.length).toBe(64)
   })
 
   test("PR-3: cancelCell aborts the running cell and the event stream ends", async () => {
@@ -223,7 +290,10 @@ describe("R2 broker transaction", () => {
     const exit = events.find(e => e.type === "cell.exit") as { signal?: string | null } | undefined
     expect(exit?.signal).toBe("aborted")
     expect(broker.activeCells().length).toBe(0)
-    // 后台进程归零（cancelCell 后无残留）
+    // F4（ORPHAN_PROCESS）：cancelCell 后残留实测归零 —— receipt cleanup 是
+    // 真实测量值（countProcessGroup），不是假定 0
+    const receiptEvent = events.find(e => e.type === "cell.receipt") as { receipt?: { cleanup?: { processesRemaining?: number } } } | undefined
+    expect(receiptEvent?.receipt?.cleanup?.processesRemaining).toBe(0)
   })
 
   test("PR-2: receipt is persisted to the state store", async () => {
@@ -239,7 +309,7 @@ describe("R2 broker transaction", () => {
       const files = (await import("node:fs")).readdirSync(receiptsDir)
       expect(files.length).toBeGreaterThan(0)
       const persisted = JSON.parse((await import("node:fs")).readFileSync(`${receiptsDir}/${files[0]}`, "utf8"))
-      expect(persisted.receiptDigest.length).toBe(16)
+      expect(persisted.receiptDigest.length).toBe(64)
       expect(persisted.backend).toBe("host-audit")
     } finally {
       (await import("node:fs")).rmSync(root, { recursive: true, force: true })

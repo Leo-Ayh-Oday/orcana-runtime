@@ -22,6 +22,7 @@
  *    - Unclosed tool-use chains block rollover (DeepSeek 400 error).
  */
 
+import { createHash } from "node:crypto"
 import type { ProviderMessage } from "../provider/types"
 import type { TaskPacket } from "./task-packet"
 import type { MasterPlan } from "./master-plan"
@@ -72,6 +73,9 @@ export interface EpochSnapshot {
   messageCountAfter: number
   charsArchived: number
   planStateDigest: string
+  /** K3: ref (artifact store) or sha256 of the archived raw messages. Backfilled
+   *  by the caller via persistEpochArchive — epochRollover stays pure. */
+  archiveRef?: string
   createdAt: number
 }
 
@@ -83,6 +87,9 @@ export interface EpochState {
   snapshots: EpochSnapshot[]
   /** Total chars trimmed across all epochs. */
   totalCharsTrimmed: number
+  /** K19: chars-per-token observed from the previous provider round's measured
+   *  input tokens; calibrates the char thresholds. 3 when unknown. */
+  lastMeasuredCharsPerToken?: number
 }
 
 export function createEpochState(thresholds?: Partial<EpochThresholds>): EpochState {
@@ -231,13 +238,35 @@ export { hasUnclosedToolChain }
 
 export type EpochAction = "none" | "compress" | "forceCompress" | "rollover"
 
+/** Scale char thresholds by an observed chars-per-token density.
+ *
+ *  The defaults assume ~3 chars/token. Real content drifts (code/JSON/CJK pack
+ *  more chars per token), so the char thresholds are scaled by `charsPerToken / 3`
+ *  to keep the effective *token* thresholds constant. charsPerToken = 3 is the
+ *  identity. A non-positive ratio (no measurement / degenerate provider) is
+ *  treated as 1 — never invert the thresholds.
+ */
+export function calibrateEpochThresholds(
+  thresholds: EpochThresholds,
+  charsPerToken: number,
+): EpochThresholds {
+  const factor = charsPerToken > 0 ? charsPerToken / 3 : 1
+  return {
+    compressChars: Math.round(thresholds.compressChars * factor),
+    forceCompressChars: Math.round(thresholds.forceCompressChars * factor),
+    rolloverChars: Math.round(thresholds.rolloverChars * factor),
+  }
+}
+
 export function classifyEpochAction(
   totalChars: number,
   thresholds: EpochThresholds,
+  charsPerToken = 3,
 ): EpochAction {
-  if (totalChars >= thresholds.rolloverChars) return "rollover"
-  if (totalChars >= thresholds.forceCompressChars) return "forceCompress"
-  if (totalChars >= thresholds.compressChars) return "compress"
+  const effective = calibrateEpochThresholds(thresholds, charsPerToken)
+  if (totalChars >= effective.rolloverChars) return "rollover"
+  if (totalChars >= effective.forceCompressChars) return "forceCompress"
+  if (totalChars >= effective.compressChars) return "compress"
   return "none"
 }
 
@@ -248,6 +277,9 @@ export interface RolloverResult {
   messages: ProviderMessage[]
   /** Number of messages archived. */
   archivedCount: number
+  /** K3: the archived raw messages, preserved verbatim. Callers persist them
+   *  (via persistEpochArchive) and record the ref on the snapshot. */
+  archivedMessages: ProviderMessage[]
   /** Chars removed. */
   charsTrimmed: number
   /** Snapshot of what was archived. */
@@ -259,12 +291,16 @@ export interface RolloverResult {
  * recent few rounds, and prepend the plan state digest.
  *
  * Safety: refuses to roll over if unclosed tool chains are detected.
+ * With `fallback: true` (K22) it instead cuts to the last safe boundary —
+ * archiving everything before the most recent complete user message, so the
+ * pending tool chain stays intact in the volatile tail.
  *
  * @param messages — rawMessages to roll over
  * @param keepRecent — number of assistant+user pairs to retain at the tail (default 3 = ~6 messages)
  * @param planStateContext — serialized plan state (from buildPlanStateContext)
  * @param state — current epoch state
  * @param round — current round number
+ * @param fallback — when true, allow cutting at the last safe boundary even with an unclosed tool chain
  */
 export function epochRollover(
   messages: ProviderMessage[],
@@ -272,8 +308,10 @@ export function epochRollover(
   planStateContext: string,
   state: EpochState,
   round: number,
+  fallback = false,
 ): RolloverResult | { blocked: true; reason: string } {
-  if (hasUnclosedToolChain(messages)) {
+  const unclosedChain = hasUnclosedToolChain(messages)
+  if (unclosedChain && !fallback) {
     return {
       blocked: true,
       reason: "Cannot roll over: unclosed tool-use chain detected. Retry after tool results arrive.",
@@ -282,33 +320,48 @@ export function epochRollover(
 
   const charsBefore = totalMessageChars(messages)
 
-  // Find the cut point: keep the most recent `keepRecent` assistant→user pairs
-  // Walking backwards to find the cut
-  let assistantCount = 0
-  let cutIndex = messages.length
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]!
-    if (msg.role === "assistant") assistantCount++
-    if (assistantCount >= keepRecent) {
-      cutIndex = i
-      break
+  // Find the cut point.
+  let cutIndex: number
+  let fallbackNote = ""
+  if (unclosedChain) {
+    // K22 fallback: cut to the last safe boundary — the last complete plain-text
+    // user message before any currently-open tool_use. Everything before it is
+    // archived; the unclosed chain itself stays intact so DeepSeek's
+    // tool_use→tool_result adjacency is never broken.
+    const boundary = findSafeRolloverBoundary(messages)
+    if (boundary < 0) {
+      return {
+        blocked: true,
+        reason: "Cannot roll over in fallback mode: the entire history is inside an unclosed tool chain.",
+      }
     }
-  }
+    cutIndex = boundary
+    fallbackNote = "Rollover executed in FALLBACK mode (unclosed tool chain): archived up to the last safe boundary; the pending tool chain is retained in the volatile tail."
+  } else {
+    // Normal path: keep the most recent `keepRecent` assistant→user pairs.
+    // Walking backwards to find the cut.
+    let assistantCount = 0
+    cutIndex = messages.length
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]!
+      if (msg.role === "assistant") assistantCount++
+      if (assistantCount >= keepRecent) {
+        cutIndex = i
+        break
+      }
+    }
 
-  // Guard: ensure at least 2 messages are retained (one full turn)
-  // Using cutIndex on short message lists can produce empty retained sets.
-  // e.g. messages.length=2, cutIndex=2 → retained=[]
-  const minRetained = 2
-  if (messages.length - cutIndex < minRetained) {
-    cutIndex = Math.max(0, messages.length - minRetained)
+    // Guard: ensure at least 2 messages are retained (one full turn)
+    // Using cutIndex on short message lists can produce empty retained sets.
+    // e.g. messages.length=2, cutIndex=2 → retained=[]
+    const minRetained = 2
+    if (messages.length - cutIndex < minRetained) {
+      cutIndex = Math.max(0, messages.length - minRetained)
+    }
   }
 
   const archivedMessages = messages.slice(0, cutIndex)
   const retainedMessages = messages.slice(cutIndex)
-  // charsTrimmed: actual reduction in raw messages (preamble adds its own chars,
-  // so this slightly overstates the net context reduction by ~preamble length).
-  const charsAfter = totalMessageChars(retainedMessages)
-  const charsTrimmed = charsBefore - charsAfter
 
   // Build epoch preamble — replaces the archived messages
   const preamble: ProviderMessage = {
@@ -317,12 +370,18 @@ export function epochRollover(
       planStateContext,
       "",
       "## Epoch Rollover",
-      `Epoch ${state.currentEpochIndex} archived. ${archivedMessages.length} messages (${charsTrimmed} chars) moved to archive.`,
+      `Epoch ${state.currentEpochIndex} archived. ${archivedMessages.length} messages (${totalMessageChars(archivedMessages)} chars) moved to archive.`,
       "Continue from the plan state above. The volatile context has been reset, but all plan state, decisions, and obligations are preserved.",
       "",
       "Do NOT re-execute completed steps — check the Plan State for current progress.",
+      ...(fallbackNote ? [fallbackNote] : []),
     ].join("\n"),
   }
+
+  // charsTrimmed: net reduction — the preamble replaces the archived
+  // messages, so its own chars are subtracted from the gross reduction.
+  const charsAfter = totalMessageChars(retainedMessages)
+  const charsTrimmed = Math.max(0, charsBefore - charsAfter - msgCharLen(preamble))
 
   const snapshot: EpochSnapshot = {
     index: state.currentEpochIndex,
@@ -331,15 +390,81 @@ export function epochRollover(
     messageCountBefore: messages.length,
     messageCountAfter: retainedMessages.length + 1, // +1 for preamble
     charsArchived: charsTrimmed,
-    planStateDigest: planStateContext.slice(0, 500),
+    // K23: a real digest (sha256), not a content prefix — auditable/reproducible.
+    planStateDigest: createHash("sha256").update(planStateContext).digest("hex"),
     createdAt: Date.now(),
   }
 
   return {
     messages: [preamble, ...retainedMessages],
     archivedCount: archivedMessages.length,
+    archivedMessages,
     charsTrimmed,
     snapshot,
+  }
+}
+
+// ── K22: fallback safe-boundary search ──
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null
+}
+
+function isToolResultMessage(m: ProviderMessage): boolean {
+  if (typeof m.content === "string") return false
+  return m.content.some(b => isRecord(b) && b.type === "tool_result")
+}
+
+/** Largest index at which a fresh, complete plain-text user turn starts with
+ *  every prior tool_use closed — the last safe archive boundary. Returns -1
+ *  when no such boundary exists (the whole history is inside a tool chain). */
+function findSafeRolloverBoundary(messages: ProviderMessage[]): number {
+  let pendingToolUses = 0
+  let boundary = -1
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!
+    if (pendingToolUses === 0 && m.role === "user" && !isToolResultMessage(m)) {
+      boundary = i
+    }
+    if (m.role === "assistant") {
+      const blocks = Array.isArray(m.content) ? m.content : []
+      for (const b of blocks) {
+        if (isRecord(b) && b.type === "tool_use") pendingToolUses++
+      }
+    } else if (m.role === "user") {
+      const blocks = Array.isArray(m.content) ? m.content : []
+      for (const b of blocks) {
+        if (isRecord(b) && b.type === "tool_result") pendingToolUses = Math.max(0, pendingToolUses - 1)
+      }
+    }
+  }
+  return boundary
+}
+
+// ── K3: archive preservation (先持久化事实，再压缩表示) ──
+
+/** Deterministic sha256 of the archived raw messages' serialized JSON. */
+export function archiveContentHash(archivedMessages: ProviderMessage[]): string {
+  return createHash("sha256").update(JSON.stringify(archivedMessages)).digest("hex")
+}
+
+/** Persist the archived raw messages via the artifact store (best-effort).
+ *
+ *  Returns the artifact ref when the store is present and succeeds; otherwise
+ *  falls back to the content sha256 hash. Never throws — a failed persistence
+ *  must not block the rollover.
+ */
+export async function persistEpochArchive(
+  artifactStore: { storeContent(content: string): Promise<string> } | undefined,
+  archivedMessages: ProviderMessage[],
+): Promise<{ ref: string; persisted: boolean }> {
+  const fallbackHash = archiveContentHash(archivedMessages)
+  if (!artifactStore) return { ref: fallbackHash, persisted: false }
+  try {
+    const ref = await artifactStore.storeContent(JSON.stringify(archivedMessages))
+    return ref ? { ref, persisted: true } : { ref: fallbackHash, persisted: false }
+  } catch {
+    return { ref: fallbackHash, persisted: false }
   }
 }
 

@@ -6,12 +6,19 @@ import {
   formatProviderStreamBlockedReport,
   formatProviderStreamRecoveryPrompt,
 } from "../runtime-failure"
+import type { RetryLedger } from "../../runtime/retry-ledger"
 import { compactAssistantContext } from "../round/helpers"
 import { missingTaskRequirements, type TaskTracker } from "../task-tracker"
 import type { ProviderFailure } from "../run/types"
 
 export function isNonRetryableProviderStreamError(error: string): boolean {
-  return /^(auth|client|quota)(?:\s|:)/i.test(error)
+  // GATE-02 (GS-03): max_tokens is TRUNCATED — never a generic retryable
+  // provider error. The main path (deepseek/anthropic providers) already
+  // emits `truncated` events instead of errors; this is the backstop for any
+  // path that still surfaces it as an error: re-issuing the same doomed
+  // request was the OTS-013 loop.
+  return /stop_reason=max_tokens|finish_reason=(length|max_tokens)/i.test(error)
+    || /^(auth|client|quota)(?:\s|:)/i.test(error)
     || /insufficient[_\s-]*quota|quota[_\s-]*(?:exceeded|insufficient)|(?:exceeded|insufficient)[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|额度|余额|欠费|账户余额|资源包|套餐/i.test(error)
 }
 
@@ -44,6 +51,9 @@ export interface ProviderFailureRecoveryInput {
   finalText: string
   taskTracker: TaskTracker | null
   changedFiles: string[]
+  /** PR-GATE-06：Run 级 RetryLedger —— 同一 round 的轮续跑（truncation 类）
+   *  最多一次，预算与 provider/capability/repair 层共享。 */
+  retryLedger?: RetryLedger
 }
 
 export interface ProviderFailureRecoveryDecision {
@@ -79,7 +89,11 @@ export function decideProviderFailureRecovery(
     }
   }
 
-  const canRetry = input.round + 1 < input.maxRounds
+  // PR-GATE-06：轮续跑属于 truncation 类 —— 同一 round 经 ledger 严格限次
+  // （truncation <= 1），不再只依赖 maxRounds 宽松边界。
+  const roundFingerprint = `truncation:${input.round}`
+  const ledgerAllows = !input.retryLedger || input.retryLedger.canRetry("truncation", roundFingerprint)
+  const canRetry = ledgerAllows && input.round + 1 < input.maxRounds
   const assistantContext: ProviderMessage[] = input.finalText.trim()
     ? [{ role: "assistant", content: compactAssistantContext(input.finalText) }]
     : []
@@ -87,6 +101,7 @@ export function decideProviderFailureRecovery(
   if (input.taskTracker) {
     const missing = missingTaskRequirements(input.taskTracker)
     if (canRetry) {
+      input.retryLedger?.record("truncation", roundFingerprint)
       return {
         action: "continue",
         status: "provider-stream-gate: retrying unfinished long task",
@@ -130,6 +145,7 @@ export function decideProviderFailureRecovery(
   }
 
   if (canRetry) {
+    input.retryLedger?.record("truncation", roundFingerprint)
     return {
       action: "continue",
       status: "provider-stream-gate: retrying interrupted round",

@@ -6,14 +6,25 @@ import type { ToolDescriptor } from "../../tools/registry"
 
 // ── Token estimation ──
 
+/** Cap on provider-visible tool schemas — must match between disclosure and budget. */
+export const TOOL_SCHEMA_CAP = 128
+
+function toolSchemaChars(tools: ToolDescriptor[]): number {
+  const schemas = tools.map(tool => tool.toAnthropicSchema()).slice(0, TOOL_SCHEMA_CAP)
+  return schemas.length ? JSON.stringify(schemas).length : 0
+}
+
 export function estimateRoundTokens(
   system: string,
   contextMessages: ProviderMessage[],
   rawMessages: ProviderMessage[],
   budgetContext: ProviderMessage | null,
+  tools: ToolDescriptor[] = [],
 ): { roundInputTokens: number; providerMessages: ProviderMessage[] } {
+  const schemas = toolSchemaChars(tools)
   let roundInputTokens = Math.round(
     (system.length +
+      schemas +
       contextMessages.reduce((s, m) => s + msgCharLen(m), 0) +
       rawMessages.reduce((s, m) => s + msgCharLen(m), 0)) / 3
   )
@@ -25,7 +36,7 @@ export function estimateRoundTokens(
     contextMessages.push(budgetContext)
     providerMessages.push(budgetContext)
     roundInputTokens = Math.round(
-      (system.length + providerMessages.reduce((s, m) => s + msgCharLen(m), 0)) / 3
+      (system.length + schemas + providerMessages.reduce((s, m) => s + msgCharLen(m), 0)) / 3
     )
   }
   return { roundInputTokens, providerMessages }
@@ -86,7 +97,7 @@ export interface RoundRequestBuildOutput {
 export function buildRoundProviderRequest(input: RoundRequestBuildInput): RoundRequestBuildOutput {
   const providerToolSchemas = input.tools
     .map(tool => tool.toAnthropicSchema())
-    .slice(0, 128)
+    .slice(0, TOOL_SCHEMA_CAP)
   const cacheAnatomy = buildCacheAnatomy({
     system: input.system,
     tools: providerToolSchemas,

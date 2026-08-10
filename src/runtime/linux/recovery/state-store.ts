@@ -1,11 +1,16 @@
 /** LNXF-1.0: runtime state store + boot identity + startup janitor (LF-7, plan §20).
  *
  *  Host runtime state lives in ~/.orcana/runtime/linux (capabilities.json,
- *  runs/<runId>/{run.json,domains,cells,receipts,cleanup.json}, locks).
+ *  runs/<runId>/{run.json,domains,cells,receipts,cleanup.json}, locks,
+ *  services/<id>.json, ports/<port>.json).
  *  The janitor runs at startup: boot-id based leftover detection — never
  *  PID-based guessing (PID reuse safety); cleans cgroups, worktrees, port
  *  leases, containers (via labels) that provably belong to an old Orcana
  *  run of a previous boot.
+ *
+ *  LNXF-GATE-02 (A7/B10): durable resource ownership — ServiceCell leases
+ *  and port leases are persisted here so recovery is record-driven, never
+ *  empty-Broker guesswork.
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from "node:fs"
@@ -73,6 +78,109 @@ export class RuntimeStateStore {
     mkdirSync(dir, { recursive: true })
     return join(dir, `${name}.lock`)
   }
+
+  // ── LNXF-GATE-02：durable service / port lease records ──
+
+  /** 服务长期进程的持久化租赁记录（janitor 恢复依据）。 */
+  writeServiceLease(lease: ServiceLeaseRecord): void {
+    const dir = join(this.root, "services")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${lease.id}.json`), JSON.stringify(lease, null, 2), "utf8")
+  }
+
+  readServiceLeases(): ServiceLeaseRecord[] {
+    const dir = join(this.root, "services")
+    if (!existsSync(dir)) return []
+    return readdirSync(dir)
+      .filter(name => name.endsWith(".json"))
+      .map(name => {
+        try {
+          return JSON.parse(readFileSync(join(dir, name), "utf8")) as ServiceLeaseRecord
+        } catch {
+          return undefined
+        }
+      })
+      .filter((lease): lease is ServiceLeaseRecord => lease !== undefined)
+  }
+
+  removeServiceLease(id: string): void {
+    rmSync(join(this.root, "services", `${id}.json`), { force: true })
+  }
+
+  /** 端口租赁记录（同一端口并发服务冲突检测 + 恢复释放）。 */
+  writePortLease(lease: PortLease): void {
+    const dir = join(this.root, "ports")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${lease.port}.json`), JSON.stringify(lease, null, 2), "utf8")
+  }
+
+  readPortLeases(): PortLease[] {
+    const dir = join(this.root, "ports")
+    if (!existsSync(dir)) return []
+    return readdirSync(dir)
+      .filter(name => name.endsWith(".json"))
+      .map(name => {
+        try {
+          return JSON.parse(readFileSync(join(dir, name), "utf8")) as PortLease
+        } catch {
+          return undefined
+        }
+      })
+      .filter((lease): lease is PortLease => lease !== undefined)
+  }
+
+  removePortLease(port: number): void {
+    rmSync(join(this.root, "ports", `${port}.json`), { force: true })
+  }
+}
+
+/** LNXF-GATE-02：ServiceCell 的 durable 租赁记录（不含进程句柄）。
+ *  owner 判定用 pid + ownerProcStartTicks 双校验（PID 复用安全）。 */
+export interface ServiceLeaseRecord {
+  id: string
+  kind: "service" | "mcp" | "lsp"
+  runId?: string
+  pid: number | undefined
+  ownerProcStartTicks: number
+  url?: string
+  port?: number
+  command: string
+  cwd: string
+  startedAt: number
+  status: "starting" | "ready" | "stopped" | "failed"
+  cleanupPolicy: "manual" | "run-end"
+  logPath: string
+  restartPolicy: "none"
+  stoppedAt?: number
+}
+
+/** LNXF-GATE-02：端口租赁记录。 */
+export interface PortLease {
+  port: number
+  serviceId: string
+  runId?: string
+  pid: number | undefined
+  ownerProcStartTicks: number
+  startedAt: number
+  releasedAt?: number
+}
+
+/** LNXF-GATE-02：ServiceCell 集成方的 durable 存储抽象。 */
+export interface ServiceLeaseStore {
+  writeServiceLease(lease: ServiceLeaseRecord): void
+  readServiceLeases(): ServiceLeaseRecord[]
+  removeServiceLease(id: string): void
+  writePortLease(lease: PortLease): void
+  readPortLeases(): PortLease[]
+  removePortLease(port: number): void
+}
+
+/** 进程已死判定（PID 复用安全）：pid 无效或 starttime 不匹配 → 死。 */
+export function processDead(pid: number | undefined, ownerProcStartTicks: number): boolean {
+  if (!pid || pid <= 0) return true
+  if (!ownerProcStartTicks) return true
+  const current = procStartTicksOf(pid)
+  return current <= 0 || current !== ownerProcStartTicks
 }
 
 export interface BootIdentity {
@@ -159,6 +267,7 @@ export interface RecoveryReceipt {
     cgroups: string[]
     worktrees: string[]
     ports: number
+    services: number
     containers: string[]
     stateRemoved: boolean
   }
@@ -178,7 +287,7 @@ export async function startupJanitor(options: {
   for (const runId of stale) {
     const cleaned = options.cleanupRun
       ? await options.cleanupRun(runId)
-      : { cgroups: [], worktrees: [], ports: 0, containers: [], stateRemoved: false }
+      : { cgroups: [], worktrees: [], ports: 0, services: 0, containers: [], stateRemoved: false }
     const receipt: RecoveryReceipt = {
       runId,
       cleaned,

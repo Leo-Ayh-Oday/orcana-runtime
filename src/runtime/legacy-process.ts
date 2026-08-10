@@ -14,7 +14,12 @@
 
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync, execSync as nodeExecSync } from "node:child_process"
 import type { ChildProcess, SpawnSyncOptions, SpawnOptions, ExecSyncOptions } from "node:child_process"
+import { hostKeyDenied } from "./linux/environment"
 export type { ChildProcess }
+
+// minimalHostEnv 已正式化至 ./linux/environment（LNXF-GATE-02）；此处
+// re-export 兼容暂存区既有调用方（astgrep-provider 等，迁移后移除）。
+export { minimalHostEnv } from "./linux/environment"
 
 /** sync spawn（git worktree / 验证收集器 / journal 回放）。 */
 export function spawnSyncLegacy(

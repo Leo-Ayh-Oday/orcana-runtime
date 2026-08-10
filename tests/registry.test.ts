@@ -128,7 +128,9 @@ describe("Router", () => {
     const { createState, decideThinking, updateState } = await import("../src/agent/router")
     const state = createState()
     updateState(state, ["edit_file"], ["a.py"], false)
-    expect(decideThinking(state)).toEqual({ type: "enabled", budget_tokens: 8192, effort: "high" })
+    // GATE-02：thinking budget 经 ResponseBudget 校准 —— 8192 意图在
+    // execution 档（reserve 40%）下受 12288 envelope 约束为 7372。
+    expect(decideThinking(state)).toEqual({ type: "enabled", budget_tokens: 7372, effort: "high" })
   })
 
   test("complex long task can think on the first round", async () => {
@@ -138,11 +140,14 @@ describe("Router", () => {
       prompt: "Implement a complete full-stack project with frontend, backend API, tests, build verification, and production quality.",
       intentMode: "long_task",
       planningPhase: true,
+      // GATE-02：round.ts 生产路径按阶段传 stage；planning 档 reserve 25%，
+      // 32K 意图在 16384 envelope 下校准为 12288。
+      stage: "planning",
     })
 
     expect(decision.thinking?.type).toBe("enabled")
     expect(decision.thinking?.effort).toBe("max")
-    expect(decision.thinking?.budget_tokens).toBeGreaterThanOrEqual(16384)
+    expect(decision.thinking?.budget_tokens).toBe(12288)
     expect(decision.visibleStatus).toContain("深度思考：")
   })
 
@@ -172,7 +177,7 @@ describe("Router", () => {
       intentMode: "narrow_edit",
     })
 
-    expect(simpleDecision.thinking?.budget_tokens).toBe(8192)
+    expect(simpleDecision.thinking?.budget_tokens).toBe(7372)
     expect(structuralDecision.thinking?.budget_tokens).toBeGreaterThan(simpleDecision.thinking!.budget_tokens!)
     expect(structuralDecision.reason).toContain("结构")
   })

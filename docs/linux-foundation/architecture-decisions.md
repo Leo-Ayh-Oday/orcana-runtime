@@ -1,5 +1,9 @@
 # Orcana Linux 原生执行底座 — 架构决策（LNXF-1.0 ADR）
 
+> 当前解释（2026-08-10）：`已定案` 表示架构方向和相应组件曾通过阶段
+> 验证，不表示所有生产路径或当前发布候选已经闭环。运行强制与降级见
+> [当前状态矩阵](current-status.md)。
+
 **状态表：** 决策随阶段实施更新；`已定案` 表示对应阶段完成并验证。
 
 | ADR | 决策 | 状态 | 阶段 |
@@ -13,9 +17,14 @@
 | ADR-L7 | **网络默认关闭**：新网络 namespace 默认 `none`；`loopback` 仅 Cell/Domain 内；`full-approved` 需人工批准并记录 Receipt；proxy-allowlist 为后续增强，禁止简单 DNS 预解析治理 | **已定案 (v0.8.14)** | LF-3/LF-7 |
 | ADR-L8 | **Isolation-Domain Lock**：`main-workspace` 独占写锁、`worktree:<agent>` 独占写锁、`cache:<type>:<key>` 独占/读写锁、`artifact:<id>` 不可变；不同 Worktree 并行写、正式工作区单写者 | **已定案 (v0.8.12)** | LF-5 |
 | ADR-L9 | **严格 Profile 禁止降级**：`allowDegradation:false` 的 Profile（untrusted/evolution）在严格隔离不可用时**拒绝执行**而非回退；`ISOLATION_REQUIREMENT_UNMET`/`DEGRADATION_NOT_ALLOWED` | **已定案 (v0.8.10)** | LF-3/LF-6 |
-| ADR-L10 | **Receipt 进入 Evidence**：每次执行产生 `SandboxReceipt`，绑定 nodeRunId/cellId/workspaceDigest/backend/profile/cellSpecDigest/resourcePolicyDigest/networkPolicyDigest；HostAudit 结果不能满足 `minimumIsolation=container` 的 Criterion | 待定 | LF-2 |
+| ADR-L10 | **Receipt 进入 Evidence**：每次执行产生 `SandboxReceipt`，绑定 nodeRunId/cellId/workspaceDigest/backend/profile/cellSpecDigest/resourcePolicyDigest/networkPolicyDigest；HostAudit 结果不能满足 `minimumIsolation=container` 的 Criterion | **基础接线已实现，Evidence Frontier/外部状态绑定仍待闭环** | LF-2/R5 |
 
-**记录时点（LF-0 基线）：**
+**历史记录时点（LF-0 基线）：**
 - 直接进程入口计数：**36 处调用 / 7 个源文件**（`src/tools/process.ts` 3、`src/tools/shell.ts` 3、`src/tools/git.ts` 2、`src/tools/mcp.ts` 1、`src/tools/service.ts` 2、`src/verification/collector.ts` 6，其余散布于 lsp/ripple/typescript/codegraph/journal/worktree/post-loop 等）
 - Kernel 变更需求：**NO**（不修改 kernel；执行层全部落在 Broker 目录与适配层）
-- 环境实测（WSL2 kernel 6.6.87.2）：cgroup v2 ✓（cpu/io/memory/pids 等控制器）、user namespace ✓、seccomp ✓、bwrap ✗、podman ✗、Landlock LSM 未启用
+- LF-0 当时环境：cgroup v2 ✓、user namespace ✓、seccomp ✓、bwrap ✗、
+  podman ✗、Landlock LSM 未启用。
+- 2026-08-10 当前权威 WSL 只读观测：kernel
+  `6.6.87.2-microsoft-standard-WSL2`、bwrap `0.9.0`、Podman `4.9.3`、
+  cgroup v2、seccomp filter mode；Landlock LSM 仍不可用。安装状态不替代
+  真实后端/Receipt 验收。

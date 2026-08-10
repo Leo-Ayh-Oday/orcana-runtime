@@ -16,8 +16,17 @@ export interface CriterionContext {
   readFile?: (path: string) => string | undefined
   exists?: (path: string) => boolean
   runCommand?: (command: string) => Promise<{ passed: boolean; output: string }>
-  /** Evidence entries available (evidenceKind matches on kind/summary). */
-  evidence?: Array<{ kind: string; summary?: string }>
+  /** Evidence entries available. M22: entries carry their passed state and
+   *  (for sandbox evidence) backend/degradation/cleanup attributes so a
+   *  criterion can require more than a kind match. */
+  evidence?: Array<{
+    kind: string
+    summary?: string
+    passed?: boolean
+    backend?: string
+    degraded?: boolean
+    cleanupVerified?: boolean
+  }>
 }
 
 export interface CriterionVerdict {
@@ -70,9 +79,31 @@ export function evaluateCriterion(criterion: CompletionCriterion, ctx: Criterion
         return { ...base, passed: contains, requiresReview: false, reason: contains ? undefined : `${check.path} does not contain the required marker` }
       }
       case "evidence": {
+        // M22: a kind match alone is never enough — the entry must satisfy
+        // the declared predicates (passed state, backend level, no
+        // degradation, verified cleanup). An entry with passed=false fails
+        // every criterion by default (requirePassed defaults to true).
         const evidence = ctx.evidence ?? []
-        const hit = evidence.some(e => e.kind === check.evidenceKind)
-        return { ...base, passed: hit, requiresReview: false, reason: hit ? undefined : `no passing evidence of kind "${check.evidenceKind}"` }
+        const hits = evidence.filter(e => e.kind === check.evidenceKind)
+        const failureOf = (e: (typeof evidence)[number]): string | undefined => {
+          if (check.requirePassed !== false && e.passed === false) return "evidence passed=false"
+          if (check.requireBackend === "namespace" && e.backend === "host-audit") return "backend is host-audit"
+          if (check.requireNoDegradation && e.degraded === true) return "evidence degraded"
+          if (check.requireCleanupVerified && e.cleanupVerified === false) return "cleanup not verified"
+          return undefined
+        }
+        const satisfying = hits.filter(e => failureOf(e) === undefined)
+        const passed = satisfying.length > 0
+        return {
+          ...base,
+          passed,
+          requiresReview: false,
+          reason: passed
+            ? undefined
+            : hits.length === 0
+              ? `no passing evidence of kind "${check.evidenceKind}"`
+              : (hits.map(failureOf).find(r => r !== undefined) ?? `no passing evidence of kind "${check.evidenceKind}"`),
+        }
       }
       default:
         return { ...base, passed: false, requiresReview: false, reason: "criterion has no check" }

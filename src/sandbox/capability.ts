@@ -44,8 +44,11 @@ function detectProcessIsolation(): SandboxFeature {
     case "win32":
       return {
         name: "进程隔离 (Job Object)",
-        tier: "full",
+        tier: "partial",
         description: "Windows Job Object 提供进程树强杀保证，子进程不会逃逸",
+        // E1.9：createJob 已实现但 SandboxManager.track() 无生产调用方 ——
+        // 进程树强杀保证当前未生效；接线列入 Windows 独立计划线。
+        note: "未接线：track() 零调用，Job Object 进程树控制当前未生效",
       }
     case "linux":
       return {

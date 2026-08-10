@@ -235,12 +235,13 @@ export function createPodmanBackend(): ExecutionBackend {
         violations: outcome.violations,
         degradationReasons: outcome.degradationReasons,
         // PR-2：无默认成功值；containerRemoved 基于 --rm 语义（PR-7 真实验证）。
+        // LR2-0：worktreeRetained 不再抄 spec 推定 —— 未实测 → 缺省
+        // （buildReceipt 默认 false，不声称保留/清理策略）。
         cleanup: {
           processesRemaining: outcome.cleanup?.processesRemaining ?? -1,
           mountsReleased: true,
           cgroupRemoved: outcome.cleanup?.cgroupRemoved ?? false,
           containerRemoved: true,
-          worktreeRetained: spec.lifecycle.retainOnFailure,
         },
       })
     },

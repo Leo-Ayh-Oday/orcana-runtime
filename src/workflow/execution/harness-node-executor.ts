@@ -18,6 +18,14 @@ import { runNodeToResult } from "../../harness/nodes/run"
 import type { ResultStore } from "../results/result-store"
 import { WorkflowInterruptError, type WorkflowInterruptRecord } from "../interrupts/types"
 
+/** H12: the node's prompt for the built context slice — llm_agent nodes
+ *  carry one; other kinds contribute an empty prompt (plan-state userGoal
+ *  falls back to the run's plan goal). */
+function nodePrompt(node: WorkflowNodeSpec): string {
+  const prompt = (node.input as { prompt?: unknown }).prompt
+  return typeof prompt === "string" ? prompt : ""
+}
+
 /** M4: H11 interrupt kinds → workflow interrupt kinds. */
 function humanInterruptKind(node: WorkflowNodeSpec): WorkflowInterruptRecord["kind"] {
   const kind = (node.input as { kind?: string }).kind
@@ -61,7 +69,7 @@ export async function executeHarnessNode(
         (interrupts.resumeAnswer !== undefined && interrupts.resumeAnswer.nodeId === node.id) ||
         runtime.environment.respond !== undefined
       if (!hasAnswer) {
-        const context = createWorkflowNodeContext(runtime, node.id, projectRootOverride)
+        const context = await createWorkflowNodeContext(runtime, node.id, nodePrompt(node), projectRootOverride)
         const opened = interrupts.controller.openInterrupt({
           runId: runtime.runId,
           specId: interrupts.specId,
@@ -82,7 +90,7 @@ export async function executeHarnessNode(
         ? async () => interrupts.resumeAnswer!.answer
         : undefined,
     })
-    const context = createWorkflowNodeContext(runtime, node.id, projectRootOverride)
+    const context = await createWorkflowNodeContext(runtime, node.id, nodePrompt(node), projectRootOverride)
     const input = harnessInputFor(node)
     const { result } = await runNodeToResult(harnessNode, context, input)
     const adapted = adaptNodeResult(result, { nodeId: node.id, startedAt })

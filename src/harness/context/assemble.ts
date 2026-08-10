@@ -10,6 +10,17 @@
  *  Ungrouped contributions become one user message each; empty content is
  *  skipped (mirroring the old conditional expansion). Every call returns a
  *  NEW array — estimateRoundTokens mutates the array it receives.
+ *
+ *  Entrypoint (K29): assembly accepts slices produced by runContextPipeline
+ *  (which stamp `entrypoint: "pipeline"`); the type documents the contract —
+ *  messages must only be assembled from pipeline-produced slices so the
+ *  pipeline stays the single context entrypoint.
+ *
+ *  Chain integrity (K9): the single pass renders contributions in slice
+ *  order — a tool_use→tool_result chain inside one contribution is never
+ *  split or reordered, and no message is inserted between chain members.
+ *  Orphan tool_results are flagged by the pipeline's chain check (manifest),
+ *  never silently reordered here.
  */
 
 import type { ContextContribution, ContextSlice } from "../contracts/context"
@@ -19,7 +30,7 @@ const STABLE_PREFIX_HEADER = "## Stable Prefix Context\n[CACHE_ANCHOR:v3]"
 const VOLATILE_HEADER = "## Volatile Round Context"
 
 /** Assemble contributions into the context message list (byte-frozen order). */
-export function contextSliceToMessages(slice: ContextSlice): ProviderMessage[] {
+export function contextSliceToMessages(slice: ContextSlice & { entrypoint?: "pipeline" }): ProviderMessage[] {
   const messages: ProviderMessage[] = []
   const emittedGroups = new Set<string>()
 

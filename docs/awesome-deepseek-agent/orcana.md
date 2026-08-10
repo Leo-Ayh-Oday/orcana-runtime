@@ -1,8 +1,12 @@
 # Connect Orcana
 
-[简体中文](./orcana.zh-CN.md) · [← Back](../README.md)
+[简体中文](./orcana.zh-CN.md) · [← Back](../../README.md)
 
-Orcana is a DeepSeek-native terminal Coding Agent runtime built for long-running software engineering tasks.
+Orcana is a model-agnostic terminal Coding Agent runtime with first-class DeepSeek integration, built for long-running software engineering tasks.
+
+> Public package: `0.8.16`. The repository contains newer unreleased source.
+> See [current status](../status.md) before comparing package behavior with the
+> repository.
 
 Its core direction is constraint-first coding workflow: task triage, planning gates, task packets, controlled tool calls, patch transactions, evidence-based completion, and an interactive TUI for coding sessions.
 
@@ -173,6 +177,13 @@ Before any file write, the Ripple Engine traces how the change propagates throug
 
 Orcana records verification evidence — typecheck, test, build, or manual inspection. Without required evidence, the agent is blocked from claiming completion. The Final Truthfulness Gate cross-references completion text against the EvidenceLedger.
 
+### Typed Execution Graph
+
+The G0-G6 Graph core is implemented: typed nodes and edges, DAG scheduling,
+single-writer control, cache/replay, bounded repair and dynamic compilation.
+Production authority for strict replay, approvals, cache provenance and durable
+resource/retry handling is still being closed.
+
 ### TUI for Long Tasks
 
 The interactive TUI is designed for coding sessions that involve planning, tool calls, code edits, verification, and repair loops. It shows current mode, plan node, task packet, tool stream, patch status, evidence status, and gate block reasons.
@@ -195,11 +206,15 @@ Start with small, verifiable tasks before attempting broad multi-file changes.
 
 ## 9. Known Limitations
 
-Orcana is an experimental Coding Agent runtime. Some capabilities are still evolving: lifecycle hooks, long-task memory, end-to-end replay, and full rewind workflows.
+Orcana is an experimental Coding Agent runtime. Durable replay, full rewind,
+long-lived service isolation and several cross-layer authority boundaries are
+still evolving. On Linux, Host Audit is a degraded path rather than a security
+boundary; see the [Linux sandbox status](../linux-foundation/current-status.md).
 
 For high-risk operations, inspect the plan, changes, and verification output before accepting results. Do not use auto-approve mode in production repositories unless you fully understand the tool permissions and rollback behavior.
 
-Current version: v0.3.4. Target: v1.0 (10 phases, 32 PR groups, 17 verifiable acceptance criteria).
+Current public version: `0.8.16`. Newer repository versions are unreleased until
+npm, tag, GitHub Release and public-install smoke verification agree.
 
 ## 10. Troubleshooting
 
@@ -238,4 +253,6 @@ For complex coding tasks, Orcana uses max reasoning effort by default. You can v
 
 ### Commands not found
 
-Available commands: `orcana`, `orcana-runtime`, `deepseek-code`, `deepseek`. If `orcana` is not found, try `npx orcana-runtime`.
+Preferred commands are `orcana` and `orcana-runtime`. Legacy DeepSeek-named
+aliases remain only for migration. If `orcana` is not found, try
+`npx orcana-runtime`.

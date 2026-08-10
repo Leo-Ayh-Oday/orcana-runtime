@@ -12,7 +12,7 @@
  */
 
 import type { StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage } from "./types"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs } from "./retry"
+import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt, providerBackoffWait, recordProviderRetry } from "./retry"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
 
@@ -86,19 +86,35 @@ export class OpenAIProvider implements LLMProvider {
     const body = this.buildRequestBody(options)
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // RC-19 ABORT_RETRIED: an aborted request is never issued, and never
+      // retried once the signal fires — including an abort landing in backoff.
+      if (options.abortSignal?.aborted) {
+        yield { type: "error", data: "provider request aborted" }
+        return
+      }
+      let unsafeToRetry = false
       try {
-        yield* this.streamOnce(body, options)
+        yield* this.streamOnce(body, value => { unsafeToRetry = value }, options)
         return
       } catch (e) {
+        if (options.abortSignal?.aborted) {
+          yield { type: "error", data: "provider request aborted" }
+          return
+        }
         const info = classifyProviderError(e)
-        const canRetry = info.retryable && attempt < this.maxRetries
+        const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry, options.retryLedger)
         if (!canRetry) {
           yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
           return
         }
+        recordProviderRetry(info, options.retryLedger)
         const delayMs = providerRetryDelayMs(info, attempt)
         yield { type: "status", data: formatProviderRetryStatus(info, delayMs, attempt, this.maxRetries) }
-        await this.sleep(delayMs)
+        const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
+        if (!waited) {
+          yield { type: "error", data: "provider request aborted during retry backoff" }
+          return
+        }
       }
     }
   }
@@ -228,6 +244,7 @@ export class OpenAIProvider implements LLMProvider {
 
   private async *streamOnce(
     body: Record<string, unknown>,
+    markUnsafeToRetry: (value: boolean) => void,
     options: ProviderCallOptions,
   ): AsyncGenerator<StreamEvent> {
     const response = await this.fetchFn(this.chatCompletionsURL(), {
@@ -292,11 +309,13 @@ export class OpenAIProvider implements LLMProvider {
               const delta = choice.delta
 
               if (delta.content) {
+                markUnsafeToRetry(true)
                 textChunks.push(delta.content)
                 yield { type: "text", data: delta.content }
               }
 
               if (delta.tool_calls) {
+                markUnsafeToRetry(true)
                 for (const tc of delta.tool_calls) {
                   const existing = toolCalls.get(tc.index)
                   if (!existing || (tc.id && existing.id && tc.id !== existing.id)) {
@@ -329,15 +348,13 @@ export class OpenAIProvider implements LLMProvider {
       yield { type: "error", data: "provider returned a malformed SSE data chunk; response may be incomplete" }
       return
     }
-    if (finishReason === "length") {
-      yield { type: "error", data: "provider finish_reason=length: response hit the output token limit before completion" }
-      return
-    }
     if (finishReason === "content_filter") {
       yield { type: "error", data: "provider finish_reason=content_filter: response was interrupted by the provider content filter" }
       return
     }
-    if (finishReason && !NORMAL_OPENAI_FINISH_REASONS.has(finishReason)) {
+    // GATE-02: finish_reason=length (OpenAI native) and max_tokens (compat
+    // relays) are TRUNCATED — handled after tool-call validation below.
+    if (finishReason && !NORMAL_OPENAI_FINISH_REASONS.has(finishReason) && finishReason !== "length" && finishReason !== "max_tokens") {
       yield { type: "error", data: `provider finish_reason=${finishReason}: response ended before normal completion` }
       return
     }
@@ -363,6 +380,19 @@ export class OpenAIProvider implements LLMProvider {
       }
       parsedToolCalls.push({ id: tc.id, name: tc.name, input })
     }
+    // GATE-02 (GS-03/GS-05): TRUNCATED is not an error. Tool calls that
+    // parsed before the cut are complete side effects — emit them so the
+    // round executes them instead of discarding (OTS-013 lost every tool
+    // block this way and retried the same doomed request forever). The
+    // kernel continues as a fresh round; no blind generic retry.
+    if (finishReason === "length" || finishReason === "max_tokens") {
+      for (const toolCall of parsedToolCalls) {
+        yield { type: "tool_call", data: toolCall }
+      }
+      yield { type: "truncated", data: { stopReason: finishReason, toolCalls: parsedToolCalls.length } }
+      return
+    }
+
     for (const toolCall of parsedToolCalls) {
       yield { type: "tool_call", data: toolCall }
     }

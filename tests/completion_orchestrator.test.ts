@@ -70,7 +70,9 @@ describe("CompletionOrchestrator truthfulness gate", () => {
 
     expect(result.decision).toBe("break_blocked")
     expect(result.statusMessages.some(message => message.includes("truthfulness-gate: blocked"))).toBe(true)
-    expect(result.yieldTexts.join("\n")).toContain("Completion blocked by truthfulness gate")
+    // GATE-04：Truthfulness 确定性降级 —— 不再让模型重跑"诚实"，直接 INCOMPLETE
+    expect(result.yieldTexts.join("\n")).toContain("完成声明未被运行时证据支持（INCOMPLETE）")
+    expect(result.yieldTexts.join("\n")).toContain("任务状态：未完成")
   })
 
   test("blocks implementation claims when no write evidence exists", async () => {
@@ -134,7 +136,7 @@ describe("CompletionOrchestrator truthfulness gate", () => {
     }))
 
     expect(result.decision).toBe("break_blocked")
-    expect(result.statusMessages).toContain("truthfulness-gate: blocked (1 contradictions)")
+    expect(result.statusMessages).toContain("truthfulness-gate: blocked (1 contradictions) → INCOMPLETE")
   })
 
   test("fails closed when an observed shell write has no PatchTransaction binding", async () => {

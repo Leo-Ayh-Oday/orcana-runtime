@@ -43,6 +43,9 @@ export enum AgentState {
 
   /** Unrecoverable — max errors, timeout, or explicit block. */
   BLOCKED = "blocked",
+
+  /** GATE-03: no progress for 4 consecutive rounds — terminated by ProgressGovernor. */
+  STALLED = "stalled",
 }
 
 // ── Transition descriptor ──
@@ -70,14 +73,22 @@ export interface AgentContext {
 
 const ALLOWED_TRANSITIONS: Map<AgentState, Set<AgentState>> = new Map([
   [AgentState.IDLE, new Set<AgentState>([AgentState.UNDERSTAND])],
-  [AgentState.UNDERSTAND, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.BLOCKED])],
-  [AgentState.SEARCH, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.UNDERSTAND, AgentState.BLOCKED])],
-  [AgentState.PLAN, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.BLOCKED])],
-  [AgentState.CODE, new Set<AgentState>([AgentState.VERIFY, AgentState.CODE, AgentState.SEARCH, AgentState.BLOCKED])],
-  [AgentState.VERIFY, new Set<AgentState>([AgentState.DONE, AgentState.REPAIR, AgentState.BLOCKED])],
-  [AgentState.REPAIR, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.BLOCKED])],
-  [AgentState.DONE, new Set<AgentState>()],
+  // DONE 出口：post-loop updateStateMachine 的 isDone 分支优先（task complete
+  // 可在任意执行状态发生——本轮验证通过、或工具失败后任务恰好完成），
+  // 转换表必须与之一致（此前仅 VERIFY→DONE，REPAIR 等状态完成任务打非法转换）。
+  [AgentState.UNDERSTAND, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.REPAIR, AgentState.DONE, AgentState.BLOCKED, AgentState.STALLED])],
+  [AgentState.SEARCH, new Set<AgentState>([AgentState.SEARCH, AgentState.PLAN, AgentState.CODE, AgentState.UNDERSTAND, AgentState.REPAIR, AgentState.DONE, AgentState.BLOCKED, AgentState.STALLED])],
+  [AgentState.PLAN, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.DONE, AgentState.BLOCKED, AgentState.STALLED])],
+  [AgentState.CODE, new Set<AgentState>([AgentState.VERIFY, AgentState.CODE, AgentState.SEARCH, AgentState.REPAIR, AgentState.DONE, AgentState.BLOCKED, AgentState.STALLED])],
+  [AgentState.VERIFY, new Set<AgentState>([AgentState.DONE, AgentState.REPAIR, AgentState.BLOCKED, AgentState.STALLED])],
+  [AgentState.REPAIR, new Set<AgentState>([AgentState.CODE, AgentState.SEARCH, AgentState.VERIFY, AgentState.DONE, AgentState.BLOCKED, AgentState.STALLED])],
+  // DONE 允许 → STALLED：ProgressGovernor 终止优先于完成终态——模型写完代码
+  // （状态机转 done）后若 4 轮无有效进展，STALLED 必须仍可落地（GS-P2 任意
+  // 执行状态可转 STALLED）。2026-08-08 EVAL-006 实证：done→stalled 非法转换
+  // 导致 CLI fatal 崩溃（考试暴露）。
+  [AgentState.DONE, new Set<AgentState>([AgentState.STALLED])],
   [AgentState.BLOCKED, new Set<AgentState>()],
+  [AgentState.STALLED, new Set<AgentState>()],
 ])
 
 /** Read-only states — only readonly / concurrency-safe tools allowed */

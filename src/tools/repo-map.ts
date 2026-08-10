@@ -12,11 +12,27 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import * as ts from "typescript"
-import type { ToolDef, ToolResult } from "./registry"
+import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result } from "./registry"
+import { isWithin } from "./path-authority"
 
 const SKIP_DIRS = new Set([".git", ".orcana", "node_modules", "__pycache__", ".pytest_cache", ".venv", "dist", "build", ".next"])
 const TS_EXT = new Set(["ts", "tsx"])
+
+/** RC-19 Phase 2 (D7): the scan root. The execution authority wins; the
+ *  legacy `cwd` param survives only as an explicit test/CLI injection and is
+ *  gated against the authority when one is present. NEVER process.cwd(). */
+function repoScanRoot(context: ToolExecutionContext | undefined, params: Record<string, unknown>): string | undefined {
+  const authority = context?.projectRoot
+  const paramCwd = typeof params["cwd"] === "string" ? String(params["cwd"]) : undefined
+  if (authority) {
+    if (paramCwd && !isWithin(authority, resolve(paramCwd))) {
+      return undefined // param cwd escapes the authority → cross-project
+    }
+    return authority
+  }
+  return paramCwd
+}
 
 export interface RepoSymbol {
   name: string
@@ -122,8 +138,9 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-function tokenEstimate(text: string): number {
-  return Math.ceil(text.length / 3)
+function tokenEstimate(text: string | number): number {
+  const chars = typeof text === "number" ? text : text.length
+  return Math.ceil(chars / 3)
 }
 
 export function buildRepoMap(params: { projectRoot: string; entryFile?: string; includeTests?: boolean; maxFiles?: number }): RepoMap {
@@ -159,7 +176,7 @@ export function buildRepoMap(params: { projectRoot: string; entryFile?: string; 
     rankedSymbols: ranked.slice(0, 100),
     dependencyEdges: edges.slice(0, 200),
     relatedTests,
-    tokenEstimate: tokenEstimate(String(total)),
+    tokenEstimate: tokenEstimate(total),
     provenance: "compiler",
     scannedFiles: files.length,
   }
@@ -197,8 +214,9 @@ export const BUILD_REPO_MAP_TOOL: ToolDef = {
   category: "safe",
   isConcurrencySafe: true,
   inputSchema: BUILD_REPO_MAP_SCHEMA as unknown as Record<string, unknown>,
-  execute(params) {
-    const projectRoot = typeof params["cwd"] === "string" ? String(params["cwd"]) : process.cwd()
+  execute(params, _onProgress, context) {
+    const projectRoot = repoScanRoot(context, params)
+    if (!projectRoot) return Result.blocked("build_repo_map requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
     const map = buildRepoMap({
       projectRoot,
       entryFile: typeof params["entryFile"] === "string" ? String(params["entryFile"]) : undefined,
@@ -238,9 +256,10 @@ export const QUERY_REPO_MAP_TOOL: ToolDef = {
   category: "safe",
   isConcurrencySafe: true,
   inputSchema: QUERY_REPO_MAP_SCHEMA as unknown as Record<string, unknown>,
-  execute(params) {
+  execute(params, _onProgress, context) {
     const query = String(params["query"] ?? "")
-    const projectRoot = typeof params["cwd"] === "string" ? String(params["cwd"]) : process.cwd()
+    const projectRoot = repoScanRoot(context, params)
+    if (!projectRoot) return Result.blocked("query_repo_map requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
     if (!query) return Result.fail("query_repo_map requires query")
     const matches = queryRepoMap({ projectRoot, query })
     if (matches.length === 0) return Result.ok("No symbols match", { matches: [] })
@@ -266,10 +285,11 @@ export const BUILD_CONTEXT_SLICE_TOOL: ToolDef = {
   category: "safe",
   isConcurrencySafe: true,
   inputSchema: BUILD_CONTEXT_SLICE_SCHEMA as unknown as Record<string, unknown>,
-  execute(params) {
+  execute(params, _onProgress, context) {
     const entryFile = String(params["entryFile"] ?? "")
     const budget = Number(params["tokenBudget"] ?? 8000)
-    const projectRoot = typeof params["cwd"] === "string" ? String(params["cwd"]) : process.cwd()
+    const projectRoot = repoScanRoot(context, params)
+    if (!projectRoot) return Result.blocked("build_context_slice requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
     const entry = join(projectRoot, entryFile)
     if (!existsSync(entry)) return Result.fail(`entry file not found: ${entryFile}`)
 

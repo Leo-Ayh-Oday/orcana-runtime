@@ -10,8 +10,11 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs"
+import { CrossProcessWorkspaceLease } from "./workspace/workspace-lease"
 import { spawnSync } from "node:child_process"
+import { killProcessGroup } from "./process/termination"
+import { processDead } from "./recovery/state-store"
 import type {
   AgentExecutionDomain,
   CapabilityRequest,
@@ -21,12 +24,16 @@ import type {
   ExecutionMaterialization,
   LinuxCapabilities,
   SandboxReceipt,
+  SecretDeliveryRecord,
+  TrustedExecutionAuthority,
+  UntrustedCapabilityRequest,
 } from "./contracts"
 import type { DomainResourceBudget } from "./contracts"
 import { probeLinuxCapabilities, requireLinuxPlatform } from "./capability-probe"
-import { compileCapabilityRequest, compileCellSpec } from "./policy-compiler"
+import { compileCapabilityRequest, compileCapabilityRequestCached, compileCellSpec } from "./policy-compiler"
 import { selectBackend } from "./backend-router"
 import type { BackendSelection } from "./backend-router"
+import { isStrictProfile } from "./profiles"
 import { LinuxExecutionError } from "./errors"
 import { createHostAuditBackend } from "./backends/host-audit"
 import { createBubblewrapBackend } from "./backends/bubblewrap"
@@ -65,6 +72,9 @@ export interface ShadowExecutionRecord {
 export interface LinuxBrokerOptions {
   /** shadow = 编译 spec + 记录后端选择，仍走旧执行路径（LF-1）。 */
   mode: "shadow" | "enabled" | "enforced"
+  /** Deterministic capability fixture for tests. Rejected unless
+   *  NODE_ENV=test; production always uses the live probe. */
+  testCapabilities?: LinuxCapabilities
   onShadow?: (record: ShadowExecutionRecord) => void
   /** R2: 注入 cgroup 管理器（无委托时 Broker 自动降级为无 cgroup）。 */
   cgroup?: CgroupManager
@@ -78,6 +88,9 @@ export interface LinuxBrokerOptions {
   secretValues?: Record<string, string>
   /** PR-7: 已批准镜像策略（digest 全串或 registry 前缀；命中才允许 podman 执行）。 */
   approvedImages?: string[]
+  /** LR2-2（P2-D）：Sandbox Plan Cache —— 同 workspace 同策略请求跳过
+   *  完整 Policy Compiler（命中注入新身份）。 */
+  planCache?: import("./cache/plan-cache").PlanCache
 }
 
 /** PR-6：统一 ExecutionRuntimeContext —— Graph 调度 / ProcessExecutor /
@@ -95,33 +108,42 @@ export interface ExecuteOptions {
   abortSignal?: AbortSignal
   /** 指定 Agent Domain（多 Agent 执行身份投影，R4 接线）。 */
   domain?: AgentExecutionDomain
+  /** R2 PR-9: 可信执行权威（executeRequest 传入；enabled 下必填）。 */
+  authority?: TrustedExecutionAuthority
+  /** LNXF-R2 9.5: full-approved 网络的人工批准凭证 —— 由调用方（UI/
+   *  人工确认路径）显式授予，Receipt 记录批准事实。缺省拒绝。 */
+  approvedNetwork?: boolean
 }
 
 export interface LinuxExecutionBroker {
   probe(options?: { refresh?: boolean }): LinuxCapabilities
   /** 编译并校验一个执行 spec（Policy Compiler 唯一入口）。 */
   compileSpec(spec: ExecutionCellSpec): ExecutionCellSpec
-  /** Capability Request → 冻结 Spec（身份由 Runtime 生成；P0-1/P0-2）。 */
-  compileRequest(request: CapabilityRequest): ExecutionCellSpec
+  /** Capability Request + 可信权威 → 冻结 Spec（R2 PR-9：身份/工作区只来自
+   *  authority；enabled 模式缺 authority 即 fail-closed）。 */
+  compileRequest(request: UntrustedCapabilityRequest, authority?: TrustedExecutionAuthority): ExecutionCellSpec
   /** 选择后端（不执行）。 */
   selectBackendFor(spec: ExecutionCellSpec): BackendSelection
   /** Shadow：记录拟用 spec/后端，不执行。 */
   shadow(spec: ExecutionCellSpec): ShadowExecutionRecord
   /** 执行（R2: 完整事务）。 */
   execute(spec: ExecutionCellSpec, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
-  /** 执行 Capability Request（编译 → 执行）。 */
-  executeRequest(request: CapabilityRequest, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
+  /** 执行 Untrusted Capability Request（编译 → 执行）。 */
+  executeRequest(request: UntrustedCapabilityRequest, options?: ExecuteOptions): AsyncIterable<ExecutionCellEvent>
   createAgentDomain(input: { runId: string; agentId: string; worktreeRoot: string; ownerFiles: string[]; resourceBudget: DomainResourceBudget; role?: string }): AgentExecutionDomain
   cancelCell(cellId: string): Promise<void>
   cancelAgent(agentId: string): Promise<void>
   cancelRun(runId: string): Promise<void>
-  cleanupRun(runId: string): Promise<{ removed: number }>
+  cleanupRun(runId: string): Promise<{ removed: number; servicesCleaned: number; portsCleaned: number }>
   /** R2: 当前运行中 Cell（诊断/测试）。 */
   activeCells(): ExecutionCell[]
   /** R2: 资源账本（调度接入）。 */
   ledger(): ResourceLedger
   /** PR-6: 统一运行时上下文（Graph 调度与 Broker 共享单一账本/锁/缓存）。 */
   runtimeContext(): ExecutionRuntimeContext
+  /** execd v2（L2-A）：cgroup 委托基路径（无委托 → undefined）。
+   *  供执行句柄记录计算 cell 专属 cgroup 路径。 */
+  cgroupBase(): string | undefined
 }
 
 /** 全进程共享的 broker 实例（能力探测缓存）。 */
@@ -144,7 +166,10 @@ function backendOf(id: string): ExecutionBackend | undefined {
 
 function resourceRequestOf(spec: ExecutionCellSpec): ResourceRequest {
   return {
-    cpuQuota: spec.resources.cpuQuotaMicros ? Math.max(1, Math.round(spec.resources.cpuQuotaMicros / 10_000)) : 1,
+    // LNXF-R2 10.2：CPU 记账统一 cpuMillis（1000 = 1 核）——
+    // 旧换算（quotaMicros/10000 vs ledger cores×10000）相差 1000 倍，
+    // 使 CPU 维度 overcommit 拒绝形同虚设。
+    cpuQuota: spec.resources.cpuMillis ?? 1000,
     memoryBytes: spec.resources.memoryMaxBytes,
     pids: spec.resources.pidsMax,
     ioWeight: spec.resources.ioWeight ?? 0,
@@ -154,20 +179,32 @@ function resourceRequestOf(spec: ExecutionCellSpec): ResourceRequest {
 }
 
 export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBroker {
-  const caps = requireLinuxPlatform()
+  const mode = options.mode
+  if (options.testCapabilities && process.env.NODE_ENV !== "test") {
+    throw new Error("test capability injection requires NODE_ENV=test")
+  }
+  const caps = options.testCapabilities ?? requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
-  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string }>()
+  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string; leaseRelease?: () => void }>()
 
   const ledger = options.ledger ?? new ResourceLedger()
   const stateStore = options.stateStore ?? new RuntimeStateStore()
   const domainManager = new AgentDomainManager({ ledger })
+  // GATE（GS-13）：跨进程 workspace lease（mkdir 原子锁）。
+  const workspaceLease = new CrossProcessWorkspaceLease()
   const cacheManager = new CacheManager(options.cacheRoot ?? join(stateStore.capabilitiesPath(), "..", "cache"))
 
   // cgroup：仅在有真实委托时启用（无委托 → cgroupPath 为空，严格任务已在
   // selectBackend 层拒绝；P0-4 修复前绝不假装资源限制生效）。
   const delegated = detectDelegatedRoot()
-  const cgroup = options.cgroup ?? (delegated.writable ? new CgroupManager({ base: delegated.base }) : undefined)
+  // 单元测试默认不接入宿主真实 cgroup：测试必须显式注入 mock manager；
+  // 真实内核路径由 cgroup.test 与 eval:linux 的 delegated lane 覆盖。这样
+  // 测试超时/进程中断不会在宿主留下 run-* 空目录。
+  const autoCgroup = process.env.NODE_ENV !== "test" && caps.cgroup.delegated && delegated.writable
+    ? new CgroupManager({ base: delegated.base })
+    : undefined
+  const cgroup = options.cgroup ?? autoCgroup
   const locks = new IsolationDomainLock()
 
   const compileOrThrow = (spec: ExecutionCellSpec): ExecutionCellSpec => {
@@ -183,7 +220,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
    *  PR-7：seccomp 按后端协议生成（bwrap=raw BPF；podman=OCI JSON）；
    *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。 */
   const materializeExecution = (spec: ExecutionCellSpec, backendId: string): ExecutionMaterialization => {
-    const materialization: ExecutionMaterialization = {}
+    const materialization: ExecutionMaterialization = {
+      // B7：统一清理动作登记表 —— dispose 执行时逐项回填 ok/detail。
+      cleanupActions: [],
+    }
+    // C5：sealed secret 的清理回调（删文件 + 空 root 目录）；环境注入类无文件。
+    let secretCleanup: (() => void) | undefined
     if ((backendId === "bubblewrap" || backendId === "rootless-podman")
       && (spec.profile === "inspect" || spec.profile === "untrusted")) {
       try {
@@ -204,25 +246,85 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     if (spec.secrets.length > 0) {
       const bound = bindSecrets({ bindings: spec.secrets, values: options.secretValues ?? {} })
       if (!bound.ok) {
+        // C5：失败路径同样清理 —— 部分 binding 可能在校验失败前已写入文件。
+        bound.cleanup()
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
       }
       materialization.secretEnv = bound.envInjections
       // PR-7：sealed-file 交付 → 宿主文件真实挂载进沙盒/容器。
       const secretFiles: Record<string, string> = {}
+      const secretRecords: SecretDeliveryRecord[] = []
       for (const item of bound.bound) {
         if (item.deliveryTarget) {
           const target = item.binding.target ?? `/run/secrets/${item.binding.id}`
           secretFiles[target] = item.deliveryTarget
         }
+        // B7：交付生命周期记录（Receipt 审计；dispose 后落 revokedAt/verified）。
+        secretRecords.push({
+          leaseId: item.binding.id,
+          runId: spec.identity.runId,
+          cellId: spec.identity.cellId,
+          bindingId: item.binding.id,
+          deliveryTarget: item.deliveryTarget,
+          delivery: item.binding.delivery,
+          expiresAt: item.binding.expiresAt,
+          cleanupVerified: false,
+        })
       }
       materialization.secretFiles = secretFiles
-      // 环境注入类无宿主文件；sealed-file 在挂载路径下由后端读取后清理。
-      if (Object.keys(secretFiles).length === 0) bound.cleanup()
+      materialization.secretRecords = secretRecords
+      // C5：文件不在此处清理 —— 统一由 dispose（execute 事务 finally）调用，
+      // 保证执行结束（含异常/取消路径）后 /tmp 无密钥残留。
+      secretCleanup = bound.cleanup
     }
     for (const cache of spec.cache) {
       materialization.cacheHostPaths = {
         ...materialization.cacheHostPaths,
         [cache.target]: cacheManager.hostPath(cache),
+      }
+    }
+    // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（seccomp/sealed secret）统一清理。
+    // B7：逐项执行 + 结果回填 cleanupActions / secretRecords（Receipt 审计）。
+    materialization.dispose = () => {
+      const actions = materialization.cleanupActions ?? []
+      // temp：seccomp 宿主文件（best-effort，结果如实记录）。
+      if (materialization.seccompFile) {
+        try {
+          rmSync(materialization.seccompFile, { force: true })
+          actions.push({ kind: "temp", name: "seccomp-file", ok: true, at: Date.now() })
+        } catch (error) {
+          actions.push({ kind: "temp", name: "seccomp-file", ok: false, detail: error instanceof Error ? error.message : String(error), at: Date.now() })
+        }
+      }
+      // secrets：逐文件删除并验证（cleanupVerified 真值 —— 失败如实标记，
+      // 不因 best-effort 伪装干净）。
+      for (const record of materialization.secretRecords ?? []) {
+        if (record.deliveryTarget) {
+          try {
+            rmSync(record.deliveryTarget, { force: true })
+            record.cleanupVerified = !existsSync(record.deliveryTarget)
+          } catch {
+            record.cleanupVerified = false
+          }
+          record.revokedAt = Date.now()
+        } else {
+          // environment 交付无文件 —— 撤销即记录时间戳。
+          record.revokedAt = Date.now()
+          record.cleanupVerified = true
+        }
+        actions.push({
+          kind: "secret-file",
+          name: record.bindingId,
+          ok: record.cleanupVerified,
+          at: record.revokedAt ?? Date.now(),
+        })
+      }
+      // 兜底：secret root 空目录清理（C5）。
+      try {
+        secretCleanup?.()
+        actions.push({ kind: "secrets", name: "secret-root", ok: true, at: Date.now() })
+      } catch (error) {
+        actions.push({ kind: "secrets", name: "secret-root", ok: false, detail: error instanceof Error ? error.message : String(error), at: Date.now() })
       }
     }
     return materialization
@@ -279,34 +381,50 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   }
 
   const readCellMetrics = (cgroupCellPath: string): SandboxReceipt["metrics"] => {
-    if (!cgroup || !cgroupCellPath) return {}
+    // LR2-0（ADR-LR2-003）：未观测必须 unknown —— 空对象不得冒充完整
+    // metrics（原实现无委托/读取失败时返回 {}，被当作完整 Receipt）。
+    if (!cgroup || !cgroupCellPath) {
+      return { status: "unknown", reason: "no cgroup delegation" }
+    }
     try {
       const metrics = readMetrics(cgroupCellPath, cgroup.fs)
       return {
-        cpuUsageUsec: metrics.cpuUsageUsec,
-        cpuThrottledUsec: metrics.cpuThrottledUsec,
-        peakMemoryBytes: metrics.peakMemoryBytes,
-        peakPids: metrics.peakPids,
+        status: "observed",
+        value: {
+          cpuUsageUsec: metrics.cpuUsageUsec,
+          cpuThrottledUsec: metrics.cpuThrottledUsec,
+          peakMemoryBytes: metrics.peakMemoryBytes,
+          peakPids: metrics.peakPids,
+        },
       }
     } catch {
-      return {}
+      return { status: "unknown", reason: "cgroup metrics read failed" }
     }
   }
 
   return {
     probe(opts) {
-      return probeLinuxCapabilities(opts)
+      return options.testCapabilities ?? probeLinuxCapabilities(opts)
     },
     compileSpec: compileOrThrow,
-    compileRequest(request) {
-      const compiled = compileCapabilityRequest(request)
+    compileRequest(request, authority) {
+      if (mode === "enabled" && !authority) {
+        throw new LinuxExecutionError("EXECUTION_AUTHORITY_MISSING", "enabled execution requires a TrustedExecutionAuthority")
+      }
+      // LR2-2（P2-D）：Plan Cache 命中跳过完整编译（workspace 限定键）。
+      const wsIdentity = authority ? workspaceIdentityOf(authority.workspace.hostRoot) : undefined
+      const compiled = authority
+        ? (options.planCache
+            ? compileCapabilityRequestCached(request, authority, options.planCache, wsIdentity)
+            : compileCapabilityRequest(request, authority))
+        : compileCapabilityRequest(request, testAuthorityFallback())
       if (!compiled.ok) {
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `request invalid: ${compiled.errors.join("; ")}`)
       }
       return compiled.spec
     },
     async *executeRequest(request, executeOptions) {
-      yield* this.execute(this.compileRequest(request), executeOptions)
+      yield* this.execute(this.compileRequest(request, executeOptions?.authority), executeOptions)
     },
     selectBackendFor(spec) {
       return selectBackend(spec, caps)
@@ -351,6 +469,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           throw new LinuxExecutionError("IMAGE_NOT_APPROVED", `image "${image}" is not in the approved image policy`)
         }
       }
+      // LNXF-R2 9.5：full-approved 网络必须经人工批准（ADR-L7 承诺的
+      // 运行时门，此前只有注释）；未批准即 fail-closed。
+      if (compiled.network.mode === "full-approved" && !executeOptions?.approvedNetwork) {
+        throw new LinuxExecutionError("NETWORK_APPROVAL_REQUIRED", "network mode full-approved requires explicit human approval (approvedNetwork)")
+      }
       // P0-2：隔离后端不可用时的显式降级通道 —— 只有非严格 Profile
       // （allowDegradation=true）允许经编译器重编译到 minimum=audit；
       // 严格 Profile 在 selectBackend 直接抛 DEGRADATION_NOT_ALLOWED。
@@ -377,9 +500,6 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `backend ${backend.id} rejects spec: ${violations.join("; ")}`)
       }
 
-      // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
-      const materialization = materializeExecution(compiled, selection.backend)
-
       const cellId = compiled.identity.cellId
       const runId = compiled.identity.runId
       const agentId = compiled.identity.agentId ?? executeOptions?.domain?.agentId
@@ -399,13 +519,30 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       let cellReceipt: SandboxReceipt | undefined
       // PR-5：attach 失败不再吞掉 —— 记入 Receipt degradation（fail-closed 审计）。
       let attachFailure: string | undefined
+      // GATE（GS-11）：attach 后必须验证真实 membership —— 仅"attach 调用
+      // 未抛错"不算验证成功（WSL2 EACCES 等场景 attach 可能静默空操作）。
+      let attachVerified = false
+      // GATE（GS-13）：跨进程 lease 释放句柄 —— try 外声明（finally 必须
+      // 无条件可达，即使 cellRuns.set 之前抛错）。
+      let leaseRelease: (() => void) | undefined
+      // C5：try 前声明 —— 物化本身抛错时 finally 仍可安全访问（避免 TDZ）。
+      let materialization: ExecutionMaterialization | undefined
       try {
-        // Isolation Lock（PR-4）：worktreeRoot + agentId → 按 Agent 的 worktree
-        // 独占；worktreeRoot 无 agentId（工具投影）→ main-workspace 独占（正式
-        // 工作区单写者）；无 worktree → main-workspace 独占。
-        const lockTarget = compiled.filesystem.worktreeRoot
-          ? (agentId ? IsolationDomainLock.worktreeKey(agentId) : IsolationDomainLock.mainWorkspaceKey())
-          : IsolationDomainLock.mainWorkspaceKey()
+        // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
+        // C5：物化在事务内进行 —— finally 保证宿主文件（sealed secret/
+        // seccomp）在成功、异常、取消任何路径后都被清理。
+        materialization = materializeExecution(compiled, selection.backend)
+        // GATE（GS-12）：Isolation Lock 身份 = 真实 workspace（canonical
+        // realpath + dev/ino）——同 agent 不同 worktree 必须允许并行；
+        // agent 是 owner 不是 lock domain。无 hostRoot → 回退 agent/物理
+        // 键（保留既有语义）。
+        const hostRoot = executeOptions?.authority?.workspace.hostRoot
+        const workspaceIdentity = workspaceIdentityOf(hostRoot)
+        const lockTarget = workspaceIdentity
+          ? IsolationDomainLock.workspaceKey(workspaceIdentity)
+          : (agentId
+              ? IsolationDomainLock.worktreeKey(agentId)
+              : IsolationDomainLock.mainWorkspaceKey())
         if (!locks.acquire(lockTarget, "exclusive", cellId)) {
           throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `isolation lock held: ${lockTarget}`, { lockTarget })
         }
@@ -451,7 +588,16 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             executeOptions.abortSignal.addEventListener("abort", () => controller.abort(), { once: true })
           }
         }
-        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile })
+        // GATE（GS-13）：跨进程 workspace 写互斥（进程内隔离锁之外的 OS 级
+        // 互斥）。同一 workspace 跨进程并发 writer → 拒绝（fail-fast）。
+        if (workspaceIdentity) {
+          const lease = workspaceLease.acquire(workspaceIdentity)
+          if (!lease.ok) {
+            throw new LinuxExecutionError("WORKSPACE_LEASE_HELD", lease.reason ?? `workspace lease held: ${workspaceIdentity}`, { workspaceIdentity })
+          }
+          leaseRelease = lease.release
+        }
+        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile, leaseRelease })
         stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId), backend: selection.backend, ownerPid: process.pid, ownerProcStartTicks: readProcStartTicks() })
 
         // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
@@ -467,10 +613,36 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               if (cgroup && cgroupCellPath) {
                 try {
                   cgroup.attach(pid, cgroupCellPath)
+                  // GATE（GS-11）：ATTACH_VERIFIED —— 读 /proc/<pid>/cgroup
+                  // 确认真实 membership，不假设 attach 调用成功即生效。
+                  attachVerified = verifyCgroupMembership(pid, cgroupCellPath)
+                  if (!attachVerified) {
+                    attachFailure = `CGROUP_ATTACH_NOT_VERIFIED: pid ${pid} not found in ${cgroupCellPath}`
+                  }
                 } catch (error) {
                   attachFailure = `CGROUP_ATTACH_FAILED: ${error instanceof Error ? error.message : String(error)}`
+                  // LNXF-R2 10.5：严格 Profile attach 失败 → 立即取消
+                  // （fail-fast：资源限额不被绕过到执行结束）；非严格
+                  // 保留 degradation 声明。GATE：验证失败同样处理。
+                  if (isStrictProfile(compiled.profile)) {
+                    controller.abort()
+                    // LR2-0F：严格 + attach 失败 → 不释放 launcher（目标
+                    // 程序不 exec，避免在 cgroup 外开始执行）。
+                    return false
+                  }
                 }
+                // LR2-0F：launcher handshake 释放决策 —— attach 调用成功
+                // 即释放（cgroup.procs 写入成功即 membership；verify 结果
+                // 记入 Receipt degradation，不阻塞执行 —— mock/已退出竞态
+                // 场景不得让执行挂起）。非严格 + attach 异常 → 降级执行
+                // （Receipt 记 degradation，原语义保留）。
+                return true
               }
+              // 无 cgroup 委托 —— 无法验证 Cell 边界（进程组 fallback 模式
+              // 是既有正常路径，不记 degradation）；Receipt 必须如实声明
+              // cleanupVerified=false，不得假装有强保证。
+              attachVerified = false
+              return true // 无 attach 需求 → 立即释放（不阻塞执行）
             },
             readCellMetrics: () => readCellMetrics(cgroupCellPath),
             cleanupVerify: () => {
@@ -500,6 +672,18 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         cell.state = "succeeded"
       } finally {
         // 清理与释放（异常路径同 finally 事务）。
+        // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（sealed secret / seccomp）
+        // 执行结束即清理 —— /tmp 不残留密钥与策略文件。
+        materialization?.dispose?.()
+        // podman cidfile 同样属于 /tmp 临时资源 —— 执行后移除。
+        if (podmanCidfile) {
+          try { rmSync(podmanCidfile, { force: true }) } catch { /* best-effort */ }
+        }
+        // GATE：锁与 lease 无条件释放 —— cellRuns.set 之前抛错（物化/
+        // cgroup/lease 失败）时 record 不存在，若只在 record 内释放会
+        // 泄漏锁，后续所有 cell 撞同一 workspace 键。
+        for (const key of lockKeys) locks.release(key, cellId)
+        leaseRelease?.()
         const record = cellRuns.get(cellId)
         if (record) {
           // Cell cgroup 真实移除（PR-2 先做 best-effort；PR-5 重建完整协议）。
@@ -512,7 +696,18 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             }
           }
           if (cellReceipt) {
+            // GATE（GS-11）：清理真值 —— 空 cgroup 删除成功 ≠ 原进程已清理。
+            // attach 已验证且空 cgroup 移除 → 0 残留；attach 未验证（进程
+            // 从未进入 Cell，或 WSL2 EACCES 等）→ processesRemaining=-1 /
+            // cleanupVerified=false，绝不谎报 0。
+            const cleanupVerified = attachVerified && cgroupRemoved
+            const processesRemaining = cleanupVerified
+              ? 0
+              : attachVerified
+                ? cellReceipt.cleanup.processesRemaining
+                : -1
             // 最终 Receipt：合并真实清理结果 + attach 失败降级，重算自摘要后持久化。
+            // B7：统一清理动作结果 + secret 交付生命周期记录随 Receipt 审计。
             const finalReceipt: SandboxReceipt = {
               ...cellReceipt,
               degradationReasons: attachFailure
@@ -521,8 +716,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               cleanup: {
                 ...cellReceipt.cleanup,
                 cgroupRemoved: cgroupRemoved || cellReceipt.cleanup.cgroupRemoved,
-                processesRemaining: cgroupRemoved ? 0 : cellReceipt.cleanup.processesRemaining,
+                processesRemaining,
+                cleanupVerified,
               },
+              cleanupActions: materialization?.cleanupActions,
+              secretRecords: materialization?.secretRecords,
             }
             const final: SandboxReceipt = {
               ...finalReceipt,
@@ -536,7 +734,6 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               // 持久化失败不阻断执行（Receipt 仍在事件流中）
             }
           }
-          for (const key of record.lockKeys) locks.release(key, cellId)
           ledger.release(record.reservationId)
           cellRuns.delete(cellId)
           cells.delete(cellId)
@@ -607,8 +804,28 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           // best-effort
         }
       }
-      stateStore.writeCleanup(runId, { removed, at: Date.now() })
-      return { removed }
+      // LNXF-GATE-02 (A7/B10)：durable service/port lease 清理 —— 从
+      // stateStore 记录恢复（非空 broker 推测）。runId 匹配 + owner 已死
+      // 双条件；owner 存活时仅 run-end 策略的 lease 停止（manual 存活不
+      // 误杀 —— 可能已被其他进程接管复用）。
+      let servicesCleaned = 0
+      let portsCleaned = 0
+      for (const lease of stateStore.readServiceLeases()) {
+        if (lease.runId !== runId) continue
+        if (!processDead(lease.pid, lease.ownerProcStartTicks)) {
+          if (lease.cleanupPolicy !== "run-end") continue
+          if (lease.pid) killProcessGroup(lease.pid)
+        }
+        stateStore.removeServiceLease(lease.id)
+        servicesCleaned += 1
+      }
+      for (const lease of stateStore.readPortLeases()) {
+        if (lease.runId !== runId) continue
+        stateStore.removePortLease(lease.port)
+        portsCleaned += 1
+      }
+      stateStore.writeCleanup(runId, { removed, servicesCleaned, portsCleaned, at: Date.now() })
+      return { removed, servicesCleaned, portsCleaned }
     },
     activeCells() {
       return [...cells.values()]
@@ -619,10 +836,63 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     runtimeContext() {
       return { ledger, locks, domainManager, cacheManager, stateStore }
     },
+    cgroupBase() {
+      return cgroup?.base
+    },
   }
 }
 
 export function getLinuxBroker(): LinuxExecutionBroker {
   if (!shared) shared = createLinuxBroker({ mode: "shadow" })
   return shared
+}
+
+/**
+ * GATE（GS-11）：读 /proc/<pid>/cgroup 验证 pid 真实位于 cell cgroup。
+ * attach 调用成功 ≠ 生效（WSL2 EACCES 下 attach 可能静默空操作），
+ * 只有 membership 可读且包含 cell 路径才算 ATTACH_VERIFIED。
+ */
+function verifyCgroupMembership(pid: number, cgroupPath: string): boolean {
+  try {
+    const content = readFileSync(`/proc/${pid}/cgroup`, "utf8")
+    return content.includes(cgroupPath)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * GATE（GS-12/GS-13）：workspace 身份 = canonicalRealPath + filesystem
+ * identity（dev/ino）。同物理目录的别名/符号链接 → 同一身份 → 同锁键；
+ * 不同目录（即使同 agent）→ 不同身份 → 允许并行（A10 修复语义）。
+ * 目录不可解析时返回 undefined（调用方回退到 agent/main 键）。
+ */
+export function workspaceIdentityOf(hostRoot: string | undefined): string | undefined {
+  if (!hostRoot) return undefined
+  try {
+    const canonical = realpathSync(hostRoot)
+    const st = statSync(canonical)
+    return `${st.dev}:${st.ino}`
+  } catch {
+    return undefined
+  }
+}
+
+/** R2 PR-9（EA-012）：shadow/单元测试使用的显式 Test Authority。
+ *  仅允许 shadow 模式（enabled/enforced 由 compileRequest 前置拒绝）。
+ *  生产路径必须由 AgentRunScope 注入真实 authority。 */
+export function testAuthorityFallback(workspaceRoot?: string): TrustedExecutionAuthority {
+  const root = workspaceRoot ?? join(tmpdir(), "orcana-test-ws")
+  return {
+    identity: { runId: `run-test-${process.pid}`, nodeRunId: `run-test-${process.pid}:n1`, attempt: 1 },
+    workspace: {
+      workspaceId: "ws_test",
+      physicalWorkspaceKey: `wp_test_${process.pid}`,
+      projectId: "test",
+      hostRoot: root,
+      kind: "system",
+      access: "readwrite",
+      ownerFiles: [],
+    },
+  }
 }

@@ -17,11 +17,12 @@
 import type { ProviderMessage, StreamEvent, LLMProvider } from "../../provider/types"
 import type { ModelRouter } from "../../provider/router"
 import type { KnowledgeBase } from "../../memory/knowledge"
-import type { ThinkingStore } from "../../memory/thinking-store"
+import type { ThinkingStore, CompactOutput } from "../../memory/thinking-store"
 import type { AgentRunState, RoundToolCall } from "../run/types"
 import type { PlanStore } from "../run/plan-store"
 import type { AgentRunTrace } from "../run-trace"
-import { collectThinkingRounds, compactHistoricalToolResults, microcompactToolResults } from "../round/post-loop"
+import { collectThinkingRounds, compactHistoricalToolResults, mcThreshold, microcompactToolResults } from "../round/post-loop"
+import type { ArtifactStore } from "../../harness/contracts/artifact"
 import { compactThinkingChain } from "../../memory/compactor"
 import { streamProviderRoundEvents } from "../provider/round-runner"
 import { formatSkippedProviderPurpose, shouldSkipProviderPurpose } from "../../provider/cost-policy"
@@ -34,6 +35,7 @@ import {
   shouldSkipCheckpointThisRound,
 } from "../../session/checkpoint"
 import { distillAndStore, shouldDistill } from "../../memory/distiller"
+import { currentTransactionEvidenceBinding } from "../patch-transaction"
 import { planProgress } from "../master-plan"
 
 export interface MaintenanceContext {
@@ -46,6 +48,13 @@ export interface MaintenanceContext {
   thinkingStore?: ThinkingStore
   /** Mutable — thinking compaction rewrites the in-memory cold memory slice. */
   stableMemoryContext?: string
+  /** K36 (RC-18): 写穿钩子——把 compaction 合并后的冷记忆写回 K35 稳定前缀源
+   *  （round.ts 的 `options.stableMemoryContext`）。round.ts 接线后，下一轮
+   *  源指纹将检测到变化并重建 frozen stable prefix。未接线时仅更新本地
+   *  stableMemoryContext（原行为）。注：round.ts 的 maintenanceCtx 字段是
+   *  options.stableMemoryContext 的拷贝，直接改本地字段不会传播到指纹源，
+   *  故需此写穿机制。 */
+  stableMemoryWriteThrough?: (merged: string) => void
   effectivePrompt: string
   /** Router state roundNum — semantic recall gates on the pre-update value. */
   routerRoundNum: number
@@ -66,6 +75,8 @@ export interface MaintenanceContext {
 
   preRoundCtx: { contextBudgetPercent: number; contextBudgetMode?: string }
   runTrace?: AgentRunTrace
+  /** K5: 压缩前持久化完整 Tool Output 的 Artifact Store（生产路径由 harness 注入）。 */
+  artifactStore?: ArtifactStore
 }
 
 /** RC-13 E3: 追加用户侧上下文——与相邻 user 消息合并，杜绝连续 user 消息
@@ -121,6 +132,9 @@ export async function* runAdaptiveCheckpoint(
   }
   const cpDecision = adaptiveCheckpointThreshold(ctx.preRoundCtx.contextBudgetPercent, metrics)
   if (cpDecision && !shouldSkipCheckpointThisRound(ctx.round)) {
+    // D3 (RC-11): checkpoint 必须使用真实会话 id——优先 runState.identity.sessionId
+    // （kernel/context.ts 已接线），回退 ORCANA_SESSION_ID env，最后 ds-default。
+    const sessionId = ctx.runState.identity.sessionId ?? process.env.ORCANA_SESSION_ID ?? "ds-default"
     yield { type: "status", data: `checkpoint: ${cpDecision.label} (${cpDecision.urgency})` }
     const masterPlan = ctx.planStore.current ? {
       goal: ctx.planStore.current.goal,
@@ -143,7 +157,7 @@ export async function* runAdaptiveCheckpoint(
       checkpointId: generateCheckpointId(),
       round: ctx.round,
       timestamp: Date.now(),
-      sessionId: process.env.ORCANA_SESSION_ID ?? "ds-default",
+      sessionId, // D3: 真实会话 id
       masterPlan,
       taskSteps,
       changedFiles,
@@ -158,7 +172,7 @@ export async function* runAdaptiveCheckpoint(
         checkpointId: generateCheckpointId(),
         round: ctx.round,
         timestamp: Date.now(),
-        sessionId: "",
+        sessionId, // D3: 真实会话 id（summary 不再硬编码 "")
         masterPlan: ctx.planning.taskTracker ? { goal: ctx.planning.taskTracker.goal, steps: ctx.planning.taskTracker.steps } : {},
         taskSteps: ctx.planning.taskTracker?.steps ?? [],
         changedFiles,
@@ -243,7 +257,34 @@ export async function* runForwardMicrocompact(ctx: MaintenanceContext): AsyncGen
     || ctx.epochAction === "forceCompress"
     || ctx.epochAction === "rollover"
   if (!should) return
-  const mcResult = microcompactToolResults(ctx.resultsContent, ctx.completedToolCalls)
+
+  // ── K5: 压缩前先持久化完整 Tool Output 到 Artifact Store（异步），再以同步
+  // map 钩子交给 microcompactToolResults 写入 placeholder。失败结果（K25 Pin）
+  // 不持久化——完整内容本就保留。best-effort：持久化失败不阻断压缩。
+  let refByToolUseId: Map<string, string> | null = null
+  if (ctx.artifactStore) {
+    refByToolUseId = new Map()
+    const nameById = new Map(ctx.completedToolCalls.map(tc => [tc.id, tc]))
+    for (const r of ctx.resultsContent) {
+      if (r.type !== "tool_result" || typeof r.content !== "string" || r.content.length < 100) continue
+      const tc = nameById.get(String(r.tool_use_id ?? ""))
+      if (!tc) continue
+      if (r.is_error === true) continue // K25: 失败 Pin——不压缩也不持久化
+      const threshold = mcThreshold(tc.name)
+      if (threshold <= 0 || r.content.length <= threshold) continue
+      try {
+        const ref = await ctx.artifactStore.storeContent(r.content)
+        refByToolUseId.set(String(r.tool_use_id ?? ""), ref)
+      } catch { /* best-effort */ }
+    }
+  }
+  const mcResult = microcompactToolResults(
+    ctx.resultsContent,
+    ctx.completedToolCalls,
+    refByToolUseId
+      ? (content, meta) => refByToolUseId!.get(meta.toolUseId) ?? null
+      : undefined,
+  )
   while (ctx.resultsContent.length > 0) ctx.resultsContent.pop()
   for (const r of mcResult.results) ctx.resultsContent.push(r)
   if (mcResult.compacted > 0) {
@@ -253,6 +294,27 @@ export async function* runForwardMicrocompact(ctx: MaintenanceContext): AsyncGen
 }
 
 // ── Thinking compaction (one-shot per session) ──
+
+/**
+ * K8 (RC-18): 计算 thinking compaction 的证据锚。
+ *
+ * 优先使用当前提交 transaction 绑定（stateId/transactionCount/latestTransactionId）
+ * ——这是可溯源的 commit 历史身份；再附 evidence ledger 条目数作为轻量 digest。
+ * 无任何证据状态时返回 undefined（行为不退化——verified 洞察不带锚也正常合并）。
+ */
+function compactionEvidenceAnchor(ctx: MaintenanceContext): string | undefined {
+  const binding = currentTransactionEvidenceBinding()
+  const ledgerEntries = ctx.verificationState?.evidenceLedger?.entries?.length ?? 0
+  const parts: string[] = []
+  if (binding) {
+    parts.push(`tx=${binding.latestTransactionId} state=${binding.stateId} count=${binding.transactionCount}`)
+  }
+  if (ledgerEntries > 0) {
+    parts.push(`ledger=${ledgerEntries}`)
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined
+}
+
 
 /**
  * One-shot thinking-chain compaction triggered by epoch force-compress or
@@ -301,9 +363,15 @@ export async function* runThinkingCompaction(ctx: MaintenanceContext): AsyncGene
       },
     )
     if (compactResult.success) {
+      // K8: 把当前 run 的验证证据状态（transaction 绑定 digest + ledger 条目数）
+      // 作为证据锚挂到 compact output 上——verified 洞察进入冷记忆后据此可溯源。
+      const evidenceAnchor = compactionEvidenceAnchor(ctx)
+      const compactOutput: CompactOutput = evidenceAnchor
+        ? { ...compactResult.output, evidence: evidenceAnchor }
+        : compactResult.output
       const mergeResult = ctx.thinkingStore.mergeCompressedInsights(
         ctx.stableMemoryContext ?? "",
-        compactResult.output,
+        compactOutput,
       )
       const insightCount = compactResult.output.key_insights.length +
         compactResult.output.discarded.length +
@@ -317,21 +385,35 @@ export async function* runThinkingCompaction(ctx: MaintenanceContext): AsyncGene
         const compactSummary = [
           "<system-reminder>",
           "思考链已压实。以下是从本次会话推理中提取的关键洞察（已去重并存入冷记忆）：",
-          ...compactResult.output.key_insights.map((k, i) => `${i + 1}. [insight] ${k}`),
-          ...compactResult.output.verified.map((v, i) => `✓ [verified] ${v}`),
-          ...compactResult.output.open.map((o, i) => `? [open] ${o}`),
+          ...(evidenceAnchor ? [`Evidence: ${evidenceAnchor}`] : []),
+          ...compactOutput.key_insights.map((k, i) => `${i + 1}. [insight] ${k}`),
+          ...compactOutput.verified.map((v, i) => `✓ [verified] ${v}`),
+          ...compactOutput.open.map((o, i) => `? [open] ${o}`),
           "</system-reminder>",
         ].join("\n")
         appendUserContext(ctx.rawMessages, compactSummary)
         ctx.stableMemoryContext = mergeResult.merged
-        yield { type: "status", data: `thinking-compaction: ${thinkingRounds.length} rounds → ${insightCount} insights (appended, cache preserved)` }
+        // K36: 写穿到 K35 稳定前缀源（options.stableMemoryContext）。round.ts
+        // 的 maintenanceCtx.stableMemoryContext 是源字段的拷贝，仅更新本地字段
+        // 不会被下一轮源指纹捕获——故需写穿钩子。接线后下一轮指纹漂移 → 重建
+        // frozen prefix。可观测：trace + status。
+        ctx.stableMemoryWriteThrough?.(mergeResult.merged)
+        ctx.runTrace?.record("thinking_compaction", {
+          rounds: thinkingRounds.length,
+          insights: insightCount,
+          merged: true,
+          stablePrefixSourceUpdated: true,
+          evidence: evidenceAnchor ?? null,
+        })
+        yield { type: "status", data: `thinking-compaction: ${thinkingRounds.length} rounds → ${insightCount} insights (appended, stable-prefix source updated → next round rebuild)` }
       }
 
       ctx.thinkingStore.storeCompressed({
         query: ctx.effectivePrompt,
-        compactOutput: compactResult.output,
+        compactOutput,
         roundRange: `r${thinkingRounds[0]?.roundNum ?? 0}-r${thinkingRounds[thinkingRounds.length - 1]?.roundNum ?? ctx.round}`,
         filePattern: [...ctx.taskFiles].join(","),
+        evidence: evidenceAnchor,
       })
       ctx.maintenance.thinkingCompacted = true
       yield { type: "status", data: `thinking-compaction: ${thinkingRounds.length} rounds → ${insightCount} insights` }

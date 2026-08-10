@@ -1,14 +1,54 @@
 /** Shell tool — execute commands with streaming progress. */
 
+import { performance } from "node:perf_hooks"
 import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result, isNonInteractive } from "./registry"
 import { buildVerificationResult } from "../verification/result"
 import type { SandboxManager } from "../sandbox/sandbox"
 import { recordRuntimeObservedWrites } from "../file-state"
 import { createRuntimeContextKey, getRuntimeContextValue, setRuntimeContextValue } from "../runtime/execution-context"
-import { executeProcess, type ProcessEvent } from "../runtime/process-executor"
+import { executeProcess, type ProcessEvent, type ProcessRequest } from "../runtime/process-executor"
+import { getExecutionGateway } from "../runtime/execution/execution-gateway"
+import { currentExecutionAuthority } from "../runtime/execution/execution-context"
+import type { ExecutionIntent } from "../runtime/execution/execution-intent"
 
 const SHELL_RESULT_MAX_CHARS = 8000
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAt))
+}
+
+/** LR2-0D：shell 执行路由 —— 存在受信权威时经 ExecutionGateway（统一
+ *  入口 → Broker → Receipt），否则保留旧路径（Windows/测试/legacy）。 */
+function executeShellRequest(request: ProcessRequest, capabilityId: string): AsyncGenerator<ProcessEvent> {
+  const authority = currentExecutionAuthority()
+  if (authority) {
+    const intent: ExecutionIntent = {
+      requestId: `sh-${capabilityId}-${Date.now().toString(36)}`,
+      tool: {
+        capabilityId,
+        executable: request.command,
+        args: request.args,
+        cwdRef: request.cwd,
+      },
+      workload: { kind: "build", readonly: false },
+      timeoutMs: request.timeoutMs,
+      env: request.env,
+      abortSignal: request.abortSignal,
+    }
+    return getExecutionGateway().execute(intent, {
+      approvedCapabilityId: capabilityId,
+      sideEffectClass: "write",
+      authority,
+    })
+  }
+  return executeProcess(request)
+}
+
+export function parseTimeoutSec(value: unknown, fallback: number): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
 
 // ── Sandbox injection (set by loop.ts at startup) ──
 
@@ -62,7 +102,7 @@ async function shell(
   context?: ToolExecutionContext,
 ): Promise<ToolResult> {
   const command = String(params.command ?? "")
-  const timeoutSec = Number(params.timeout ?? 120)
+  const timeoutSec = parseTimeoutSec(params.timeout, 120)
 
   if (!command.trim()) return Result.fail("Empty command")
 
@@ -98,13 +138,14 @@ async function shell(
   let timedOut = false
   let aborted = false
   let exitCode: number | null = null
-  for await (const event of executeProcess({
+  const startedAt = performance.now()
+  for await (const event of executeShellRequest({
     command: shellExecutable(),
     args: shellArgs(command),
     env: sandboxed && verdict.injectedEnv ? (verdict.injectedEnv as Record<string, string>) : undefined,
     timeoutMs: effectiveTimeout * 1000,
     abortSignal: context?.abortSignal,
-  })) {
+  }, "run_shell_script")) {
     switch (event.type) {
       case "stdout":
         stdoutChunks.push(event.data)
@@ -122,7 +163,6 @@ async function shell(
     }
   }
 
-  const startedAt = Date.now()
   const sandboxReport = observeWorkspaceWrites(sandbox)
   if (aborted) {
     return Result.fail(`Command aborted${sandboxReport}`)
@@ -133,7 +173,7 @@ async function shell(
       success: false,
       error: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}`,
       content: `Command timed out after ${effectiveTimeout}s${sandboxed ? " (sandbox)" : ""}${sandboxReport}`,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
     })
   }
   let output = stdoutChunks.join("").trim() || "(empty output)"
@@ -147,7 +187,7 @@ async function shell(
       error: `Command exited with code ${code}`,
       content: output.slice(0, 8000),
       exitCode: code,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
     })
   }
   return shellResult({
@@ -155,7 +195,7 @@ async function shell(
     success: true,
     content: output.slice(0, 8000),
     exitCode: code,
-    durationMs: Date.now() - startedAt,
+    durationMs: elapsedMs(startedAt),
   })
 }
 
@@ -164,7 +204,7 @@ export async function* shellStream(
   context?: ToolExecutionContext,
 ): AsyncGenerator<{ type: "progress"; data: string } | { type: "done"; data: ToolResult }> {
   const command = String(params.command ?? "")
-  const timeoutSec = Number(params.timeout ?? 120)
+  const timeoutSec = parseTimeoutSec(params.timeout, 120)
 
   // Non-interactive mode: caller already signalled intent via prompt arg. Skip confirm.
   if (params.confirm !== true && !isNonInteractive()) {
@@ -210,13 +250,14 @@ export async function* shellStream(
   let aborted = false
   let spawnError = ""
   let exitCode: number | null = null
-  for await (const event of executeProcess({
+  const startedAt = performance.now()
+  for await (const event of executeShellRequest({
     command: shellExecutable(),
     args: shellArgs(command),
     env: childEnv,
     timeoutMs: timeoutSec * 1000,
     abortSignal: context?.abortSignal,
-  })) {
+  }, "run_shell_script")) {
     if (event.type === "exit" && event.signal === "error") spawnError = "failed to spawn"
 
     switch (event.type) {
@@ -235,7 +276,6 @@ export async function* shellStream(
         break
     }
   }
-  const startedAt = Date.now()
 
   if (aborted) {
     const sandboxReport = observeWorkspaceWrites(sandbox)
@@ -250,7 +290,7 @@ export async function* shellStream(
       success: false,
       error: `Command timed out after ${timeoutSec}s`,
       content: `Command timed out after ${timeoutSec}s${sandboxReport}`,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
     }) }
     return
   }
@@ -276,7 +316,7 @@ export async function* shellStream(
       error: `Command exited with code ${code}`,
       content: display,
       exitCode: code,
-      durationMs: Date.now() - startedAt,
+      durationMs: elapsedMs(startedAt),
       truncated: truncated ? output.length : undefined,
     }) }
     return
@@ -286,7 +326,7 @@ export async function* shellStream(
     success: true,
     content: display,
     exitCode: code,
-    durationMs: Date.now() - startedAt,
+    durationMs: elapsedMs(startedAt),
     truncated: truncated ? output.length : undefined,
   }) }
 }
@@ -320,6 +360,9 @@ function shellResult(input: {
   const metadata: Record<string, unknown> = {}
   if (input.exitCode !== undefined) metadata.exitCode = input.exitCode
   if (input.truncated !== undefined) metadata.truncated = input.truncated
+  // RC-16 G4：durationMs 始终暴露在顶层 metadata（verification 只对验证类
+  // 命令生成——非验证命令的执行时长也必须可观测）。
+  metadata.durationMs = input.durationMs
   const verification = buildVerificationResult({
     command: input.command,
     passed: input.success,

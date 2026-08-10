@@ -23,7 +23,7 @@
 </p>
 
 > [!IMPORTANT]
-> Orcana Runtime is currently a runnable, research-grade Coding Agent Runtime — not a mature general-purpose agent platform. The project first converges the state, execution, verification and recovery semantics of a single agent, then gradually extends to Durable Execution, Typed Graph and constrained Multi-Agent.
+> Orcana Runtime is currently a runnable, research-grade Coding Agent Runtime — not a mature general-purpose agent platform. It established the single-agent state, execution, verification and recovery foundation and has implemented the G0-G6 Typed Execution Graph core. Current work closes Durable Execution, Graph authority and constrained Multi-Agent boundaries.
 
 ## What is Orcana Runtime?
 
@@ -76,7 +76,7 @@ set DEEPSEEK_API_KEY=sk-your-key-here
 
 For advanced configuration — providers, models, budgets, permissions, sandbox and MCP — see:
 
-- [ORCANA.md](./ORCANA.md)
+- [User guide](./docs/awesome-deepseek-agent/orcana.md)
 - [settings.example.json](./settings.example.json)
 - [.env.example](./.env.example)
 
@@ -315,6 +315,12 @@ Orcana has multi-layer context management, including:
 
 ## Current project status
 
+> [!IMPORTANT]
+> Publication and source versions are currently split: npm and GitHub Latest
+> Release are `0.8.16`, `origin/main` declares `0.8.26.1`, and the active
+> repair line declares the unreleased candidate `0.8.26.2`. A source version
+> change is not evidence that a package or Release was published.
+
 | Subsystem | Status | Notes |
 |---|---|---|
 | CLI / TUI | Runnable | Interactive and one-shot task entry points |
@@ -329,10 +335,10 @@ Orcana has multi-layer context management, including:
 | Interrupt / Resume | Explicit wait-point recovery implemented | Not arbitrary call-stack or instruction-level recovery |
 | Trace / Snapshot | Implemented | Stable replay and Durable Execution semantics still being completed |
 | Tool Runtime 2.0 (RT-1..13) | Implemented | Contract, unified policy chain, patch/process/git/repo-map/verification tools, SSRF-hardened web, MCP trust policy, capability router, TL-001..020 eval |
-| Linux Sandbox | Partial execution | Not a complete security boundary — see below |
-| Typed Execution Graph | Not implemented | Still centered on a single main execution node |
+| Linux Sandbox | Real backends implemented; host-dependent enforcement | Linux short-process execution uses the Broker, but Host Audit remains degraded and service/MCP/LSP plus several lifecycle boundaries are not yet fully broker-governed — see below |
+| Typed Execution Graph | Core implemented; authority closure in progress | `src/workflow/` contains typed contracts, compiler/validation, DAG scheduling, read/write serialization, result cache/replay, repair loops, dynamic compilation, interrupts and Harness node execution; strict replay, immutable approval, cache provenance and resource/retry authority still need closure |
 | Multi-Agent | Deferred | Constrained Subagent stage comes after single-agent runtime semantics stabilize |
-| Recursive Self-Evolution | Research direction | Not to be treated as a capability stably delivered in v0.4 |
+| Recursive Self-Evolution | Research direction | Not to be treated as a stably delivered current capability |
 
 ## What Orcana is not
 
@@ -341,7 +347,7 @@ To avoid writing research goals as shipped capabilities, Orcana today is not:
 - A mature general-purpose agent platform;
 - A system that can prove any code change absolutely correct;
 - A complete Durable Execution Engine;
-- A general Graph Runtime with arbitrary fan-out, fan-in and joins;
+- A fully distributed, general-purpose Graph Runtime with production-grade exactly-once semantics;
 - A Multi-Agent Framework where multiple agents freely write to a shared workspace;
 - A full replacement for Linux kernel-level security sandboxing;
 - A finished recursive self-evolution system;
@@ -353,39 +359,42 @@ Orcana is best understood as:
 
 ## Linux-first development and sandbox status
 
-Orcana's primary development and runtime environment is moving to Linux.
+Linux is the authoritative development and runtime environment. The normal
+Linux short-process path is now:
 
-Current cross-platform sandbox capabilities include:
+```text
+ProcessExecutor → LinuxExecutionBroker → Host Audit | Bubblewrap | Rootless Podman
+```
 
-- Environment variable filtering;
-- Command timeouts;
-- Dangerous command and permission rules;
-- Pre/post execution diff audits of the workspace;
-- Process termination attempts on cancellation.
+This is not one uniform security level:
 
-Windows additionally has Job Object process-tree control; Linux/macOS currently remain a degraded path and cannot claim full filesystem, network, process or resource isolation.
+- **Host Audit** filters environment variables, enforces timeout/process-group
+  handling and records post-execution file diffs. It is an observable degraded
+  path, not a filesystem or network security boundary.
+- **Bubblewrap** can provide namespace, mount, empty-Home and network isolation
+  when the host supports unprivileged namespaces and the real backend runs.
+- **Rootless Podman** can provide a stricter container boundary with a
+  digest-approved image, explicit mounts and network disabled. It still shares
+  the host kernel and is not a VM.
+- **cgroup v2** enforcement is valid only when delegation, process attachment
+  and cleanup are observed. Installed binaries or configured limits are not
+  sufficient evidence.
+- **Landlock** is not enforced by the current production path and is unavailable
+  on the current WSL2 development kernel.
+- Long-lived service, MCP and LSP processes use a transitional `ServiceCell`
+  path that sanitizes the environment and records leases, but does not yet run
+  through the Broker/cgroup authority. Do not apply ordinary Cell isolation
+  claims to these processes.
 
-Until the Linux sandbox rework is complete:
+`inspect` and `build` may explicitly degrade to Host Audit. `test`,
+`dependency`, `service`, `untrusted` and `evolution` are strict profiles and
+must fail closed when their required boundary is unavailable. The Receipt for
+the specific run—not a startup banner or a unit test—is the authority for what
+actually executed.
 
-- Do not run Orcana directly on host environments containing high-value credentials;
-- Do not expose unrestricted Shell to untrusted repos or scripts;
-- For high-risk scenarios, run inside an additional container or isolated environment;
-- Sandbox degradation must be explicitly recorded in traces and evidence;
-- When necessary isolation is missing, high-risk execution should fail closed rather than silently fall back to host execution.
-
-Planned Linux sandbox directions include:
-
-- A unified streaming and non-streaming shell execution pipeline;
-- Process groups and full process-tree cleanup;
-- Capability probing and `orcana doctor sandbox`;
-- Read-only workspaces with declarative writable paths;
-- Network off by default;
-- cgroup v2 resource limits;
-- A Bubblewrap low-latency isolation backend;
-- A Rootless Podman strict execution backend;
-- Later Landlock / seccomp native hardening layers.
-
-See [SECURITY.md](./SECURITY.md) for the security model and known limitations.
+For the exact backend/profile matrix, WSL observations, known gaps and claim
+rules, see [Linux sandbox current status and degradation matrix](./docs/linux-foundation/current-status.md).
+See [SECURITY.md](./SECURITY.md) for the wider security model.
 
 ## Config directory
 
@@ -439,18 +448,20 @@ bun run typecheck
 ### Tests
 
 ```bash
-# Default test gate
-bun test
-
-# Repo-defined test script
+# Default repository gate (provider/live tests remain visibly quarantined)
 bun run test
 
-# Integration tests
+# Non-provider integration tests
 bun run test:integration
 
-# Full test suite
+# Alias for the full local gate; live/provider tests are not executed
 bun run test:all
 ```
+
+Paid provider tests run only through the manual `Live Provider Lane` workflow
+from the protected default branch. `code_as_action.test.ts` remains blocked
+until model-generated code execution has a credential-free, network-isolated
+sandbox.
 
 ### Build and publish check
 
@@ -466,7 +477,9 @@ npm pack --dry-run
 
 | Doc | Contents |
 |---|---|
-| [ORCANA.md](./ORCANA.md) | Usage, configuration and project entry point |
+| [User guide](./docs/awesome-deepseek-agent/orcana.md) | Installation, provider setup and first run |
+| [Current status](./docs/status.md) | Public/source versions, capability status and release gates |
+| [Linux sandbox status](./docs/linux-foundation/current-status.md) | Backend enforcement, degradation matrix and claim rules |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Runtime, agent loop, gates and subsystem architecture |
 | [SECURITY.md](./SECURITY.md) | Permissions, credentials, sandbox and security boundaries |
 | [CHANGELOG.md](./CHANGELOG.md) | Version history |
@@ -490,7 +503,7 @@ Focus areas:
 - Baseline Linux shell and sandbox consistency;
 - Runtime critical paths in stable CI.
 
-### Next: Durable Execution
+### Current closure track: Durable Execution
 
 Focus areas:
 
@@ -502,18 +515,17 @@ Focus areas:
 - Avoiding duplicate side-effect execution on recovery;
 - Trace replay and a runtime evaluation lab.
 
-### Later: Typed Execution Graph
+### Current: Typed Execution Graph authority closure
 
-Focus areas:
+The G0-G6 core is implemented and covered by focused tests. Remaining focus
+areas are production-authority closure rather than initial Graph construction:
 
-- Typed nodes and edges;
-- A ready queue;
-- Conditional routing;
-- Explicit joins;
-- Bounded loops;
-- Node-level checkpoints;
-- Read-only parallelism;
-- A single write-commit channel.
+- strict replay with zero live side effects;
+- provenance-complete cache identity and invalidation;
+- immutable approval grants bound to an exact execution;
+- authoritative resource, retry and liveness budgets;
+- durable checkpoint/recovery semantics across process crashes;
+- broader production integration without bypassing the existing gates.
 
 ### Further: Bounded Multi-Agent
 
@@ -559,7 +571,7 @@ The project documentation follows these principles:
 - Do not write one passing test as a general proof of correctness;
 - Do not equate model self-assessment with independent verification;
 - Do not describe the degraded sandbox as a complete security boundary;
-- Do not describe node dependency plans as a complete Graph Runtime;
+- Do not confuse the implemented typed Graph core with a fully distributed or exactly-once production runtime;
 - Do not describe multiple role prompts as mature Multi-Agent;
 - Performance, quality and reliability conclusions come with reproducible evaluation conditions.
 

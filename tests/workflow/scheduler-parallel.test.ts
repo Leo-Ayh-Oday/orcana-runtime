@@ -1,6 +1,7 @@
 /** G1 acceptance: 4 dependency-free read-only nodes run in parallel. */
 
 import { describe, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -11,6 +12,12 @@ import { GIT_STATUS, GIT_DIFF } from "../../src/tools/git"
 import { runScheduler } from "../../src/workflow/scheduler/scheduler"
 import { buildReadonlyRegistry } from "../../src/workflow/registry"
 import type { WorkflowSpec } from "../../src/workflow/types"
+import {
+  createRuntimeExecutionContext,
+  runWithRuntimeExecutionContext,
+  setExecutionAuthority,
+} from "../../src/runtime/execution-context"
+import type { TrustedExecutionAuthority } from "../../src/runtime/linux/contracts"
 
 function tools(): ContractToolDescriptor[] {
   return [READ_FILE, FIND_SYMBOL, FIND_REFERENCES, PROJECT_STRUCTURE, GIT_STATUS, GIT_DIFF].map(t => buildTool(t))
@@ -22,7 +29,36 @@ function makeProject(): string {
   writeFileSync(join(dir, "b.ts"), "export const b = 2\n")
   writeFileSync(join(dir, "c.ts"), "export const c = 3\n")
   writeFileSync(join(dir, "d.ts"), "export const d = 4\n")
+  // git_status runs the REAL git tool through the managed Linux executor —
+  // the project must be an actual git repository (git_rt8 pattern).
+  execFileSync("git", ["init", "-q"], { cwd: dir })
   return dir
+}
+
+/** Real git tools execute through the managed Linux executor — fail-closed
+ *  without a trusted execution authority (PR-9 INV-B). G1 runs the legacy
+ *  scheduler path (no harness scope), so inject the equivalent authority
+ *  for the run (production path: WorkflowHarnessEnvironment). hostRoot is
+ *  the project dir: workspace-authority resolveCwd rejects paths escaping
+ *  hostRoot (WORKSPACE_PATH_ESCAPE). */
+function withTestAuthority<T>(projectRoot: string, fn: () => T | Promise<T>): Promise<T> {
+  const context = createRuntimeExecutionContext()
+  return runWithRuntimeExecutionContext(context, async () => {
+    const authority: TrustedExecutionAuthority = {
+      identity: { runId: "g1-test", nodeRunId: "g1-test-0", attempt: 1 },
+      workspace: {
+        workspaceId: "g1-ws",
+        projectId: "g1-proj",
+        hostRoot: projectRoot,
+        kind: "main",
+        access: "readwrite",
+        physicalWorkspaceKey: "wp_test",
+        ownerFiles: [],
+      },
+    }
+    setExecutionAuthority(authority)
+    return await fn()
+  })
 }
 
 describe("G1 parallel scheduler", () => {
@@ -39,7 +75,7 @@ describe("G1 parallel scheduler", () => {
       ],
     }
     const started = Date.now()
-    const run = await runScheduler(spec, buildReadonlyRegistry(tools()))
+    const run = await runScheduler(spec, buildReadonlyRegistry(tools()), { projectRoot: dir })
     const wall = Date.now() - started
 
     expect(run.results).toHaveLength(4)
@@ -67,7 +103,7 @@ describe("G1 parallel scheduler", () => {
         { id: "tool:gs1", handler: "tool.git_status", input: { path: dir }, dependsOn: [] },
       ],
     }
-    const run = await runScheduler(spec, buildReadonlyRegistry(tools()))
+    const run = await withTestAuthority(dir, () => runScheduler(spec, buildReadonlyRegistry(tools()), { projectRoot: dir }))
     expect(run.results.filter(r => r.status === "done")).toHaveLength(3)
   })
 
@@ -80,7 +116,7 @@ describe("G1 parallel scheduler", () => {
         { id: "tool:s1", handler: "tool.find_symbol", input: { query: "a", path: dir }, dependsOn: [] },
       ],
     }
-    const run = await runScheduler(spec, buildReadonlyRegistry(tools()))
+    const run = await runScheduler(spec, buildReadonlyRegistry(tools()), { projectRoot: dir })
     expect(run.results[0]!.status).toBe("done")
   })
 })

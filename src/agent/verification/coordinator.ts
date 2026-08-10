@@ -28,6 +28,8 @@ import { deriveLastTypecheck, ingestTypecheck, ingestVerificationResults } from 
 import type { ArtifactStore } from "../../harness/contracts/artifact"
 import { ingestTypecheckWithArtifact, ingestVerificationWithArtifact, putRippleArtifact } from "../../harness/artifacts/evidence-adapter"
 import { computeRelevantFileHashes } from "../../harness/artifacts/freshness"
+import { existsSync } from "node:fs"
+import { resolve } from "node:path"
 import { runRippleVerification } from "../round/post-loop"
 import {
   getBlockingObligations,
@@ -227,7 +229,14 @@ export async function* runBatchTypecheckAndTaskTracker(
   const { verificationState, modifiedFilesThisRound, verificationResultsThisRound, toolNames, resultsContent } = ctx
 
   // ── Batch typecheck: run tsc once per round instead of per-file ──
-  const tsFilesWritten = [...modifiedFilesThisRound].filter(f => f.endsWith(".ts") || f.endsWith(".tsx"))
+  // 物化守卫（与 runPostEditDiagnostics 同原则）：custom/failed write adapter
+  // 可能报告路径但未真正写入磁盘——此时全仓 tsc 只是浪费 ~15s，且会让
+  // 测试/第三方适配器路径被真实 tsc 时序绑架。文件真实存在才跑；
+  // 解析基准 = projectRoot（自定义 worktree 的真实写入必须可见）。
+  const materializeBase = ctx.options.projectRoot ?? process.cwd()
+  const tsFilesWritten = [...modifiedFilesThisRound].filter(
+    f => (f.endsWith(".ts") || f.endsWith(".tsx")) && existsSync(resolve(materializeBase, f)),
+  )
   if (tsFilesWritten.length > 0) {
     const tscResult = await runTypeScriptNoEmit(process.cwd())
     // L5: the batch tsc result is the authoritative typecheck for the round —

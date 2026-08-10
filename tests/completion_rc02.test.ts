@@ -68,10 +68,11 @@ describe("RC-02 A3 truth claims per-sentence", () => {
       maxRounds: 10,
       finalText: text,
       evidenceLedger: ledger,
-      taskHadWrite: false,
-      changedFiles: [],
+      taskHadWrite: true,
+      taskModifiedFiles: 1,
+      changedFiles: ["src/fixed.ts"],
     }))
-    // 已完成声明（typecheck 通过）被检查且有证据支撑 → 不 block
+    // 已完成声明（typecheck 通过 + 修复有写入证据）被检查且都有证据 → 不 block
     expect(result.decision).not.toBe("break_blocked")
   })
 

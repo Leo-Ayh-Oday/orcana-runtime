@@ -5,6 +5,7 @@
  *  `{ ...process.env, ...requested }` (HOST_ENV_INHERITANCE_BLOCKED).
  */
 
+import { existsSync } from "node:fs"
 import type { EnvironmentPolicy } from "./contracts"
 
 export const DEFAULT_ENV_VARS: Record<string, string> = {
@@ -19,6 +20,16 @@ export const DEFAULT_ENV_VARS: Record<string, string> = {
 export const DEFAULT_DENIED_KEYS = [
   "*_API_KEY",
   "*_TOKEN",
+  // LNXF-R2 9.6：补全凭据类模式（AZURE_CLIENT_SECRET / PGPASSWORD /
+  // STRIPE_SECRET_KEY / GOOGLE_APPLICATION_CREDENTIALS 等）。
+  // matchesPattern 仅支持 "*_" 前缀通配（后缀匹配）——无分隔符拼写
+  // （PGPASSWORD）必须精确列出（9.6 测试暴露）。
+  "*_SECRET",
+  "*_PASSWORD",
+  "PGPASSWORD",
+  "*_PWD",
+  "*_KEY",
+  "*_CREDENTIALS",
   "AWS_*",
   "GITHUB_TOKEN",
   "SSH_AUTH_SOCK",
@@ -29,8 +40,28 @@ export const DEFAULT_DENIED_KEYS = [
   "HTTPS_PROXY",
   "http_proxy",
   "https_proxy",
+  "all_proxy",
   "ALL_PROXY",
 ]
+
+/** LNXF-R2 9.4 + GATE（GS-14）：Runtime 保留环境键 —— requestedValues /
+ *  allowedHostKeys / secretEnv 一律不得覆盖；由构造链末步强制写回
+ *  （防子进程伪造身份）。
+ *
+ *  GATE：PATH/HOME/TMPDIR 必须保留 —— 宿主 PATH 经 allowedHostKeys 复制
+ *  覆盖 Runtime 构造的 PATH 是 OTS-013 的 canary 命中路径（恶意同名命令
+ *  可达 Cell）；HOME/TMPDIR 同理（Runtime 自己的 /home/orcana /tmp）。 */
+export const RUNTIME_RESERVED_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "ORCANA_RUN_ID",
+  "ORCANA_NODE_RUN_ID",
+  "ORCANA_AGENT_ID",
+  "ORCANA_CELL_ID",
+  "ORCANA_SANDBOX",
+  "ORCANA_WORKSPACE_ID",
+] as const
 
 export interface BuildEnvironmentInput {
   policy: EnvironmentPolicy
@@ -58,9 +89,78 @@ function matchesPattern(key: string, pattern: string): boolean {
   return key === pattern
 }
 
+/** GATE-TEST-01：宿主 PATH 中受控追加的安全可执行目录。
+ *
+ *  GS-14 保留语义不变（Runtime 决定 PATH 结构，首段固定安全目录）；
+ *  此函数把宿主 PATH 中"真实存在且非危险"的目录只读追加在尾部，保证
+ *  bun/node/tsc 等常用工具可达（LNXF-GATE-01 后 verification 类工具
+ *  命令在固定 PATH 下 command-not-found 的回归）。过滤规则：
+ *    - 相对路径（"."/"./x"）、/tmp（可写注入面）、空段 —— 一律拒绝
+ *    - 宿主 PATH 条目必须真实存在（GS-14 验收：虚构/恶意条目如 /evil
+ *      不进入 Cell，恶意同名命令不可达）
+ *    - 去重 + 上限 16（Runtime 首段固定目录永远优先）
+ */
+export function appendSafeHostPathEntries(
+  runtimePath: string,
+  hostPath: string | undefined,
+  extra: string[] = [],
+): string {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  const push = (p: string, requireExists: boolean) => {
+    if (!p || p === "." || p.startsWith("./") || p.startsWith("/tmp")) return
+    if (requireExists) {
+      try {
+        if (!existsSync(p)) return
+      } catch {
+        return
+      }
+    }
+    if (seen.has(p)) return
+    seen.add(p)
+    parts.push(p)
+  }
+  for (const p of runtimePath.split(":")) push(p, false)
+  for (const p of extra) push(p, false)
+  for (const p of (hostPath ?? "").split(":")) {
+    if (parts.length >= 16) break
+    push(p, true)
+  }
+  return parts.join(":")
+}
+
 /** 宿主环境可见性：给定键是否属于默认拒绝集。 */
+/** LNXF-GATE-02：ServiceCell/长期进程的最小宿主环境（E1 语义正式化）。
+ *  白名单键 + 显式 extra（extra 中命中拒绝集的键被过滤）——
+ *  service/MCP/LSP 等长期进程必须用它启动，禁止 `{...process.env}`
+ *  （宿主 API key/代理/SSH 凭据零泄露）。 */
+export const MINIMAL_HOST_ENV_KEYS = [
+  "PATH", "HOME", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
+  "TERM", "USER", "LOGNAME", "CI", "EDITOR", "VISUAL", "SHELL",
+]
+
+export function minimalHostEnv(extra?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const key of MINIMAL_HOST_ENV_KEYS) {
+    const value = process.env[key]
+    if (value !== undefined) env[key] = value
+  }
+  if (extra) {
+    for (const [key, value] of Object.entries(extra)) {
+      if (hostKeyDenied(key)) continue
+      env[key] = value
+    }
+  }
+  return env
+}
+
 export function hostKeyDenied(key: string, extraDenied: string[] = []): boolean {
   return [...DEFAULT_DENIED_KEYS, ...extraDenied].some(p => matchesPattern(key, p))
+}
+
+/** LNXF-R2 9.4：键是否属于 Runtime 保留集（请求/secret/宿主继承均不得写入）。 */
+export function isRuntimeReservedKey(key: string): boolean {
+  return (RUNTIME_RESERVED_ENV_KEYS as readonly string[]).includes(key)
 }
 
 /** 显式环境构造（唯一入口）。 */
@@ -72,16 +172,25 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
   // 1. Runtime 固定安全变量。
   env.ORCANA_RUN_ID = input.runId
   env.ORCANA_NODE_RUN_ID = input.nodeRunId
-  env.PATH = input.policy.baseProfile === "minimal"
-    ? "/usr/bin:/bin"
-    : `/usr/local/bin:/usr/bin:/bin${(input.pathEntries ?? []).length ? ":" + input.pathEntries!.join(":") : ""}`
+  // GATE（GS-14）：PATH 由 Runtime 决定 —— allowedHostKeys 的 PATH 会被
+  // reserved 拒绝；末步再强制写回（双重保险）。
+  // GATE-TEST-01：宿主 PATH 安全目录受控追加（bun/node/tsc 可达，首段
+  // 仍是 Runtime 固定目录，/tmp/相对路径不进入）。
+  const runtimePath = appendSafeHostPathEntries(
+    input.policy.baseProfile === "minimal"
+      ? "/usr/bin:/bin"
+      : `/usr/local/bin:/usr/bin:/bin`,
+    process.env.PATH,
+    input.pathEntries,
+  )
+  env.PATH = runtimePath
   if (input.policy.baseProfile === "service") {
     env.TERM = "xterm"
   }
 
-  // 2. Profile 允许变量（fixedValues 覆盖默认）。
+  // 2. Profile 允许变量（fixedValues 覆盖默认；保留键由末步强制写回）。
   for (const [key, value] of Object.entries(input.policy.fixedValues)) {
-    if (hostKeyDenied(key, extraDenied)) {
+    if (hostKeyDenied(key, extraDenied) || isRuntimeReservedKey(key)) {
       rejectedHostKeys.push(key)
       continue
     }
@@ -90,7 +199,7 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
 
   // 3. 宿主键白名单（显式允许才复制）。
   for (const key of input.policy.allowedHostKeys) {
-    if (hostKeyDenied(key, input.extraDenied)) {
+    if (hostKeyDenied(key, input.extraDenied) || isRuntimeReservedKey(key)) {
       rejectedHostKeys.push(key)
       continue
     }
@@ -100,16 +209,20 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
 
   // 4. Tool 显式申请。
   for (const [key, value] of Object.entries(input.policy.requestedValues)) {
-    if (hostKeyDenied(key, extraDenied)) {
+    if (hostKeyDenied(key, extraDenied) || isRuntimeReservedKey(key)) {
       rejectedHostKeys.push(key)
       continue
     }
     env[key] = value
   }
 
-  // 5. Secret 注入。
+  // 5. Secret 注入（同样不得覆盖保留键）。
   if (input.secrets) {
     for (const [key, value] of Object.entries(input.secrets)) {
+      if (isRuntimeReservedKey(key)) {
+        rejectedHostKeys.push(key)
+        continue
+      }
       env[key] = value
     }
   }
@@ -121,6 +234,14 @@ export function buildExplicitEnvironment(input: BuildEnvironmentInput): Environm
       delete env[key]
     }
   }
+
+  // 7. GATE（GS-14）：Runtime 保留键最后强制写回 —— 请求/secret/宿主
+  //    继承不得伪造身份或覆盖 Runtime 决定的 PATH/HOME（恶意同名命令
+  //    不可达 Cell）。
+  env.ORCANA_RUN_ID = input.runId
+  env.ORCANA_NODE_RUN_ID = input.nodeRunId
+  env.PATH = runtimePath
+  if (env.ORCANA_SANDBOX === undefined) env.ORCANA_SANDBOX = "1"
 
   return { ok: true, env, rejectedHostKeys }
 }

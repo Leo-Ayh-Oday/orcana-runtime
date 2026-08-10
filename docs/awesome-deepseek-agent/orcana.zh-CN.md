@@ -1,8 +1,11 @@
 # 接入 Orcana
 
-[English](./orcana.md) · [← 返回](../README.zh-CN.md)
+[English](./orcana.md) · [← 返回](../../README.zh.md)
 
-Orcana 是一个 DeepSeek-native 的终端 Coding Agent runtime，面向长时间运行的软件工程任务。
+Orcana 是一个模型无关、对 DeepSeek 提供一等支持的终端 Coding Agent runtime，面向长时间运行的软件工程任务。
+
+> 当前公开包为 `0.8.16`，仓库内包含更新但尚未发布的源码。比较 npm
+> 行为与仓库源码前，请先看[当前状态](../status.md)。
 
 它的核心方向是 constraint-first coding workflow：任务识别、计划门控、任务包、受控工具调用、补丁事务、证据化完成，以及用于编码会话的交互式 TUI。
 
@@ -173,6 +176,12 @@ Orcana 使用 planning gate 和 TaskPacket 来减少盲目编辑。复杂任务�
 
 Orcana 记录 typecheck、test、build 或 manual inspection 等验证证据。没有必要证据时，Agent 被阻止声称任务完成。Final Truthfulness Gate 将完成文本与 EvidenceLedger 交叉校验。
 
+### Typed Execution Graph
+
+G0-G6 Graph 核心已经实现，包括类型化节点与边、DAG 调度、单写控制、
+缓存/重放、有界修复和动态编译。严格重放、审批、缓存溯源以及持久资源/
+重试权威仍在生产闭环中。
+
 ### 面向长任务的 TUI
 
 交互式 TUI 面向包含计划、工具调用、代码编辑、验证和修复循环的编码任务。展示当前 mode、计划节点、任务包、工具流、补丁状态、证据状态和 gate block 原因。
@@ -195,11 +204,14 @@ Orcana 记录 typecheck、test、build 或 manual inspection 等验证证据。�
 
 ## 9. 已知限制
 
-Orcana 仍是实验性的 Coding Agent runtime。一些运行时能力仍在演进中：lifecycle hooks、长任务记忆、端到端 replay、完整 rewind 工作流。
+Orcana 仍是实验性的 Coding Agent runtime。Durable Replay、完整 Rewind、
+长期服务隔离和若干跨层权威边界仍在演进。Linux 的 Host Audit 是降级路径，
+不是安全边界；详见 [Linux 沙盒状态](../linux-foundation/current-status.md)。
 
 对于高风险操作，请在接受结果前检查计划、改动和验证输出。除非你完全理解工具权限和回滚行为，否则不要在生产仓库中使用自动批准模式。
 
-当前版本：v0.3.4。目标：v1.0（10 Phase / 32 PR 组 / 17 条可验证验收标准）。
+当前公开版本为 `0.8.16`。只有 npm、tag、GitHub Release 和公开安装烟雾验证
+一致后，仓库中的更新版本才算正式发布。
 
 ## 10. 故障排查
 
@@ -238,4 +250,5 @@ DeepSeek V4 支持 1M token 上下文窗口。Orcana 通过 ContextEpoch 自动�
 
 ### 命令找不到
 
-可用命令：`orcana`、`orcana-runtime`、`deepseek-code`、`deepseek`。如果 `orcana` 找不到，尝试 `npx orcana-runtime`。
+推荐命令为 `orcana` 和 `orcana-runtime`。DeepSeek 命名的旧别名只用于迁移。
+如果找不到 `orcana`，可尝试 `npx orcana-runtime`。

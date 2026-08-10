@@ -10,6 +10,9 @@
  */
 
 import { AgentBudget } from "./agent-budget"
+import { isValidAgentId } from "./worktree"
+import type { RunCancellation } from "../../harness/contracts/scope"
+import { createRunCancellation } from "../../harness/runtime/cancellation"
 
 export interface AgentSpec {
   id: string
@@ -33,6 +36,10 @@ export interface Agent {
   writable: boolean
   cancelled: boolean
   budget: AgentBudget
+  /** M5: agent-local cancellation — cancel() aborts this signal so RUNNING
+   *  nodes observe the abort (running tool/LLM/loop work stops), without
+   *  touching other agents' signals (they share only the run scope). */
+  cancellation: RunCancellation
 }
 
 export interface OwnershipViolation {
@@ -45,6 +52,9 @@ export interface RegisterResult {
   ok: boolean
   agent?: Agent
   violations?: OwnershipViolation[]
+  /** M2: registration rejected because the agent id is not a valid
+   *  identifier (it must never be interpretable as a path). */
+  error?: string
 }
 
 export class AgentPool {
@@ -55,6 +65,20 @@ export class AgentPool {
 
   /** Register an agent; disjoint-ownership enforced. */
   register(spec: AgentSpec): RegisterResult {
+    // M2: the id is joined into the worktree path — reject path-like ids
+    // before any ownership bookkeeping (no "../../victim" registrations).
+    if (!isValidAgentId(spec.id)) {
+      return {
+        ok: false,
+        error: `agent id "${spec.id}" is not a valid identifier (must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)`,
+      }
+    }
+    // M17: duplicate ids are rejected — re-registering would replace the
+    // Agent object while keeping the old ownership map (phantom ownership,
+    // canWrite/agent.ownerFiles divergence).
+    if (this.agents.has(spec.id)) {
+      return { ok: false, error: `agent id "${spec.id}" is already registered` }
+    }
     const violations: OwnershipViolation[] = []
     for (const file of spec.ownerFiles) {
       const owner = this.owners.get(file)
@@ -71,6 +95,7 @@ export class AgentPool {
       writable: spec.writable ?? true,
       cancelled: false,
       budget: new AgentBudget(spec.budget),
+      cancellation: createRunCancellation(new AbortController()),
     }
     this.agents.set(spec.id, agent)
     return { ok: true, agent }
@@ -99,11 +124,14 @@ export class AgentPool {
     return this.agents.get(agentId)?.cancelled ?? false
   }
 
-  /** Cancel an agent: pending nodes fail fast, running nodes abort. */
+  /** Cancel an agent: pending nodes fail fast, running nodes abort
+   *  (M5: the agent-local signal fires — in-flight tool/LLM work observes
+   *  the abort and releases locks/worktrees). */
   cancel(agentId: string): boolean {
     const agent = this.agents.get(agentId)
     if (!agent) return false
     agent.cancelled = true
+    agent.cancellation.cancel("agent_cancelled")
     return true
   }
 

@@ -59,8 +59,18 @@ export interface LinuxCapabilities {
  *  身份字段由 Runtime 生成（编译器是唯一权威）；工具只能声明命令、Profile
  *  与显式需求。override 语义：只能收紧（更高隔离、更小资源），不能放宽。
  */
-export interface CapabilityRequest {
-  command: { executable: string; args: string[]; cwd?: string; stdin?: "closed" | "pipe" }
+/** 不可信能力声明（R2 PR-9：INV-A/INV-B）。
+ *  工具/模型只能声明能力和资源需求；身份、workspace、宿主路径
+ *  全部由 TrustedExecutionAuthority 注入。禁止出现任何身份字段
+ *  或宿主物理路径（绝对 cwd / worktreeRoot / ownerFiles）。 */
+export interface UntrustedCapabilityRequest {
+  command: {
+    executable: string
+    args: string[]
+    /** 相对 AuthorizedWorkspace 的逻辑工作目录（默认 "."）。 */
+    relativeCwd?: string
+    stdin?: "closed" | "pipe"
+  }
   profile: ExecutionProfile
   /** 网络需求：只能比 Profile 默认更严格（none ⊂ loopback ⊂ proxy-allowlist ⊂ full-approved）。 */
   network?: { mode: NetworkMode; allowedHosts?: string[]; allowedPorts?: number[] }
@@ -73,17 +83,107 @@ export interface CapabilityRequest {
   stderrMaxBytes?: number
   memoryMaxBytes?: number
   pidsMax?: number
-  worktreeRoot?: string
-  ownerFiles?: string[]
+  /** LNXF-R2 9.3：请求挂载只允许两态 —— workspace-relative（工作区内
+   *  相对路径）或 runtime-grant（Runtime 授予的挂载物，暂未开放）。
+   *  禁止宿主绝对 source（PR-9 宿主路径漏洞不回归）。 */
+  writableMounts?: RequestedMount[]
+  readonlyMounts?: RequestedMount[]
+  cache?: CacheMountRequest[]
+}
+
+/** 请求级挂载（模型声明需求；宿主路径由编译器权威解析，模型不可指定）。 */
+export type RequestedMount =
+  | {
+      source: { type: "workspace-relative"; path: string }
+      target: string
+      mode: "ro" | "rw"
+    }
+  | {
+      source: { type: "runtime-grant"; grantId: string }
+      target: string
+      mode: "ro"
+    }
+
+/** 授权工作区（R2 PR-9：INV-B）。由 WorkspaceAuthorityRegistry 注册生成，
+ *  模型不可构造。workspaceId 由 canonical physical root 稳定生成。 */
+export interface AuthorizedWorkspace {
+  workspaceId: string
+  /** LNXF-R2 9.2：物理冲突域键 —— 由 realpath + stat(dev,ino) 生成；
+   *  bind-mount/软链接别名指向同一物理目录时键相同（单写者锁
+   *  workspace-physical:<key>，防止 workspaceId 公式旁路）。 */
+  physicalWorkspaceKey: string
+  projectId: string
+  /** realpath 后的物理根目录。 */
+  hostRoot: string
+  /** main/worktree/system。 */
+  kind: "main" | "worktree" | "system"
+  /** 是否允许写入。 */
+  access: "readonly" | "readwrite"
+  /** Runtime 分配的文件所有权。 */
+  ownerFiles: readonly string[]
+}
+
+/** 可信执行身份（R2 PR-9：INV-A）。由 Runtime 生成，请求不得覆盖。 */
+export interface TrustedExecutionIdentity {
+  runId: string
+  nodeRunId: string
+  attempt: number
+  agentId?: string
+  assignmentId?: string
+}
+
+/** 可信执行权威 —— Linux enabled 执行的唯一身份/工作区来源。 */
+export interface TrustedExecutionAuthority {
+  identity: TrustedExecutionIdentity
+  workspace: AuthorizedWorkspace
+  domainId?: string
+}
+
+/** @deprecated R2 PR-9：已拆分 —— 能力声明见 UntrustedCapabilityRequest，
+ *  身份/工作区见 TrustedExecutionAuthority。 */
+export interface CapabilityRequest {
+  command: { executable: string; args: string[]; cwd?: string; stdin?: "closed" | "pipe" }
+  profile: ExecutionProfile
+  network?: { mode: NetworkMode; allowedHosts?: string[]; allowedPorts?: number[] }
+  env?: Record<string, string>
+  allowedHostKeys?: string[]
+  timeoutMs?: number
+  stdoutMaxBytes?: number
+  stderrMaxBytes?: number
+  memoryMaxBytes?: number
+  pidsMax?: number
   writableMounts?: MountRule[]
   readonlyMounts?: MountRule[]
   cache?: CacheMountRequest[]
-  /** Runtime 上下文（由上层执行层注入，工具不可见）。 */
   runId?: string
   nodeRunId?: string
   agentId?: string
   assignmentId?: string
   attempt?: number
+}
+
+/** LNXF-GATE-02 (B7)：统一清理动作 —— broker finally 按序执行并逐项
+ *  记录结果（process → mounts → secrets → temp → cgroup → lease）。 */
+export interface CleanupAction {
+  kind: "process" | "mounts" | "secrets" | "temp" | "cgroup" | "lease" | "secret-file"
+  name: string
+  ok: boolean
+  detail?: string
+  at: number
+}
+
+/** LNXF-GATE-02 (B7)：secret 交付的生命周期记录（Receipt 审计）。 */
+export interface SecretDeliveryRecord {
+  leaseId: string
+  runId?: string
+  cellId?: string
+  bindingId: string
+  deliveryTarget?: string
+  delivery: "sealed-file" | "file-descriptor" | "environment"
+  expiresAt: number
+  revokedAt?: number
+  /** GS-11 语义：实际删除文件才算 verified；失败如实标记。 */
+  cleanupVerified: boolean
 }
 
 /** 运行期物化材料 —— 不属于策略 Spec，编译完成后由 Runtime 生成并随
@@ -97,6 +197,14 @@ export interface ExecutionMaterialization {
   secretFiles?: Record<string, string>
   /** 缓存宿主路径映射（target → 宿主源目录；Runtime 决定，模型不可指定）。 */
   cacheHostPaths?: Record<string, string>
+  /** B7：secret 交付生命周期记录（dispose 后 revokedAt/cleanupVerified 落真值）。 */
+  secretRecords?: SecretDeliveryRecord[]
+  /** B7：统一清理动作登记表（dispose 执行时逐项回填 ok/detail）。 */
+  cleanupActions?: CleanupAction[]
+  /** C5（SECRET_TEMP_RESIDUE）：运行期物化宿主文件的统一清理回调
+   *  （sealed secret 文件 + secret root + seccomp 文件；执行结束后调用，
+   *  由 Broker 事务 finally 保证触发）。 */
+  dispose?: () => void
 }
 
 // ── ExecutionCellSpec (§7.2) ──
@@ -178,6 +286,9 @@ export interface ExecutionCellSpec {
   }
   secrets: SecretBinding[]
   resources: {
+    /** LNXF-R2 10.2：CPU 资源记账单位（1000 = 1 核；ResourceLedger 唯一
+     *  权威）。cgroup 物化由 cpuQuotaMicros/cpuPeriodMicros 表达。 */
+    cpuMillis?: number
     cpuQuotaMicros?: number
     cpuPeriodMicros?: number
     cpuWeight?: number
@@ -251,6 +362,26 @@ export interface SandboxViolation {
   scope?: string
 }
 
+/** LR2-0（ADR-LR2-003）：观测三态 —— Receipt 只记录真实观测。
+ *  - observed：实测值；
+ *  - unsupported：平台/后端不支持该观测；
+ *  - unknown：未测量/测量失败。
+ *  未观测 ≠ 成功：任何"已验证"断言（receiptComplete、Evidence 绑定）都
+ *  不得把 unknown/unsupported 当作成功事实。 */
+export type Observed<T> =
+  | { status: "observed"; value: T }
+  | { status: "unsupported"; reason: string }
+  | { status: "unknown"; reason: string }
+
+export interface SandboxReceiptMetrics {
+  cpuUsageUsec?: number
+  cpuThrottledUsec?: number
+  peakMemoryBytes?: number
+  peakPids?: number
+  readBytes?: number
+  writeBytes?: number
+}
+
 export interface SandboxReceipt {
   schemaVersion: "1.0"
   /** Receipt 自摘要（完整 Outcome 的 sha256，PR-2；Evidence 绑定此值）。 */
@@ -279,27 +410,39 @@ export interface SandboxReceipt {
   pidLimitHit: boolean
   outputLimitHit: boolean
   tempLimitHit: boolean
-  metrics: {
-    cpuUsageUsec?: number
-    cpuThrottledUsec?: number
-    peakMemoryBytes?: number
-    peakPids?: number
-    readBytes?: number
-    writeBytes?: number
-  }
+  /** LR2-0：观测三态（未测量必须 unknown，禁止空对象冒充完整 metrics）。 */
+  metrics: Observed<SandboxReceiptMetrics>
   observedWrites: string[]
   observedDeletes: string[]
   unexpectedWrites: string[]
   networkMode: string
   secretBindingIds: string[]
+  /** B7: 统一清理动作结果（process→mounts→secrets→temp→cgroup→lease）。 */
+  cleanupActions?: CleanupAction[]
+  /** B7: secret 交付生命周期记录（revokedAt/cleanupVerified 落真值）。 */
+  secretRecords?: SecretDeliveryRecord[]
   violations: SandboxViolation[]
   degradationReasons: string[]
+  /** PathGuard 快照有界性证据（OTS-004 事故后加）：跳过的大文件/预算超限/
+   *  实际哈希字节数 —— 证明本 cell 的 PathGuard 未把超大文件全量读入
+   *  Runtime 进程内存。只有 after 快照（对本 cell 写入内容负责的那份）。 */
+  snapshotGuard?: {
+    skippedLargeFiles: string[]
+    budgetExceeded: boolean
+    bytesHashed: number
+  }
   cleanup: {
     processesRemaining: number
     mountsReleased: boolean
     cgroupRemoved: boolean
     containerRemoved?: boolean
     worktreeRetained: boolean
+    /**
+     * GATE（GS-11）：清理是否经真实验证。attach 未验证（进程从未进入
+     * Cell cgroup）时不得宣称强保证 —— 空 cgroup 删除成功 ≠ 原进程
+     * 已清理。
+     */
+    cleanupVerified: boolean
   }
 }
 

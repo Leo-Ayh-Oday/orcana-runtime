@@ -13,11 +13,24 @@
  *    - Does not touch loop.ts gate logic — diagnostics flow through existing VerificationResult path
  */
 
-import { spawnLegacy, ChildProcess } from "../runtime/legacy-process"
-const spawn = spawnLegacy
+import type { ChildProcess } from "../runtime/legacy-process"
+import { createServiceCell } from "../runtime/linux/service-cell"
+import type { ServiceLeaseStore } from "../runtime/linux/recovery/state-store"
+import { setServiceLeaseStore } from "../tools/service"
 import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { URI } from "./uri"
+
+// LNXF-GATE-02：LSP 的 durable lease 存储与 service/MCP 共用同一 store
+// （测试可注入内存版；默认不持久化）。
+let lspLeaseStoreOverride: ServiceLeaseStore | undefined
+export function setLspLeaseStore(store: ServiceLeaseStore | undefined): void {
+  lspLeaseStoreOverride = store
+  setServiceLeaseStore(store)
+}
+function lspLeaseStore(): ServiceLeaseStore | undefined {
+  return lspLeaseStoreOverride
+}
 
 // ── Types ──
 
@@ -83,6 +96,7 @@ function encodeMessage(msg: Record<string, unknown>): string {
 
 export class LSPClient {
   private proc: ChildProcess | null = null
+  private cell: import("../runtime/linux/service-cell").ServiceCell | null = null
   private buffer = ""
   private diagnostics = new Map<string, LSPDiagnostic[]>()
   private reqId = 0
@@ -118,11 +132,22 @@ export class LSPClient {
 
     return new Promise(resolve => {
       try {
-        this.proc = spawn(this.serverPath!, ["--stdio"], {
+        // LNXF-GATE-02 (B12+B13)：spawnLegacy → ServiceCell（kind: lsp）——
+        // explicit env + durable lease + owner(pid+starttime)；ready 以
+        // initialize 响应为准；auto-reconnect 逻辑保持不变（restartPolicy
+        // 语义归 LSP 客户端自身，ServiceCell 只负责记录与清理）。
+        this.cell = createServiceCell({
+          kind: "lsp",
+          command: this.serverPath!,
+          args: ["--stdio"],
           cwd: this.cwd,
+          cleanupPolicy: "run-end",
+          logPath: "",
           stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env },
+          detached: false,
+          store: lspLeaseStore(),
         })
+        this.proc = this.cell.proc
 
         this.proc.stdout?.on("data", (chunk: Buffer) => {
           this.buffer += chunk.toString("utf-8")
@@ -134,6 +159,7 @@ export class LSPClient {
         })
 
         this.proc.on("error", () => {
+          this.cell?.markFailed()
           this.cleanup()
           resolve(false)
         })
@@ -168,6 +194,7 @@ export class LSPClient {
           this.send("initialized", {})
           this.initialized = true
           this.reconnectAttempts = 0
+          this.cell?.markReady()
           resolve(true)
         }).catch(() => {
           this.cleanup()
@@ -189,6 +216,9 @@ export class LSPClient {
   }
 
   private cleanup(): void {
+    // LNXF-GATE-02：ServiceCell release（幂等 —— 停进程 + 删 durable 记录）。
+    this.cell?.release()
+    this.cell = null
     this.proc = null
     this.initialized = false
     this.openFiles.clear()

@@ -17,11 +17,11 @@ import {
 import { ModelRouter } from "../provider/router"
 import type { ToolDescriptor } from "../tools/registry"
 import { StagedContextManager } from "../context/staged"
-import { SessionManager, SessionCorruptedError, searchAllSessions } from "../session"
-import { lastCheckpoint, verifyCheckpoint } from "../session/checkpoint"
+import { SessionManager, SessionCorruptedError, searchAllSessions, type Session } from "../session"
+import { lastCheckpoint, sha256, verifyCheckpoint } from "../session/checkpoint"
 import type { SessionCheckpoint } from "../session/checkpoint"
 import { saveRewindPoint } from "../agent/rewind"
-import { buildResumeContext, resumeMessages } from "../session/summarizer"
+import { buildResumeMessages, buildResumeContext, resumeMessages } from "../session/summarizer"
 import { ThinkingStore } from "../memory/thinking-store"
 import { KnowledgeBase } from "../memory/knowledge"
 import {
@@ -33,7 +33,7 @@ import {
   saveCompactorState,
 } from "../memory/compactor"
 import type { CompactionState } from "../memory/compactor"
-import { distillUserConstraints } from "../agent/memory/user-constraints"
+import { distillUserConstraints, formatConstraintContext } from "../agent/memory/user-constraints"
 import type { UsageStats } from "../agent/loop"
 import { createStreamRenderState, dim, flushStreamRender, green, yellow, red, renderResponse, renderStreamChunk } from "./render"
 import { reprompt, startInput } from "./input"
@@ -93,10 +93,22 @@ function rememberTurn(compactor: CompactionState, turn: { role: "user" | "assist
   replaceCompactorState(compactor, addTurn(compactor, turn))
 }
 
+/** K11: 蒸馏冷却——锚已存在时避免每轮重跑 flash 蒸馏（仅在新材料 + 冷却后 supersede）。 */
+const M0_DISTILL_COOLDOWN_MS = 30_000
+let lastM0DistillAt = 0
+
 async function maybeCreateM0(compactor: CompactionState, title: string, provider?: MultiProvider, modelRouter?: ModelRouter) {
-  const thresholdTokens = envNumber("ORCANA_M0_THRESHOLD_TOKENS", 50_000)
-  if (compactor.anchor || compactor.estimatedTokens < thresholdTokens) return
-  // RC-02.5 X1 触发点③：M0 创建时用 flash 蒸馏硬约束，替代正则 DECISION_RE。
+  // K11 (M0_NO_PROTECTION_WINDOW): 默认阈值 0 → 首轮立即建锚，消除 50k 阈值前的
+  // 保护空窗（ORCANA_M0_THRESHOLD_TOKENS 仍可调高；createBaseCheckpoint 的
+  // thresholdTokens 参数同样默认 0）。
+  const thresholdTokens = envNumber("ORCANA_M0_THRESHOLD_TOKENS", 0)
+  if (compactor.estimatedTokens < thresholdTokens) return
+  // 锚已存在且无 provider → 无蒸馏能力，无需处理（锚由首轮默认创建）。
+  if (compactor.anchor && !provider) return
+  // 锚已存在 → 蒸馏受冷却约束，防每轮重跑。K12 hasNewMaterial 在
+  // createBaseCheckpoint 内部判定——无新材料时返回原状态，不产生 churn/版本自增。
+  if (compactor.anchor && Date.now() - lastM0DistillAt < M0_DISTILL_COOLDOWN_MS) return
+  // RC-02.5 X1 触发点③：M0 创建/supersede 时用 flash 蒸馏硬约束，替代正则 DECISION_RE。
   let distilledDecisions: string[] = []
   if (provider) {
     const userTexts = [...compactor.hotTurns, ...compactor.warmTurns]
@@ -120,6 +132,7 @@ async function maybeCreateM0(compactor: CompactionState, title: string, provider
     title: title.slice(0, 140),
     activeDecisions: distilledDecisions,
   }))
+  lastM0DistillAt = Date.now()
 }
 
 
@@ -143,9 +156,29 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
 
   let sessionId = resumeId || runtime.sessionId
   let thinkEffort: "auto" | "high" | "max" = "auto"
-  const history: Array<{ role: "user" | "assistant"; content: string }> = []
+  // K6: 角色含 "system"——权威约束帧（buildResumeMessages 产物）进入历史。
+  const history: Array<{ role: "user" | "assistant" | "system"; content: string }> = []
 
   let resumeFromCheckpoint: SessionCheckpoint | null = null
+
+  // H8 (COLD_MEMORY_SHA_VERIFIED): compactor 恢复提前到 resume 块之前——
+  // checkpoint 冷内存 SHA 校验需要恢复后的锚上下文（restoreCompactorState 滞后
+  // 会令 verify 拿不到 anchor，冷内存声明无法验证）。
+  const compactor = runtime.compactor
+  if (resumeId) restoreCompactorState(compactor, resumeId)
+
+  // K6 (RESUME_PRESERVES_CONSTRAINTS): resume 时以权威状态重建约束——flash 蒸馏
+  // （≥3 条用户输入且 provider 可用），失败/不足降级确定性摘要，两者都保留 2+4 尾部。
+  const distillResumeConstraints = async (userTexts: string[]): Promise<string | null> => {
+    if (shouldSkipProviderPurpose("thinking_compaction")) return null
+    const result = await distillUserConstraints(
+      multiProvider,
+      modelRouter.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash",
+      userTexts,
+    ).catch(() => null)
+    if (!result || !result.success || result.constraints.length === 0) return null
+    return formatConstraintContext(result.constraints)
+  }
 
   if (resumeId) {
     try {
@@ -153,26 +186,29 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       if (restored) {
         const stagedFiles = (restored.metadata?.stagedFiles as string[]) ?? []
         for (const f of stagedFiles) { try { stagedCtx.markLoaded(f) } catch { } }
+        // K6: 统一重建（checkpoint-valid 分支此前历史为空——旧实现只在无效分支补摘要）
+        for (const m of await buildResumeMessages(restored, distillResumeConstraints)) history.push(m)
         // ── Checkpoint recovery: if checkpoint exists, verify and load ──
         const cp = lastCheckpoint(resumeId)
         if (cp) {
-          const integrity = verifyCheckpoint(cp)
+          // H8 (COLD_MEMORY_SHA_VERIFIED): 用恢复后的 compactor 锚上下文 SHA 校验冷内存
+          // （无锚/无声明时 currentColdMemorySHA 为 undefined → 跳过，不做假校验）。
+          const currentColdMemorySHA = compactor.anchor ? sha256(buildStableAnchorContext(compactor)) : undefined
+          const integrity = verifyCheckpoint(cp, currentColdMemorySHA)
           if (integrity.valid) {
             resumeFromCheckpoint = cp
             const stepsDone = cp.taskSteps.filter(s => s.status === "done").length
             console.log(green(
               `从检查点恢复 (round ${cp.round}, ${stepsDone}/${cp.taskSteps.length} 步骤, ${cp.changedFiles.length} 文件)`
             ))
-          } else {
+          } else if (!integrity.filesMatch) {
             console.log(yellow(
               `检查点文件已变更 (${integrity.filesMismatched.length} 个不匹配)，从对话历史恢复`
             ))
-            history.push({ role: "assistant", content: buildResumeContext(restored) })
+          } else {
+            console.log(yellow("检查点冷记忆已变更（锚上下文 SHA 校验失败），从对话历史恢复"))
           }
-        } else {
-          history.push({ role: "assistant", content: buildResumeContext(restored) })
         }
-        for (const m of resumeMessages(restored)) history.push(m)
         sessionId = resumeId
       } else {
         console.log(yellow(`会话 ${resumeId} 不存在，创建新会话`))
@@ -196,16 +232,21 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
   const usedInkStartup = await playInkStartupScreen(startupOptions).catch(() => false)
   if (!usedInkStartup) await playStartupScreen(startupOptions)
 
-  // Use runtime's compactor but restore resume state if needed
-  const compactor = runtime.compactor
-  if (resumeId) restoreCompactorState(compactor, resumeId)
-
   if (cliPrompt) {
     process.stdout.write(`${dim(">")}  ${cliPrompt}\n\n`)
     try {
       if (shouldUseChatLite(cliPrompt) && !shouldSkipProviderPurpose("chat_lite")) await runLiteTurn(multiProvider, modelRouter, cliPrompt, history, compactor)
       else await runTurn(runtime.harness, cliPrompt, compactor, history, thinkEffort, sessionId, resumeFromCheckpoint, runtime.startRunTrace)
     } finally {
+      // D2 SINGLE_SHOT_MODE_PERSISTS: single-shot mode saves the session too.
+      if (history.length) {
+        try {
+          const savedId = persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId)
+          console.log(dim(`会话已保存: ${savedId}（/sessions 或 /resume 可恢复）\n`))
+        } catch (e) {
+          console.log(red(`会话保存失败: ${e instanceof Error ? e.message : String(e)}\n`))
+        }
+      }
       runtime.dispose()
     }
     return
@@ -241,7 +282,9 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
     thinkingStore,
     knowledgeBase,
     compactor,
-    sessionId,
+    // D6: dynamic read — command handlers must see the CURRENT session ID
+    // (the closure variable moves as persistSession assigns new ids).
+    get sessionId() { return sessionId },
     undoStack,
     thinkEffort,
     hooks,
@@ -287,7 +330,6 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       const handled = commandRegistry.execute(input, { ...cmdCtx, reprompt: () => reprompt(rl) })
       if (handled) { reprompt(rl); return }
     }
-
     // PR-4.3: Auto-save rewind point on each user prompt
     currentRound++
     try {
@@ -297,6 +339,8 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
         summary: input.slice(0, 200),
         changedFiles: undoStack.map(s => s.path),
         fileSHAs: {},
+        // H8: 记录锚上下文 SHA（16-hex），resume 时冷内存完整性可验证
+        coldMemorySHA: compactor.anchor ? sha256(buildStableAnchorContext(compactor)) : "",
         conversationTokens: history.reduce((sum, h) => sum + h.content.length, 0),
       })
     } catch {
@@ -310,6 +354,15 @@ export async function startCLI(cliPrompt?: string, resumeId?: string) {
       setSessionId(persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId))
     }
     reprompt(rl)
+  }, () => {
+    // D5 EXIT_PATH_FLUSHES_SESSION: flush unsaved trailing turns on exit
+    if (history.length > 0) {
+      try {
+        setSessionId(persistSession(sessions, history, stagedCtx, compactor, sessionId, !sessionId))
+      } catch (e) {
+        process.stderr.write(`会话保存失败: ${e instanceof Error ? e.message : String(e)}\n`)
+      }
+    }
   })
 
   if (resumeId) {
@@ -329,7 +382,7 @@ function showStats(sessionId: string, msgCount: number, fileCount: number) {
 
 function persistSession(
   sessions: SessionManager,
-  history: Array<{ role: "user" | "assistant"; content: string }>,
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }>,
   stagedCtx: StagedContextManager,
   compactor: CompactionState,
   sessionId: string,
@@ -337,11 +390,22 @@ function persistSession(
   /** Optional: update active SessionStore when session ID changes (first save). */
   onNewId?: (oldId: string, newId: string) => void,
 ): string {
-  const s = isNew
+  let existing: Session | null = null
+  if (!isNew) {
+    try { existing = sessions.load(sessionId) } catch { existing = null }
+  }
+  const s: Session = isNew || !existing
     ? sessions.create({ topic: history[0]?.content?.slice(0, 50), messageCount: history.length })
-    : (() => { try { return sessions.load(sessionId) } catch { return null } })()
-      ?? sessions.create({ topic: history[0]?.content?.slice(0, 50), messageCount: history.length })
-  s.messages = history.map(h => ({ role: h.role as "user" | "assistant", content: h.content, timestamp: Date.now(), metadata: {} }))
+    : existing
+  // H5: preserve original timestamps for already-persisted messages
+  const tsByKey = new Map<string, number>()
+  for (const m of s.messages) tsByKey.set(`${m.role}\u0000${m.content}`, m.timestamp)
+  s.messages = history.map(h => ({
+    role: h.role as "user" | "assistant" | "system",
+    content: h.content,
+    timestamp: tsByKey.get(`${h.role}\u0000${h.content}`) ?? Date.now(),
+    metadata: {},
+  }))
   s.metadata = { ...s.metadata, messageCount: history.length, stagedFiles: [...stagedCtx.loadedFiles.keys()] }
   sessions.save(s)
   saveCompactorState(compactor, s.id)
@@ -361,7 +425,7 @@ async function runLiteTurn(
   provider: MultiProvider,
   router: ModelRouter,
   prompt: string,
-  history: Array<{ role: "user" | "assistant"; content: string }>,
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }>,
   compactor: CompactionState,
 ) {
   const started = Date.now()
@@ -428,7 +492,7 @@ async function runTurn(
   harness: AgentHarness,
   prompt: string,
   compactor: CompactionState,
-  history: Array<{ role: "user" | "assistant"; content: string }>,
+  history: Array<{ role: "user" | "assistant" | "system"; content: string }>,
   thinkEffort: "auto" | "high" | "max",
   sessionId: string,
   resumeFromCheckpoint: SessionCheckpoint | null,

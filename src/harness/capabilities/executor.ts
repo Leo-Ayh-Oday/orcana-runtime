@@ -31,6 +31,7 @@ import { DEFAULT_MAX_OUTPUT_BYTES, limitOutput } from "./output-limiter"
 import { projectCapabilityDescriptor, toolCapabilityHandler } from "./tool-adapter"
 import { buildNodePolicyInput, type NodePolicyContext } from "./policy-adapter"
 import { createDefaultNodePolicyContext } from "../nodes/context"
+import type { RetryLedger } from "../../runtime/retry-ledger"
 
 /** Optional artifact hook (plan §15.3 "Artifact / Evidence" step). */
 export interface CapabilityArtifactTracker {
@@ -70,9 +71,18 @@ export interface CapabilityExecuteInput {
   // ── shared ──
   artifactTracker?: CapabilityArtifactTracker
   abortSignal?: AbortSignal
+  /** PR-GATE-06：Run 级 RetryLedger —— node 模式且 descriptor.retryable 时，
+   *  工具重试预算由统一账本裁决（tool <= 1）；loop 模式不重试（工具失败由
+   *  agent 轮次机制 + ProgressGovernor 治理，避免行为冻结回归）。 */
+  retryLedger?: RetryLedger
   /** RT-3: explicit run-scoped execution context (node mode wires it from
    *  the run scope; loop mode keeps the legacy loose parameters). */
   context?: ToolExecutionContext
+  /** RC-19 Phase 2 (D7): authoritative project root for this execution.
+   *  Threaded into the tool context — relative paths resolve against it,
+   *  never process.cwd(). Fail-closed: absent root yields an empty authority
+   *  (tools then reject path work rather than guess a cwd). */
+  projectRoot?: string
 }
 
 export interface CapabilityExecutionResult {
@@ -196,15 +206,33 @@ export async function executeCapability(
         params: effectiveParams,
         abortSignal: input.abortSignal,
         parallelResult: input.parallelResult,
+        // RC-19 Phase 2 (D7): projectRoot from the batch/run scope; node-mode
+        // callers may carry it on the execution context. Absent → empty
+        // (fail-closed — never process.cwd()).
+        projectRoot: input.projectRoot ?? input.context?.projectRoot ?? "",
       })
       result = output.result
     } else {
       // Node mode: the registered capability handler.
-      input.emit?.("tool.call.started", { toolName: descriptor.id, toolCallId: input.toolCallId })
-      const response = await handler.execute(effectiveParams, {
-        abortSignal: input.abortSignal ?? input.context?.signal,
-        metadata: { capabilityId: descriptor.id, ...(input.context ? { runContext: input.context } : {}) },
-      })
+      // PR-GATE-06：descriptor.retryable 的 capability 最多经 ledger 重试
+      // 一次（tool <= 1，同工具指纹）—— 预算与 provider/repair 层共享，
+      // 不存在 capability 独立重试预算。
+      const toolFingerprint = `tool:${descriptor.id}`
+      const maxRetries = descriptor.retryable && input.retryLedger ? 1 : 0
+      let attempt = 0
+      let response: Awaited<ReturnType<CapabilityHandler["execute"]>>
+      do {
+        input.emit?.("tool.call.started", { toolName: descriptor.id, toolCallId: input.toolCallId })
+        response = await handler.execute(effectiveParams, {
+          abortSignal: input.abortSignal ?? input.context?.signal,
+          metadata: { capabilityId: descriptor.id, ...(input.context ? { runContext: input.context } : {}) },
+        })
+        if (response.ok || attempt >= maxRetries || !input.retryLedger) break
+        if (!input.retryLedger.canRetry("tool", toolFingerprint)) break
+        input.retryLedger.record("tool", toolFingerprint)
+        input.emit?.("tool.call.failed", { toolName: descriptor.id, toolCallId: input.toolCallId, error: response.error ?? "capability execution failed", retry: true })
+        attempt++
+      } while (true)
       if (!response.ok) {
         const message = response.error ?? "capability execution failed"
         result = { success: false, content: message, error: message }

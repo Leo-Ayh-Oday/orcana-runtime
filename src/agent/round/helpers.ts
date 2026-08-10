@@ -4,7 +4,7 @@ import { AgentState } from "../state-machine"
 import type { AgentContext } from "../state-machine"
 
 export interface StringHistoryMessage {
-  role: "user" | "assistant"
+  role: "user" | "assistant" | "system"
   content: string
 }
 
@@ -14,7 +14,11 @@ export function resolveMaxRounds(explicit: number | undefined, envValue: string 
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 50
 }
 
-/** Select the newest history that fits while preserving chronological order. */
+/**
+ * Select the newest history that fits while preserving chronological order.
+ * An oversized single message is skipped without consuming budget so it does
+ * not block older short messages (e.g. user hard constraints) from selection.
+ */
 export function selectRecentHistoryWithinBudget<T extends StringHistoryMessage>(
   history: T[],
   tokenBudget: number,
@@ -27,7 +31,7 @@ export function selectRecentHistoryWithinBudget<T extends StringHistoryMessage>(
   for (let index = recent.length - 1; index >= 0; index--) {
     const message = recent[index]!
     const estimate = Math.ceil(message.content.length / estimatedCharsPerToken)
-    if (used + estimate > tokenBudget) break
+    if (used + estimate > tokenBudget) continue
     used += estimate
     selected.push(message)
   }

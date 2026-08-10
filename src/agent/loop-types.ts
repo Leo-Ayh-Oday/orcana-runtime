@@ -14,6 +14,11 @@ export interface UsageStats {
   estimatedInputTokens: number
   cacheHits: number
   cacheMisses: number
+  /** H12: cumulative cache-miss INPUT tokens across rounds — the final
+   *  provider usage event carries this as a run total so every counter on
+   *  the stream (input/output/cacheMiss) shares the same "cumulative
+   *  snapshot" invariant the harness BudgetGuard deltas against. */
+  cacheMissInputTokens: number
   flashRounds: number
   proRounds: number
   flashUsed: boolean
@@ -31,7 +36,8 @@ export interface AgentOptions {
   maxRounds?: number
   /** Active model context window; defaults to DeepSeek V4's 1M for legacy callers. */
   contextMaxTokens?: number
-  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>
+  /** K6: 角色含 "system"——resume 权威约束帧（buildResumeMessages 产物）可进入历史。 */
+  conversationHistory?: Array<{ role: "user" | "assistant" | "system"; content: string }>
   stagedContext?: StagedContextManager
   thinkingStore?: ThinkingStore
   knowledgeBase?: KnowledgeBase
@@ -43,6 +49,8 @@ export interface AgentOptions {
   autoApprovePlan?: boolean
   modelRouter?: import("../provider/router").ModelRouter
   sessionId?: string
+  /** D4 (CHECKPOINT_RESUME_USED): checkpoint 快照，buildRunContext 消费
+   *  （恢复提示 system 消息注入 + masterPlan/taskTracker 水合）。 */
   resumeFromCheckpoint?: SessionCheckpoint
   /** Optional: gate telemetry collector for the 3-step validation plan. */
   gateTelemetry?: import("./gates/telemetry").GateTelemetry
@@ -77,4 +85,7 @@ export interface AgentOptions {
   /** H9: capability registry — the loop's tool executions route through the
    *  CapabilityExecutor with this registry (shared with the Node Runtime). */
   capabilityRegistry?: import("../harness/contracts/capability").CapabilityRegistry
+  /** PR-GATE-06: Run 级统一重试预算（harness 传入其 scope 的 ledger；
+   *  注入后 loop 内 provider/round 重试与该 ledger 共享，预算跨层统一）。 */
+  retryLedger?: import("../runtime/retry-ledger").RetryLedger
 }

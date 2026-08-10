@@ -28,11 +28,18 @@ export interface SupervisorOptions {
   detectDaemon?: boolean
   /** 实时输出回调（流式消费者用；数据到达即调用，已截断）。 */
   onOutput?: (stream: "stdout" | "stderr", data: Buffer) => void
-  /** spawn 完成回调（cgroup attach 用）。 */
-  onSpawn?: (pid: number) => void
+  /** spawn 完成回调（cgroup attach 用）。返回值决定 launcher handshake
+   *  释放：true/undefined = 释放目标 exec；false = 阻塞（attach 未确认，
+   *  目标程序不得开始执行 —— LR2-0F 关闭"启动后再 attach"竞态）。 */
+  onSpawn?: (pid: number) => boolean | void
   /** bwrap seccomp BPF 文件：以 FD 3 打开传给子进程（bwrap --seccomp 3）。
    *  PR-4：bwrap --seccomp 协议要求 FD 数字，不是文件路径。 */
   seccompFdPath?: string
+  /** LR2-0F：launcher handshake（Linux only）—— 以包装进程启动目标，
+   *  包装进程先阻塞在 read；attach 确认（onSpawn 返回 true/undefined）
+   *  后写入释放令牌，包装进程才 exec 目标。目标程序在执行任何指令前
+   *  已进入 cgroup（消除 spawn 后 attach 的 fork/读秘密/占资源窗口）。 */
+  launcherHandshake?: boolean
 }
 
 export interface SupervisorResult {
@@ -55,7 +62,8 @@ export interface SpawnedProcess {
 
 export function spawnSupervised(options: SupervisorOptions): SpawnedProcess {
   const detached = process.platform !== "win32"
-  const stdinMode = options.stdin === "pipe" ? "pipe" : "ignore"
+  // LR2-0F：launcher handshake 需要 stdin pipe（释放令牌通道）。
+  const stdinMode = options.stdin === "pipe" || options.launcherHandshake ? "pipe" : "ignore"
   // PR-4：bwrap --seccomp 需要已打开的文件描述符（数字 FD）。
   // 约定 FD 3 为 seccomp 专用槽位：父进程打开 BPF 文件 → stdio[3] 继承。
   let seccompFd: number | undefined
@@ -64,7 +72,15 @@ export function spawnSupervised(options: SupervisorOptions): SpawnedProcess {
     seccompFd = openSync(options.seccompFdPath, "r")
     stdio[3] = seccompFd
   }
-  const proc = spawn(options.executable, options.args, {
+  let executable = options.executable
+  let args = options.args
+  if (options.launcherHandshake && process.platform === "linux") {
+    // 包装进程：read 阻塞（释放令牌）→ exec 目标。exec 替换进程自身，
+    // PID/进程组不变；目标 stdin 为 pipe（释放后 end → EOF ≈ closed）。
+    executable = "/bin/sh"
+    args = ["-c", 'read _ <&0; exec "$@"', "orcana-cell-launcher", options.executable, ...options.args]
+  }
+  const proc = spawn(executable, args, {
     cwd: options.cwd,
     env: options.env,
     stdio: stdio as import("node:child_process").StdioOptions,
@@ -79,7 +95,18 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
   const startedAt = Date.now()
   const limiter = createOutputLimiter(options.limits)
   const { proc, pid } = spawnSupervised(options)
-  options.onSpawn?.(pid)
+  // LR2-0F：launcher handshake —— attach 确认（onSpawn 返回 true/undefined）
+  // 后写入释放令牌；返回 false（attach 未确认）→ 目标程序阻塞在 read，
+  // 不执行任何指令（由取消/清理路径终止）。
+  const released = options.onSpawn?.(pid)
+  if (options.launcherHandshake && released !== false && pid > 0) {
+    try {
+      proc.stdin?.write("go\n")
+      proc.stdin?.end()
+    } catch {
+      // 管道已关（进程异常退出）—— 忽略，退出路径照常处理。
+    }
+  }
   const stdoutChunks: string[] = []
   const stderrChunks: string[] = []
   // PR-3：超限即杀 —— 一旦累计输出触及上限，立即终止进程树（不再等到
@@ -103,11 +130,25 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
     let timedOut = false
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
+    let drainTimer: ReturnType<typeof setTimeout> | undefined
+    // F4：父进程 exit 时刻实测的组内幸存者数（不等 stdio close）。
+    let orphansAtExit = 0
+    // GATE-TEST-01：wallTime 到期先于任何 finish 路径置位 —— exit/close/
+    // drain 回调（含 terminateTree 阻塞期间排队的事件）不得把 timeout 真值
+    // 覆盖成普通退出（修复前高负载下 SIGTERM→exit 时序偏移导致
+    // timedOut=false 的 flaky 根因）。
+    let timeoutPending = false
 
-    const finish = (exitCode: number | null, signal: string | null, orphans: number) => {
+    const finish = (
+      exitCode: number | null,
+      signal: string | null,
+      orphans: number,
+      outcome: { timedOut?: boolean; cancelled?: boolean } = {},
+    ) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      if (drainTimer) clearTimeout(drainTimer)
       options.abortSignal?.removeEventListener("abort", onAbort)
       resolve({
         exitCode,
@@ -115,8 +156,10 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
         stdout: stdoutChunks.join("") + finalizeOutput(limiter.state, "stdout"),
         stderr: stderrChunks.join("") + finalizeOutput(limiter.state, "stderr"),
         durationMs: Date.now() - startedAt,
-        timedOut,
-        cancelled,
+        // timeoutPending 优先 —— exit 路径（drain 窗口内 wallTime 已到期）
+        // 也必须如实报 timedOut。
+        timedOut: outcome.timedOut ?? timeoutPending ?? timedOut,
+        cancelled: outcome.cancelled ?? cancelled,
         outputLimitHit: limiter.exceeded(),
         orphanProcesses: orphans,
       })
@@ -124,8 +167,10 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
 
     const onAbort = () => {
       cancelled = true
-      terminateTree(pid)
-      finish(null, "aborted", 0)
+      // F4（ORPHAN_PROCESS）：取消后残留必须真实上报 —— 不硬编码 0。
+      // terminateTree 返回 SIGTERM→SIGKILL 后的实测扫描值，残留如实入 Receipt。
+      const report = terminateTree(pid)
+      finish(null, "aborted", report.processesRemaining, { cancelled: true })
     }
     options.abortSignal?.addEventListener("abort", onAbort, { once: true })
     if (options.abortSignal?.aborted) onAbort()
@@ -133,16 +178,30 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
     proc.on("error", () => {
       finish(null, "error", 0)
     })
+    proc.on("exit", (code, signal) => {
+      // F4：daemon 检测必须挂在父进程 exit（非 stdio close）—— 后台进程
+      // 持有管道时 close 被推迟到后台进程死亡，届时残留早已消失，close 时
+      // 扫描恒假 0。exit 时刻扫描进程组，得到真实幸存者数。
+      if (options.detectDaemon && pid > 0) orphansAtExit = countProcessGroup(pid)
+      // stdio 排水窗口：exit 后管道数据尾有短窗口到达；daemon 持有管道时
+      // close 永不触发 —— 窗口后照常 finish（防挂到 wallTime 误报 timeout）。
+      drainTimer = setTimeout(() => {
+        finish(code ?? null, signal ?? null, orphansAtExit, { timedOut: timeoutPending })
+      }, 150)
+    })
     proc.on("close", (code, signal) => {
-      // daemon 检测：父退出后进程组内的幸存者。
-      const orphans = options.detectDaemon && pid > 0 ? countProcessGroup(pid) : 0
-      finish(code ?? null, signal ?? null, orphans)
+      if (drainTimer) clearTimeout(drainTimer)
+      finish(code ?? null, signal ?? null, orphansAtExit, { timedOut: timeoutPending })
     })
 
     timer = setTimeout(() => {
+      // 置位必须早于 terminateTree —— 其同步阻塞（SIGTERM→grace→SIGKILL）
+      // 期间 exit/close 事件排队，随后 drain 回调读 timeoutPending 仍为真。
+      timeoutPending = true
       timedOut = true
-      terminateTree(pid)
-      finish(null, "timeout", 0)
+      // F4：超时终止后的残留同样如实上报（不再硬编码 0）。
+      const report = terminateTree(pid)
+      finish(null, "timeout", report.processesRemaining, { timedOut: true })
     }, options.wallTimeMs)
   })
 }

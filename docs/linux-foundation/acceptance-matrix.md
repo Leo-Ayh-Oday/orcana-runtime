@@ -1,5 +1,33 @@
 # Orcana Linux 原生执行底座 — 验收矩阵（LNXF-1.0）
 
+> 当前裁决入口（2026-08-10）：下方 LF/R/PR 表是历史阶段证据，不是当前
+> 发布候选的整体 PASS 声明。当前运行级能力与降级矩阵见
+> [current-status.md](current-status.md)。当前源码快照为
+> `fix/gate-control-plane` @ `76a90ef`；公开 npm/GitHub Release 仍为
+> `0.8.16`。
+
+## 当前总裁决
+
+| 门 | 当前状态 | 说明 |
+|---|---|---|
+| Linux component implementation | `PASS_WITH_OPEN_GAPS` | Broker、Bubblewrap、Podman、cgroup、seccomp、Receipt/Evidence 组件存在并有真实本地 lane |
+| Linux ordinary short-process wiring | `PASS_WITH_OPEN_GAPS` | `ProcessExecutor` 默认进入 enabled Broker；acquisition 注册前异常、run-state identity 和部分 cleanup/cancel 真值仍需关闭 |
+| Host Audit strong isolation | `FAIL_BY_DESIGN` | Host Audit 只能作为显式降级审计路径 |
+| Strict Profile silent downgrade | `MUST_REMAIN_ZERO` | `test/dependency/service/untrusted/evolution` 缺少所需边界时必须拒绝；不能以 Host Audit 冒充 |
+| service/MCP/LSP broker authority | `FAIL / PARTIAL` | ServiceCell 环境和 lease 已改进，但仍直接 spawn，不受 Broker/cgroup 统一治理 |
+| Landlock enforcement | `NOT_IMPLEMENTED` | 只有探测/规则接口；当前 WSL LSM 不可用 |
+| Egress proxy allowlist | `NOT_IMPLEMENTED_END_TO_END` | Podman 只接受 none/loopback；dependency 默认 proxy-allowlist 当前应 fail closed |
+| Workspace secret/bounded read | `PARTIAL` | projectRoot/symlink 边界已有测试；secret read 和真正 bounded reader 未闭环 |
+| Filesystem TOCTOU | `OPEN` | 严格 Profile 尚无 dirfd/openat2/renameat2 级关闭 |
+| Local real Bubblewrap | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；不外推到其他主机/提交 |
+| Local real Rootless Podman | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；不外推到其他主机/提交 |
+| Local delegated cgroup | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；每次运行仍需 attach/cleanup Evidence |
+| GitHub-hosted Linux lanes | `CI_BLOCKED_EXTERNAL` | billing lock 导致 job 0 steps；既不是代码 PASS，也不是代码 FAIL |
+| Current source release gate | `FAIL` | `bun run typecheck` 当前存在 `paused` Stop-hook 类型漂移；修复和全门禁前不可发布 |
+| npm/GitHub release convergence | `FAIL` | npm/Release `0.8.16`，`origin/main` `0.8.26.1`，修复线 `0.8.26.2` |
+
+## 历史阶段记录
+
 | 阶段 | 验收门 | 状态 | 依据 |
 |---|---|---|---|
 | LF-0 | BASELINE_LOCKED: PASS / KERNEL_CHANGE_REQUIRED: NO / DIRECT_PROCESS_ENTRY_COUNT: RECORDED | 待做 | — |
@@ -82,3 +110,29 @@ v0.8.15 保留（不删除），作为组件/契约层基线；生产接线闭�
 | PR-8 | LF-8 评测重写（真实攻击场景、无委托如实 FAIL、--strict 禁 SKIP、Receipt→Evidence→Gate 端到端） | **完成** (0f644c2) |
 
 **修复线状态（2026-08-06）**：PR-1~PR-8 全部落地。本机评测 32 pass / 4 fail（CGROUP_DELEGATION_REQUIRED，无委托机器如实红）/ 1 skip（podman 未装）。真机 lane 需以 `bun run eval:linux --strict` 跑通（bwrap + rootless podman + cgroup 委托）。全量门禁：typecheck/build/pack/diff-check 全绿；仅剩另一窗口 RC-13 的 revisePlan 语义问题。与基础设施修复合流后以 **0.8.17** 发布。
+
+## Linux Execution Authority Closure（LNXF R2.1，2026-08-07）
+
+> 计划：`docs/linux-foundation/production-closure-r2-plan.md`（三源审计合并：远端两轮独立审计 A + 本地全库审计 B + 交叉裁决实证 C）。
+
+**归因修正（2026-08-07 本机实测）**：
+- 此前"本机 4 fail = CGROUP_DELEGATION_REQUIRED（无委托机器如实红）"归因修正：
+  - 45eba78 前：委托探测漏检 `user@UID.service`（旧判据依赖 `~/.config/systemd/user` 目录存在性）—— 属实；
+  - 45eba78 后实测：`detectDelegatedRoot()` 正确返回 systemd-user 委托（LX-002 PASS），但 **LX-016~019 新 fail**（`cgroup attribute missing: cell/memory.max`）—— 根因为 `createCell` 独立调用时授权链断口（agent 层 `subtree_control` EINVAL 被 `enableControllers` catch 静默吞掉；生产 broker 路径先 createRun/createAgent 不受影响）。`probeWritable` 恒假判断经实测（cgroupfs 含控制文件可 rmdir）**撤回**，保留真实缺陷：委托探测不充分 + `CAPABILITY_PROBE_OVERCLAIMS`。
+  - 2026-08-07 本机评测：**31 pass / 5 fail / 1 skip**（LX-016~019 授权链 + LX-036 authority 环境；LX-030 podman 未装 skip）。
+
+**0.8.26.3 阶段（R2-0 + PR-E1 + 12.1 seccomp）**：
+
+| 项 | 状态 | 依据 |
+|---|---|---|
+| R2-0 缺陷登记与归因修正 | 本表 | 本小节 |
+| E1.1 `.codejournal` command 规则 | **完成** | 默认禁用（`ORCANA_JOURNAL_ALLOW_COMMAND=1` opt-in）+ 最小 env + 参数数组（src/agent/journal.ts） |
+| E1.2 service_start env 收紧 | **完成** | minimalHostEnv（src/tools/service.ts） |
+| E1.3 MCP server env 过滤 | **完成** | minimalHostEnv(env) 拒绝键过滤（src/tools/mcp.ts） |
+| E1.4 LSP env 收紧 | **完成** | minimalHostEnv（src/lsp/client.ts） |
+| E1.5 astgrep 参数数组化 | **完成** | spawnSyncLegacy 参数数组 + 最小 env（src/ripple/astgrep-provider.ts，22 测试全过） |
+| E1.6 worktree git 暂存登记 | **完成** | args 数组无注入；git Broker 化 PR-13 |
+| E1.7 verification collector 死代码登记 | **完成** | 无生产调用方，待删除/迁移 |
+| E1.8 门禁扩展（HOST_PROCESS_BYPASS） | **完成** | AST 门禁追踪 legacy 包装层 + 暂存 allowlist（process-core.test.ts 40 pass） |
+| E1.9 Job Object 声明撤回 | **完成** | track() 零调用 → tier full→partial + note（src/sandbox/capability.ts） |
+| 12.1 seccomp BPF jt/jf 反转 | **完成** | TDD：新增 seccomp-bpf.test.ts（BPF 解码+模拟，修复前 7 fail → 修复后 7 pass） |

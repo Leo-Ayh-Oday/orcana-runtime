@@ -23,7 +23,7 @@
 </p>
 
 > [!IMPORTANT]
-> Orcana Runtime 当前是一套可运行、研究级的 Coding Agent Runtime，而不是已经成熟的通用 Agent 平台。项目优先收敛单 Agent 的状态、执行、验证和恢复语义，再逐步扩展 Durable Execution、Typed Graph 与受约束的 Multi-Agent。
+> Orcana Runtime 当前是一套可运行、研究级的 Coding Agent Runtime，而不是已经成熟的通用 Agent 平台。项目已经建立单 Agent 的状态、执行、验证与恢复基础，并实现 G0-G6 Typed Execution Graph 核心；当前工作是闭环 Durable Execution、Graph 权威边界和受约束 Multi-Agent。
 
 ## Orcana Runtime 是什么？
 
@@ -76,7 +76,7 @@ set DEEPSEEK_API_KEY=sk-your-key-here
 
 Provider、模型、预算、权限、沙箱和 MCP 等高级配置，请参考：
 
-- [ORCANA.md](./ORCANA.md)
+- [中文使用指南](./docs/awesome-deepseek-agent/orcana.zh-CN.md)
 - [settings.example.json](./settings.example.json)
 - [.env.example](./.env.example)
 
@@ -315,6 +315,12 @@ Orcana 具备多层上下文管理能力，包括：
 
 ## 当前项目状态
 
+> [!IMPORTANT]
+> 当前公开版本与源码版本已经分叉：npm 和 GitHub Latest Release 仍为
+> `0.8.16`，`origin/main` 声明 `0.8.26.1`，活动修复线声明尚未发布的
+> `0.8.26.2` 候选。修改源码中的版本号不等于 npm 包或 GitHub Release
+> 已经发布。
+
 | 子系统 | 当前状态 | 说明 |
 |---|---|---|
 | CLI / TUI | 可运行 | 支持交互式与单次任务入口 |
@@ -329,10 +335,10 @@ Orcana 具备多层上下文管理能力，包括：
 | Interrupt / Resume | 已实现显式等待点恢复 | 不是任意调用栈或指令级恢复 |
 | Trace / Snapshot | 已实现 | 继续补足稳定重放和 Durable Execution 语义 |
 | Tool Runtime 2.0 (RT-1..13) | 已实现 | 契约、统一策略链、Patch/进程/Git/repo map/验证工具、SSRF 硬化 Web、MCP 信任策略、Capability Router、TL-001..020 评测 |
-| Linux Sandbox | 部分执行 | 当前不能视为完整安全边界，见下文 |
-| Typed Execution Graph | 未完成 | 当前仍以单主执行节点为核心 |
+| Linux Sandbox | 真实后端已实现，强制能力取决于宿主 | Linux 短进程已进入 Broker；Host Audit 仍是降级路径，service/MCP/LSP 和若干生命周期边界尚未完全由 Broker 管理，见下文 |
+| Typed Execution Graph | 核心已实现，权威闭环中 | `src/workflow/` 已包含类型契约、编译/校验、DAG 调度、读写串行、结果缓存/重放、修复循环、动态编译、中断与 Harness 节点执行；严格重放、不可变审批、缓存溯源以及资源/重试权威仍需闭环 |
 | Multi-Agent | 延后 | 单 Agent Runtime 语义稳定后再进入受约束 Subagent 阶段 |
-| Recursive Self-Evolution | 研究方向 | 不应被视为 v0.4 已稳定交付的能力 |
+| Recursive Self-Evolution | 研究方向 | 不应被视为当前已经稳定交付的能力 |
 
 ## Orcana 目前不是什么
 
@@ -341,7 +347,7 @@ Orcana 具备多层上下文管理能力，包括：
 - 已成熟的通用 Agent 平台；
 - 能证明任意代码修改绝对正确的系统；
 - 完整的 Durable Execution Engine；
-- 支持任意 fan-out、fan-in 和 join 的通用 Graph Runtime；
+- 已具备生产级 exactly-once 语义的完全分布式、通用 Graph Runtime；
 - 多个 Agent 共享工作区自由写入的 Multi-Agent Framework；
 - Linux 内核级安全沙箱的完整替代品；
 - 已完成的递归自我进化系统；
@@ -353,39 +359,35 @@ Orcana 当前最适合被理解为：
 
 ## Linux 优先开发与沙箱状态
 
-Orcana 当前的主要开发和运行环境正在转向 Linux。
+Linux 现在是权威开发与运行环境。普通 Linux 短进程路径已经是：
 
-现有跨平台沙箱能力包括：
+```text
+ProcessExecutor → LinuxExecutionBroker → Host Audit | Bubblewrap | Rootless Podman
+```
 
-- 环境变量过滤；
-- 命令超时；
-- 危险命令和权限规则；
-- 工作区执行前后差异审计；
-- 取消后的进程终止尝试。
+这并不代表所有运行都具有同一种安全等级：
 
-Windows 还具备 Job Object 进程树控制；Linux/macOS 当前仍属于降级路径，不能宣称具备完整的文件系统、网络、进程和资源隔离。
+- **Host Audit** 提供环境过滤、超时/进程组处理和执行后文件差异审计；
+  它是可观察的降级路径，不是文件系统或网络安全边界。
+- **Bubblewrap** 在宿主支持非特权 namespace 且真实后端实际运行时，可以
+  提供 namespace、挂载、空 Home 和网络隔离。
+- **Rootless Podman** 可通过 digest 审批镜像、显式挂载和默认断网形成更
+  严格的容器边界，但仍共享宿主内核，不等于 VM。
+- **cgroup v2** 只有在委托、进程 attach 和 cleanup 被真实观测后才能
+  宣称生效；安装了二进制或写入了配置值都不是充分证据。
+- **Landlock** 尚未进入当前生产执行路径，并且当前 WSL2 开发内核不可用。
+- service、MCP、LSP 长期进程使用过渡期 `ServiceCell`：环境已净化、可记录
+  lease，但尚未进入 Broker/cgroup 权威，因此不能套用普通 Cell 的强隔离
+  声明。
 
-在 Linux 沙箱重构完成前：
+`inspect`、`build` 可显式降级为 Host Audit；`test`、`dependency`、
+`service`、`untrusted`、`evolution` 是严格 Profile，缺少必要边界时必须
+fail closed。某次运行实际获得了什么边界，应以该次 `SandboxReceipt` 为
+权威，不能仅依据启动横幅或单元测试推断。
 
-- 不要把 Orcana 直接运行在包含高价值凭据的宿主环境；
-- 不要向不可信仓库或脚本开放无限制 Shell；
-- 高风险场景建议运行在额外容器或隔离环境中；
-- Sandbox 降级必须在 Trace 和 Evidence 中被明确记录；
-- 缺失必要隔离能力时，高风险执行应 fail closed，而不是静默回退宿主执行。
-
-计划中的 Linux 沙箱方向包括：
-
-- 统一流式和非流式 Shell 执行管线；
-- 进程组和完整进程树清理；
-- Capability Probe 与 `orcana doctor sandbox`；
-- 只读工作区和声明式可写路径；
-- 默认关闭网络；
-- cgroup v2 资源限制；
-- Bubblewrap 低延迟隔离后端；
-- Rootless Podman 严格执行后端；
-- 后续 Landlock / seccomp 原生加强层。
-
-安全模型与已知限制见 [SECURITY.md](./SECURITY.md)。
+完整后端/Profile 矩阵、WSL 实测、已知缺口和声明规则见
+[Linux 沙盒当前状态与降级矩阵](./docs/linux-foundation/current-status.md)。
+更广的安全模型见 [SECURITY.md](./SECURITY.md)。
 
 ## 配置目录
 
@@ -439,18 +441,19 @@ bun run typecheck
 ### 测试
 
 ```bash
-# 默认测试门禁
-bun test
-
-# 仓库定义的测试脚本
+# 默认仓库门禁（Provider/Live 测试保持显式隔离）
 bun run test
 
-# 集成测试
+# 不含 Provider 的集成测试
 bun run test:integration
 
-# 完整测试集合
+# 完整本地门禁别名；不会执行 Live/Provider 测试
 bun run test:all
 ```
+
+付费 Provider 测试只通过受保护默认分支上的手动 `Live Provider Lane`
+workflow 执行。`code_as_action.test.ts` 在模型生成代码尚未获得无凭据、
+网络隔离的执行沙箱前继续保持阻断。
 
 ### 构建与发布检查
 
@@ -466,7 +469,9 @@ npm pack --dry-run
 
 | 文档 | 内容 |
 |---|---|
-| [ORCANA.md](./ORCANA.md) | 使用、配置和项目入口文档 |
+| [中文使用指南](./docs/awesome-deepseek-agent/orcana.zh-CN.md) | 安装、Provider 配置与首次运行 |
+| [当前状态](./docs/status.md) | 公开/源码版本、能力状态与发布门禁 |
+| [Linux 沙盒状态](./docs/linux-foundation/current-status.md) | 后端强制、降级矩阵与声明规则 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Runtime、Agent Loop、Gate 与子系统架构 |
 | [SECURITY.md](./SECURITY.md) | 权限、凭据、沙箱和安全边界 |
 | [CHANGELOG.md](./CHANGELOG.md) | 版本变更记录 |
@@ -490,7 +495,7 @@ Orcana 采用"先收敛执行语义，再增加执行单元"的路线。
 - Linux Shell 与 Sandbox 基础一致性；
 - 将 Runtime 关键路径纳入稳定 CI。
 
-### 下一阶段：Durable Execution
+### 当前闭环线：Durable Execution
 
 重点包括：
 
@@ -502,18 +507,16 @@ Orcana 采用"先收敛执行语义，再增加执行单元"的路线。
 - 恢复时避免重复执行副作用；
 - Trace Replay 和 Runtime Evaluation Lab。
 
-### 后续：Typed Execution Graph
+### 当前：Typed Execution Graph 权威闭环
 
-重点包括：
+G0-G6 核心已实现并有专项测试。当前重点不是从零构建 Graph，而是完成生产权威闭环：
 
-- 类型化节点和边；
-- Ready Queue；
-- 条件路由；
-- 显式 Join；
-- 有界循环；
-- 节点级 Checkpoint；
-- 只读并行；
-- 单写入提交通道。
+- 零实时副作用的严格 Replay；
+- 溯源完整的缓存身份与失效；
+- 与精确执行绑定的不可变审批授权；
+- 权威资源、重试与活性预算；
+- 跨进程崩溃的 Durable Checkpoint / Recovery；
+- 不绕过现有 Gate 的更广生产集成。
 
 ### 再后续：Bounded Multi-Agent
 
@@ -559,7 +562,7 @@ Orcana 采用实现驱动的研究方式：
 - 不把一次测试通过写成普遍正确性证明；
 - 不把模型自评等同于独立验证；
 - 不把降级沙箱描述为完整安全边界；
-- 不把节点依赖计划描述为完整 Graph Runtime；
+- 不把已实现的类型化 Graph 核心混同为已完成的分布式或 exactly-once 生产 Runtime；
 - 不把多个角色提示词描述为成熟 Multi-Agent；
 - 性能、质量和可靠性结论应附带可复现的评测条件。
 

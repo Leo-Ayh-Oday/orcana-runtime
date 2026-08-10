@@ -38,7 +38,7 @@ describe("R4 scheduler ledger", () => {
       maxConcurrentCells: 1,
       capacity: { cpuQuota: 1000, memoryBytes: 512 * 1024 * 1024, pids: 100, networkSlots: 1, tempBytes: 1024 * 1024 * 1024, concurrentCells: 1 },
     })
-    const run = await runScheduler(spec, tools(), { maxParallel: 3, ledger })
+    const run = await runScheduler(spec, tools(), { maxParallel: 3, ledger, projectRoot: dir })
     expect(run.status).toBe("done")
     expect(run.results).toHaveLength(3)
     expect(run.results.every(r => r.status === "done")).toBe(true)
@@ -53,7 +53,7 @@ describe("R4 scheduler ledger", () => {
       specId: "r4-noledger",
       nodes: [{ id: "tool:1", handler: "read_file", input: { path: join(dir, "a.txt") }, dependsOn: [] }],
     }
-    const run = await runScheduler(spec, tools(), { maxParallel: 2 })
+    const run = await runScheduler(spec, tools(), { maxParallel: 2, projectRoot: dir })
     expect(run.status).toBe("done")
   })
 })

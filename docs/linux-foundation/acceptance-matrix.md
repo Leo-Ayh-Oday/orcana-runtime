@@ -1,5 +1,33 @@
 # Orcana Linux 原生执行底座 — 验收矩阵（LNXF-1.0）
 
+> 当前裁决入口（2026-08-10）：下方 LF/R/PR 表是历史阶段证据，不是当前
+> 发布候选的整体 PASS 声明。当前运行级能力与降级矩阵见
+> [current-status.md](current-status.md)。当前源码快照为
+> `fix/gate-control-plane` @ `76a90ef`；公开 npm/GitHub Release 仍为
+> `0.8.16`。
+
+## 当前总裁决
+
+| 门 | 当前状态 | 说明 |
+|---|---|---|
+| Linux component implementation | `PASS_WITH_OPEN_GAPS` | Broker、Bubblewrap、Podman、cgroup、seccomp、Receipt/Evidence 组件存在并有真实本地 lane |
+| Linux ordinary short-process wiring | `PASS_WITH_OPEN_GAPS` | `ProcessExecutor` 默认进入 enabled Broker；acquisition 注册前异常、run-state identity 和部分 cleanup/cancel 真值仍需关闭 |
+| Host Audit strong isolation | `FAIL_BY_DESIGN` | Host Audit 只能作为显式降级审计路径 |
+| Strict Profile silent downgrade | `MUST_REMAIN_ZERO` | `test/dependency/service/untrusted/evolution` 缺少所需边界时必须拒绝；不能以 Host Audit 冒充 |
+| service/MCP/LSP broker authority | `FAIL / PARTIAL` | ServiceCell 环境和 lease 已改进，但仍直接 spawn，不受 Broker/cgroup 统一治理 |
+| Landlock enforcement | `NOT_IMPLEMENTED` | 只有探测/规则接口；当前 WSL LSM 不可用 |
+| Egress proxy allowlist | `NOT_IMPLEMENTED_END_TO_END` | Podman 只接受 none/loopback；dependency 默认 proxy-allowlist 当前应 fail closed |
+| Workspace secret/bounded read | `PARTIAL` | projectRoot/symlink 边界已有测试；secret read 和真正 bounded reader 未闭环 |
+| Filesystem TOCTOU | `OPEN` | 严格 Profile 尚无 dirfd/openat2/renameat2 级关闭 |
+| Local real Bubblewrap | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；不外推到其他主机/提交 |
+| Local real Rootless Podman | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；不外推到其他主机/提交 |
+| Local delegated cgroup | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；每次运行仍需 attach/cleanup Evidence |
+| GitHub-hosted Linux lanes | `CI_BLOCKED_EXTERNAL` | billing lock 导致 job 0 steps；既不是代码 PASS，也不是代码 FAIL |
+| Current source release gate | `FAIL` | `bun run typecheck` 当前存在 `paused` Stop-hook 类型漂移；修复和全门禁前不可发布 |
+| npm/GitHub release convergence | `FAIL` | npm/Release `0.8.16`，`origin/main` `0.8.26.1`，修复线 `0.8.26.2` |
+
+## 历史阶段记录
+
 | 阶段 | 验收门 | 状态 | 依据 |
 |---|---|---|---|
 | LF-0 | BASELINE_LOCKED: PASS / KERNEL_CHANGE_REQUIRED: NO / DIRECT_PROCESS_ENTRY_COUNT: RECORDED | 待做 | — |

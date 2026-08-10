@@ -1,87 +1,114 @@
-# Orcana Strong Single v1.0 Status Matrix
+# Orcana Current Status
 
-Updated: 2026-08-03
+Updated: 2026-08-10
+Source snapshot: `fix/gate-control-plane` @ `76a90ef143d97b0b0466cc118d511a3ea1f78323`
 
-Snapshot: `codex/transaction-evidence-binding` → v0.4.0 (ALK 减重 L0–L7 + Harness 2.0 H0–H8 landed). Published npm baseline was `0.3.4`.
+This file is the conservative current-status entry point. Historical plans and
+completion records describe what was built at a point in time; they do not
+override current code, current tests, real runtime evidence or a later audit.
 
-This matrix maps the Strong Single v1.0 seed plan to the current codebase. It is intentionally conservative: a module is `Done` only when the code, tests, and runtime wiring are present.
+## Version and publication state
 
-## Summary
+| Surface | Version | Meaning |
+|---|---:|---|
+| npm `latest` | `0.8.16` | Current public package |
+| GitHub Latest Release | `v0.8.16` | Current public Release/tag |
+| `origin/main` | `0.8.26.1` | Unreleased source |
+| Active repair line | `0.8.26.2` | Unreleased candidate |
 
-| Area | Status | Current evidence | Gap |
-|------|--------|------------------|-----|
-| Runtime bootstrap | Done | `src/runtime/bootstrap.ts`, shared CLI/TUI runtime assembly | Keep future UI entrypoints on this path |
-| Runtime event boundary | Partial | `src/runtime/event-bus.ts`, `src/runtime/controller.ts`, `src/runtime/control-plane.ts`, `tests/runtime_event_bus.test.ts` | Slash parsing/resolution is shared; command execution still needs full CLI/TUI runtime controller wiring |
-| File state / Freshness | Done | `src/file-state/*`, `src/tools/registry.ts`, managed file-tool transactions, `tests/file_state.test.ts`, `tests/file_tools_file_state.test.ts` | Keep future write tools on the contract preflight plus approved-snapshot transaction boundary; `rollback_transaction` remains a dedicated recovery policy |
-| HookSystem 2.0 | Done | `src/hooks/index.ts` accumulates warnings, chains replacements, fail-closes handler exceptions, and supports lifecycle events | Keep future hook events on this shared implementation |
-| Default hooks | Done | `src/hooks/defaults.ts` creates safety, side-effect, write-observation, and journal hooks; the public factory keeps its strict default, while runtime bootstrap explicitly selects warn mode because FreshnessGate owns enforcement | Keep noncanonical callers on strict unless they install the contract gate |
-| TaskPacket / MasterPlan | Partial | `src/agent/task-packet.ts`, `src/agent/master-plan.ts`, `src/agent/plan-validator.ts`, `tests/task_packet.test.ts` | Zod adapter is intentionally deferred while the project has no Zod dependency; keep future packet changes on the validated schema path |
-| ModeContract | Done | `src/agent/mode-contract.ts`, `src/agent/runtime-context.ts`, `src/agent/loop.ts`, `tests/mode_contract.test.ts`, `tests/runtime_agent_context.test.ts` | Active mode and adjacent runtime state are isolated per concurrent agent run; keep future mode changes routed through shared transition context |
-| Completion / Evidence | Done | `src/agent/completion-orchestrator.ts`, `src/agent/evidence-ledger.ts`, `src/agent/evidence-staleness.test.ts`, `src/agent/rollback-evidence.test.ts`, `tests/completion_orchestrator.test.ts`, `tests/command_file_coverage.test.ts` | Latest-result, write-generation freshness, fixed built-in verifier identity, unmanaged-write invalidation, authoritative commit-history identity, SS-Next-2B rollback-aware invalidation, and **command-to-file coverage** are enforced: shell/run_process writes record exact paths; a passing `run_targeted_verification` covers them; the completion gate relaxes the binding requirement only when every unmanaged write is covered (no deadlock), while L1/L2 stay hard. Finer-grained invalidation remains deferred |
-| PatchTransaction / Rewind | Partial | `src/agent/patch-transaction.ts`, `src/tools/transaction.ts`, `src/agent/rewind.ts`, related tests | Approved base hashes, new-file absence, non-file targets, symlink parents, partial-conflict rollback, and committed transaction evidence snapshots are guarded; `rollback_transaction` can still leave pre-rollback evidence eligible because it advances neither write generation nor history fingerprint, so rollback-aware invalidation is a hard SS-Next-2B gap |
-| Tool contract / Risk / Permission | Partial | `src/tools/tool-contract.ts`, `src/tools/builtins.ts`, `src/agent/tool-risk.ts`, `src/agent/permission.ts`, `tests/tool_contract.test.ts`, `tests/tool_policy.test.ts` | The immutable ToolDef-derived projection now drives freshness preflight; broader ToolPolicy migration and permission UX remain incomplete |
-| Provider / ModelRouter | Partial | `src/provider/router.ts`, `src/provider/capabilities.ts`, `src/provider/stream-lifecycle.ts`, runtime model config and provider tests | Built-in metadata now derives from the config catalog and provider aborts close safely; complete purpose/cost trace coverage is still pending |
-| Replay harness | Done | `src/agent/replay-harness.ts`, `tests/replay_harness.test.ts`, 70 deterministic replay fixtures, CI core gate, `evals/harness/` H12 scripted E2E suite (12 scenarios, all passing), `evals/mini-benchmark.ts` (PR-8.3) | E2E replay runs via `bun run eval:replay` (12/12, rubric + floors + history); mini benchmark runs via `bun run bench:mini` with persisted baseline and regression gate (pass@1 100%, false done rate 0%) |
-| TUI / CLI operator UX | Partial | TUI tests, command dispatcher, command shelf, composer, runtime panels | Plan approval and evidence report UX still need completion checks |
-| Observability | Done | `AgentRunTrace`, gate telemetry, runtime panels, `src/telemetry/taxonomy.ts` | PR-10.1 taxonomy is landed: finite 9-category event classification (lifecycle/model/tool/gate/verification/evidence/workflow/error/internal), canonical event table, category summaries, unknown-type discoverability |
-| Docs / release | Partial | `README.md`, `ARCHITECTURE.md`, `SECURITY.md` exist; `orcana doctor` landed (PR-10.4) | v1.0 architecture/status/security doc synchronization remains |
+There is no automatic npm/GitHub Release workflow. A `package.json` version is
+not a release until a clean candidate passes the release gates, receives owner
+authorization, is tagged, published to npm, created as a GitHub Release and
+installed back from the public registry for smoke verification.
 
-## Strong Single PR Mapping
+## Status vocabulary
 
-| PR | Status | Notes |
-|----|--------|-------|
-| PR-0.1 Status Matrix | Done | This document is the baseline status matrix. |
-| PR-0.2 Baseline CI | Done | CI is split into `typecheck`, `core`, `test`, and `build`; `test:core` runs hook/runtime plus 70-case replay gates. |
-| PR-0.3 Runtime control boundary | Done | Runtime control-plane parsing/resolution is shared by controller, TUI dispatcher, and CLI command registry; unknown slash commands pass to the agent and unsafe local commands are blocked while running. |
-| SS-Next-1A Canonical ToolContract projection | Done | `buildTool()` derives one immutable, handler-free contract from each existing `ToolDef`; the frozen 24-tool catalog has full-contract fingerprints, MCP provenance defaults conservatively, and runtime order/behavior remain unchanged. This slice is descriptive only. |
-| SS-Next-1B Canonical FreshnessGate enforcement | Done | `buildTool()` fail-closes malformed/unread/partial/truncated/stale/deleted targets, carries an async approved content/hash snapshot into managed writes, blocks unsupported streaming freshness tools, and emits structured gate metadata into ToolExecutionLedger. `edit_fim` now enters PatchTransaction before disk commit. |
-| SS-Next-2A Authoritative transaction identity binding | Done | Successful `PatchTransaction` commits update a constant-size, runtime-owned history fingerprint in the per-run execution context. Only untampered descriptors backed by the fixed built-in verifier allowlist can emit verification; the runtime parses their core result and overwrites all authority stamps. Any observed runtime write requires the exact commit-history snapshot, including shell/shadow writes that bypass PatchTransaction. Command-to-file coverage and rollback-aware invalidation are intentionally deferred to SS-Next-2B. |
-| Harness PR-2.1 FileState/Freshness core | Done | `FileStateLedger`, file fingerprinting, and `validateFreshnessForEdit()` cover fresh/full/partial/truncated/deleted/create cases without touching TUI. |
-| Harness PR-2.2 FileState tool observation | Done | `read_file` records full/partial/truncated baselines; `write_file`, `edit_file`, `multi_edit`, and `edit_fim` record fresh agent-write baselines after successful disk commits. |
-| Harness PR-2.3 FileState runtime isolation | Done | `agentLoop` binds its async generator lifecycle to a per-run file-state context; concurrent runs no longer share ledgers or write generations, while direct tool calls retain compatibility fallback state. |
-| Runtime active-state isolation | Done | A neutral async runtime context isolates ModeContract, shell sandbox, patch context, context-budget mode, cascade files, and checkpoint scheduling; early iterator close disposes the run sandbox through a single `finally` cleanup path. |
-| Runtime cancellation | Done | Run-level abort reaches providers and tools; pre-aborted runs skip work, legacy Promise/stream tools cannot retain the loop, shell abort kills its process tree, TUI cleanup actively aborts, and Stop hooks receive one terminal reason. Third-party tools should cooperatively consume `ToolExecutionContext.abortSignal` to release their own resources. |
-| Harness PR-2.x FileState/Freshness enforcement | Done | Canonical contract requirements now enforce stale/partial/truncated/deleted/unread targets through one shared preflight; approved snapshots are re-bound at managed write/commit boundaries, fresh rereads recover stale state, and runtime bootstrap explicitly places legacy writeGuard in observe mode. |
-| PR-1.1 HookOutput semantics | Done | `HookSystem` supports warning accumulation, block/replace priority, chained Pre/Post replacements, fail-closed handler exceptions, and dedicated regressions. |
-| PR-1.2 writeGuard before/after | Done | The public hook factory retains strict compatibility semantics; canonical runtime bootstrap explicitly uses warn/observe mode and delegates the actual block to FreshnessGate. |
-| PR-1.3 CLI/TUI default hooks | Done | `createDefaultHookSystem()` exists and runtime bootstrap uses it. Future CLI/TUI entrypoints should keep using runtime bootstrap instead of manual hook assembly. |
-| PR-1.4 Side-effect policy hook | Done | Shell side-effect detection now runs through `hooks:side-effect-policy` in the default hook stack instead of ad hoc loop preflight code. |
-| PR-2.1 TaskPacket schema | Done | `TASK_PACKET_JSON_SCHEMA` and `parseTaskPacketJson()` validate unknown JSON fail-closed before TaskPacket execution; invalid verification kinds now block. |
-| PR-2.2 MasterPlan mode auto-flow | Done | `loop.ts` feeds MasterPlan node status, error count, ripple obligations, evidence presence, and plan completion into `shouldTransitionMode()`; completed plans now synchronize to report mode before final delivery. |
-| PR-2.x MasterPlan / TaskPacket / ModeContract | Done | TaskPacket schema validation, MasterPlan packet wiring, plan validation, and ModeContract auto-flow are present. Zod adapter remains intentionally deferred because the project does not depend on Zod. |
-| PR-3.1 Final truthfulness gate | Done | `CompletionOrchestrator` now fail-closes final-round truthfulness contradictions and checks implementation claims against write/changed-file evidence. |
-| PR-3.2 narrow_edit evidence path | Done | Verified-write auto-complete now checks structured evidence inside `checkNarrowEditCompletion()` before returning completion text; `loop.ts` no longer has a separate `canClaimDone()` handoff. |
-| PR-3.x Completion / Evidence | Partial | Final completion routes through `CompletionOrchestrator`; latest failed re-verification, post-verification writes, unmanaged observed writes, and commit-history fingerprint mismatches invalidate old evidence. Fixed built-in verifier identity and conservative shell command recognition are enforced; command-to-file coverage, rollback-aware invalidation, and scoped invalidation remain incomplete. |
-| PR-4.x Patch / Rewind | Done | State machine and rewind modules exist, successful commits feed the authoritative evidence snapshot, and **SS-Next-2B** rollback-aware invalidation is landed: `rollback_transaction` (and the commit-failure auto-revert paths) now advance the write-generation (L2) and the committed-transaction evidence state (L3) so pre-rollback evidence can never satisfy the completion gate, while the binding stays authoritative for fresh re-verification (no deadlock). |
-| PR-5.x Safety | Partial | Secret-path rules now share the transaction-layer canonical patterns and risk messages omit sensitive payloads. Permission UX, redaction persistence coverage, and sandbox capability still need unification. |
-| PR-6.x Provider | Partial | Registry metadata derives from the canonical config catalog and provider streams close cleanly on abort. Structured output, transcript, and purpose/cost trace enforcement remain incomplete. |
-| PR-7.x Replay / CI | Done | 70-case deterministic replay exists with a CI core gate; H12 scripted E2E replay runs 12/12 scenarios through the real AgentHarness with rubric evaluation; PR-8.3 mini benchmark (pass@1 / false done rate / cost) runs offline with a persisted baseline and regression gate. |
-| PR-8.x TUI / CLI | Partial | Large TUI surface exists and has high targeted test coverage; final plan/evidence UX still needs acceptance gates. |
-| PR-9.x Observability | Done | Gate/runtime telemetry exists; PR-10.1 event taxonomy (9 categories, canonical event table, summarize, unknown-type discovery) is landed and tested; finer-grained evidence invalidation intentionally remains the conservative global write-generation (L2) by design. |
-| PR-10.x Docs / Release | Done | `orcana doctor` (PR-10.4) is landed (version, runtime, config, model/auth, concurrent provider probes, sandbox matrix, MCP status, paths; `--json`; CI exit codes). ARCHITECTURE.md status table and SECURITY.md are synchronized with the v1.0 closure facts (PR-10.2/10.3): module legend matches status.md, evidence-chain invalidation (rollback + command-to-file), FreshnessGate, MCP default-untrusted, redaction boundary. |
+| Label | Meaning |
+|---|---|
+| `IMPLEMENTED` | Production code and focused tests exist |
+| `PARTIAL` | Some production wiring or authority/lifecycle edge remains open |
+| `LOCAL_REAL_VERIFIED` | A named local host executed the real backend/lane |
+| `DEGRADED` | Work executed without the requested strong boundary |
+| `ENV_BLOCKED` | Required host capability, credential or service is unavailable |
+| `CI_BLOCKED_EXTERNAL` | Hosted job never started; no code verdict is possible |
+| `RELEASED` | npm, tag, GitHub Release and public-install smoke all agree |
 
-## Current Validation Baseline
+## Current subsystem matrix
 
-These commands were used while creating this matrix:
+| Subsystem | Status | Current truth / open boundary |
+|---|---|---|
+| CLI / TUI | `IMPLEMENTED`, baseline repair required | Entry points exist, but the current committed source snapshot has a `paused` Stop-hook TypeScript union mismatch; do not call it release-ready yet |
+| Agent Kernel / Harness | `IMPLEMENTED`, converging | Lifecycle, outcomes, budgets, traces, persistence and interrupts exist; authority is still split across several layers |
+| Provider finish semantics | `PARTIAL` | Truncation/retry work exists, but finish-reason normalization, complete-vs-partial tool-call preservation and output/thinking reserve require current-code audit |
+| Loop progress / retry | `PARTIAL` | ProgressGovernor and run-scoped retry ledger exist; the Infrastructure Closure plan still requires one physical-request budget and bounded no-progress/truncation ladders to be re-verified |
+| Workspace file I/O | `PARTIAL` | Relative paths bind to `projectRoot`, cross-project and symlink escapes have tests; direct `TrustedExecutionAuthority.workspace.hostRoot` binding, secret-read policy and bounded large-file reads remain open |
+| Patch / filesystem write | `PARTIAL` | Freshness and transaction guards exist; strict Linux TOCTOU closure still lacks dirfd/openat2/renameat2-like enforcement |
+| Linux short-process authority | `IMPLEMENTED`, transaction gaps open | Normal Linux `ProcessExecutor` uses the Broker in enabled mode; acquisition/release before registry publication and some run-state identity/cleanup paths still require closure |
+| Linux Bubblewrap backend | `LOCAL_REAL_VERIFIED`, host-dependent | Real local lane has run; every claim still requires the run Receipt and no relevant degradation |
+| Linux Rootless Podman backend | `LOCAL_REAL_VERIFIED`, host-dependent | Real local lane has run; container is not a VM and depends on rootless/image policy readiness |
+| Linux cgroup v2 | `LOCAL_REAL_VERIFIED`, host-dependent | Delegated local lane has run; configured limits do not prove attachment/cleanup for another run |
+| Host Audit | `DEGRADED` | Explicit environment, timeout/process group and post-hoc PathGuard only; never a filesystem/network isolation boundary |
+| Landlock | `PARTIAL` / unavailable on current WSL | Probe/rule interfaces exist, production enforcement is not wired, current WSL2 does not expose the LSM |
+| seccomp | `IMPLEMENTED` hardening layer | BPF/OCI profiles can be materialized for real backends; not a standalone sandbox and generation/application must be observed |
+| service / MCP / LSP | `PARTIAL` | Transitional ServiceCell sanitizes environment and records optional leases, but directly spawns outside Broker/cgroup; readiness is not bound to listener/Cell identity |
+| Legacy process closure | `PARTIAL` | `legacy-process` still has sync callers; service/workspace/remote execution exceptions and static-Gate coverage still need a narrower, unified authority |
+| Secret lifecycle | `PARTIAL` | Secret contracts and sealed-file cleanup exist; file-descriptor semantics must not be claimed until true FD delivery is implemented and recovery is proven |
+| Evidence / Completion | `IMPLEMENTED`, frontier incomplete | Receipt/Evidence criteria exist; dependency-frontier invalidation and all external modification detection remain incomplete |
+| Approval / Cache / Replay | `PARTIAL` | Implementations and deterministic harnesses exist; immutable approval grants, provenance-complete cache identity and zero-live-side-effect strict runtime replay remain closure work |
+| Typed Execution Graph | `IMPLEMENTED`, authority closure remains | `src/workflow/` provides typed contracts, compiler/validation, DAG scheduling, read/write serialization, result cache/replay, repair loops, dynamic compilation, interrupts, agent/worktree coordination and Harness-node execution; strict replay, immutable approval, cache provenance and authoritative resource/retry/liveness integration remain partial |
+| GitHub Actions | `CI_BLOCKED_EXTERNAL` | The account billing lock prevents jobs before the first step; zero-step failures are not code failures |
+| Release | `NOT_RELEASED` after `0.8.16` | Source versions `0.8.26.1/.2` have not been reconciled with npm or GitHub Releases |
 
-```bash
-bun test tests/hooks_defaults.test.ts tests/safety_policy.test.ts tests/runtime_event_bus.test.ts
-bun test tests/hooks_system.test.ts
-bun run test:core
-bun run test:replay
-bun test tests/runtime_model_config.test.ts tests/config/config-loader.test.ts
-bun test tests/verification_result.test.ts tests/registry.test.ts tests/tool_contract.test.ts tests/evidence_ledger.test.ts tests/completion_orchestrator.test.ts tests/mode_contract.test.ts tests/file_tools_file_state.test.ts tests/patch_transaction.test.ts tests/agent_loop.test.ts
-bun run typecheck
-bun run build
-bun run test
-bun test tests/tui
-bun test tests/config/auth-store.test.ts tests/config/config-loader.test.ts tests/runtime_model_config.test.ts tests/provider_capabilities.test.ts tests/provider_retry.test.ts
-bun test tests/agent_loop.test.ts -t "non-retryable provider stream failure blocks instead of retrying|quota provider stream failure blocks once instead of retrying"
-```
+## Linux development-host observation
 
-## Not In Scope
+Read-only observation on 2026-08-10:
 
-- Multi-agent/T3R split: Strong Single v1.0 must stabilize single-agent runtime first.
-- SkillForge or plugin marketplace: defer until ToolPolicy, Evidence, Replay, and sandbox behavior are hard-gated.
-- Separate ToolContractRegistry: do not add one; future consumers should use the immutable projection derived from the existing `ToolDef` catalog.
-- Replacing the existing TUI track: current work should reuse the TUI command/composer/runtime-panel surface already in the codebase.
+- WSL2 kernel `6.6.87.2-microsoft-standard-WSL2`;
+- Bubblewrap `0.9.0` installed;
+- Podman `4.9.3` installed;
+- cgroup v2 mounted;
+- the current process reports seccomp filter mode;
+- Landlock LSM is not available through `/sys/kernel/security/lsm`.
+
+Installed binaries are prerequisites, not acceptance. See
+[`linux-foundation/current-status.md`](linux-foundation/current-status.md) for
+the enforcement/degradation matrix.
+
+## Current validation boundary
+
+Facts must remain separated:
+
+1. Historical component tests passed at their recorded commits.
+2. Real Bubblewrap, Rootless Podman and delegated-cgroup lanes were verified on
+   the canonical WSL host on 2026-08-09.
+3. GitHub-hosted lanes have not executed while the billing lock is active.
+4. The current committed source snapshot is not a green release candidate:
+   `bun run typecheck` currently reports the `AgentRunStopReason "paused"`
+   versus `StopInput.reason` type drift.
+5. Uncommitted work in another worktree is not part of this status snapshot.
+
+## Next acceptance order
+
+1. Restore the clean TypeScript baseline with the bounded IC00 fix.
+2. Re-audit each Infrastructure Closure item against current code; do not
+   replay stale plans over functionality that already exists.
+3. Complete IC01 through IC06 before Gate A.
+4. Complete service/process/secret/TOCTOU closure before strong Runtime
+   isolation claims (Gate B).
+5. Complete evidence/approval/cache/replay/durable-state closure before
+   publishing Runtime research claims (Gate C).
+6. Reconcile npm/tag/GitHub Release only from a clean, audited candidate and
+   only after explicit owner authorization.
+
+## Claim rules
+
+Do not turn any of the following into a shipped-capability claim:
+
+- a mock-only or conditionally skipped test;
+- a backend binary being installed;
+- a zero-step GitHub Actions job;
+- a configured cgroup limit without verified membership;
+- Host Audit execution;
+- a historical completion report superseded by a later audit;
+- an unreleased `package.json` version;
+- uncommitted source or executor self-report.

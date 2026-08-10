@@ -1,5 +1,8 @@
 # Orcana Agent Loop Kernel 重构计划
 
+> [!IMPORTANT]
+> **历史实施计划，不是当前状态页。** 本文保留 `0.4.0` 基线和当时的前置/后续顺序；文中“Graph Runtime 后置”“下次入口 G0”等措辞描述的是当时阶段。Typed Execution Graph G0-G6 后续已实现，当前事实以 [`status.md`](status.md)、[`graph-runtime/execution-plan.md`](graph-runtime/execution-plan.md) 和源码/测试为准。
+
 **文档状态：** In Progress  
 **计划编号：** ALK-1.0  
 **代码核对日期：** 2026-07-30  

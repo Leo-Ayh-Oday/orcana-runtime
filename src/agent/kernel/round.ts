@@ -949,7 +949,10 @@ export async function* runRound(
     hadSearchTool: toolNames.some(t => /read_file|web_search|find_symbol|find_references|project_structure|glob|grep/.test(t)),
     hadWriteTool: toolNames.some(t => /write_file|edit_file|edit_fim/.test(t)),
     hadVerifyTool: toolNames.some(t => t === "shell" || t === "typescript"),
-    isDone: round + 1 >= ctx.maxRounds || verificationState.lastTypecheck?.passed === true || (verificationState.lastResults?.some(r => r.passed) ?? false),
+    // TB2-1: 轮次耗尽（round+1 >= maxRounds）永远不是完成——DONE 只能来自
+    // 完成门：typecheck 通过或验证结果有通过证据。预算耗尽由 finalizeRun
+    // 映射为 paused/incomplete。
+    isDone: verificationState.lastTypecheck?.passed === true || (verificationState.lastResults?.some(r => r.passed) ?? false),
     pendingRippleCount: verificationState.rippleObligations.length,
   })
   // Reset one-shot thinking upgrade

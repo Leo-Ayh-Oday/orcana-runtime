@@ -29,8 +29,9 @@ export class RunLifecycleMachine {
     return canTransition(this.run.status, to)
   }
 
-  /** Validate + update + emit. Idempotent for same-status; illegal transitions throw. */
-  transition(to: RunStatus): void {
+  /** Validate + update + emit. Idempotent for same-status; illegal transitions throw.
+   *  `extra` merges into the lifecycle event payload (TB2-1 Resume contract). */
+  transition(to: RunStatus, extra?: { checkpointId?: string; reason?: string }): void {
     if (this.run.status === to) return
     if (!canTransition(this.run.status, to)) {
       throw new InvalidStateTransitionError(this.run.runId, this.run.status, to)
@@ -42,15 +43,16 @@ export class RunLifecycleMachine {
     if (isTerminal(to)) {
       this.run.finishedAt ??= Date.now()
     }
-    this.emit(lifecycleEvent(this.run, to))
+    this.emit(lifecycleEvent(this.run, to, extra))
   }
 
-  /** Transition honoring the pausing intermediate (running → pausing → paused). */
-  transitionTo(to: RunStatus): void {
+  /** Transition honoring the pausing intermediate (running → pausing → paused).
+   *  `extra` lands on the final (stopped) event only. */
+  transitionTo(to: RunStatus, extra?: { checkpointId?: string; reason?: string }): void {
     if (to === "paused" && this.run.status === "running") {
       this.transition("pausing")
     }
-    this.transition(to)
+    this.transition(to, extra)
   }
 }
 
@@ -79,8 +81,14 @@ export function lifecycleEventName(status: RunStatus): string {
   }
 }
 
-/** Build a lifecycle EventEnvelope<{status: RunStatus}> for the run. */
-export function lifecycleEvent(run: AgentRun, status: RunStatus): HarnessEvent {
+/** Build a lifecycle EventEnvelope<{status: RunStatus}> for the run.
+ *  `extra` (checkpointId/reason) rides the stopped-state events so the CLI
+ *  can persist a full Resume handle without re-reading the registry. */
+export function lifecycleEvent(
+  run: AgentRun,
+  status: RunStatus,
+  extra?: { checkpointId?: string; reason?: string },
+): HarnessEvent {
   const event = {
     schemaVersion: HARNESS_EVENT_SCHEMA_VERSION,
     eventId: randomUUID(),
@@ -89,7 +97,7 @@ export function lifecycleEvent(run: AgentRun, status: RunStatus): HarnessEvent {
     sessionId: run.sessionId,
     type: lifecycleEventName(status),
     timestamp: new Date().toISOString(),
-    payload: { status },
+    payload: { status, ...(extra ?? {}) },
   }
   return event as HarnessEvent
 }

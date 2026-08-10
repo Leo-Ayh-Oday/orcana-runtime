@@ -23,11 +23,22 @@ const green = (s: string) => `\x1b[1;32m${s}\x1b[0m`
 function persistAndReturnId(ctx: CommandContext): string {
   const { sessions, history, stagedCtx, compactor } = ctx
   const isNew = !ctx.sessionId
-  const s: Session = isNew
+  let existing: Session | null = null
+  if (!isNew) {
+    try { existing = sessions.load(ctx.sessionId) } catch { existing = null }
+  }
+  const s: Session = isNew || !existing
     ? sessions.create({ topic: history[0]?.content?.slice(0, 50), messageCount: history.length })
-    : (() => { try { return sessions.load(ctx.sessionId) } catch { return null } })()
-      ?? sessions.create({ topic: history[0]?.content?.slice(0, 50), messageCount: history.length })
-  s.messages = history.map(h => ({ role: h.role as "user" | "assistant", content: h.content, timestamp: Date.now(), metadata: {} }))
+    : existing
+  // H5: preserve original timestamps for already-persisted messages
+  const tsByKey = new Map<string, number>()
+  for (const m of s.messages) tsByKey.set(`${m.role}\u0000${m.content}`, m.timestamp)
+  s.messages = history.map(h => ({
+    role: h.role as "user" | "assistant",
+    content: h.content,
+    timestamp: tsByKey.get(`${h.role}\u0000${h.content}`) ?? Date.now(),
+    metadata: {},
+  }))
   s.metadata = { ...s.metadata, messageCount: history.length, stagedFiles: [...stagedCtx.loadedFiles.keys()] }
   sessions.save(s)
   saveCompactorState(compactor, s.id)

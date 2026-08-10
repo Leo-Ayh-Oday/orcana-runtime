@@ -32,7 +32,7 @@ import {
   activateSkillNamesByKeywords,
 } from "../flash-triage"
 import { activateSkillsByNames } from "../../skills/registry"
-import { createTaskTracker } from "../task-tracker"
+import { createTaskTracker, type TaskStepStatus, type TaskTracker } from "../task-tracker"
 import { buildExperienceKernelContext } from "../../experience/kernel"
 import { classifyResearchRoute } from "../research-router"
 import { createAgentRunState } from "../run/state"
@@ -45,13 +45,98 @@ import { SandboxManager } from "../../sandbox/sandbox"
 import { setShellSandbox } from "../../tools/shell"
 import { setActiveMode } from "../mode-contract"
 import { ToolExecutionLedger } from "../tool-ledger"
+import { ProgressGovernor, resolveProgressConfig } from "./progress-governor"
 import { StateMachine, AgentState } from "../state-machine"
 import { createEpochState, epochThresholdsForContext } from "../context-epoch"
 import type { LoopDecision, RunPhaseContext } from "./types"
+import { buildRecoveryPrompt, type SessionCheckpoint } from "../../session/checkpoint"
+import { createMasterPlan, currentNode, type MasterPlan, type PlanNodeStatus } from "../master-plan"
+import { setCurrentPlan } from "../run/plan-store"
 
 export interface BuildRunContextResult {
   ctx: RunPhaseContext | null
   earlyStop: LoopDecision | null
+}
+
+// ── D4 (CHECKPOINT_RESUME_USED): checkpoint → 计划/跟踪器水合 ──
+
+function isNodeStatus(s: string): s is PlanNodeStatus {
+  return s === "pending" || s === "active" || s === "blocked" || s === "done" || s === "skipped"
+}
+
+function isStepStatus(s: string): s is TaskStepStatus {
+  return s === "pending" || s === "running" || s === "done" || s === "failed" || s === "cancelled" || s === "superseded"
+}
+
+/**
+ * 从 checkpoint 快照重建 MasterPlan（nodes 形状）或 TaskTracker（steps 形状），
+ * 让恢复的会话从第一个未完成节点继续。快照无可用计划数据时返回 null。
+ */
+function hydratePlanFromCheckpoint(
+  cp: SessionCheckpoint,
+): { plan: MasterPlan | null; tracker: TaskTracker | null } | null {
+  const planData = cp.masterPlan
+  const goal = typeof planData.goal === "string" && planData.goal.length > 0 ? planData.goal : cp.summary
+  if (!goal) return null
+
+  const nodes = Array.isArray(planData.nodes) ? (planData.nodes as Array<Record<string, unknown>>) : []
+  if (nodes.length > 0) {
+    const plan = createMasterPlan(goal, "long_task", nodes.map(n => String(n.title ?? "?")))
+    for (let i = 0; i < plan.nodes.length && i < nodes.length; i++) {
+      const source = nodes[i]!
+      const node = plan.nodes[i]!
+      const status = String(source.status ?? "pending")
+      if (isNodeStatus(status)) node.status = status
+      if (typeof source.evidence === "string") node.evidence = source.evidence
+    }
+    const current = typeof planData.current === "string" && plan.nodes.some(n => n.id === planData.current)
+      ? planData.current
+      : (plan.nodes.find(n => n.status !== "done")?.id ?? plan.nodes[0]!.id)
+    plan.current = current
+    const cur = currentNode(plan)
+    if (cur?.tracker && cp.taskSteps.length > 0) {
+      // checkpoint 的 taskSteps 即检查点时刻活动节点的 steps（与 plan.current 同快照）——
+      // 恢复其进度，使会话从第一个未完成步骤继续而非重置。
+      cur.tracker.steps = cp.taskSteps.map(s => {
+        const raw = s.status
+        return {
+          id: s.id,
+          title: s.title,
+          status: isStepStatus(raw) ? raw : "pending",
+        }
+      })
+    }
+    return { plan, tracker: cur?.tracker ?? null }
+  }
+
+  const steps = Array.isArray(planData.steps) ? (planData.steps as Array<Record<string, unknown>>) : []
+  // legacy 扁平形状：masterPlan.steps 优先，缺省回退 checkpoint.taskSteps
+  const stepSource: Array<Record<string, unknown>> = steps.length > 0
+    ? steps
+    : cp.taskSteps.map(s => ({ id: s.id, title: s.title, status: s.status }))
+  if (stepSource.length > 0) {
+    const tracker: TaskTracker = {
+      goal,
+      intent: "long_task",
+      // building：跳过 planning 相位直接继续执行（planning 仅在校验/修订时进入）
+      phase: "building",
+      requiredFiles: [],
+      requiredVerificationKinds: [],
+      verificationEvidence: {},
+      verification: [],
+      steps: stepSource.map(s => {
+        const raw = String(s.status ?? "pending")
+        return {
+          id: String(s.id ?? "?"),
+          title: String(s.title ?? "?"),
+          status: isStepStatus(raw) ? raw : "pending",
+          ...(typeof s.evidence === "string" ? { evidence: s.evidence } : {}),
+        }
+      }),
+    }
+    return { plan: null, tracker }
+  }
+  return null
 }
 
 export async function buildRunContext(
@@ -116,6 +201,15 @@ export async function buildRunContext(
     rawMessages.push({
       role: "system",
       content: `<system-reminder>\n以下约束来自已被上下文窗口淘汰的历史轮次（蒸馏保留）：\n${evictedConstraintContext}\n</system-reminder>`,
+    })
+  }
+
+  // D4 (CHECKPOINT_RESUME_USED): 检查点恢复——恢复提示作为 system 消息注入
+  // （任务状态叙述，非用户内容）；计划/跟踪器水合见 hydratePlanFromCheckpoint。
+  if (options.resumeFromCheckpoint) {
+    rawMessages.push({
+      role: "system",
+      content: buildRecoveryPrompt(options.resumeFromCheckpoint).recoveryPrompt,
     })
   }
 
@@ -217,6 +311,19 @@ export async function buildRunContext(
   // L1 compatibility references: these point at canonical state-owned objects
   // and are never reassigned. Mutable scalar facts use their owning section.
   const planning = runState.planning
+  // D4 (CHECKPOINT_RESUME_USED): 消费 resumeFromCheckpoint——恢复 checkpoint 中的
+  // masterPlan（含节点状态）与任务跟踪器，使会话从第一个未完成节点继续而非重新规划。
+  if (options.resumeFromCheckpoint) {
+    const hydrated = hydratePlanFromCheckpoint(options.resumeFromCheckpoint)
+    if (hydrated) {
+      if (hydrated.plan) {
+        setCurrentPlan(planStore, hydrated.plan)
+        planning.taskTracker = hydrated.tracker ?? planning.taskTracker
+      } else if (hydrated.tracker) {
+        planning.taskTracker = hydrated.tracker
+      }
+    }
+  }
   const execution = runState.execution
   const verificationState = runState.verification
   const budget = runState.budget
@@ -260,8 +367,11 @@ export async function buildRunContext(
   setActiveMode(options.activeMode ?? "coder")
   const pmode: "full" | "strict" = process.env.ORCANA_PERMISSION_MODE === "strict" ? "strict" : "full"
   const toolLedger = new ToolExecutionLedger()
-  const gateBlockCounts = new Map<string, { count: number; lastSeen: number }>()
+  // GATE-05: GateOverflow 已删除（断环职责并入 ProgressGovernor）——
+  // deferredGateMessages 保留给 revise-plan 等通用延迟消息。
   const deferredGateMessages: string[] = []
+  // GATE-03 v2: run-scoped liveness ledger — one governor per run（GS-P1~P6 配置）。
+  const progressGovernor = new ProgressGovernor(resolveProgressConfig())
   options.runTrace?.record("agent_loop_started", { maxRounds, toolCount: tools.length })
 
   // L1 ownership: Router State remains the legacy behavior driver.
@@ -326,9 +436,9 @@ export async function buildRunContext(
     sandbox,
     pmode,
     toolLedger,
-    gateBlockCounts,
     deferredGateMessages,
     sm,
+    progressGovernor,
     contextMap: {
       runtimeContextMap: null,
       contextMapContext: "",

@@ -103,7 +103,7 @@ export function createTaskTracker(prompt: string, intent: TaskIntent): TaskTrack
     steps.push({ id: "verification", title: "运行验证命令", status: "pending" })
   }
 
-  if (hasAny(text, [/smoke/i, /browser/i, /curl/i, /api smoke/i, /娴忚鍣?/i])) {
+  if (hasAny(text, [/smoke/i, /browser/i, /curl/i, /api smoke/i, /浏览器/i])) {
     addVerificationKind(requiredVerificationKinds, "smoke")
   }
 
@@ -273,15 +273,11 @@ export function updateTaskTrackerAfterTools(input: {
     verificationStep.evidence = `missing required verification: ${tracker.requiredVerificationKinds.filter(kind => !tracker.verificationEvidence[kind]).map(verificationKindLabel).join(", ")}`
   }
   if (requiredVerificationSatisfied) {
-    markDone("verification", `楠岃瘉鍛戒护閫氳繃: ${tracker.requiredVerificationKinds.map(verificationKindLabel).join(", ")}`)
+    markDone("verification", `验证命令通过: ${tracker.requiredVerificationKinds.map(verificationKindLabel).join(", ")}`)
   }
 
   const running = tracker.steps.find(step => step.status === "running")
-  if (!running || running.status === "done") {
-    const next = tracker.steps.find(step => step.status === "pending")
-    if (next) next.status = "running"
-  }
-  if (running?.status === "done") {
+  if (!running) {
     const next = tracker.steps.find(step => step.status === "pending")
     if (next) next.status = "running"
   }
@@ -304,10 +300,12 @@ export function missingTaskRequirements(tracker: TaskTracker | null, cwd = proce
     if (!found) missing.push(`缺少文件：${file}`)
   }
   for (const kind of tracker.requiredVerificationKinds) {
-    if (!tracker.verificationEvidence[kind]) missing.push(`缂哄皯楠岃瘉璇佹嵁: ${verificationKindLabel(kind)}`)
+    if (!tracker.verificationEvidence[kind]) missing.push(`缺少验证证据: ${verificationKindLabel(kind)}`)
   }
-  missing.push(...frontendDesignFindings(tracker, cwd))
-  missing.push(...backendQualityFindings(tracker, cwd))
+  // GATE-05 (GS-07): frontend/backend 质量启发式（CSS 量级、@media、flex、
+  // hero 结构、测试结构等）不得作为通用 Runtime completion blocker——
+  // "我认为你的 CSS 不够丰富，所以你不能结束任务" 不是 Runtime correctness。
+  // 函数保留导出，供 Skill Requirement / Quality Advisory / Benchmark 层使用。
   return missing
 }
 

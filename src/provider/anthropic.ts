@@ -13,7 +13,7 @@ import Anthropic from "@anthropic-ai/sdk"
 import type { StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs } from "./retry"
+import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, providerBackoffWait, canRetryProviderAttempt, recordProviderRetry } from "./retry"
 import { bindProviderAbort, type ClosableAsyncIterable } from "./stream-lifecycle"
 
 interface AnthropicLikeClient {
@@ -67,20 +67,35 @@ export class AnthropicProvider implements LLMProvider {
     if (options.thinking) params.thinking = options.thinking as Anthropic.ThinkingConfigParam
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // RC-19 ABORT_RETRIED: an aborted request is never issued, and never
+      // retried once the signal fires — including an abort landing in backoff.
+      if (options.abortSignal?.aborted) {
+        yield { type: "error", data: "provider request aborted" }
+        return
+      }
       let unsafeToRetry = false
       try {
         yield* this.streamOnce(params, value => { unsafeToRetry = value }, options)
         return
       } catch (e) {
+        if (options.abortSignal?.aborted) {
+          yield { type: "error", data: "provider request aborted" }
+          return
+        }
         const info = classifyProviderError(e)
-        const canRetry = info.retryable && !unsafeToRetry && attempt < this.maxRetries
+        const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry, options.retryLedger)
         if (!canRetry) {
           yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
           return
         }
+        recordProviderRetry(info, options.retryLedger)
         const delayMs = providerRetryDelayMs(info, attempt)
         yield { type: "status", data: formatProviderRetryStatus(info, delayMs, attempt, this.maxRetries) }
-        await this.sleep(delayMs)
+        const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
+        if (!waited) {
+          yield { type: "error", data: "provider request aborted during retry backoff" }
+          return
+        }
       }
     }
   }
@@ -146,6 +161,10 @@ export class AnthropicProvider implements LLMProvider {
               initialInput: isRecord(b.input) ? b.input : null,
             }
           } else if (isRecord(b) && b.type === "thinking") {
+            // RC-19 STREAM_REPLAY_SIDE_EFFECT: thinking deltas are emitted —
+            // the stream is no longer replayable; a retry would duplicate
+            // reasoning output.
+            markUnsafeToRetry(true)
             cthink = { thinking: "", signature: String(b.signature ?? "") }
           }
           break
@@ -223,22 +242,33 @@ export class AnthropicProvider implements LLMProvider {
     }
     yield { type: "status", data: `provider-stop: ${stopReason}` }
     if (!NORMAL_STOP_REASONS.has(stopReason)) {
-      const detail = stopReason === "max_tokens"
-        ? "response hit the output token limit before completion"
-        : "response ended before normal completion"
-      yield { type: "error", data: `provider stop_reason=${stopReason}: ${detail}` }
+      if (stopReason === "max_tokens") {
+        // GATE-02 (GS-03/GS-05): TRUNCATED is not an error. Tool blocks that
+        // closed before the cut are complete side effects — emit them so the
+        // round executes them instead of discarding (OTS-013 lost every tool
+        // block this way and retried the same doomed request forever). The
+        // kernel continues as a fresh round; no blind generic retry.
+        for (const tb of toolBlocks) {
+          yield { type: "tool_call", data: { id: tb.id, name: tb.name, input: tb.input } }
+        }
+        if (cthink?.thinking) {
+          thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
+        }
+        if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
+        yield { type: "truncated", data: { stopReason: "max_tokens", toolCalls: toolBlocks.length } }
+        return
+      }
+      yield { type: "error", data: `provider stop_reason=${stopReason}: response ended before normal completion` }
       return
     }
 
     for (const tb of toolBlocks) {
       yield { type: "tool_call", data: { id: tb.id, name: tb.name, input: tb.input } }
     }
-    if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
-
     if (cthink?.thinking) {
       thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
-      yield { type: "thinking_blocks", data: thinkingBlocks }
     }
+    if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
 
     const finalText = textChunks.join("")
     if (finalText && toolBlocks.length === 0) yield { type: "done", data: finalText }

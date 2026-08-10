@@ -1,7 +1,7 @@
-import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { afterEach, describe, expect, test } from "bun:test"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
 import { buildTools, Result } from "../src/tools/registry"
 import { createNodeExecutionContext, createDefaultNodePolicyContext, createMinimalContextSlice } from "../src/harness/nodes/context"
@@ -23,6 +23,13 @@ import { addEvidence, generateEvidenceId } from "../src/agent/evidence-ledger"
 
 // H11 part A: node runtime contracts, sequential runner, FunctionNode —
 // lifecycle events, cancellation, node context, single-use enforcement.
+
+const nodeProjectRoots = new Set<string>()
+
+afterEach(() => {
+  for (const root of nodeProjectRoots) rmSync(root, { recursive: true, force: true })
+  nodeProjectRoots.clear()
+})
 
 class ProbeThenTextProvider implements LLMProvider {
   rounds = 0
@@ -52,6 +59,7 @@ function probeTool() {
 /** Build a real AgentRun + node context (assembleRunScope, run-level ledger). */
 function buildNodeContext(budgetLimits?: Record<string, number>): { context: NodeExecutionContext; run: AgentRun; projectRoot: string } {
   const projectRoot = mkdtempSync(join(tmpdir(), "h11-node-"))
+  nodeProjectRoots.add(projectRoot)
   const runId = `run-${projectRoot.split("/").pop()}`
   const controller = new AbortController()
   const scope = assembleRunScope({ runId, sessionId: "sess-node", projectRoot, controller })
@@ -90,7 +98,10 @@ function registerWriteCapability(context: NodeExecutionContext, file: string): v
     {
       async execute(input) {
         const params = input as { path?: string; content?: string }
-        writeFileSync(params.path ?? file, params.content ?? "new")
+        const target = params.path
+          ? (isAbsolute(params.path) ? params.path : resolve(context.runScope.projectRoot, params.path))
+          : file
+        writeFileSync(target, params.content ?? "new")
         return { ok: true, output: { success: true, content: "written", metadata: { patchTransactionId: "ptxn_mock" } } }
       },
     },
@@ -252,6 +263,7 @@ describe("H11 ToolNode", () => {
     const node = createToolNode({ id: "write", policyContext: allowGate("mock_write") })
     const { result } = await runNodeToResult(node, context, { capabilityId: "mock_write", params: { path: "a.txt", content: "new" } })
     expect(result.status).toBe("succeeded")
+    expect(readFileSync(join(projectRoot, "a.txt"), "utf-8")).toBe("new")
     const patches = await context.artifacts.findByKind("patch")
     expect(patches).toHaveLength(1)
     expect(patches[0]!.producedBy).toBe("mock_write")
@@ -369,6 +381,33 @@ describe("H11 VerificationNode", () => {
     expect(result.evidence).toHaveLength(1)
     expect(result.evidence[0]!.id).not.toBe(seeded.id)
     expect(result.evidence[0]!.id).toBe(result.output!.ingested[0]!.evidenceId)
+  })
+
+  test("H12: kernelRoundState carries generation into evidence and producedBy into the artifact", async () => {
+    const { context } = buildNodeContext()
+    const node = createVerificationNode({ id: "verify" })
+    const verification: VerificationResult = {
+      kind: "typecheck",
+      command: "bun run typecheck",
+      passed: true,
+      issues: 0,
+      durationMs: 10,
+      summary: "typecheck ok",
+    }
+    const { result } = await runNodeToResult(node, context, {
+      results: [verification],
+      kernelRoundState: { generation: 7, producedBy: "kernel_round_3" },
+    })
+    expect(result.status).toBe("succeeded")
+    // generation: the ledger entry's staleness field records the round's
+    // write generation (a later write past 7 makes this evidence stale).
+    expect(result.evidence).toHaveLength(1)
+    expect(result.evidence[0]!.generation).toBe(7)
+    // producedBy: artifact attribution override — the node id is the default
+    // when the workflow does not carry kernel round state.
+    const artifacts = await context.artifacts.findByKind("typecheck_result")
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0]!.producedBy).toBe("kernel_round_3")
   })
 
   test("unclassifiable kinds warn but do not fail", async () => {

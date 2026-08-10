@@ -10,6 +10,7 @@ import { platform, arch } from "node:os"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
+import { detectDelegatedRoot } from "./cgroup/delegation"
 import type { LinuxCapabilities, NamespaceCapabilities } from "./contracts"
 
 const CGROUP2_MAGIC = "0x63677270"
@@ -56,18 +57,14 @@ function probeCgroup(): LinuxCapabilities["cgroup"] {
   const controllers = controllersRaw.filter((c): c is "cpu" | "memory" | "pids" | "io" | "cpuset" =>
     c === "cpu" || c === "memory" || c === "pids" || c === "io" || c === "cpuset")
 
-  // Delegation: systemd user manager runs a per-user subtree when delegated.
-  let delegated = false
-  let delegationSource: LinuxCapabilities["cgroup"]["delegationSource"]
-  const userCgroup = existsSync("/sys/fs/cgroup/user.slice")
-  if (userCgroup) {
-    delegated = true
-    delegationSource = "systemd-system"
-  }
-  if (!delegated && existsSync("/sys/fs/cgroup/user.slice/user-0.slice")) {
-    delegated = true
-    delegationSource = "systemd-user"
-  }
+  // Delegation: LNXF-R2 10.1 —— 不再凭 user.slice 目录存在声称委托；
+  // 以 detectDelegatedRoot 的真实 7 步探针（enable controllers + 写限额
+  // + 进程迁移 + 清理）结果为准（capability-probe 过度声称根因消除）。
+  const detected = detectDelegatedRoot()
+  const delegated = detected.writable
+  const delegationSource: LinuxCapabilities["cgroup"]["delegationSource"] = detected.writable && detected.source !== "none"
+    ? detected.source
+    : undefined
 
   if (version === 0) reasons.push("cgroup v2 不可用（无 cgroup2 挂载）")
   if (version === 2 && !delegated) reasons.push("无 cgroup 委托（systemd/容器运行时未委托子树）")
@@ -80,8 +77,8 @@ function probeCgroup(): LinuxCapabilities["cgroup"] {
     delegated,
     delegationSource,
     controllers,
-    supportsKill: version === 2,
-    supportsFreeze: version === 2,
+    supportsKill: version === 2 && delegated,
+    supportsFreeze: version === 2 && delegated,
     supportsPressure: version === 2 && controllers.includes("memory"),
   }
 }
@@ -235,10 +232,11 @@ export function probeLinuxCapabilities(options: { refresh?: boolean } = {}): Lin
   return caps
 }
 
-/** Stable hash of the capability set (excludes bootId — it changes per boot). */
+/** Stable hash of the capability set (excludes bootId — it changes per boot).
+ *  LR2-0：完整 SHA-256（Receipt 字段与 cellSpecDigest 同宽）。 */
 export function capabilitiesDigest(caps: LinuxCapabilities): string {
   const { bootId: _boot, ...stable } = caps
-  return createHash("sha256").update(JSON.stringify(stable)).digest("hex").slice(0, 16)
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex")
 }
 
 /** Non-linux platforms: no foundation (Windows keeps legacy paths). */

@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { addEvidence, createEvidenceLedger, latestEvidence } from "../src/agent/evidence-ledger"
 import {
+  backendQualityFindings,
   createTaskTracker,
   formatTaskTrackerPrompt,
+  frontendDesignFindings,
   markPlanAccepted,
   missingTaskRequirements,
   taskTrackerComplete,
@@ -171,7 +173,10 @@ describe("TaskTracker", () => {
       })
 
       const missing = missingTaskRequirements(tracker, dir)
-      expect(missing.some(item => item.includes("前端设计不足"))).toBe(true)
+      // GATE-05 (GS-07): quality 启发式不再是 completion blocker —— missing
+      // 不包含设计发现；advisory 层（frontendDesignFindings）仍独立保留。
+      expect(missing.some(item => item.includes("前端设计不足"))).toBe(false)
+      expect(frontendDesignFindings(tracker, dir).some(item => item.includes("前端设计不足"))).toBe(true)
     })
   })
 
@@ -203,6 +208,7 @@ describe("TaskTracker", () => {
 
       const missing = missingTaskRequirements(tracker, dir)
       expect(missing.some(item => item.includes("前端设计不足"))).toBe(false)
+      expect(frontendDesignFindings(tracker, dir)).toHaveLength(0)
     })
   })
 
@@ -224,7 +230,9 @@ describe("TaskTracker", () => {
       })
 
       const missing = missingTaskRequirements(tracker, dir)
-      expect(missing.some(item => item.includes("后端质量不足"))).toBe(true)
+      // GATE-05 (GS-07): 同上 —— 质量发现移出 blocking path，advisory 保留。
+      expect(missing.some(item => item.includes("后端质量不足"))).toBe(false)
+      expect(backendQualityFindings(tracker, dir).some(item => item.includes("后端质量不足"))).toBe(true)
     })
   })
 
@@ -247,6 +255,57 @@ describe("TaskTracker", () => {
 
       const missing = missingTaskRequirements(tracker, dir)
       expect(missing.some(item => item.includes("后端质量不足"))).toBe(false)
+      expect(backendQualityFindings(tracker, dir)).toHaveLength(0)
     })
+  })
+
+  test("Chinese browser prompts are recognized as needing smoke verification", () => {
+    const tracker = createTaskTracker("帮我做一个浏览器插件，要冒烟验证", "long_task")
+    expect(tracker?.requiredVerificationKinds).toContain("smoke")
+  })
+
+  test("model-facing evidence strings are clean UTF-8 Chinese, not mojibake", () => {
+    const tracker = createTaskTracker("做一个全栈项目", "long_task")!
+    updateTaskTrackerAfterTools({
+      tracker,
+      changedFiles: [],
+      toolNames: ["shell"],
+      typecheckPassed: true,
+      verificationPassed: true,
+      verificationResults: [
+        { kind: "test", command: "bun test", passed: true, issues: 0, durationMs: 1, summary: "ok" },
+        { kind: "build", command: "bunx vite build", passed: true, issues: 0, durationMs: 1, summary: "ok" },
+      ],
+    })
+
+    const verificationStep = tracker.steps.find(step => step.id === "verification")
+    expect(verificationStep?.evidence).toBe("验证命令通过: typecheck, test, build")
+
+    const fresh = createTaskTracker("做一个全栈项目", "long_task")!
+    expect(missingTaskRequirements(fresh).some(item => item.includes("缺少验证证据: typecheck"))).toBe(true)
+  })
+
+  test("promotes exactly one pending step per update", () => {
+    const tracker = createTaskTracker("Build a full-stack blog", "long_task")!
+    tracker.steps = [
+      { id: "plan", title: "规划项目结构", status: "done" },
+      { id: "backend", title: "创建后端接口", status: "pending" },
+      { id: "frontend", title: "创建前端页面", status: "pending" },
+    ]
+    updateTaskTrackerAfterTools({
+      tracker,
+      changedFiles: [],
+      toolNames: ["shell"],
+      skipLegacyStepIds: true,
+    })
+
+    const running = tracker.steps.filter(step => step.status === "running")
+    expect(running.map(step => step.id)).toEqual(["backend"])
+    expect(tracker.steps.find(step => step.id === "frontend")?.status).toBe("pending")
+  })
+
+  test("no unreachable duplicate step-promotion block remains", () => {
+    const source = readFileSync(new URL("../src/agent/task-tracker.ts", import.meta.url), "utf-8")
+    expect(source).not.toContain('if (running?.status === "done")')
   })
 })

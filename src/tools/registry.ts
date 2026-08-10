@@ -8,6 +8,13 @@ import { projectToolContract, type ToolContract, type ToolContractMetadata } fro
 export interface ToolExecutionContext {
   abortSignal?: AbortSignal
   freshness?: ToolFreshnessApproval
+  /** RC-19 Phase 2 (D7): the authoritative project root — relative tool paths
+   *  resolve against this via resolveToolPath(), never process.cwd(). */
+  projectRoot: string
+  /** Extra roots a read may reach (defaults to [projectRoot]). */
+  readableRoots?: string[]
+  /** Extra roots a write may reach (defaults to [projectRoot]). */
+  writableRoots?: string[]
 }
 
 export interface ToolDef {
@@ -136,7 +143,7 @@ export function buildTool(defn: ToolDef): ContractToolDescriptor {
   const preflight = async (
     params: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<{ ok: true; context: ToolExecutionContext } | { ok: false; result: ToolResult }> => {
+  ): Promise<{ ok: true; context?: ToolExecutionContext } | { ok: false; result: ToolResult }> => {
     if (defn.validate) {
       const vr = defn.validate(params)
       if (!vr.ok) return { ok: false, result: Result.blocked(vr.message ?? "invalid input") }
@@ -156,7 +163,9 @@ export function buildTool(defn: ToolDef): ContractToolDescriptor {
     }
     return {
       ok: true,
-      context: { ...context, freshness: freshness.approval },
+      // Spread only a present context — an absent one stays absent
+      // (projectRoot: string must not widen to undefined).
+      context: context ? { ...context, freshness: freshness.approval } : undefined,
     }
   }
 

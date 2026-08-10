@@ -17,7 +17,19 @@ export type CriterionCheck =
   | { type: "command"; command: string; verificationKind?: VerificationKind }
   | { type: "file_exists"; path: string }
   | { type: "file_content"; path: string; contains: string }
-  | { type: "evidence"; evidenceKind: string }
+  | {
+      /** M22: evidence criteria check the entry's PASSED state and (when
+       *  declared) its sandbox attributes — never just its kind. */
+      type: "evidence"
+      evidenceKind: string
+      /** Default true: an entry with passed=false never satisfies. */
+      requirePassed?: boolean
+      /** "namespace" = backend must be bubblewrap/rootless-podman, never
+       *  host-audit. */
+      requireBackend?: "namespace"
+      requireNoDegradation?: boolean
+      requireCleanupVerified?: boolean
+    }
   | { type: "semantic_review"; reviewer: string; guidance: string }
 
 export interface CompletionCriterion {
@@ -60,7 +72,7 @@ export const SANDBOX_EXECUTION_CRITERION: CompletionCriterion = {
   title: "存在通过验证的沙盒执行证据（完整 Receipt）",
   hard: true,
   mode: "deterministic",
-  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  check: { type: "evidence", evidenceKind: "sandbox_execution", requirePassed: true },
 }
 
 /** 隔离后端必须达到 namespace 级（bubblewrap/podman，非 host-audit）。 */
@@ -69,7 +81,7 @@ export const SANDBOX_BACKEND_CRITERION: CompletionCriterion = {
   title: "执行后端 >= namespace 级（无 host-audit）",
   hard: true,
   mode: "deterministic",
-  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  check: { type: "evidence", evidenceKind: "sandbox_execution", requirePassed: true, requireBackend: "namespace" },
   description: "由证据的 backend 字段判定：backend ∈ {bubblewrap, rootless-podman} 且 degraded=false",
 }
 
@@ -79,7 +91,7 @@ export const SANDBOX_NO_DEGRADATION_CRITERION: CompletionCriterion = {
   title: "严格任务无降级",
   hard: true,
   mode: "deterministic",
-  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  check: { type: "evidence", evidenceKind: "sandbox_execution", requirePassed: true, requireNoDegradation: true },
   description: "由证据的 degraded=false 判定；host-audit 或降级 = 不满足",
 }
 
@@ -89,7 +101,7 @@ export const SANDBOX_RESOURCE_LIMIT_CRITERION: CompletionCriterion = {
   title: "资源限制已施加",
   hard: false,
   mode: "deterministic",
-  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  check: { type: "evidence", evidenceKind: "sandbox_execution", requirePassed: true },
   description: "由证据的 cleanupVerified 与 Receipt metrics 判定",
 }
 
@@ -99,7 +111,7 @@ export const SANDBOX_NETWORK_ISOLATED_CRITERION: CompletionCriterion = {
   title: "执行网络隔离（none）",
   hard: false,
   mode: "deterministic",
-  check: { type: "evidence", evidenceKind: "sandbox_execution" },
+  check: { type: "evidence", evidenceKind: "sandbox_execution", requirePassed: true },
   description: "由证据的 networkMode=none 判定",
 }
 
@@ -109,5 +121,5 @@ export const SANDBOX_CLEANUP_CRITERION: CompletionCriterion = {
   title: "清理已验证",
   hard: true,
   mode: "deterministic",
-  check: { type: "evidence", evidenceKind: "sandbox_cleanup" },
+  check: { type: "evidence", evidenceKind: "sandbox_cleanup", requirePassed: true, requireCleanupVerified: true },
 }

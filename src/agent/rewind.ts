@@ -13,6 +13,7 @@
  *   - Zero LLM dependency. Pure filesystem + SHA snapshots.
  *   - Each rewind point captures: conversation position + file SHAs + FileTransaction IDs
  *   - File restoration uses rollbackTransaction from transaction.ts
+ *   - Bounded history: per-user-prompt points pruned to REWIND_MAX_DEPTH (H9)
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs"
@@ -54,6 +55,38 @@ export interface RewindResult {
 
 function rewindDir(sessionId: string): string {
   return resolve(process.cwd(), ".orcana", "rewind", sessionId)
+}
+
+/** H9 (REWIND_HISTORY_DEPTH_AND_CLEANUP): 每用户 prompt 自动保存的 rewind 点最大保留深度。
+ *  每次保存后清理超出深度的 round-N.json 快照；checkpoint 行由 SessionStore 的
+ *  checkpointRetention 对齐清理（rewind 点与协调器 checkpoint 共用 checkpoints 表）。
+ *  可用 ORCANA_REWIND_MAX_DEPTH 环境变量覆盖。 */
+export const REWIND_MAX_DEPTH = 20
+
+function resolveRewindDepth(): number {
+  const configured = Number(process.env.ORCANA_REWIND_MAX_DEPTH)
+  return Number.isInteger(configured) && configured > 0 ? configured : REWIND_MAX_DEPTH
+}
+
+/** H9: 按 round 降序保留最近 maxDepth 个快照文件（best-effort，失败不阻断保存流程）。 */
+function pruneRewindSnapshots(dir: string): void {
+  let rounds: number[] = []
+  try {
+    rounds = readdirSync(dir)
+      .filter(f => f.startsWith("round-") && f.endsWith(".json"))
+      .map(f => Number.parseInt(f.slice("round-".length, -".json".length), 10))
+      .filter(n => !Number.isNaN(n))
+      .sort((a, b) => b - a)
+  } catch {
+    return
+  }
+  for (const round of rounds.slice(resolveRewindDepth())) {
+    try {
+      rmSync(join(dir, `round-${round}.json`), { force: true })
+    } catch {
+      // best-effort cleanup
+    }
+  }
 }
 
 /** Save a per-user-prompt rewind point.
@@ -124,6 +157,10 @@ export function saveRewindPoint(input: {
     prevRound: input.round - 1,
     summary: input.summary,
   })
+
+  // H9: 深度清理——保留最近 REWIND_MAX_DEPTH 个快照文件（checkpoint 行由
+  // SessionStore.saveCheckpoint 的 retention 对齐清理，两侧深度一致）。
+  pruneRewindSnapshots(dir)
 }
 
 /** List available rewind points for a session.

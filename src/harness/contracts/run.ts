@@ -13,6 +13,7 @@ import type { PlanStore } from "../../agent/run/plan-store"
 import type { EvidenceLedger } from "../../agent/evidence-ledger"
 import type { SandboxManager } from "../../sandbox/sandbox"
 import type { ArtifactStore } from "./artifact"
+import type { RetryLedger } from "../../runtime/retry-ledger"
 import type {
   ModeStore,
   PatchContextStore,
@@ -123,4 +124,7 @@ export interface AgentRunScope {
 
   cancellation: RunCancellation
   trace: TraceWriter
+  /** PR-GATE-06：Run 级统一重试预算（provider/capability/repair 层共享，
+   *  禁止各层独立无限重试的乘法爆炸）。 */
+  retryLedger: RetryLedger
 }

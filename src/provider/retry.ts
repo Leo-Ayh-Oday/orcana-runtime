@@ -1,3 +1,5 @@
+import { providerRetryFingerprint, type RetryLedger } from "../runtime/retry-ledger"
+
 export type ProviderErrorKind = "rate_limit" | "server" | "network" | "auth" | "client" | "capacity" | "quota" | "unknown"
 
 export interface ProviderErrorInfo {
@@ -66,11 +68,67 @@ export function classifyProviderError(error: unknown): ProviderErrorInfo {
   return { kind: "unknown", retryable: false, status, message }
 }
 
+const MAX_RETRY_AFTER_MS = 60_000
+
 export function providerRetryDelayMs(info: ProviderErrorInfo, attempt: number): number {
-  if (info.retryAfterMs !== undefined) return info.retryAfterMs
+  if (info.retryAfterMs !== undefined) return Math.min(info.retryAfterMs, MAX_RETRY_AFTER_MS)
   // Capacity errors need longer backoff (DeepSeek may be under heavy load)
   const base = info.kind === "capacity" ? 5_000 : info.kind === "rate_limit" ? 2_000 : 1_000
   return Math.min(30_000, base * 2 ** attempt)
+}
+
+export function canRetryProviderAttempt(
+  info: ProviderErrorInfo,
+  attempt: number,
+  maxRetries: number,
+  unsafeToRetry: boolean,
+  ledger?: RetryLedger,
+): boolean {
+  if (!info.retryable || unsafeToRetry) return false
+  // PR-GATE-06：注入 Run 级 RetryLedger 时，预算由统一账本裁决（rate_limit
+  // → rateLimit 类，其余 retryable（server/network/capacity）→ transport
+  // 类），构造时 maxRetries 仅作无 ledger 时的 legacy 兜底。
+  if (ledger) {
+    const retryClass = info.kind === "rate_limit" ? "rateLimit" : "transport"
+    return ledger.canRetry(retryClass, providerRetryFingerprint(info.kind, info.status))
+  }
+  return attempt < maxRetries
+}
+
+/** PR-GATE-06：实际发起一次重试前记账（返回本次重试计数）。 */
+export function recordProviderRetry(
+  info: ProviderErrorInfo,
+  ledger: RetryLedger | undefined,
+): void {
+  if (!ledger) return
+  const retryClass = info.kind === "rate_limit" ? "rateLimit" : "transport"
+  ledger.record(retryClass, providerRetryFingerprint(info.kind, info.status))
+}
+
+/**
+ * Abort-aware retry backoff (RC-19 ABORT_RETRIED). Resolves false when the
+ * abort signal fires before the delay elapsed — the caller must NOT issue
+ * another request. The injected sleep keeps test seams working (tests abort
+ * inside the sleep and assert no further fetch).
+ */
+export function providerBackoffWait(
+  delayMs: number,
+  signal: AbortSignal | undefined,
+  sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false)
+  return new Promise(resolve => {
+    let settled = false
+    const onAbort = () => finish(false)
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener("abort", onAbort)
+      resolve(ok)
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+    void sleep(delayMs).then(() => finish(true), () => finish(true))
+  })
 }
 
 export function formatProviderRetryStatus(info: ProviderErrorInfo, delayMs: number, attempt: number, maxRetries: number): string {

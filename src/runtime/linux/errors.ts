@@ -26,6 +26,7 @@ export const LINUX_ERROR_CODES = [
   "RESOURCE_RESERVATION_FAILED",
   "CGROUP_CREATE_FAILED",
   "CGROUP_ATTACH_FAILED",
+  "WORKSPACE_LEASE_HELD",
   "PROCESS_START_FAILED",
   "PROCESS_ORPHANED",
   "PROCESS_TIMEOUT",
@@ -40,6 +41,16 @@ export const LINUX_ERROR_CODES = [
   "IMAGE_NOT_APPROVED",
   "MOUNT_SEMANTICS_UNSUPPORTED",
   "WORKSPACE_MISSING",
+  "EXECUTION_AUTHORITY_MISSING",
+  "WORKSPACE_NOT_AUTHORIZED",
+  "WORKSPACE_PATH_ESCAPE",
+  "WORKSPACE_CWD_MISSING",
+  "WORKSPACE_READONLY",
+  "WORKSPACE_OWNER_FILE_VIOLATION",
+  // LNXF-R2 9.5 / 9.3
+  "NETWORK_APPROVAL_REQUIRED",
+  "MOUNT_REQUEST_INVALID",
+  "RUNTIME_GRANT_UNAVAILABLE",
 ] as const
 
 export type LinuxErrorCode = (typeof LINUX_ERROR_CODES)[number]
@@ -72,6 +83,7 @@ export const LINUX_ERROR_OUTCOME: Record<LinuxErrorCode, LinuxErrorOutcome> = {
   EXECUTION_SPEC_INVALID: "execution_failed",
   MOUNT_SOURCE_MISSING: "execution_failed",
   RESOURCE_RESERVATION_FAILED: "execution_failed",
+  WORKSPACE_LEASE_HELD: "blocked",
   CGROUP_CREATE_FAILED: "execution_failed",
   CGROUP_ATTACH_FAILED: "execution_failed",
   PROCESS_START_FAILED: "execution_failed",
@@ -86,6 +98,15 @@ export const LINUX_ERROR_OUTCOME: Record<LinuxErrorCode, LinuxErrorOutcome> = {
   IMAGE_NOT_APPROVED: "execution_failed",
   MOUNT_SEMANTICS_UNSUPPORTED: "execution_failed",
   WORKSPACE_MISSING: "execution_failed",
+  EXECUTION_AUTHORITY_MISSING: "execution_failed",
+  WORKSPACE_NOT_AUTHORIZED: "execution_failed",
+  WORKSPACE_PATH_ESCAPE: "execution_failed",
+  WORKSPACE_CWD_MISSING: "execution_failed",
+  WORKSPACE_READONLY: "execution_failed",
+  WORKSPACE_OWNER_FILE_VIOLATION: "execution_failed",
+  NETWORK_APPROVAL_REQUIRED: "blocked",
+  MOUNT_REQUEST_INVALID: "blocked",
+  RUNTIME_GRANT_UNAVAILABLE: "blocked",
   PROCESS_CANCELLED: "cancelled",
   PROCESS_TIMEOUT: "timed_out",
 }

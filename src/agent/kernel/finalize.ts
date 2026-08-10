@@ -27,11 +27,11 @@ export async function* finalizeRun(
     if (decision.reason === "prompt_blocked") {
       yield { type: "error", data: `Prompt blocked by hook: ${decision.blockReason ?? "unknown"}` }
     }
-    if (ctx && (decision.reason === "clarification" || decision.reason === "gate_overflow")) {
+    if (ctx && decision.reason === "clarification") {
       await flushTelemetry(ctx)
     }
     lifecycle.stopReason =
-      decision.reason === "prompt_blocked" || decision.reason === "gate_overflow"
+      decision.reason === "prompt_blocked"
         ? "blocked"
         : "aborted"
     return
@@ -66,5 +66,10 @@ export async function* finalizeRun(
     yield { type: "status", data: `gate-telemetry: ${ctx.gateTelemetry.gateNames().length} gates\n${ctx.gateTelemetry.report()}` }
   }
   await flushTelemetry(ctx)
+  // GATE-03: ProgressGovernor STALLED 是独立终态（GS-01）——不是 completed。
+  if (decision.reason === "progress_stalled") {
+    lifecycle.stopReason = "stalled"
+    return
+  }
   lifecycle.stopReason = "completed"
 }

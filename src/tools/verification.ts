@@ -11,11 +11,27 @@
  */
 
 import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
-import type { ToolDef, ToolResult } from "./registry"
+import { join, resolve } from "node:path"
+import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result } from "./registry"
 import { runProcess } from "./process"
 import { recordVerificationCoverage } from "../file-state"
+import { isWithin } from "./path-authority"
+
+/** RC-19 Phase 2 (D7): the project root for verification runs. The execution
+ *  authority wins; the legacy `cwd` param survives only as an explicit
+ *  test/CLI injection, gated against the authority. NEVER process.cwd(). */
+function verificationRoot(context: ToolExecutionContext | undefined, params: Record<string, unknown>): string | undefined {
+  const authority = context?.projectRoot
+  const paramCwd = typeof params["cwd"] === "string" ? String(params["cwd"]) : undefined
+  if (authority) {
+    if (paramCwd && !isWithin(authority, resolve(paramCwd))) {
+      return undefined // param cwd escapes the authority → cross-project
+    }
+    return authority
+  }
+  return paramCwd
+}
 
 // ── discover_verification ──
 
@@ -188,8 +204,9 @@ export const DISCOVER_VERIFICATION_TOOL: ToolDef = {
   category: "safe",
   isConcurrencySafe: true,
   inputSchema: DISCOVER_SCHEMA as unknown as Record<string, unknown>,
-  execute(params) {
-    const projectRoot = typeof params["cwd"] === "string" ? String(params["cwd"]) : process.cwd()
+  execute(params, _onProgress, context) {
+    const projectRoot = verificationRoot(context, params)
+    if (!projectRoot) return Result.blocked("discover_verification requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
     const found = discoverVerification(projectRoot)
     if (found.commands.length === 0) {
       return Result.ok("No verification commands discovered (no package.json scripts)", { discovered: found })
@@ -221,9 +238,10 @@ export const RUN_TARGETED_VERIFICATION_TOOL: ToolDef = {
   category: "shell",
   requiresConfirmation: true,
   inputSchema: TARGETED_SCHEMA as unknown as Record<string, unknown>,
-  async execute(params) {
+  async execute(params, _onProgress, context) {
     const files = Array.isArray(params["files"]) ? (params["files"] as unknown[]).map(String) : []
-    const projectRoot = typeof params["cwd"] === "string" ? String(params["cwd"]) : process.cwd()
+    const projectRoot = verificationRoot(context, params)
+    if (!projectRoot) return Result.blocked("run_targeted_verification requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
     if (files.length === 0) return Result.fail("run_targeted_verification requires files")
     const kinds = targetedKinds(files)
     const catalog = discoverVerification(projectRoot)
@@ -309,9 +327,10 @@ export const VERIFY_CLAIM_TOOL: ToolDef = {
   category: "shell",
   requiresConfirmation: true,
   inputSchema: VERIFY_CLAIM_SCHEMA as unknown as Record<string, unknown>,
-  async execute(params) {
+  async execute(params, _onProgress, context) {
     const claims = Array.isArray(params["claims"]) ? (params["claims"] as unknown[]).map(String) : []
-    const projectRoot = typeof params["cwd"] === "string" ? String(params["cwd"]) : process.cwd()
+    const projectRoot = verificationRoot(context, params)
+    if (!projectRoot) return Result.blocked("verify_claim requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
     const catalog = discoverVerification(projectRoot)
     const kindFor: Record<string, VerificationCommand["kind"]> = {
       tests_passed: "test",

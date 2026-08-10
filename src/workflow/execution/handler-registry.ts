@@ -10,7 +10,7 @@
 import type { ContractToolDescriptor } from "../../tools/registry"
 import { WRITE_HANDLERS } from "./transaction-executor"
 
-export type WorkflowHandler = (input: Record<string, unknown>) => Promise<unknown>
+export type WorkflowHandler = (input: Record<string, unknown>, projectRoot?: string) => Promise<unknown>
 
 export interface HandlerDef {
   id: string
@@ -31,8 +31,10 @@ export class HandlerRegistry {
     this.handlers.set(handlerId, {
       id: handlerId,
       description: tool.defn.description ?? tool.defn.name,
-      run: async input => {
-        const result = await tool.execute(input)
+      run: async (input, projectRoot) => {
+        // RC-19 D7: thread the run-scoped projectRoot so tools resolve
+        // relative paths against the authority, never process.cwd().
+        const result = await tool.execute(input, projectRoot ? { projectRoot } : undefined)
         if (!result.success) {
           throw new Error(result.error ?? result.content ?? `tool ${tool.defn.name} failed`)
         }
@@ -53,8 +55,9 @@ export class HandlerRegistry {
       id: handlerId,
       description: tool.defn.description ?? tool.defn.name,
       isWrite: true,
-      run: async input => {
-        const result = await tool.execute(input)
+      run: async (input, projectRoot) => {
+        // RC-19 D7: thread the run-scoped projectRoot (fail-closed absent).
+        const result = await tool.execute(input, projectRoot ? { projectRoot } : undefined)
         if (!result.success) {
           throw new Error(result.error ?? result.content ?? `tool ${tool.defn.name} failed`)
         }

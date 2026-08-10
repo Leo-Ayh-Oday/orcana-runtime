@@ -188,8 +188,8 @@ describe("H10 dedupe", () => {
   })
 })
 
-describe("H10 freshness", () => {
-  test("stale non-required contributions are dropped, required kept with warning", async () => {
+describe("H10 freshness (K31/K32)", () => {
+  test("stale non-required dropped; stale system-required is revalidated (K32)", async () => {
     const now = 1_000_000
     const slice = await runContextPipeline({
       providers: [
@@ -211,8 +211,12 @@ describe("H10 freshness", () => {
       now,
       maxContributionAgeMs: 100,
     })
-    expect(freshSlice.contributions.map((c) => c.providerId)).toEqual(["old-required"])
+    // K32: stale system-required is downgraded to optional (REVALIDATE) and
+    // then stale-dropped — it no longer survives unconditionally.
+    expect(freshSlice.contributions.map((c) => c.providerId)).toEqual([])
     expect(freshSlice.warnings.some((w) => w.includes("old-required"))).toBe(true)
+    const revalidate = freshSlice.retention.dropped.find((e) => e.providerId === "old-required")
+    expect(revalidate?.reason).toBe("revalidate")
     expect(slice.contributions).toHaveLength(2) // default: nothing stale
   })
 })

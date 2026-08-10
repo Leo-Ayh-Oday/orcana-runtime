@@ -14,6 +14,10 @@ import { spawn } from "node:child_process"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 import { collectProcessRun } from "../runtime/process-executor"
+import { getExecutionGateway } from "../runtime/execution/execution-gateway"
+import type { ExecutionIntent } from "../runtime/execution/execution-intent"
+import type { ExecutionResult } from "../runtime/execution/execution-result"
+import { currentExecutionAuthority } from "../runtime/execution/execution-context"
 
 export interface RunProcessParams {
   command: string
@@ -36,8 +40,31 @@ export interface RunProcessResult {
   aborted: boolean
 }
 
-/** Parameterized process execution — never shell:true. */
+/** Parameterized process execution — never shell:true.
+ *
+ *  LR2-0D：存在受信执行权威时经 ExecutionGateway（统一入口 → Broker →
+ *  Receipt）；无权威（Windows/测试/legacy 环境）保留旧路径 —— 渐进迁移，
+ *  shadow → enabled → enforced。 */
 export function runProcess(params: RunProcessParams): Promise<RunProcessResult> {
+  const authority = currentExecutionAuthority()
+  if (authority) {
+    const intent: ExecutionIntent = {
+      requestId: `rp-${params.command}-${params.args[0] ?? ""}-${Date.now().toString(36)}`,
+      tool: {
+        capabilityId: "run_process",
+        executable: params.command,
+        args: params.args,
+        cwdRef: params.cwd,
+      },
+      workload: { kind: "build", readonly: false },
+      timeoutMs: params.timeoutMs ?? 120_000,
+      env: params.env,
+      abortSignal: params.abortSignal,
+    }
+    return getExecutionGateway()
+      .collect(intent, { approvedCapabilityId: "run_process", sideEffectClass: "write", authority })
+      .then(adaptResult)
+  }
   return collectProcessRun({
     command: params.command,
     args: params.args,
@@ -46,6 +73,18 @@ export function runProcess(params: RunProcessParams): Promise<RunProcessResult> 
     timeoutMs: params.timeoutMs ?? 120_000,
     abortSignal: params.abortSignal,
   })
+}
+
+function adaptResult(r: ExecutionResult): RunProcessResult {
+  return {
+    exitCode: r.exitCode,
+    signal: r.signal,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    durationMs: r.durationMs,
+    timedOut: r.timedOut,
+    aborted: r.aborted,
+  }
 }
 
 /** Kill the whole process tree (taskkill /T on Windows, SIGTERM→SIGKILL
@@ -77,6 +116,11 @@ function formatProcessResult(r: RunProcessResult, command: string): string {
   return `Command succeeded (exit 0) in ${r.durationMs}ms`
 }
 
+function parseTimeoutMs(value: unknown): number | undefined {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
 // ── run_process ──
 
 const RUN_PROCESS_SCHEMA = {
@@ -103,7 +147,7 @@ export const RUN_PROCESS_TOOL: ToolDef = {
     const args = Array.isArray(params["args"]) ? (params["args"] as unknown[]).map(String) : []
     const cwd = typeof params["cwd"] === "string" ? params["cwd"] : undefined
     const env = params["env"] as Record<string, string> | undefined
-    const timeoutMs = typeof params["timeoutMs"] === "number" ? params["timeoutMs"] : undefined
+    const timeoutMs = parseTimeoutMs(params["timeoutMs"])
     if (!executable) return Result.fail("run_process requires executable")
 
     const result = await runProcess({ command: executable, args, cwd, env, timeoutMs })
@@ -184,7 +228,7 @@ export const RUN_SHELL_SCRIPT_TOOL: ToolDef = {
       command: shell.path,
       args: shell.args(script),
       cwd: typeof params["cwd"] === "string" ? params["cwd"] : undefined,
-      timeoutMs: typeof params["timeoutMs"] === "number" ? params["timeoutMs"] : undefined,
+      timeoutMs: parseTimeoutMs(params["timeoutMs"]),
     })
     const content = [
       formatProcessResult(result, script.slice(0, 60)),

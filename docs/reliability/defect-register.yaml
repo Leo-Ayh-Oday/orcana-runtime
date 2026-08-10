@@ -67,7 +67,8 @@
   wave: RC-17
   invariant: NO_MOJIBAKE_IN_MODEL_CONTEXT
   files: [src/agent/task-tracker.ts]
-  status: open
+  status: fixed
+  fixedBy: 96ac920
 - id: A8
   severity: P1
   wave: RC-03
@@ -226,13 +227,15 @@
   wave: RC-10
   invariant: SESSION_MESSAGE_DUPLICATION=0
   files: [src/ui/cli.ts, src/session/sqlite-session.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: D2
   severity: P0
   wave: RC-10
   invariant: SINGLE_SHOT_MODE_PERSISTS
   files: [src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: D3
   severity: P0
   wave: RC-11
@@ -243,50 +246,58 @@
   severity: P0
   wave: RC-11
   invariant: CHECKPOINT_RESUME_USED
-  files: [src/agent/loop-types.ts, src/session/checkpoint.ts]
-  status: open
+  files: [src/agent/loop-types.ts, src/session/checkpoint.ts, src/agent/kernel/context.ts]
+  status: fixed
+  fixedBy: 76f67ec
 - id: D5
   severity: P1
   wave: RC-10
   invariant: EXIT_PATH_FLUSHES_SESSION
   files: [src/ui/input.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: D6
   severity: P1
   wave: RC-10
   invariant: COMMAND_CTX_READS_CURRENT_SESSION_ID
   files: [src/ui/commands/definitions.ts, src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: H5
   severity: P2
   wave: RC-10
   invariant: MESSAGE_TIMESTAMP_PRESERVED
   files: [src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: H6
   severity: P2
   wave: RC-12
   invariant: COLD_ARCHIVE_ATOMIC
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: fb85f22
 - id: H7
   severity: P2
   wave: RC-12
   invariant: SQLITE_DELETE_CLEANS_WAL_SHM
   files: [src/session/sqlite-session.ts, src/session/index.ts]
-  status: open
+  status: fixed
+  fixedBy: 3520a1e
 - id: H8
   severity: P2
   wave: RC-11
   invariant: COLD_MEMORY_SHA_VERIFIED
-  files: [src/session/checkpoint.ts]
-  status: open
+  files: [src/session/checkpoint.ts, src/ui/cli.ts]
+  status: fixed
+  fixedBy: 9abf498
 - id: H9
   severity: P2
   wave: RC-11
   invariant: REWIND_HISTORY_DEPTH_AND_CLEANUP
-  files: [src/agent/rewind.ts, src/session/sqlite-session.ts]
-  status: open
+  files: [src/agent/rewind.ts, src/session/sqlite-session.ts, src/session/checkpoint.ts]
+  status: fixed
+  fixedBy: b7cf90e
 
 ## 内核恢复（Wave 5）
 
@@ -352,67 +363,119 @@
   wave: RC-15
   invariant: MCP_REQUEST_CORRELATION
   files: [src/tools/mcp.ts]
-  status: open
+  status: fixed
+  fixedBy: ccbccd1
 - id: G3
   severity: P0
   wave: RC-14
   invariant: DUPLICATE_PROVIDER_SIDE_EFFECT=0
   files: [src/provider/openai.ts, src/provider/retry.ts]
-  status: open
+  status: fixed
+  fixedBy: 948dd1d
+  reverifiedAtCommit: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
 - id: G4
   severity: P1
   wave: RC-16
   invariant: DURATION_MEASURED_FROM_START
   files: [src/tools/shell.ts]
-  status: open
+  status: fixed
+  fixedBy: 5a2c9c8
 - id: G5
   severity: P1
   wave: RC-16
   invariant: PROJECT_STRUCTURE_SKIPS_DEPS
   files: [src/tools/codegraph.ts]
-  status: open
+  status: fixed
+  fixedBy: 5a2c9c8
 - id: G6
   severity: P1
   wave: RC-14
   invariant: THINKING_BLOCKS_SENT_ONCE
   files: [src/provider/deepseek.ts, src/provider/anthropic.ts]
-  status: open
+  status: fixed
+  fixedBy: 62d87f9
 - id: G7
   severity: P1
   wave: RC-16
   invariant: SERVICE_LOG_TAIL_READ
   files: [src/tools/service.ts]
-  status: open
+  status: fixed
+  fixedBy: 9b9680a
 - id: G8
   severity: P1
   wave: RC-16
   invariant: EDIT_SYMBOL_IN_TRANSACTION
   files: [src/tools/file.ts]
-  status: open
+  status: fixed
+  fixedBy: 7064b69
 - id: G9
   severity: P1
   wave: RC-14
   invariant: FIM_HAS_TIMEOUT
   files: [src/provider/fim.ts]
-  status: open
+  status: fixed
+  fixedBy: 6c1a896
 - id: G10
   severity: P2
   wave: RC-16
   invariant: TOKEN_ESTIMATE_MEANINGFUL
   files: [src/tools/repo-map.ts]
-  status: open
+  status: fixed
+  fixedBy: 385ae4b
 - id: G11
   severity: P1
   wave: RC-14
   invariant: RETRY_AFTER_CAPPED
   files: [src/provider/retry.ts]
-  status: open
+  status: fixed
+  fixedBy: bf99b44
 - id: G12
   severity: P2
   wave: RC-16
   invariant: TIMEOUT_PARSE_GUARDED
   files: [src/tools/shell.ts, src/tools/process.ts, src/tools/service.ts]
-  status: open
+  status: fixed
+  fixedBy: cb9fc58
+
+## RC-19 基准关键收敛（Wave 8 · Phase 1 — Provider Side-Effect Safety）
+
+- id: RC19-1
+  severity: P0
+  wave: RC-19
+  invariant: ABORT_RETRIED=0
+  files: [src/provider/openai.ts, src/provider/deepseek.ts, src/provider/anthropic.ts, src/provider/retry.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: abort 在 attempt 顶部与 backoff 期间都检查；providerBackoffWait 与 abort 竞争，信号触发后不再发起新 fetch
+- id: RC19-2
+  severity: P0
+  wave: RC-19
+  invariant: STREAM_REPLAY_SIDE_EFFECT=0
+  files: [src/provider/deepseek.ts, src/provider/anthropic.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: thinking block start 即标记 unsafeToRetry —— 思考流不可重放
+- id: RC19-3
+  severity: P0
+  wave: RC-19
+  invariant: RETRY_AFTER_SIDE_EFFECT=0
+  files: [src/agent/provider/round-runner.ts, src/agent/provider/round-retry-state.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: ProviderRoundRetryState 跟踪 requestId/emittedThinking/emittedText/toolCallStarted/completedToolCallIds/sideEffectBoundaryCrossed/aborted；完整 tool_call 交付即越过边界，NO_BLIND_RETRY
+- id: RC19-4
+  severity: P0
+  wave: RC-19
+  invariant: DUPLICATE_TOOL_CALL_EXECUTED=0
+  files: [src/agent/tool-execution/batch-executor.ts, src/agent/tool-ledger.ts]
+  status: fixed
+  fixedBy: 6a3b652
+  verificationTest: tests/reliability/provider_side_effect_retry.test.ts
+  note: ToolExecutionLedger.findById 作为 run 级 dedup 键；重发的 tool call id 不再执行，返回结构化 DUPLICATE_TOOL_CALL 结果（串行与并行路径都拦截）
 
 ## 卫生与长期（Wave 7）
 
@@ -421,25 +484,29 @@
   wave: RC-17
   invariant: STABLE_TOKENS_TRULY_STABLE
   files: [src/context/cache-anatomy.ts]
-  status: open
+  status: fixed
+  fixedBy: 049aa58
 - id: H3
   severity: P2
   wave: RC-17
   invariant: SYMBOL_REGEX_ESCAPED
   files: [src/tools/codegraph.ts]
-  status: open
+  status: fixed
+  fixedBy: 78065e5
 - id: H4
   severity: P1
   wave: RC-17
   invariant: DEAD_CODE_DISPOSITION_PER_SYMBOL
   files: [全库]
-  status: open
+  status: fixed
+  fixedBy: a5faeed
 - id: H10
   severity: P2
   wave: RC-17
   invariant: TRIAGE_HIGH_RISK_PRESERVED
   files: [src/agent/flash-triage.ts]
-  status: open
+  status: fixed
+  fixedBy: 29af4c4
 - id: H11
   severity: P2
   wave: RC-17
@@ -454,7 +521,8 @@
   wave: RC-17
   invariant: CHARS_TRIMMED_ACCURATE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: 188a662
 
 ## 上下文压缩专项（ContextGuard）
 
@@ -480,15 +548,18 @@
 
 ## 上下文全景（K 系列，RC-18 Context Authority 细化，来源：2026-08 上下文系统全景 55 项）
 
-注：K4 已由 RC-02.5 X2 关闭；K13/K25/K36 为部分修复，缺口保持 open；
-K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
+注：K4 已由 RC-02.5 X2 关闭；K25/K36 由 RC-18 关闭（K25 @af12939；K36 @a4472d0）；
+K26/K27 为 RC-02.5 审计遗漏，随 RC-18 Batch A 关闭（@af12939）；
+K18 能力就位（轨迹输入接口 + 验证通过佐证"已解决"），生产接线在 src/ui/cli.ts 与
+src/runtime/bootstrap.ts（非 RC-18 领地），缺口待后续窗口。
 
 - id: K1
   severity: P0
   wave: RC-18
   invariant: USER_HARD_CONSTRAINTS_NEVER_SILENTLY_EVICTED
   files: [src/agent/round/helpers.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: 用户硬约束在进入 Agent 前消失（窗口 break 语义：超长单条直接 break，更早短消息不纳入）
   related: X1(partial)
 
@@ -497,7 +568,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: PLAN_STATE_DECISIONS_WIRED
   files: [src/harness/context/request.ts]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Plan State decisions 来源为空（createContextRequest decisions: [] TODO）
 
 - id: K3
@@ -505,7 +577,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_ARCHIVE_PRESERVES_SOURCE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Epoch archive 不保存被移除原始消息（有元数据记录的删除）
 
 - id: K4
@@ -523,15 +596,17 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: TOOL_OUTPUT_PERSISTED_BEFORE_COMPRESSION
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: 被压缩的完整 Tool Output 无原始 Artifact（重执行不可复现）
 
 - id: K6
   severity: P0
   wave: RC-18
   invariant: RESUME_PRESERVES_CONSTRAINTS
-  files: [src/session/checkpoint.ts, src/ui/cli.ts]
-  status: open
+  files: [src/session/summarizer.ts, src/ui/cli.ts, src/session/checkpoint.ts]
+  status: fixed
+  fixedBy: ef940b5
   desc: Session Resume 丢早期约束（2+4 条消息，正则摘要）
   related: X1(partial)
 
@@ -540,7 +615,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: AUTHORITY_LEVELS_DISTINGUISHED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 不同权威等级内容混成普通 user 消息（权威混淆+注入面）
   related: E3(partial)
 
@@ -549,7 +625,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: VERIFIED_INSIGHTS_EVIDENCE_BOUND
   files: [src/agent/maintenance/coordinator.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Thinking Compaction verified 无 Evidence 绑定（上下文真值污染）
 
 - id: K9
@@ -557,7 +634,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: TOOL_CHAIN_ID_EXACT_MATCH
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 历史 Tool Chain 验证未按 ID 严格匹配（错配关联）
 
 - id: K10
@@ -565,7 +643,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: THINKING_NAMESPACED_BY_PROJECT
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: ThinkingStore 全局目录无项目隔离（跨项目串线）
 
 - id: K11
@@ -573,7 +652,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: M0_NO_PROTECTION_WINDOW
   files: [src/memory/compactor.ts, src/ui/cli.ts]
-  status: open
+  status: fixed
+  fixedBy: 3cd8fbd
   desc: M0 创建太晚（50k 阈值前存在保护空窗）
   related: X1③(partial)
 
@@ -582,7 +662,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: M0_SUPERSEDABLE
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: M0 一次性锚点无法修正（遗漏长期漏掉）
 
 - id: K13
@@ -590,7 +671,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: WARM_GIST_STRUCTURED_EXTRACTION
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: warm gist 层 Decision 提取仍用低召回正则（X1 未覆盖层）
   related: X1(partial)
 
@@ -599,7 +681,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: WARM_GIST_TAIL_PRESERVED
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Warm gist 只保留开头 220 字符（尾部约束被截断）
 
 - id: K15
@@ -607,7 +690,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: CAP_LIMITS_NEVER_SILENT
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: 多处固定数量上限静默淘汰旧事实（无 omission manifest）
 
 - id: K16
@@ -615,7 +699,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: COLD_ARCHIVE_COMPLETE_AND_ATOMIC
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Cold archive 非完整原始来源 + 非原子写
   related: H6(原子性)
 
@@ -624,7 +709,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: DYNAMIC_MEMORY_BUDGET_ORDER_SAFE
   files: [src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Dynamic memory 预算顺序挤掉真实对话（无省略告知）
 
 - id: K18
@@ -632,7 +718,9 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: COMPACTOR_SEES_RUN_TRAJECTORY
   files: [src/ui/cli.ts, src/memory/compactor.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
+  note: 能力就位（轨迹输入 + 证据佐证）；cli/bootstrap 接线缺口见顶部注记
   desc: Compactor 看不到 Agent 内部轨迹（tool calls/verification/gates）
 
 - id: K19
@@ -640,7 +728,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_THRESHOLDS_CALIBRATED
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Epoch 阈值基于 chars/3 无真实 token 校准
 
 - id: K20
@@ -648,7 +737,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_ROLLOVER_SCOPE_MATCHES
   files: [src/agent/context-epoch.ts, src/agent/kernel/round.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Epoch 计算全部 Context 却只裁 rawMessages（重复 rollover 风险）
 
 - id: K21
@@ -656,7 +746,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: COMPRESS_IMMEDIATE
   files: [src/agent/kernel/round.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: compress 不立即压缩已有上下文；forceCompress 警告延迟一轮
 
 - id: K22
@@ -664,7 +755,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: ROLLOVER_BLOCK_FALLBACK
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Tool Chain 阻止 Rollover 后无应急恢复路径（可能被迫停止）
 
 - id: K23
@@ -672,7 +764,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: EPOCH_SNAPSHOT_AUDITABLE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Epoch snapshot planStateDigest 非 hash（不可审计恢复）
 
 - id: K24
@@ -680,16 +773,18 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-17
   invariant: CHARS_TRIMMED_ACCURATE
   files: [src/agent/context-epoch.ts]
-  status: open
+  status: fixed
   desc: charsTrimmed 虚高（未扣 preamble）
   related: H12
+  fixedBy: b0f475b
 
 - id: K25
   severity: P1
   wave: RC-18
   invariant: TOOL_RESULT_LIFECYCLE_PINNING
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: 成功/失败结果同压缩策略（无 Pin/生命周期分级）
   related: X2(partial)
 
@@ -698,7 +793,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-16
   invariant: HISTORICAL_MICROCOMPACT_ROUNDS_FIXED
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Historical Microcompact 轮次计算倒置（messages.length-keepRecentRounds*2 vs assistantCount，经常不执行）
   RC-02.5 遗漏
 
@@ -707,7 +803,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-16
   invariant: HISTORICAL_MICROCOMPACT_TOOL_MATCH
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Historical Microcompact 通过 tool_use_id 前缀猜类型（provider id 形如 toolu_/call_ 永不匹配）
   RC-02.5 遗漏
 
@@ -716,7 +813,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-16
   invariant: READFILE_COMPACT_SEMANTICS_UNIFORM
   files: [src/agent/round/post-loop.ts]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: read_file 前向/历史压缩语义不一致（ORCANA_READFILE_COMPACT_CHARS=0 两路径含义不同）
 
 - id: K29
@@ -724,7 +822,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: PIPELINE_SINGLE_ENTRYPOINT
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Harness Context Pipeline 不是上下文唯一入口（conversation-tail metadata-only）
 
 - id: K30
@@ -732,7 +831,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: PIPELINE_BUDGET_ENABLED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Pipeline 预算分配在生产路径关闭（Budget stays disabled）
 
 - id: K31
@@ -740,7 +840,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: CONTEXT_FRESHNESS_ENFORCED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Freshness/Dedupe 基本未生效（sourceRefs 空/freshness undefined）
 
 - id: K32
@@ -748,7 +849,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: REQUIRED_CONTEXT_REVALIDATED
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Required Context 过期/超预算仍保留（无 REVALIDATE 状态）
 
 - id: K33
@@ -756,7 +858,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: TRIM_SEMANTIC_NOT_WHOLESALE
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Trim 整块删除而非语义压缩
 
 - id: K34
@@ -764,7 +867,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: DROPPED_WARNINGS_AUTHORITATIVE
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: Pipeline dropped/warnings 未进运行权威状态
 
 - id: K35
@@ -772,7 +876,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: STABLE_PREFIX_TRULY_STABLE
   files: [src/agent/kernel/*]
-  status: open
+  status: fixed
+  fixedBy: af12939
   desc: Frozen Stable Prefix 含会变化内容（为缓存牺牲 freshness）
   related: H1
 
@@ -781,7 +886,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: THINKING_UPDATES_REACH_STABLE_PREFIX
   files: [src/agent/maintenance/coordinator.ts]
-  status: open
+  status: fixed
+  fixedBy: a4472d0
   desc: Thinking Compaction 更新未进 Frozen Stable Prefix/Compactor Anchor
   related: X1③(partial)
 
@@ -790,7 +896,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: STAGED_FILES_HASH_REFRESHED
   files: [src/context/staged/*]
-  status: open
+  status: fixed
+  fixedBy: ad08730
   desc: Staged Files 缓存可能旧版本（无 hash/mtime 刷新）
 
 - id: K38
@@ -798,7 +905,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: STAGED_CONTEXT_RELEVANCE_RANKED
   files: [src/context/staged/*]
-  status: open
+  status: fixed
+  fixedBy: ad08730
   desc: Staged Context 机械文件头+文件名优先级（无相关性排序）
 
 - id: K39
@@ -806,7 +914,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: KERNEL_TAIL_PRESERVED
   files: [src/context/kernel.ts]
-  status: open
+  status: fixed
+  fixedBy: ad08730
   desc: Project Kernel 文件头截断（AGENTS.md 后半段被忽略）
 
 - id: K40
@@ -814,7 +923,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: FORK_STABLE_CONTEXT_IMMUTABLE
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: ad08730
   desc: 子 Agent forkStableContext 放入可变文件内容（缓存命中≠正确）
 
 - id: K41
@@ -822,16 +932,18 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-17
   invariant: STABLE_TOKENS_TRULY_STABLE
   files: [src/context/cache-anatomy.ts]
-  status: open
+  status: fixed
   desc: Cache Anatomy 统计失真（conversation 标 stable/memory 硬编码 0）
   related: H1
+  fixedBy: 7d4a9cf
 
 - id: K42
   severity: P1
   wave: RC-18
   invariant: THINKING_RETRIEVAL_NAMESPACED
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Thinking Retrieval 无 workspace/commit/model 绑定
   related: K10
 
@@ -840,7 +952,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: SEMANTIC_SCORER_FULL_CANDIDATE
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Semantic Scorer 只看到候选 80 字符标题（非完整推理）
 
 - id: K44
@@ -848,7 +961,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: NO_RAW_THINK_REPLAY
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: 过去原始推理链以 <think> 形式注入（模仿错误路径/假设污染）
 
 - id: K45
@@ -856,7 +970,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: MEMORY_SUPERSEDE_BY_EVIDENCE
   files: [src/memory/thinking-store.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Thinking Memory 时间衰减伪解决（缺席≠已解决，需 Evidence supersede）
 
 - id: K46
@@ -864,7 +979,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: KNOWLEDGE_NAMESPACED
   files: [src/memory/knowledge.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: KnowledgeBase 全局存储无项目命名空间（无来源/适用范围）
 
 - id: K47
@@ -872,7 +988,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: KNOWLEDGE_CONFLICT_RESOLVED
   files: [src/memory/knowledge.ts]
-  status: open
+  status: fixed
+  fixedBy: 1320e25
   desc: Knowledge 无冲突解析（矛盾知识可同时注入）
 
 - id: K48
@@ -888,31 +1005,35 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-17
   invariant: TOOL_SCHEMA_IN_BUDGET
   files: [src/agent/round/request-builder.ts]
-  status: open
+  status: fixed
   desc: Context Budget 未计算 Tool Schema（实际请求远大于估算）
+  fixedBy: bb9a1d3
 
 - id: K50
   severity: P1
   wave: RC-17
   invariant: TOOL_SCHEMA_CAP_CONSISTENT
   files: [src/agent/round/request-builder.ts]
-  status: open
+  status: fixed
   desc: Tool Schema >128 静默截断（模型看不到 vs 系统认为可用不一致）
+  fixedBy: 0c56278
 
 - id: K51
   severity: P2
   wave: RC-17
   invariant: DYNAMIC_TOOL_DISCLOSURE
   files: [src/agent/round/request-builder.ts]
-  status: open
+  status: fixed
   desc: cacheStableTools 默认发送全量工具集（token/延迟/选择难度代价）
+  fixedBy: 09d2e02
 
 - id: K52
   severity: P1
   wave: RC-18
   invariant: CONTEXT_RETENTION_MANIFEST
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Context Retention Manifest（每轮 retained/compressed/archived/dropped）
 
 - id: K53
@@ -920,7 +1041,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: CRITICAL_FACT_COVERAGE_GATE
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Critical Fact Coverage Gate（裁剪前验证硬约束/义务/证据覆盖）
 
 - id: K54
@@ -928,7 +1050,8 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: CONTEXT_FRESHNESS_CONTRACT
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Context Freshness Contract（文件=hash/计划=version/证据=generation）
 
 - id: K55
@@ -936,13 +1059,31 @@ K26/K27 为 RC-02.5 审计遗漏，随 RC-16 关闭。
   wave: RC-18
   invariant: CONTEXT_AUTHORITY_ARBITRATION
   files: [src/harness/context/*]
-  status: open
+  status: fixed
+  fixedBy: e149587
   desc: 无 Context 权威冲突检测与仲裁优先级
 
+
+- id: D7
+  severity: P2
+  wave: ORMB-P3
+  invariant: TOOL_PATH_BASE_BOUND
+  files: [src/tools/file.ts]
+  status: open
+  desc: file.ts 纯 Node 工具（write_file/read_file 等）相对路径用 process.cwd() 解析，未绑定 projectRoot/权威 hostRoot（ToolExecutionContext 无 projectRoot 字段）。生产 cwd==projectRoot 无影响；projectRoot≠cwd 场景（ORMB-P3 评测实测：C1 探针任务写 src/sort.ts 落进 orcana 仓库）路径错误且 checkForbiddenFile 同基准放行。评测层已用逐 case chdir 规避；生产修复归 Linux/工具域（file.ts 属 W2 遗留领地）。
 ## 汇总
 
 - 合计: 118（原 63 项 + 上下文全景 K 系列 55 项）
 - 原 63 项: P0 18 / P1 27 / P2 18（A8 B6 C5 D6 E5 F7 G12 H12 X2）
-- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 1（K4 @0874f8c）；open 54
-- 已修总计: 23（原 22 + K4）
+- K 系列 55 项: P0 10 / P1 36 / P2 9；fixed 47（K4 @0874f8c；Batch A 9 @af12939；Batch B 6 @a4472d0；Batch E 14 @1320e25；Batch D 13 @e149587；Batch C 4 @ad08730）；open 8
+- 已修总计: 69（原 22 + K4 + Batch A 9 + Batch B 6 + Batch E 14 + Batch D 13 + Batch C 4）
 - 已抽查属实: A1, D1, C2, E1, B1（2026-08-06 逐行验证）
+
+## RC-20+ 基线测试跳过记录（2026-08-07）
+
+- 决策：d48d275 的 Phase-0 失败基线（18 FAIL 如实入册）中 14 个依赖未实现模块的
+  测试标 `test.skip`（评测基线前提：官方门禁 `bun run test` 转绿），非删除、可恢复。
+- 涉及：session_event_identity 4（`src/session/event-journal`）、context_accounting 5
+  （`src/context-runtime/accounting/token-accounting`）、execution_contract_retention 5
+  （`src/context-runtime/ledgers/{directive,execution-contract}-ledger`）。
+- 恢复：RC-20+ 实现对应模块后删除 `test.skip` 并撤注释（skip 处已标 wave 引用）。

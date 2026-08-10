@@ -12,6 +12,7 @@
  *  and the MasterPlan controller — see kernel/types.ts commit boundary.
  */
 
+import { createHash } from "node:crypto"
 import type { ProviderMessage, StreamEvent } from "../../provider/types"
 import { isRuntimeBuiltToolDescriptor, type ToolDescriptor } from "../../tools/registry"
 import { isBuiltinVerificationProducer } from "../../tools/builtins"
@@ -39,17 +40,18 @@ import { CompletionOrchestrator } from "../completion-orchestrator"
 import { AgentState } from "../state-machine"
 import { executeToolBatch } from "../tool-execution/batch-executor"
 import { setRuntimeContextBudgetMode } from "../runtime-context"
-import { getBlockingObligations } from "../../ripple/obligations"
+import { getRunRetryLedger } from "../../runtime/execution-context"
 import { currentTransactionEvidenceBinding } from "../patch-transaction"
 import { buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../round/request-builder"
 import { createPreRoundChain } from "../gates/pre-round"
-import { processGateOverflow } from "../gates/overflow"
 import {
   classifyEpochAction,
   epochRollover,
   formatEpochBudgetWarning,
   formatEpochStatus,
+  persistEpochArchive,
   totalMessageChars,
+  type RolloverResult,
 } from "../context-epoch"
 import { distillUserConstraints, extractUserTexts, formatConstraintContext } from "../memory/user-constraints"
 import { appendUserContext } from "../maintenance/coordinator"
@@ -62,10 +64,18 @@ import {
   stableMessageOf,
 } from "../../harness/context"
 import { createRoundState } from "../run/state"
+import type { RoundToolCall, RoundState } from "../run/types"
+import {
+  actionFirstPrompt,
+  commitmentPrompt,
+  obligationDigest,
+  replanOncePrompt,
+} from "./progress-governor"
+import type { RoundProgressInput, GovernorDecision } from "./progress-governor"
 import { runProviderRound } from "../provider/round-runner"
 import { createProviderRoundResult, type ProviderRoundResult } from "../provider/round-result"
 import { decideProviderFailureRecovery } from "../provider/failure-policy"
-import { collectRecentTurns, updateStateMachine } from "../round/post-loop"
+import { collectRecentTurns, compactHistoricalToolResults, updateStateMachine } from "../round/post-loop"
 import { currentNode, planProgress } from "../master-plan"
 import { activateMasterPlan, tryNodeTransition } from "./master-plan"
 import { patch, stream, trace, wrapEvents } from "./effects"
@@ -130,6 +140,15 @@ export async function* runRound(
     prompt: ctx.effectivePrompt,
     intentMode: intentPolicy.mode,
     planningPhase: planning.taskTracker?.phase === "planning",
+    // GATE-02: error-rich runs enter the recovery stage — reasoning shrinks,
+    // action reserve grows. Never the reverse (that was the OTS-013 loop).
+    stage: planning.taskTracker?.phase === "planning"
+      ? "planning"
+      : execution.consecutiveErrors > 0
+        ? "recovery"
+        : "execution",
+    // GATE-03: 无进展 streak >= 2 → ACTION_FIRST（思考压到 2K，本轮必须动工具）。
+    actionFirst: ctx.progressGovernor.consecutiveNoProgress >= 2,
     autoMaxSignals: { consecutiveErrors: execution.consecutiveErrors, modifiedFiles: execution.modifiedFileCount },
   })
   const thinking = thinkingDecision.thinking
@@ -148,12 +167,47 @@ export async function* runRound(
   const contextMessages = contextSliceToMessages(contextSlice)
   const planStateText = contextSlice.byProvider.get("plan-state")?.content ?? ""
   const taskPlanning = planning.taskTracker?.phase === "planning"
-  // ── Frozen stable prefix: computed once on round 0, reused across all rounds ──
+  // ── Frozen stable prefix: computed once on round 0, reused across rounds ──
   // (the pipeline's stable-memory provider passes it through byte-for-byte
   // from round 1 — plan §23 cache stability).
+  // K35: the prefix is only frozen while the sources that produced it stay
+  // unchanged. project-kernel (hash/text), context-map (contextMapContext) and
+  // skills (triageSkillPrompts) can drift mid-run; once frozen the harness
+  // providers return EMPTY for them (frozen passthrough), so the pipeline can
+  // no longer reveal drift. Fingerprint the source content every round and
+  // rebuild the frozen prefix when it changes — otherwise the model would keep
+  // seeing stale cached bytes (cache hit ≠ correct). When sources are stable
+  // this is a pure no-op and the passthrough stays byte-identical.
+  const stableSources: StablePrefixSources = {
+    stableMemoryContext: ctx.options.stableMemoryContext,
+    experienceContext: ctx.experienceContext,
+    contextKernelText: ctx.contextKernel.text,
+    contextMapContext: ctx.contextMap.contextMapContext,
+    triageSkillPrompts: ctx.triageSkillPrompts,
+  }
+  const stablePrefixFingerprint = stablePrefixSourceFingerprint(stableSources)
   const stableMessage = stableMessageOf(contextSlice)
-  if (round === 0 && !ctx.runState.conversation.frozenStablePrefix && stableMessage) {
-    yield patch({ conversation: { frozenStablePrefix: stableMessage } })
+  const frozenStablePrefix = ctx.runState.conversation.frozenStablePrefix
+  if (round === 0 && !frozenStablePrefix && stableMessage) {
+    yield patch({ conversation: { frozenStablePrefix: stableMessage, stablePrefixHash: stablePrefixFingerprint } })
+  } else if (round > 0 && frozenStablePrefix) {
+    const frozenHash = ctx.runState.conversation.stablePrefixHash
+    if (frozenHash && frozenHash !== stablePrefixFingerprint) {
+      // A stable source drifted — rebuild the prefix from current sources and
+      // swap it into this round's contextMessages so the model never sees the
+      // stale cached bytes. Subsequent rounds continue byte-frozen against the
+      // rebuilt message until the next drift.
+      const rebuiltContent = composeStablePrefixContent(stableSources)
+      if (rebuiltContent) {
+        for (const m of contextMessages) {
+          if (typeof m.content === "string" && m.content.includes("[CACHE_ANCHOR:v3]")) {
+            m.content = rebuiltContent
+          }
+        }
+        yield patch({ conversation: { frozenStablePrefix: { role: "user", content: rebuiltContent }, stablePrefixHash: stablePrefixFingerprint } })
+        yield trace("stable_prefix_rebuilt", { round, previousHash: frozenHash, hash: stablePrefixFingerprint })
+      }
+    }
   }
   // ── Context messages: all go BEFORE rawMessages ──
   // Anthropic API requires tool_use→tool_result adjacency. Any user
@@ -162,8 +216,22 @@ export async function* runRound(
   // rawMessages, never follow it. (pipeline output preserves this order)
 
   // ── Epoch check: estimate total chars and classify action ──
-  const epochTotalChars = totalMessageChars(contextMessages) + totalMessageChars(rawMessages)
-  const epochAction = classifyEpochAction(epochTotalChars, ctx.epochState.thresholds)
+  // K20: epoch accounting is scope-aligned with the rollover. epochRollover()
+  // archives ONLY rawMessages (the volatile task-epoch tail); contextMessages
+  // (plan-state / volatile / budget context) are rebuilt fresh every round and
+  // never enter the archive. Counting both would keep the epoch permanently
+  // inflated above threshold and re-trigger rollover on every round. So the
+  // epoch decision is made on rawMessages alone — the exact scope that a
+  // rollover would trim.
+  const epochTotalChars = epochScopeChars(contextMessages, rawMessages)
+  // K19: calibrate the char thresholds with the previous round's measured token
+  // density (chars per token). The default 3 is used until a provider reports
+  // actual tokens (see the usage-capture block later in this round).
+  const epochAction = classifyEpochAction(
+    epochTotalChars,
+    ctx.epochState.thresholds,
+    ctx.epochState.lastMeasuredCharsPerToken ?? 3,
+  )
   if (epochAction !== "none") {
     yield stream({ type: "status", data: formatEpochStatus(ctx.epochState, round, epochTotalChars) })
   }
@@ -183,26 +251,66 @@ export async function* runRound(
     }
     const rolloverResult = epochRollover(rawMessages, 3 /* keep 3 most recent turns */, planStateForRollover, ctx.epochState, round)
     if ("blocked" in rolloverResult) {
-      yield stream({ type: "status", data: `epoch-rollover: blocked — ${rolloverResult.reason}` })
-      // Continue without rollover; will retry next round
+      // K22: emergency recovery — if the epoch has already rolled over at least
+      // once (or this epoch has been blocked for several rounds straight) the
+      // model may be looping on an unclosed tool chain while the context keeps
+      // growing. Retry once in fallback mode to cut at the last safe boundary
+      // instead of blocking indefinitely.
+      const roundsSinceEpochStart = round - ctx.epochState.epochStartRound
+      const shouldFallback = ctx.epochState.rolloverCount > 0 || roundsSinceEpochStart >= 4
+      if (shouldFallback) {
+        const fallbackResult = epochRollover(rawMessages, 3, planStateForRollover, ctx.epochState, round, true)
+        if (!("blocked" in fallbackResult)) {
+          yield* applyRollover(ctx, fallbackResult, round, "fallback")
+        } else {
+          yield stream({ type: "status", data: `epoch-rollover: blocked — ${rolloverResult.reason} (fallback also unavailable)` })
+          // Continue without rollover; will retry next round
+        }
+      } else {
+        yield stream({ type: "status", data: `epoch-rollover: blocked — ${rolloverResult.reason}` })
+        // Continue without rollover; will retry next round
+      }
     } else {
-      // Replace rawMessages with rolled-over version
-      while (rawMessages.length > 0) rawMessages.pop()
-      for (const m of rolloverResult.messages) rawMessages.push(m)
-      ctx.epochState.currentEpochIndex++
-      ctx.epochState.epochStartRound = round
-      ctx.epochState.rolloverCount++
-      ctx.epochState.totalCharsTrimmed += rolloverResult.charsTrimmed
-      ctx.epochState.snapshots.push(rolloverResult.snapshot)
-      yield stream({ type: "status", data: `epoch-rollover: ${rolloverResult.archivedCount} messages archived (${rolloverResult.charsTrimmed} chars), ${rawMessages.length} messages retained` })
-      yield trace("epoch_rollover", {
-        epochIndex: rolloverResult.snapshot.index,
-        round,
-        archivedCount: rolloverResult.archivedCount,
-        charsTrimmed: rolloverResult.charsTrimmed,
-      })
+      yield* applyRollover(ctx, rolloverResult, round, "normal")
     }
   }
+
+  // ── K21: epoch compression acts immediately, not one round late ──
+  // The L6 historical microcompact runs only at the END of a round and is
+  // gated on round%10 / forceCompress / rollover. A context that has already
+  // crossed a compress tier would otherwise keep its bloated historical tool
+  // results for the entire NEXT provider request. Compact existing historical
+  // results NOW, before the request is built, so the model sees the reduced
+  // context this round. compactHistoricalToolResults only rewrites the text of
+  // long tool_result blocks in place — message order and role alternation are
+  // untouched.
+  if (epochAction === "compress" || epochAction === "forceCompress" || epochAction === "rollover") {
+    const immediatelyCompacted = compactHistoricalToolResults(rawMessages, 8)
+    if (immediatelyCompacted > 0) {
+      budget.microcompactCount += immediatelyCompacted
+      yield stream({ type: "status", data: `epoch-compress: ${immediatelyCompacted} historical results compacted immediately (${epochAction})` })
+      yield trace("epoch_compress_immediate", { round, action: epochAction, compacted: immediatelyCompacted, total: budget.microcompactCount })
+    }
+  }
+
+  // ── PR 4: Epoch budget warning on force-compress (one-shot) ──
+  // K21: the warning is injected into contextMessages BEFORE the provider
+  // request is built so the model sees it THIS round. (Previously it was
+  // pushed into rawMessages after estimateRoundTokens had already assembled
+  // the request, so it only arrived on the NEXT round — one round late.)
+  if (epochAction === "forceCompress" && !notices.announcedEpochForceCompress) {
+    yield patch({ notices: { announcedEpochForceCompress: true } })
+    const epochWarning = formatEpochBudgetWarning(
+      Math.round((epochTotalChars / ctx.epochState.thresholds.forceCompressChars) * 100),
+      ctx.epochState.thresholds,
+    )
+    // contextMessages precede rawMessages in the provider request, so a user
+    // warning here never breaks tool_use→tool_result adjacency inside
+    // rawMessages. It lives only in this round's freshly built context.
+    contextMessages.push({ role: "user", content: epochWarning })
+    yield stream({ type: "status", data: `epoch-budget: force-compress — ${Math.round(epochTotalChars / 1000)}k chars` })
+  }
+
   if (!notices.announcedKernel) {
     yield patch({ notices: { announcedKernel: true } })
     yield stream({ type: "status", data: `context-kernel: ${ctx.contextKernel.hash} (~${ctx.contextKernel.estimatedTokens} tokens)` })
@@ -222,7 +330,7 @@ export async function* runRound(
   ctx.usage.apiCalls++
 
   // ── Pre-round gate chain: context budget → tool disclosure → readonly/plan → ripple filter ──
-  const preTokens = estimateRoundTokens(system, contextMessages, rawMessages, null)
+  const preTokens = estimateRoundTokens(system, contextMessages, rawMessages, null, tools)
   const contextText = preTokens.providerMessages.map(m => typeof m.content === "string" ? m.content : JSON.stringify(m.content)).join("\n").slice(-4000) + "\n" + system
   const preRoundCtx = {
     round,
@@ -251,8 +359,9 @@ export async function* runRound(
 
   setRuntimeContextBudgetMode(preRoundCtx.contextBudgetMode)
   const budgetContext = preRoundCtx.budgetMessage
+  const disclosedTools = ctx.cacheStableTools ? tools : preRoundCtx.activeTools
   const { roundInputTokens, providerMessages } = estimateRoundTokens(
-    system, contextMessages, rawMessages, budgetContext,
+    system, contextMessages, rawMessages, budgetContext, disclosedTools,
   )
   const estimatedRoundInputTokens = roundInputTokens
   ctx.usage.estimatedInputTokens += roundInputTokens
@@ -268,18 +377,6 @@ export async function* runRound(
   if ((preRoundCtx.contextBudgetMode as string) === "degraded" && !notices.announcedContextDegraded) {
     yield patch({ notices: { announcedContextDegraded: true } })
     yield stream({ type: "status", data: `context-budget: degraded ${preRoundCtx.contextBudgetPercent}%; finish current stage only` })
-  }
-
-  // ── PR 4: Epoch budget warning on force-compress (one-shot) ──
-  if (epochAction === "forceCompress" && !notices.announcedEpochForceCompress) {
-    yield patch({ notices: { announcedEpochForceCompress: true } })
-    const epochWarning = formatEpochBudgetWarning(
-      Math.round((epochTotalChars / ctx.epochState.thresholds.forceCompressChars) * 100),
-      ctx.epochState.thresholds,
-    )
-    // Inject as a user message into rawMessages to warn the model
-    rawMessages.push({ role: "user", content: epochWarning })
-    yield stream({ type: "status", data: `epoch-budget: force-compress — ${Math.round(epochTotalChars / 1000)}k chars` })
   }
 
   // Apply ripple block side effects
@@ -392,6 +489,19 @@ export async function* runRound(
     return { kind: "return", reason: "aborted" }
   }
 
+  // RC-19 Phase 1: provider round identity + side-effect boundary for
+  // observability — a round that crossed the boundary is never replayed.
+  yield trace("provider_round", {
+    round,
+    requestId: providerRoundResult.requestId,
+    sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed,
+    emittedText: providerRoundResult.textChunks.length > 0,
+    emittedThinking: (providerRoundResult.thinkingBlocks?.length ?? 0) > 0,
+    toolCalls: providerRoundResult.toolCalls.length,
+    // GATE-02：截断轮在 trace 中可见（观测性——截断频率是 OTS 类问题主信号）
+    stopReason: providerRoundResult.stopReason,
+  })
+
   const roundMs = Date.now() - roundState.startedAt
 
   const textChunks = roundState.textChunks
@@ -411,10 +521,29 @@ export async function* runRound(
   if (typeof providerRoundInputTokens === "number" && providerRoundInputTokens > 0) {
     yield patch({ budget: { contextInput: budget.contextInput + providerRoundInputTokens - estimatedRoundInputTokens } })
   }
+  // K19: calibrate the epoch thresholds with the observed token density, used by
+  // the NEXT round's epoch decision. charsPerToken = total request chars /
+  // measured input tokens; when the provider reports no tokens, keep 3 (default).
+  if (typeof providerRoundInputTokens === "number" && providerRoundInputTokens > 0) {
+    const schemaChars = activeTools.length
+      ? JSON.stringify(activeTools.map(t => t.toAnthropicSchema()).slice(0, 128)).length
+      : 0
+    const measuredRequestChars = system.length + schemaChars + totalMessageChars(providerMessages)
+    if (measuredRequestChars > 0) {
+      ctx.epochState.lastMeasuredCharsPerToken = measuredRequestChars / providerRoundInputTokens
+    }
+  }
 
   const estimatedOutputTokens = Math.round(finalText.length / 3 + completedToolCalls.reduce((s, tc) => s + JSON.stringify(tc.input).length / 3, 0))
   yield patch({ budget: { contextOutput: budget.contextOutput + (roundState.providerUsage?.outputTokens ?? estimatedOutputTokens) } })
   const displayedCacheHitRate = roundState.providerUsage?.cacheHitRate ?? ctx.cacheTracker.hitRate
+  // H12: cache-miss input tokens accumulate across rounds (round N carries
+  // rounds 1..N) — the same "provider usage is a cumulative snapshot"
+  // invariant as budget.contextInput/contextOutput, so the harness
+  // BudgetGuard's delta accounting counts each token exactly once. Before
+  // this fix the field was round-local while input/output were cumulative —
+  // a constant per-round cache miss was under-counted by the guard.
+  ctx.usage.cacheMissInputTokens += roundState.providerUsage?.cacheMissInputTokens ?? 0
   const finalUsageEvent = {
       requestedModel: modelName,
       actualModel: roundState.providerUsage?.actualModel,
@@ -427,7 +556,7 @@ export async function* runRound(
       cacheStatus,
       cacheSource: roundState.providerUsage ? "provider" : "estimate",
       cacheReadInputTokens: roundState.providerUsage?.cacheReadInputTokens,
-      cacheMissInputTokens: roundState.providerUsage?.cacheMissInputTokens,
+      cacheMissInputTokens: ctx.usage.cacheMissInputTokens,
       cacheCreationInputTokens: roundState.providerUsage?.cacheCreationInputTokens,
       cachePrefixShape: { firstChangedSection: cacheShape.firstChangedSection, sections: cacheShape.sections },
       contextUsagePercent: preRoundCtx.contextBudgetPercent,
@@ -447,6 +576,7 @@ export async function* runRound(
       finalText,
       taskTracker: planning.taskTracker,
       changedFiles: [...taskFiles],
+      retryLedger: getRunRetryLedger(),
     })
     for (const message of recovery.messages) rawMessages.push(message)
     if (recovery.emitError) {
@@ -558,15 +688,25 @@ export async function* runRound(
     }
   }
   if (completedToolCalls.length === 0) {
-    yield stream({ type: "status", data: "empty-round: no tool calls or final text" })
-    return { kind: "break", reason: "empty_round" }
+    if (providerRoundResult.stopReason === "truncated") {
+      // GATE-02：纯截断轮（thinking/文本烧光 envelope 且无工具产出）不得
+      // 静默终止——thinking 链保留入账，轮次以新 request 继续。连续空转由
+      // GATE-03 ProgressGovernor 在轮次上限内终止为 STALLED。
+      yield stream({ type: "status", data: "truncated-round: envelope exhausted before any tool call, continuing" })
+      yield trace("provider_round_truncated", { round, thinkingBlocks: roundState.thinkingBlocks.length })
+    } else {
+      yield stream({ type: "status", data: "empty-round: no tool calls or final text" })
+      return { kind: "break", reason: "empty_round" }
+    }
   }
 
   const assistantContent: Array<Record<string, unknown>> = []
   for (const tb of roundState.thinkingBlocks) assistantContent.push({ type: "thinking", thinking: tb.thinking, signature: tb.signature })
   if (finalText) assistantContent.push({ type: "text", text: finalText })
   for (const tc of completedToolCalls) assistantContent.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input })
-  rawMessages.push({ role: "assistant", content: assistantContent })
+  // GATE-02：truncated 空轮（无 thinking/text/tool）也可能走到这里——空
+  // assistant 消息会被真实 provider 拒收，必须跳过。
+  if (assistantContent.length > 0) rawMessages.push({ role: "assistant", content: assistantContent })
 
   // ── Persist thinking chain ──
   if (ctx.thinkingStore && roundState.thinkingBlocks.length > 0) {
@@ -626,6 +766,9 @@ export async function* runRound(
     capabilityRegistry: ctx.capabilityRegistry,
     artifactStore: ctx.artifactStore,
     runId: ctx.runId,
+    // RC-19 Phase 2 (D7): the run scope root — tools resolve relative paths
+    // against this, never process.cwd() (PROCESS_CWD_AFFECTS_TOOL=0).
+    projectRoot: ctx.options.projectRoot,
   }))
   if (batchResult.aborted) return { kind: "return", reason: "tool_batch_aborted" }
 
@@ -665,6 +808,11 @@ export async function* runRound(
     abortSignal,
     thinkingStore: ctx.thinkingStore,
     stableMemoryContext: options.stableMemoryContext,
+    // K36 (RC-18): thinking compaction 合并后的冷记忆写穿回 K35 稳定前缀源
+    // （ctx.options.stableMemoryContext）。maintenanceCtx 的 stableMemoryContext
+    // 只是字符串拷贝，本地赋值不会传播到源指纹（round.ts stableSources），
+    // 写穿后下一轮指纹漂移 → 重建 frozen stable prefix。
+    stableMemoryWriteThrough: (merged: string) => { options.stableMemoryContext = merged },
     effectivePrompt: ctx.effectivePrompt,
     routerRoundNum: ctx.state.roundNum,
     execution,
@@ -681,6 +829,7 @@ export async function* runRound(
     learnPrompts,
     preRoundCtx,
     runTrace: ctx.runTrace,
+    artifactStore: ctx.artifactStore,
   }
 
   // L6: forward microcompact (before history push)
@@ -691,28 +840,10 @@ export async function* runRound(
   const ripplePhase = yield* wrapEvents(runRippleVerificationPhase(verificationCtx))
   postToolRequiredFilesPrompt = ripplePhase.postToolRequiredFilesPrompt
 
-  // ── Gate overflow: track cumulative blocks, force strategy switch at 3, BLOCKED at 5 ──
+  // GATE-05: GateOverflow 已删除——"连续 N 次 block"的断环职责由
+  // ProgressGovernor（GATE-03）承担（无进展 → ACTION_FIRST → REPLAN →
+  // STALLED）。工具执行后清 blocked files 记录。
   ctx.sandbox.clearBlockedFiles()
-
-  const overflowResult = processGateOverflow({
-    round,
-    rippleBlockActive: execution.rippleBlockActive,
-    pendingRippleObligationsLength: getBlockingObligations(verificationState.rippleObligations).length,
-    postToolPlanningPrompt,
-    postToolRequiredFilesPrompt,
-    gateBlockCounts: ctx.gateBlockCounts,
-  })
-  for (const msg of overflowResult.deferredMessages) ctx.deferredGateMessages.push(msg)
-  for (const ev of overflowResult.statusEvents) yield stream({ type: "status", data: ev })
-
-  if (overflowResult.blocked) {
-    const reason = `${overflowResult.blockedGate} 累积阻断 ${overflowResult.blockedCount} 次，请求人工介入。`
-    ctx.sm.transition(AgentState.BLOCKED, reason)
-    ctx.lifecycle.stopReason = "blocked"
-    yield stream({ type: "status", data: `gate-overflow: ${overflowResult.blockedGate} blocked ${overflowResult.blockedCount} times — BLOCKED` })
-    yield trace("agent_loop_blocked", { reason, gate: overflowResult.blockedGate, blockCount: overflowResult.blockedCount })
-    return { kind: "return", reason: "gate_overflow" }
-  }
 
   // ── Revise plan: stuck detection → push back to planning ──
   if (
@@ -890,8 +1021,77 @@ export async function* runRound(
   // L6: periodic memory reconcile (prune + FTS5 rebuild)
   yield* wrapEvents(runKnowledgeReconcile(maintenanceCtx))
 
+  // ── GATE-03 v2: ProgressGovernor —— 无进展断环（GS-P1~P6） ──
+  // v1 只认状态变化，误杀合法侦察；v2 按四维 Delta（execution/evidence/
+  // epistemic/control）判定 EffectiveProgress，窗口仍为 4 轮（GS-P2）。
+  const progressInput = buildProgressInput(round, completedToolCalls, ctx, roundState)
+  const governorDecision = ctx.progressGovernor.evaluate(progressInput)
+  const pDelta = governorDecision.delta
+  // GS-P6：每轮 progress_delta trace（可审计 4 维 + 指纹 + 阶段 + 承诺）
+  yield trace("progress_delta", {
+    round,
+    phase: pDelta?.phase,
+    agentState: progressInput.agentState,
+    decision: governorDecision.action,
+    streak: ctx.progressGovernor.consecutiveNoProgress,
+    delta: pDelta ? { execution: pDelta.execution, evidence: pDelta.evidence, epistemic: pDelta.epistemic, control: pDelta.control, effective: pDelta.effective, reasons: pDelta.reasons } : null,
+    novelty: pDelta?.novelty,
+    fingerprints: pDelta?.fingerprints,
+    commitment: pDelta?.commitment ? { debtRemaining: ctx.progressGovernor.pendingCommitmentDebt, target: pDelta.commitment.target?.value ?? null, createdRound: pDelta.commitment.createdRound } : null,
+  })
+  if (governorDecision.action === "action_first") {
+    rawMessages.push(actionFirstPrompt())
+    yield stream({ type: "status", data: `progress-governor: 连续 2 轮无进展 → ACTION_FIRST（思考降级，必须发出工具调用）` })
+    yield trace("gate_decision", { gate: "progress_governor", decision: "action_first", streak: ctx.progressGovernor.consecutiveNoProgress })
+  } else if (governorDecision.action === "replan_once") {
+    rawMessages.push(replanOncePrompt())
+    yield stream({ type: "status", data: `progress-governor: 连续 3 轮无进展 → REPLAN_ONCE（不重复注入相同提示）` })
+    yield trace("gate_decision", { gate: "progress_governor", decision: "replan_once", streak: ctx.progressGovernor.consecutiveNoProgress })
+  } else if (governorDecision.action === "action_required") {
+    // GS-P4：承诺未偿付 → 明确要求发出对应工具调用（先于 streak 机制更早介入）
+    rawMessages.push(commitmentPrompt())
+    yield stream({ type: "status", data: `progress-governor: ACTION_REQUIRED —— 承诺「${governorDecision.commitment.text}」未偿付（债务 ${ctx.progressGovernor.pendingCommitmentDebt}）` })
+    yield trace("gate_decision", { gate: "progress_governor", decision: "action_required", commitment: governorDecision.commitment.fingerprint, streak: ctx.progressGovernor.consecutiveNoProgress })
+  } else if (governorDecision.action === "stalled") {
+    // GS-P2（streak）/ GS-P4（commitment）：STALLED 终止 + 完整诊断。
+    ctx.sm.transition(AgentState.STALLED, governorDecision.report)
+    ctx.lifecycle.stopReason = "stalled"
+    const why = governorDecision.reason === "commitment" ? "GS-P4 承诺未履行" : "GS-P2 连续 4 轮无有效进展"
+    yield stream({ type: "status", data: `progress-governor: STALLED —— ${why}，终止运行` })
+    yield stream({ type: "error", data: governorDecision.report })
+    yield trace("agent_loop_stalled", { round, streak: ctx.progressGovernor.consecutiveNoProgress, reason: governorDecision.reason })
+    return { kind: "break", reason: "progress_stalled" }
+  }
+
   if (round + 1 >= ctx.maxRounds) ctx.lifecycle.reachedRoundBudget = true
   return { kind: "continue" }
+}
+
+/** GATE-03 v2: 从本轮可达状态构造 RoundProgressInput（只读、纯函数）。 */
+function buildProgressInput(
+  round: number,
+  completedToolCalls: RoundToolCall[],
+  ctx: RunPhaseContext,
+  roundState: RoundState,
+): RoundProgressInput {
+  const steps = ctx.planning.taskTracker?.steps ?? []
+  const nodes = ctx.planStore.current?.nodes ?? []
+  const pendingSteps = steps.filter(s => s.status !== "done").map(s => s.title)
+  const pendingNodes = nodes.filter(n => n.status !== "done").map(n => n.title)
+  return {
+    round,
+    agentState: ctx.sm.currentState,
+    finalText: roundState.finalText,
+    committedToolCalls: completedToolCalls,
+    toolResults: roundState.toolResults,
+    verificationResults: roundState.verificationResults,
+    fileCount: ctx.taskFiles.size,
+    completedNodes: nodes.filter(n => n.status === "done").length,
+    completedSteps: steps.filter(s => s.status === "done").length,
+    currentNode: ctx.planStore.current?.current ?? "",
+    evidenceEntries: ctx.evidenceLedger.entries.length,
+    pendingObligationDigest: obligationDigest(pendingSteps, pendingNodes),
+  }
 }
 
 // ── Local helper ──
@@ -899,4 +1099,107 @@ export async function* runRound(
 function planProgressOf(ctx: RunPhaseContext): string {
   const plan = ctx.planStore.current
   return plan ? planProgress(plan) : ""
+}
+
+/** Apply a successful epoch rollover: swap in the archived result, advance the
+ *  epoch state, and persist the archived raw messages (K3).
+ *
+ *  `mode` marks the K22 fallback cut in status/trace. State mutations stay on
+ *  the run-scoped objects (rawMessages, epochState) captured by reference.
+ *  Archive persistence is best-effort: a missing/failing artifact store falls
+ *  back to the content sha256 hash and never blocks the rollover. */
+async function* applyRollover(
+  ctx: RunPhaseContext,
+  result: RolloverResult,
+  round: number,
+  mode: "normal" | "fallback",
+): AsyncGenerator<RunEffect, void, unknown> {
+  const { rawMessages } = ctx
+  while (rawMessages.length > 0) rawMessages.pop()
+  for (const m of result.messages) rawMessages.push(m)
+  ctx.epochState.currentEpochIndex++
+  ctx.epochState.epochStartRound = round
+  ctx.epochState.rolloverCount++
+  ctx.epochState.totalCharsTrimmed += result.charsTrimmed
+
+  const archive = await persistEpochArchive(ctx.artifactStore, result.archivedMessages)
+  result.snapshot.archiveRef = archive.ref
+  ctx.epochState.snapshots.push(result.snapshot)
+
+  yield stream({ type: "status", data: `epoch-rollover${mode === "fallback" ? " (fallback)" : ""}: ${result.archivedCount} messages archived (${result.charsTrimmed} chars), ${rawMessages.length} messages retained` })
+  yield trace("epoch_rollover", {
+    epochIndex: result.snapshot.index,
+    round,
+    archivedCount: result.archivedCount,
+    charsTrimmed: result.charsTrimmed,
+    mode,
+    archiveRef: archive.ref,
+    archivePersisted: archive.persisted,
+  })
+  if (archive.persisted) {
+    yield trace("epoch_archive_persisted", {
+      epochIndex: result.snapshot.index,
+      ref: archive.ref,
+      archivedCount: result.archivedMessages.length,
+    })
+  }
+}
+
+/** K20: the epoch decision scope is aligned with the rollover scope.
+ *
+ *  epochRollover() archives only rawMessages; contextMessages are rebuilt
+ *  fresh every round and never enter the archive. So only rawMessages count
+ *  toward the epoch thresholds. The contextMessages parameter is part of the
+ *  signature to make the exclusion explicit at the call site (and to allow
+ *  tests to prove a large context no longer inflates the epoch decision).
+ */
+export function epochScopeChars(contextMessages: ProviderMessage[], rawMessages: ProviderMessage[]): number {
+  void contextMessages // deliberately excluded — see K20
+  return totalMessageChars(rawMessages)
+}
+
+/** K35: the stable-prefix source inputs whose assembled bytes form the
+ *  round-0 frozen prefix (mirrors harness/context/providers/stable.ts). */
+export interface StablePrefixSources {
+  /** options.stableMemoryContext — the Stable Cold Memory block. */
+  stableMemoryContext?: string
+  /** ctx.experienceContext — composed into the stable-memory block on round 0. */
+  experienceContext?: string
+  /** ctx.contextKernel.text — the Project Context Kernel block (hash may drift). */
+  contextKernelText?: string
+  /** ctx.contextMap.contextMapContext — the Context Map block. */
+  contextMapContext?: string
+  /** ctx.triageSkillPrompts — the skills block. */
+  triageSkillPrompts?: string[]
+}
+
+/** K35: compose the stable-prefix message bytes exactly as the round-0
+ *  pipeline group assembler would (## Stable Prefix Context / [CACHE_ANCHOR:v3]
+ *  header + parts joined by "\n\n" in priority order, empty parts skipped).
+ *  Used to rebuild the frozen prefix when a source drifts. */
+export function composeStablePrefixContent(sources: StablePrefixSources): string {
+  const parts: string[] = []
+  const memory: string[] = []
+  if (sources.stableMemoryContext?.trim()) memory.push(`## Stable Cold Memory\n${sources.stableMemoryContext.trim()}`)
+  if (sources.experienceContext) memory.push(sources.experienceContext)
+  const memoryText = memory.join("\n\n")
+  if (memoryText.trim() !== "") parts.push(memoryText)
+  if (sources.contextKernelText) {
+    const kernelText = `## Project Context Kernel\n${sources.contextKernelText}`
+    if (kernelText.trim() !== "") parts.push(kernelText)
+  }
+  if (sources.contextMapContext?.trim()) parts.push(sources.contextMapContext)
+  const skillsText = (sources.triageSkillPrompts ?? []).join("\n\n")
+  if (skillsText.trim() !== "") parts.push(skillsText)
+  if (parts.length === 0) return ""
+  return ["## Stable Prefix Context\n[CACHE_ANCHOR:v3]", parts.join("\n\n")].join("\n\n")
+}
+
+/** K35: fingerprint of the stable-prefix SOURCE content (not the assembled
+ *  bytes that the frozen passthrough re-emits). Compared across rounds to
+ *  detect drift in project-kernel / context-map / skills while those sources
+ *  are suppressed by the frozen passthrough (the harness providers return
+ *  empty on frozen rounds, so the pipeline alone cannot reveal the drift). */
+export function stablePrefixSourceFingerprint(sources: StablePrefixSources): string {
+  return createHash("sha256").update(composeStablePrefixContent(sources)).digest("hex")
 }

@@ -44,8 +44,21 @@ const X86_64_SYSCALLS: Record<string, number> = {
   readlink: 89, getpid: 39, gettid: 186, getuid: 102, getgid: 104,
   geteuid: 107, getegid: 108, arch_prctl: 158, clock_gettime: 228,
   getrandom: 318, futex: 202, pipe2: 293, exit_group: 231,
+  sched_getaffinity: 204,
+  kill: 62, sched_yield: 124,
   epoll_create1: 291, epoll_ctl: 233, epoll_wait: 232, eventfd2: 290,
   timerfd_create: 283, timerfd_settime: 286, accept4: 288, dup3: 292,
+  // LR2-4 审核（B1）补全：真实运行时必需的系统调用（此前缺失 → 编译
+  // 时被静默丢弃，BPF 声明语义 ≠ 实际语义）。
+  poll: 7, nanosleep: 35, sendto: 44, recvfrom: 45, sendmsg: 46, recvmsg: 47,
+  truncate: 76, ftruncate: 77, getcwd: 79, chdir: 80, fchdir: 81,
+  rename: 82, mkdir: 83, unlink: 87, chmod: 90, fchmod: 91,
+  tgkill: 234, waitid: 247, mkdirat: 258, unlinkat: 263, renameat: 264,
+  linkat: 265, symlinkat: 266, fchmodat: 268, faccessat: 269, ppoll: 271,
+  utimensat: 280, execveat: 281, clock_nanosleep: 230, statfs: 137,
+  fstatfs: 138, renameat2: 316, prlimit64: 302, rseq: 334,
+  set_tid_address: 218, set_robust_list: 273, clone3: 435,
+  faccessat2: 439, openat2: 437,
 }
 
 interface BpfInsn { code: number; jt: number; jf: number; k: number }
@@ -73,15 +86,23 @@ export function compileSeccompBpf(profile: SeccompProfile): Uint8Array {
   }
   const insns: BpfInsn[] = []
   // 1. load arch → 非 x86_64 一律 KILL（跨架构 syscall 号不可信）。
+  //    经典 BPF：条件真 → pc += 1 + jt；假 → pc += 1 + jf。
+  //    jt=1：x86_64 匹配 → 跳过紧随的 RET_KILL，进入 deny/allow 判定；
+  //    jf=0：不匹配 → 落入 RET_KILL（LNXF-R2 12.1：原 jt=0/jf=1 写反，
+  //    x86_64 命中即被 SIGSYS，非 x86_64 反而存活 —— 语义测试见
+  //    tests/runtime/linux/seccomp-bpf.test.ts）。
   insns.push(insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 4))
-  const archCheck = insn(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, AUDIT_ARCH_X86_64)
+  const archCheck = insn(BPF_JMP | BPF_JEQ | BPF_K, 1, 0, AUDIT_ARCH_X86_64)
   insns.push(archCheck)
   insns.push(insn(BPF_RET | BPF_K, 0, 0, RET_KILL))
 
   // 2. deny 列表：load nr → jeq → ret errno（显式拒绝优先于白名单）。
+  // B1（LR2-4 审核）：未映射名字必须抛错（拒绝生成而非静默丢弃 ——
+  // 声明语义必须等于实际语义；deny 被丢是 fail-open，allow 被丢是
+  // 静默降级）。
   for (const name of profile.denySyscalls) {
     const nr = X86_64_SYSCALLS[name]
-    if (nr === undefined) continue
+    if (nr === undefined) throw new Error(`seccomp: unknown syscall name in deny list: ${name}`)
     insns.push(insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0))
     const jeq = insn(BPF_JMP | BPF_JEQ | BPF_K, 0, 0, nr)
     insns.push(jeq)
@@ -95,7 +116,9 @@ export function compileSeccompBpf(profile: SeccompProfile): Uint8Array {
   if (profile.defaultAction === "SCMP_ACT_ERRNO") {
     for (const name of profile.allowSyscalls) {
       const nr = X86_64_SYSCALLS[name]
-      if (nr === undefined) continue
+      // B1：未映射名字抛错（静默丢弃曾使 build 丢 36/86 条 —— git clone
+      // 的 mkdir/rename 全被删掉）。
+      if (nr === undefined) throw new Error(`seccomp: unknown syscall name in allow list: ${name}`)
       insns.push(insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0))
       const jeq = insn(BPF_JMP | BPF_JEQ | BPF_K, 0, 0, nr)
       insns.push(jeq)

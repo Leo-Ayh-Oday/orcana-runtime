@@ -5,7 +5,7 @@
  * CapabilityExecutor share one entry point.
  */
 
-import type { ToolDescriptor, ToolResult } from "../../tools/registry"
+import type { ToolDescriptor, ToolExecutionContext, ToolResult } from "../../tools/registry"
 import type { HookSystem } from "../../hooks"
 import {
   appendHookWarnings,
@@ -35,6 +35,11 @@ export interface SingleToolInput {
   abortSignal?: AbortSignal
   /** When a parallel readonly execution already produced a result, reuse it. */
   parallelResult?: ParallelToolResult
+  /** RC-19 Phase 2 (D7): authoritative project root threaded into the tool
+   *  execution context — relative tool paths never resolve against cwd. */
+  projectRoot?: string
+  readableRoots?: string[]
+  writableRoots?: string[]
 }
 
 export interface SingleToolOutput {
@@ -54,6 +59,16 @@ export interface SingleToolOutput {
 export async function executeSingleTool(input: SingleToolInput): Promise<SingleToolOutput> {
   const { tool, params, hooks, abortSignal, parallelResult } = input
   const startedAt = Date.now()
+  // RC-19 Phase 2 (D7): tools receive the project-root authority —
+  // resolveToolPath() binds relative paths to projectRoot, never cwd.
+  const toolContext: ToolExecutionContext = {
+    abortSignal,
+    // Fail-closed: absent authority → "" (tools reject path work rather than
+    // guess a cwd). RC-19 Phase 2 (D7).
+    projectRoot: input.projectRoot ?? "",
+    ...(input.readableRoots ? { readableRoots: input.readableRoots } : {}),
+    ...(input.writableRoots ? { writableRoots: input.writableRoots } : {}),
+  }
 
   if (parallelResult) {
     return {
@@ -68,7 +83,7 @@ export async function executeSingleTool(input: SingleToolInput): Promise<SingleT
       return { result: appendHookWarnings(before.blocked, before.warnings), startedAt }
     }
     const effectiveParams = before.replaceParams ?? params
-    const toolIterator = tool.executeStream(effectiveParams, { abortSignal })[Symbol.asyncIterator]()
+    const toolIterator = tool.executeStream(effectiveParams, toolContext)[Symbol.asyncIterator]()
     try {
       let finalResult: ToolResult = toToolResult(false, "")
       while (true) {
@@ -103,7 +118,7 @@ export async function executeSingleTool(input: SingleToolInput): Promise<SingleT
     params,
     execute: (effectiveParams) => withToolTimeout(
       tool.defn.name,
-      tool.execute(effectiveParams, { abortSignal }),
+      tool.execute(effectiveParams, toolContext),
       undefined,
       abortSignal,
     ),

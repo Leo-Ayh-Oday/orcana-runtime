@@ -139,6 +139,17 @@ const PHASE_RULE_MAP: Record<AgentState, PhaseRules> = {
       "No further tool calls in blocked state",
     ],
   },
+  [AgentState.STALLED]: {
+    phase: AgentState.STALLED,
+    activeRuleIds: [],
+    obligations: [
+      "Diagnose why no progress occurred across 4 rounds",
+      "List what was tried",
+    ],
+    hardStops: [
+      "No further tool calls in stalled state",
+    ],
+  },
 }
 
 // ── Capsule Manager ──

@@ -53,6 +53,7 @@ import type { AgentRunStatePatch } from "../run/state-patch"
 import type { GateTelemetry } from "../gates/telemetry"
 import type { UsageStats, AgentOptions } from "../loop-types"
 import type { EvidenceLedger } from "../evidence-ledger"
+import type { ProgressGovernor } from "./progress-governor"
 
 export type { AgentRunStatePatch }
 
@@ -72,6 +73,7 @@ export type LoopDecision =
         | "empty_round" // no tool calls and no final text
         | "self_edit" // runtime self-edit gate break
         | "verified_write" // completion gate text verified stop
+        | "progress_stalled" // GATE-03: ProgressGovernor — 4 no-progress rounds
     }
   | {
       kind: "return"
@@ -80,7 +82,6 @@ export type LoopDecision =
         | "prompt_blocked" // UserPromptSubmit hook blocked
         | "clarification" // clarification gate asked the user
         | "tool_batch_aborted" // tool batch aborted mid-execution
-        | "gate_overflow" // cumulative gate blocks exceeded
       blockReason?: string // prompt_blocked detail, emitted as the error event
     }
 
@@ -144,9 +145,10 @@ export interface RunPhaseContext {
   sandbox: SandboxManager
   pmode: "full" | "strict"
   toolLedger: ToolExecutionLedger
-  gateBlockCounts: Map<string, { count: number; lastSeen: number }>
   deferredGateMessages: string[]
   sm: StateMachine
+  /** GATE-03: run-scoped liveness controller (STALLED after 4 no-progress rounds). */
+  progressGovernor: ProgressGovernor
   /** Context Map (acquired in prepare, consumed by round/master-plan). */
   contextMap: {
     runtimeContextMap: RuntimeContextMap | null

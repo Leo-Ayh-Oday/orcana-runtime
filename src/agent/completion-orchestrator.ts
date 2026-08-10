@@ -144,16 +144,21 @@ export class CompletionOrchestrator {
   async evaluate(input: CompletionOrchestratorInput): Promise<CompletionOrchestratorResult> {
     const out = emptyResult()
 
+    // GATE-04 (GS-06): missingTaskRequirements 每轮只推导一次——TaskTracker
+    // gate、ExternalCompletionGate、FlashJudge 全部读取同一份快照，任何组件
+    // 不得重复重新推导同一 obligation 的 truth。
+    const obligationSnapshot = missingTaskRequirements(input.taskTracker)
+
     // ── Phase 1: Sync gate chain ──
-    const syncResult = this.evaluateSyncChain(input, out)
+    const syncResult = this.evaluateSyncChain(input, out, obligationSnapshot)
     if (syncResult !== null) return syncResult
 
     // ── Phase 2: External completion gate ──
-    const extResult = this.evaluateExternalGate(input, out)
+    const extResult = this.evaluateExternalGate(input, out, obligationSnapshot)
     if (extResult !== null) return extResult
 
     // ── Phase 3: Flash Judge ──
-    const flashResult = await this.evaluateFlashJudge(input, out)
+    const flashResult = await this.evaluateFlashJudge(input, out, obligationSnapshot)
     if (flashResult !== null) return flashResult
 
     // ── Phase 4: Evidence hard gate (canClaimDone) ──
@@ -171,8 +176,8 @@ export class CompletionOrchestrator {
 
   // ── Phase 1: Sync gate chain (RippleExit → Planning → TaskTracker → Quality) ──
 
-  private evaluateSyncChain(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult): CompletionOrchestratorResult | null {
-    const completionCtx = this.buildCompletionContext(input)
+  private evaluateSyncChain(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult, obligationSnapshot: string[]): CompletionOrchestratorResult | null {
+    const completionCtx = this.buildCompletionContext(input, obligationSnapshot)
     const completionChain = createCompletionChain()
     const completionResult = completionChain.evaluateSync(completionCtx, input.gateTelemetry)
 
@@ -254,8 +259,9 @@ export class CompletionOrchestrator {
 
   // ── Phase 2: External completion gate ──
 
-  private evaluateExternalGate(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult): CompletionOrchestratorResult | null {
-    const missingLongTask = missingTaskRequirements(input.taskTracker)
+  private evaluateExternalGate(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult, obligationSnapshot: string[]): CompletionOrchestratorResult | null {
+    // GATE-04：读取 evaluate() 构造的快照（GS-06），不再自行推导。
+    const missingLongTask = obligationSnapshot
 
     if (!needsExternalCompletionGate({
       taskTracker: input.taskTracker,
@@ -310,7 +316,13 @@ export class CompletionOrchestrator {
 
   // ── Phase 3: Flash Judge ──
 
-  private async evaluateFlashJudge(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult): Promise<CompletionOrchestratorResult | null> {
+  private async evaluateFlashJudge(input: CompletionOrchestratorInput, out: CompletionOrchestratorResult, obligationSnapshot: string[]): Promise<CompletionOrchestratorResult | null> {
+    // GATE-05: objective obligations（步骤/文件/验证）未全部通过前不允许
+    // judge —— FlashJudge 是"证据确认器"，不是"缺什么让我猜"的权威；也不得
+    // 在义务未满足时驱动 loop。
+    if (obligationSnapshot.length > 0) {
+      return null // 义务未完成，跳过 judge（继续走 evidence gate 的客观检查）
+    }
     if (!input.flashJudge.shouldEvaluate({
       taskTracker: input.taskTracker,
       taskHadWrite: input.taskHadWrite,
@@ -325,7 +337,8 @@ export class CompletionOrchestrator {
     }
 
     out.statusMessages.push("flash-judge: evaluating completion...")
-    const missingLongTask = missingTaskRequirements(input.taskTracker)
+    // GATE-04：读取 evaluate() 构造的快照（GS-06）。
+    const missingLongTask = obligationSnapshot
 
     const judgeResult = await input.flashJudge.evaluate({
       finalText: input.finalText,
@@ -435,34 +448,19 @@ export class CompletionOrchestrator {
     const contradictions = this.checkClaimEvidenceContradictions(claims, input)
     if (contradictions.length === 0) return true
 
-    if (input.round + 1 < input.maxRounds) {
-      out.injectMessages.push({ role: "assistant", content: compactAssistantContext(input.finalText) })
-      const prompt = [
-        "## 真实性检查 — 声明与证据矛盾",
-        "",
-        "你在最终陈述中做出了以下声明，但验证证据不支持：",
-        ...contradictions.map(c => `- **${c.claim}**: ${c.contradiction}`),
-        "",
-        "请要么提供缺失的验证证据，要么修正你的声明。",
-      ].join("\n")
-      out.injectMessages.push({ role: "user", content: prompt })
-      out.statusMessages.push(`truthfulness-gate: ${contradictions.length} contradictions`)
-      out.traceEvents.push({ gate: "semantic:truthfulness", decision: "continue", contradictions: contradictions.length })
-      out.decision = "continue"
-      return false
-    }
-
-    // Final round — fail closed. The agent can be blocked, but it cannot
-    // honestly finish with verification or implementation claims that lack evidence.
-    out.statusMessages.push(`truthfulness-gate: blocked (${contradictions.length} contradictions)`)
+    // GATE-04（§十二）：确定性降级。Runtime 已经知道事实——"模型说测试
+    // 通过但 EvidenceLedger 没证据"——再花一轮 LLM token 让模型"诚实一点"
+    // 既不可靠也不经济。直接以 INCOMPLETE 终止并交付诊断。
+    // （此前有轮次时会注入提示继续下一轮——同一事实重复裁决 + 无效重跑。）
+    out.statusMessages.push(`truthfulness-gate: blocked (${contradictions.length} contradictions) → INCOMPLETE`)
     out.yieldTexts.push([
-      "## Completion blocked by truthfulness gate",
-      "The final answer contains claims that are not backed by runtime evidence.",
+      "## 完成声明未被运行时证据支持（INCOMPLETE）",
+      "最终陈述包含以下声明，但运行时证据不支持：",
+      ...contradictions.map(c => `- **${c.claim}**: ${c.contradiction}`),
       "",
-      "Contradictions:",
-      ...contradictions.map(c => `- ${c.claim}: ${c.contradiction}`),
+      "任务状态：未完成。修正声明或提供真实验证证据后重新运行。",
     ].join("\n"))
-    out.traceEvents.push({ gate: "semantic:truthfulness", decision: "blocked", contradictions: contradictions.length })
+    out.traceEvents.push({ gate: "semantic:truthfulness", decision: "incomplete", contradictions: contradictions.length })
     out.decision = "break_blocked"
     return false
   }
@@ -607,7 +605,7 @@ export class CompletionOrchestrator {
 
   // ── Context builder ──
 
-  private buildCompletionContext(input: CompletionOrchestratorInput): CompletionContext {
+  private buildCompletionContext(input: CompletionOrchestratorInput, obligationSnapshot: string[]): CompletionContext {
     return {
       round: input.round,
       finalText: input.finalText,
@@ -627,6 +625,8 @@ export class CompletionOrchestrator {
       priorTools: input.priorTools,
       priorFiles: input.priorFiles,
       confidenceEvaluator: input.confidenceEvaluator,
+      // GATE-04 (GS-06): 同一 obligation 每轮一个 authority。
+      missingTaskRequirements: obligationSnapshot,
       // Outputs (initialized empty)
       completionBlockMessage: null,
       shouldBreak: false,

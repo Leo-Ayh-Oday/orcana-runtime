@@ -1,10 +1,11 @@
 /** VerificationNode (H11) — verification results ingested as artifacts.
  *
  *  Thin wrapper over the H8 evidence adapter: each VerificationResult becomes
- *  a bound artifact + evidence entry. Deliberately does NOT re-implement
- *  bindVerificationToLedger (which needs the kernel's full round
- *  VerificationContext) — wiring that for workflow nodes carrying kernel
- *  round state is deferred to H12.
+ *  a bound artifact + evidence entry. H12: kernel round state rides in via
+ *  input.kernelRoundState (write generation for evidence staleness + a
+ *  producedBy attribution override) — the coordinator's Parts 2-4 (ripple
+ *  phase, batch typecheck, self-edit gate) stay kernel-owned because they
+ *  need the full AgentRunState; this node owns only the ingestion half.
  */
 
 import type { HarnessNode, NodeEvent, NodeExecutionContext, NodeResult, NodeUsage, VerificationNodeInput } from "../contracts/nodes"
@@ -45,7 +46,12 @@ export function createVerificationNode(options: { id: string }): HarnessNode<Ver
             ledger: context.runScope.evidenceLedger,
             runId: context.runId,
             result,
-            producedBy: options.id,
+            // H12: kernel round attribution when the workflow carries it —
+            // the round's write generation makes the evidence entry's
+            // staleness field meaningful; producedBy identifies the round's
+            // verifier instead of the node id.
+            producedBy: input.kernelRoundState?.producedBy ?? options.id,
+            generation: input.kernelRoundState?.generation,
             workspaceHash: input.workspaceHash,
             relevantFileHashes,
           })

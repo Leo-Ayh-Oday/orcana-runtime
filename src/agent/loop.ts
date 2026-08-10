@@ -18,6 +18,28 @@ import type { StreamEvent } from "../provider/types"
 import type { UsageStats, AgentOptions } from "./loop-types"
 import { createAgentRunScope, runWithAgentRunScope } from "./run/scope"
 import type { AgentRunLifecycleState } from "./run/types"
+import { WorkspaceAuthorityRegistry } from "../runtime/linux/workspace/workspace-authority"
+import type { TrustedExecutionAuthority } from "../runtime/linux/contracts"
+import { randomUUID } from "node:crypto"
+
+/** R2 PR-9（§5.8）：主工作区注册 + Run 级 Trusted Execution Authority。
+ *  同一物理 projectRoot → 稳定 workspaceId（同锁身份）。 */
+function buildRunAuthority(projectRoot: string, runId: string): TrustedExecutionAuthority {
+  const registry = new WorkspaceAuthorityRegistry()
+  const workspace = registry.registerMainWorkspace({
+    projectId: runId,
+    hostRoot: projectRoot,
+    access: "readwrite",
+  })
+  return {
+    identity: {
+      runId,
+      nodeRunId: `${runId}:n1`,
+      attempt: 1,
+    },
+    workspace,
+  }
+}
 import { buildRunContext } from "./kernel/context"
 import { prepareRun } from "./kernel/prepare"
 import { runRound } from "./kernel/round"
@@ -25,7 +47,7 @@ import { finalizeRun } from "./kernel/finalize"
 import { drainPhase } from "./kernel/effects"
 import type { LoopDecision } from "./kernel/types"
 import { setRuntimeContextBudgetMode } from "./runtime-context"
-import { setExecutionIdentity } from "../runtime/execution-context"
+import { bindRunRetryLedgerToContext, setExecutionIdentity } from "../runtime/execution-context"
 import { resetRippleProgram, setCascadeFiles } from "../ripple/engine"
 import { clearActivePatchContext, clearTransactionRegistry } from "./patch-transaction"
 import { setShellSandbox } from "../tools/shell"
@@ -36,17 +58,27 @@ export async function* agentLoop(
   prompt: string,
   options: AgentOptions,
 ): AsyncGenerator<StreamEvent, LoopDecision> {
+  // R2 PR-9（§5.8）：主工作区注册 + Trusted Execution Authority 构建。
+  // 身份/工作区是 Linux 工具执行的唯一来源（INV-A/INV-B）；模型不可覆盖。
+  const projectRoot = options.projectRoot ?? process.cwd()
+  const runId = options.sessionId ?? `run-${randomUUID().slice(0, 8)}`
+  const authority: TrustedExecutionAuthority = buildRunAuthority(projectRoot, runId)
   const scope = createAgentRunScope({
     tools: options.tools,
     planStore: options.planStore,
     id: options.sessionId ? `agent-run:${options.sessionId}` : undefined,
+    authority,
   })
-  // PR-6：执行身份注入 —— 本轮工具执行（shell/git 等）携带真实 runId，
-  // 不再以匿名 tool-run 身份运行（唯一身份进 Receipt/Evidence）。
+  // PR-6：执行身份注入（兼容层；权威身份以 authority 为准）。
   setExecutionIdentity({
-    runId: options.sessionId,
+    runId,
     sessionId: options.sessionId,
   })
+  // PR-GATE-06：harness 传入的 Run 级 RetryLedger 绑定进本 scope 的 ALS
+  // context —— 与 harness 侧（tool-node/capability）共享同一重试预算。
+  if (options.retryLedger) {
+    bindRunRetryLedgerToContext(scope.runtimeContext, options.retryLedger)
+  }
   const runOptions: AgentOptions = {
     ...options,
     tools: scope.toolRegistry.tools,

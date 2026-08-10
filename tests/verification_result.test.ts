@@ -1,14 +1,42 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { buildVerificationResult, detectVerificationKind, hasServiceTestFailure, parseVerificationResult } from "../src/verification/result"
 import { shellStream } from "../src/tools/shell"
 import type { VerificationResult } from "../src/verification/result"
+import {
+  createRuntimeExecutionContext,
+  runWithRuntimeExecutionContext,
+  setExecutionAuthority,
+} from "../src/runtime/execution-context"
+import type { TrustedExecutionAuthority } from "../src/runtime/linux/contracts"
+import { installHostAuditProcessBroker, resetProcessBroker } from "./helpers/linux-process-test-broker"
 
+beforeAll(installHostAuditProcessBroker)
+afterAll(resetProcessBroker)
+
+/** shellStream 走 managed Linux executor —— 无 trusted authority fail-closed
+ *  （R2 PR-9，git_rt8/typescript_rc01 同款）。 */
 async function shellDone(command: string) {
-  let done
-  for await (const event of shellStream({ command, confirm: true, timeout: 5 })) {
-    if (event.type === "done") done = event.data
-  }
-  return done
+  const context = createRuntimeExecutionContext()
+  return runWithRuntimeExecutionContext(context, async () => {
+    const authority: TrustedExecutionAuthority = {
+      identity: { runId: "verif-test", nodeRunId: "verif-test-0", attempt: 1 },
+      workspace: {
+        workspaceId: "verif-ws",
+        projectId: "verif-proj",
+        hostRoot: process.cwd(),
+        kind: "main",
+        access: "readwrite",
+        physicalWorkspaceKey: "wp_test",
+        ownerFiles: [],
+      },
+    }
+    setExecutionAuthority(authority)
+    let done
+    for await (const event of shellStream({ command, confirm: true, timeout: 5 })) {
+      if (event.type === "done") done = event.data
+    }
+    return done
+  })
 }
 
 describe("VerificationResult", () => {
@@ -40,6 +68,10 @@ describe("VerificationResult", () => {
     expect(detectVerificationKind("bun test || true")).toBe("unknown")
     expect(detectVerificationKind("bun test; exit 0")).toBe("unknown")
     expect(detectVerificationKind("bun test | cat")).toBe("unknown")
+    // OTS-012：长驻 watch 参数不得作为验证证据（永不"完成"）
+    expect(detectVerificationKind("bun test --watch")).toBe("unknown")
+    expect(detectVerificationKind("bun test -w")).toBe("unknown")
+    expect(detectVerificationKind("tsc -w")).toBe("unknown")
   })
 
   test("builds failed verification result with issue count", () => {
@@ -131,4 +163,3 @@ describe("VerificationResult", () => {
     expect(missingScript?.metadata?.verification).toBeUndefined()
   })
 })
-

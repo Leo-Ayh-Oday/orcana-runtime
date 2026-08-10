@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildRoundProviderRequest, cacheStableProviderTools } from "../src/agent/round/request-builder"
+import { buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../src/agent/round/request-builder"
 import { CacheTracker } from "../src/provider/cache-tracker"
 import { buildTools, Result } from "../src/tools/registry"
 
@@ -69,5 +69,32 @@ describe("Round request builder", () => {
 
     expect(request.providerToolSchemas).toHaveLength(128)
     expect(request.providerToolSchemas.at(-1)?.name).toBe("tool_127")
+  })
+
+  test("tool schemas are counted in the round token budget", () => {
+    const system = "system prompt"
+    const messages: Array<{ role: "user"; content: string }> = [{ role: "user", content: "hello" }]
+    const withoutTools = estimateRoundTokens(system, [], messages, null)
+    const withTools = estimateRoundTokens(system, [], messages, null, makeTools(10))
+
+    expect(withTools.roundInputTokens).toBeGreaterThan(withoutTools.roundInputTokens)
+  })
+
+  test("tool schema budget estimate applies the same 128 cap as disclosure", () => {
+    const system = "system prompt"
+    const messages: Array<{ role: "user"; content: string }> = [{ role: "user", content: "hello" }]
+    const estimate128 = estimateRoundTokens(system, [], messages, null, makeTools(128))
+    const estimate300 = estimateRoundTokens(system, [], messages, null, makeTools(300))
+
+    expect(estimate300.roundInputTokens).toBe(estimate128.roundInputTokens)
+  })
+
+  test("budget matches the disclosed tool subset, not the full set", () => {
+    const system = "system prompt"
+    const messages: Array<{ role: "user"; content: string }> = [{ role: "user", content: "hello" }]
+    const disclosed = estimateRoundTokens(system, [], messages, null, makeTools(10))
+    const full = estimateRoundTokens(system, [], messages, null, makeTools(50))
+
+    expect(disclosed.roundInputTokens).toBeLessThan(full.roundInputTokens)
   })
 })

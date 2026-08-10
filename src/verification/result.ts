@@ -36,6 +36,10 @@ const NON_EXECUTING_VERIFIER_ARGS = new Set([
   "--collect-only",
   "--no-run",
   "--if-present",
+  // OTS-012：长驻参数 —— watch 命令永不"完成"，不能作为通过证据
+  // （bun test --watch / tsc -w / jest --watch 等）。
+  "--watch",
+  "-w",
 ])
 
 /** Parse untrusted tool metadata into the core verification shape; runtime stamps are never accepted here. */

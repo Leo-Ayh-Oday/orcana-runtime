@@ -126,6 +126,9 @@ export function buildLoopOptions(
     // H9: capability registry — the loop's tool executions route through the
     // CapabilityExecutor with this registry (shared with the future Node Runtime).
     capabilityRegistry: deps.capabilityRegistry,
+    // PR-GATE-06: run-scoped retry ledger — the loop's provider/round retries
+    // share the same budget as harness-side capability retries.
+    retryLedger: run.scope.retryLedger,
     hooks: deps.hooks,
     stagedContext: deps.stagedContext,
     thinkingStore: deps.thinkingStore,
@@ -143,6 +146,11 @@ export function buildLoopOptions(
     // H12: context window override (HR-015/016 reachability — default 1M is
     // unreachable in scripted evals without this knob).
     contextMaxTokens: readMetadata(input, LEGACY_CONTEXT_MAX_TOKENS),
+    // H12: the run's mode is the authority — the kernel defaults to "coder"
+    // (kernel/context.ts setActiveMode(options.activeMode ?? "coder")), so a
+    // non-coder run mode was silently ignored; wiring the run's modeStore
+    // through fixes the gap. Byte-safe: the harness default mode IS "coder".
+    activeMode: run.scope.modeStore.mode,
     runTrace: readMetadata(input, LEGACY_RUN_TRACE),
     initialPlanState: readMetadata(input, LEGACY_INITIAL_PLAN_STATE),
     planText: readMetadata(input, LEGACY_PLAN_TEXT),
@@ -285,6 +293,12 @@ function translateStreamEvent(
     case "done":
       // Legacy "done" marker has no UI payload; the flow ends when the
       // generator completes. Dropped by design.
+      return null
+    case "truncated":
+      // GATE-02: TRUNCATED is a flow marker, not a UI event — the round's
+      // tool calls already streamed as tool_call events. Dropped here.
+      return null
+    default:
       return null
   }
 }

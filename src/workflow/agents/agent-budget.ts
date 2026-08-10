@@ -47,9 +47,15 @@ export class AgentBudget {
   }
 
   exhausted(): boolean {
-    return (
-      (this.caps.maxNodes !== undefined && this.state.nodes >= this.caps.maxNodes) ||
-      (this.caps.maxWrites !== undefined && this.state.writes >= this.caps.maxWrites)
-    )
+    return this.exhaustedVerdict() !== null
+  }
+
+  /** M4: the specific exhausted cap, if any — lets the scheduler report
+   *  writes_exhausted vs nodes_exhausted precisely (a write budget cap is
+   *  enforced with its own verdict, not a generic "budget exhausted"). */
+  exhaustedVerdict(): BudgetVerdict | null {
+    if (this.caps.maxNodes !== undefined && this.state.nodes >= this.caps.maxNodes) return "nodes_exhausted"
+    if (this.caps.maxWrites !== undefined && this.state.writes >= this.caps.maxWrites) return "writes_exhausted"
+    return null
   }
 }

@@ -2267,6 +2267,25 @@ CompletionOrchestrator 不再依赖散落的 `lastTypecheck` 等重复事实。
 
 **Harness 2.0 第三里程碑收官。** 剩余 DoD 项（第二批 12 场景补足 30、LlmAgentNode 证据链、Node Context 富化、VerificationNode 全量接线）列入 Execution Graph 前置清单；§23 风险"Graph 与 Harness 同时开工——H11 验收前禁止 Scheduler 接线"已满足（H12 无 scheduler 接线），Execution Graph（GEP-1.0）可在下一阶段启动。
 
+### H12 技术债批次（2026-08-06）
+
+**状态：完成。** 四项技术债清偿；三路对照（agentLoop/AgentHarness/LlmAgentNode）无回归，harness 全量测试绿，L0 Golden 字节冻结路径零改动。commit：`feat: ... (Harness H12)`。
+
+实现要点：
+
+1. **BudgetGuard 双计修正收尾**（上记录 §2 的 delta 记账已有，本次补齐 kernel 侧真实缺陷）：`UsageStats.cacheMissInputTokens` 改为**跨轮累计**（`kernel/round.ts` 在 final usage event 前 `ctx.usage.cacheMissInputTokens += roundState.providerUsage?.cacheMissInputTokens`）——修前 input/output 是累计快照而 cache-miss 是轮内值，guard 的 delta 记账对恒定 cache-miss 会欠计（5→9 只记 9 不记 10）；三 token 类现在共享同一"累计快照"不变式。**测试**：`tests/harness_budget_cumulative.test.ts` 新增 2 项真实 kernel 路径测试——固定值 provider（100/20/5 cacheRead+cacheMiss 拆分，符合 round.ts `providerRoundInputTokens = cacheRead + cacheMiss` 契约）经 createAgentHarness 全栈，断言 `budgetState.used` 精确重建（200/40/10，修前 cacheMiss 只到 5）；累计限额触发（maxInputTokens 150 → round 1 累计 200 触发 token_budget，而非轮内 100 不触发）。
+2. **LlmAgentNode 证据链**：3f8ab57 已实现（snapshotEvidence/diffEvidence 于 runScope.evidenceLedger + AgentNodeOutput 五链字段），本次验证-only——`tests/harness_llm_agent_node.test.ts` 8 项全绿（含 R1 seeded-ledger 排除）。
+3. **Node Context 富化**（涉及模型可见字节，Golden 安全策略：所有既有路径字节不变）：
+   - **契约**：`ContextRequest.contextKernel/contextMapContext/epochState` 改 optional（kernel 路径 createContextRequest 恒传，字节冻结路径不变）；三个 provider（project-kernel/context-map/research/conversation-tail）对缺省做守卫。
+   - **kernel 侧独立构造**：`createNodeContextRequest`（`context/request.ts`）——从 run scope + node input 直接构造，无 RunPhaseContext；mode 来自 **run 的 modeStore**（非模块级 getActiveMode）；plan-state decisions 复用抽取出的 `buildPlanStateDecisionsFrom`（K2 决策逻辑单源）。
+   - **node 裁剪**：`NODE_SLICE_PROVIDER_ALLOWLIST`（lang-instruction/stable-memory/project-kernel/context-map/plan-state/mode-contract/conversation-tail，drop research/staged-context/thinking/knowledge/planning/skills——kernel-only 源）；`buildNodeContextSlice`（allowlist 过滤后跑 pipeline）+ `trimNodeSlice`（结构性保证任何注入 slice 无非 allowlist 贡献）。
+   - **workflow 接线**：`createWorkflowNodeContext` 异步化——environment.context 缺失时 `buildNodeContextSlice` 自建（注入 slice 仍优先，字节可控）。
+   - **modeContract 富化**：`buildLoopOptions` 传 `activeMode: run.scope.modeStore.mode`（修 kernel/context.ts `setActiveMode(options.activeMode ?? "coder")` 忽略 run 模式的 gap——harness 默认 coder 故字节安全）；`createNodePolicyContextFromRunScope` 设 `modeContract: MODES[scope.modeStore.mode]`（Gate 7 工具强制）。
+   - **测试**：`tests/harness_node_context.test.ts` 6 项（slice allowlist 纯净性 + planner 模式穿透 mode-contract 内容 / trimNodeSlice 结构性裁剪 / request 构造与 kernel-only 字段缺省 / decisions 复用 / 两处 modeContract）。
+4. **VerificationNode 全量接线**：`VerificationNodeInput.kernelRoundState {generation?, producedBy?}`——generation 进 evidence 条目（陈旧性字段），producedBy 进 artifact 归属（EvidenceEntry 无 producedBy 字段，coordinator 同构）；coordinator Parts 2-4（ripple 阶段/batch typecheck/self-edit 门）需完整 AgentRunState，保持 kernel-owned（头注释更新边界）。`tests/harness_nodes.test.ts` +1 项（generation=7 入 evidence、producedBy="kernel_round_3" 入 artifact）。
+
+**遗留（非 H12 范围）**：`tests/tools/typescript_rc01.test.ts` 5 项在 HEAD 预存在失败——R2 PR-9 起 executor fail-closed 要求 `setExecutionAuthority`（git_rt8 已设），rc01 未设 → 全 status "error"（LNXF 线代码，未动）。
+
 ---
 
 

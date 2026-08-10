@@ -83,9 +83,9 @@ describe("G5 result cache", () => {
   test("scheduler replays a cached read node and marks it replayed", async () => {
     const registry = buildReadWriteRegistry(tools())
     const cache = new ResultCache()
-    const run1 = await runScheduler(readSpec("r1", "tmp-g5-cache/a.ts"), registry, { cache })
+    const run1 = await runScheduler(readSpec("r1", "a.ts"), registry, { cache, projectRoot: PROJECT })
     expect(run1.results[0]!.status).toBe("done")
-    const run2 = await runScheduler(readSpec("r2", "tmp-g5-cache/a.ts"), registry, { cache })
+    const run2 = await runScheduler(readSpec("r2", "a.ts"), registry, { cache, projectRoot: PROJECT })
     const node = run2.results[0]!
     expect(node.status).toBe("done")
     expect(node.durationMs).toBe(0)
@@ -96,7 +96,7 @@ describe("G5 result cache", () => {
   test("a completed write node invalidates the cache (file change ⇒ miss)", async () => {
     const registry = buildReadWriteRegistry(tools())
     const cache = new ResultCache()
-    const run1 = await runScheduler(readSpec("w1", "tmp-g5-cache/a.ts"), registry, { cache })
+    const run1 = await runScheduler(readSpec("w1", "a.ts"), registry, { cache, projectRoot: PROJECT })
     expect(run1.results[0]!.status).toBe("done")
 
     const patchSpec: WorkflowSpec = {
@@ -104,14 +104,14 @@ describe("G5 result cache", () => {
       specId: "g5-write",
       mode: "read-write",
       nodes: [
-        { id: "w:patch", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/tmp-g5-cache/a.ts\n+++ b/tmp-g5-cache/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+export const a = 2\n" }] }, dependsOn: [] },
+        { id: "w:patch", handler: "tool.apply_patch", input: { patches: [{ diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-export const a = 1\n+export const a = 2\n" }] }, dependsOn: [] },
       ],
     }
-    await runScheduler(patchSpec, registry, { cache })
+    await runScheduler(patchSpec, registry, { cache, projectRoot: PROJECT })
     expect(cache.invalidations).toBe(1)
     expect(cache.size()).toBe(0)
 
-    const run3 = await runScheduler(readSpec("w2", "tmp-g5-cache/a.ts"), registry, { cache })
+    const run3 = await runScheduler(readSpec("w2", "a.ts"), registry, { cache, projectRoot: PROJECT })
     expect(run3.results[0]!.status).toBe("done")
     expect((run3.results[0]!.output as { content: string }).content).toContain("a = 2")
   })

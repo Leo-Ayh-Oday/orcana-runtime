@@ -1,0 +1,79 @@
+name: Live Provider Lane
+
+# The approved quarantined tests make paid, networked DeepSeek calls. They are
+# intentionally outside push/PR CI and run only after the repository owner
+# acknowledges cost and configures the protected live-provider environment.
+# code_as_action remains blocked because it executes provider-generated code.
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge_cost:
+        description: Run paid live-provider evaluation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deepseek-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: live-provider
+
+    steps:
+      - name: Authorize paid default-branch run
+        env:
+          ACKNOWLEDGE_COST: ${{ inputs.acknowledge_cost }}
+          DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$ACKNOWLEDGE_COST" != "true" ]; then
+            echo "::error::acknowledge_cost must be explicitly enabled"
+            exit 64
+          fi
+          if [ "$GITHUB_REF" != "$DEFAULT_REF" ]; then
+            echo "::error::live-provider tests may run only from the default branch"
+            exit 64
+          fi
+          if [ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]; then
+            echo "::error::only the repository owner may authorize provider cost"
+            exit 64
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Require live-provider secret
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_LIVE_API_KEY }}
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+            echo "::error::DEEPSEEK_LIVE_API_KEY environment secret is not configured"
+            exit 78
+          fi
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run approved live-provider tests
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_LIVE_API_KEY }}
+        run: bun run test:live-provider

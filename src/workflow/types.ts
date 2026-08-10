@@ -9,6 +9,9 @@
  *      the G1 scheduler to reinterpret as data dependencies.
  */
 
+import type { CompletionCriterion } from "./contracts/criteria"
+import type { CriterionVerdict } from "./reducers/criterion-evaluator"
+
 export type WorkflowMode = "off" | "shadow"
 
 export type WorkflowNodeKind =
@@ -148,6 +151,9 @@ export interface WorkflowSpec {
   /** G3: "readonly" (default) rejects write handlers; "read-write" allows
    *  the whitelisted write handlers under single-writer semantics. */
   mode?: "readonly" | "read-write"
+  /** M22: completion criteria enforced by the scheduler's completion gate —
+   *  a hard criterion that cannot be satisfied blocks the run (never done). */
+  completionCriteria?: CompletionCriterion[]
 }
 
 export type WorkflowNodeResultStatus = "done" | "failed" | "blocked"
@@ -184,7 +190,16 @@ export interface WorkflowNodeResult {
   evidence?: import("../agent/evidence-ledger").EvidenceEntry[]
 }
 
-export type WorkflowRunResultStatus = "done" | "blocked_no_evidence" | "write_rejected" | "waiting_interrupt" | "blocked_conflict"
+/** M6: "failed"/"blocked" aggregate any node-level failure/block — a run
+ *  with a failed or blocked node never reports done (FAILED_WORKFLOW_NODE_NEVER_DONE). */
+export type WorkflowRunResultStatus =
+  | "done"
+  | "failed"
+  | "blocked"
+  | "blocked_no_evidence"
+  | "write_rejected"
+  | "waiting_interrupt"
+  | "blocked_conflict"
 
 /** MACP-M4: a run paused at a human node — persisted, resumable. */
 export interface WorkflowWaitingInterrupt {
@@ -205,4 +220,6 @@ export interface WorkflowRunResult {
   evidence?: Array<{ nodeId: string; writeNodeIds: string[]; passed: boolean; summary?: string }>
   /** MACP-M4: set when status === "waiting_interrupt". */
   interrupt?: WorkflowWaitingInterrupt
+  /** M22: per-criterion verdicts when the spec declared completionCriteria. */
+  criteria?: CriterionVerdict[]
 }

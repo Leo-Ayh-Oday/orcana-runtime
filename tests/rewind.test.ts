@@ -1,10 +1,10 @@
 /** Tests for Unified Rewind (PR-4.3). */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
-import { registerCheckpointStore, unregisterCheckpointStore } from "../src/session/checkpoint"
+import { loadCheckpoint, registerCheckpointStore, unregisterCheckpointStore } from "../src/session/checkpoint"
 import { SessionStore } from "../src/session/sqlite-session"
 import {
   saveRewindPoint,
@@ -12,6 +12,7 @@ import {
   executeRewind,
   formatRewindList,
   formatRewindResult,
+  REWIND_MAX_DEPTH,
   type RewindMode,
 } from "../src/agent/rewind"
 
@@ -295,5 +296,81 @@ describe("formatRewindResult", () => {
     })
     expect(out).toContain("回退失败")
     expect(out).toContain("未找到")
+  })
+})
+
+// ── RC-11 H9: rewind 历史深度与清理 ──
+// 使用独立 sessionId + store：本文件其他用例（executeRewind 系列）会写 round 40/41，
+// 与深度用例共享同一 checkpoints 表会干扰"恰好保留 20 个最新"的断言。
+
+describe("RC-11 H9 REWIND_HISTORY_DEPTH_AND_CLEANUP", () => {
+  const depthSessionId = `h9-depth-${Date.now().toString(36)}`
+  const depthStore = new SessionStore(depthSessionId)
+
+  beforeAll(() => {
+    registerCheckpointStore(depthSessionId, depthStore)
+  })
+
+  afterAll(() => {
+    unregisterCheckpointStore(depthSessionId)
+    depthStore.close()
+  })
+
+  beforeEach(() => {
+    const rd = join(testDir, ".orcana", "rewind", depthSessionId)
+    try { rmSync(rd, { recursive: true, force: true }) } catch {}
+  })
+
+  it("25 个 rewind 点 → 快照文件与 checkpoint 行都裁剪到 REWIND_MAX_DEPTH，最新可读", () => {
+    for (let round = 1; round <= 25; round++) {
+      saveRewindPoint({
+        sessionId: depthSessionId,
+        round,
+        summary: `round ${round}`,
+        changedFiles: [],
+        fileSHAs: {},
+        conversationTokens: round * 100,
+      })
+    }
+
+    const files = readdirSync(join(testDir, ".orcana", "rewind", depthSessionId))
+      .filter(f => f.startsWith("round-") && f.endsWith(".json"))
+    expect(files.length).toBeLessThanOrEqual(REWIND_MAX_DEPTH)
+    expect(files).toContain("round-25.json")
+    expect(files).not.toContain("round-1.json")
+
+    const points = listRewindPoints(depthSessionId)
+    expect(points.length).toBeLessThanOrEqual(REWIND_MAX_DEPTH)
+    expect(points[0]!.round).toBe(25)
+
+    // 深度内 checkpoint 行可加载，超深行被清理
+    expect(loadCheckpoint(depthSessionId, 25)).not.toBeNull()
+    expect(loadCheckpoint(depthSessionId, 1)).toBeNull()
+  })
+
+  it("ORCANA_REWIND_MAX_DEPTH 可覆盖保留深度", () => {
+    const saved = process.env.ORCANA_REWIND_MAX_DEPTH
+    process.env.ORCANA_REWIND_MAX_DEPTH = "5"
+    try {
+      for (let round = 1; round <= 8; round++) {
+        saveRewindPoint({
+          sessionId: depthSessionId,
+          round,
+          summary: `env ${round}`,
+          changedFiles: [],
+          fileSHAs: {},
+          conversationTokens: round * 50,
+        })
+      }
+      const points = listRewindPoints(depthSessionId)
+      expect(points).toHaveLength(5)
+      expect(points[0]!.round).toBe(8)
+      expect(points.some(p => p.round === 3)).toBe(false)
+      expect(loadCheckpoint(depthSessionId, 3)).toBeNull()
+      expect(loadCheckpoint(depthSessionId, 8)).not.toBeNull()
+    } finally {
+      if (saved === undefined) delete process.env.ORCANA_REWIND_MAX_DEPTH
+      else process.env.ORCANA_REWIND_MAX_DEPTH = saved
+    }
   })
 })

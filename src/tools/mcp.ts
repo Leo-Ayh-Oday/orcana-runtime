@@ -1,17 +1,33 @@
 /** MCP client — JSON-RPC lifecycle. Ported from orcana/core/mcp_client.py */
 
-import { spawnLegacy, ChildProcess } from "../runtime/legacy-process"
-const spawn = spawnLegacy
+import type { ChildProcess } from "../runtime/legacy-process"
+import { createServiceCell } from "../runtime/linux/service-cell"
+import type { ServiceLeaseStore } from "../runtime/linux/recovery/state-store"
+import { setServiceLeaseStore } from "./service"
 import type { ToolDef, ToolResult } from "./registry"
 import { Result } from "./registry"
 
 interface ServerState {
   proc: ChildProcess
+  /** LNXF-GATE-02：release 幂等句柄（停进程 + 删 durable 记录）。 */
+  release: () => void
   tools: Array<Record<string, unknown>>
   resources: Array<Record<string, unknown>>
   buffer: string
-  pendingResolve: ((value: Record<string, unknown>) => void) | null
+  pending: Map<number, (value: Record<string, unknown>) => void>
   connected: boolean
+}
+
+// LNXF-GATE-02：MCP 的 durable lease 存储与 service 共用同一 store（测试可
+// 注入内存版；默认不持久化 —— legacy 直调语义不变）。
+let mcpLeaseStoreOverride: ServiceLeaseStore | undefined
+export function setMcpLeaseStore(store: ServiceLeaseStore | undefined): void {
+  mcpLeaseStoreOverride = store
+  // 与 service 层共享同一 store 来源（run-end 清理与 janitor 恢复一致）。
+  setServiceLeaseStore(store)
+}
+function mcpLeaseStore(): ServiceLeaseStore | undefined {
+  return mcpLeaseStoreOverride
 }
 
 export class MCPClientV2 {
@@ -21,11 +37,31 @@ export class MCPClientV2 {
   connect(name: string, command: string, args: string[] = [], env?: Record<string, string>): Promise<boolean> {
     return new Promise(resolve => {
       try {
-        const proc = spawn(command, args, {
+        // LNXF-GATE-02 (B12+B13)：spawnLegacy → ServiceCell（kind: mcp）——
+        // explicit env（minimalHostEnv 白名单 + 拒绝集过滤）+ durable lease
+        // + owner(pid+starttime)；ready 以 MCP initialize 响应为准。
+        const cell = createServiceCell({
+          kind: "mcp",
+          command,
+          args,
+          cwd: process.cwd(),
+          cleanupPolicy: "run-end",
+          logPath: "",
+          env,
           stdio: ["pipe", "pipe", "pipe"],
-          env: env ? { ...process.env, ...env } : process.env,
+          detached: false,
+          store: mcpLeaseStore(),
         })
-        const state: ServerState = { proc, tools: [], resources: [], buffer: "", pendingResolve: null, connected: false }
+        const proc = cell.proc
+        const state: ServerState = {
+          proc,
+          release: () => cell.release(),
+          tools: [],
+          resources: [],
+          buffer: "",
+          pending: new Map(),
+          connected: false,
+        }
         this.servers.set(name, state)
 
         proc.stdout?.on("data", (chunk: Buffer) => {
@@ -35,11 +71,13 @@ export class MCPClientV2 {
 
         proc.on("error", () => {
           state.connected = false
+          this.rejectAllPending(state, "MCP server failed")
           resolve(false)
         })
 
         proc.on("exit", () => {
           state.connected = false
+          this.rejectAllPending(state, "MCP server exited")
         })
 
         this._send(name, "initialize", {
@@ -49,9 +87,12 @@ export class MCPClientV2 {
         }).then(r => {
           const ok = !("error" in r)
           state.connected = ok
+          if (ok) cell.markReady()
+          else cell.markFailed()
           resolve(ok)
         }).catch(() => {
           state.connected = false
+          cell.markFailed()
           resolve(false)
         })
       } catch { resolve(false) }
@@ -60,6 +101,11 @@ export class MCPClientV2 {
 
   isConnected(name: string): boolean {
     return this.servers.get(name)?.connected ?? false
+  }
+
+  private rejectAllPending(state: ServerState, reason: string) {
+    for (const resolve of state.pending.values()) resolve({ error: reason })
+    state.pending.clear()
   }
 
   private _tryParseResponse(state: ServerState) {
@@ -72,10 +118,12 @@ export class MCPClientV2 {
     const body = state.buffer.slice(headerEnd, headerEnd + length)
     state.buffer = state.buffer.slice(headerEnd + length)
     try {
-      const data = JSON.parse(body)
-      if (state.pendingResolve) {
-        state.pendingResolve(data)
-        state.pendingResolve = null
+      const data = JSON.parse(body) as Record<string, unknown>
+      const id = typeof data.id === "number" ? data.id : -1
+      const resolve = state.pending.get(id)
+      if (resolve) {
+        state.pending.delete(id)
+        resolve(data)
       }
     } catch { /* */ }
     this._tryParseResponse(state)
@@ -86,9 +134,10 @@ export class MCPClientV2 {
       const srv = this.servers.get(name)
       if (!srv) { resolve({ error: `MCP server '${name}' not connected` }); return }
 
-      const req = JSON.stringify({ jsonrpc: "2.0", id: ++this.reqId, method, params })
+      const id = ++this.reqId
+      const req = JSON.stringify({ jsonrpc: "2.0", id, method, params })
       const header = `Content-Length: ${Buffer.byteLength(req)}\r\n\r\n`
-      srv.pendingResolve = resolve
+      srv.pending.set(id, resolve)
       srv.proc.stdin?.write(header + req)
     })
   }
@@ -157,7 +206,11 @@ export class MCPClientV2 {
 
   shutdown(name: string) {
     const srv = this.servers.get(name)
-    if (srv) { srv.proc.kill(); this.servers.delete(name) }
+    if (srv) {
+      this.rejectAllPending(srv, "MCP server shut down")
+      srv.proc.kill()
+      this.servers.delete(name)
+    }
   }
 
   shutdownAll() { for (const name of this.servers.keys()) this.shutdown(name) }

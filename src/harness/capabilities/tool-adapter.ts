@@ -13,6 +13,7 @@ import type { CapabilityDescriptor, CapabilityHandler, CapabilityRegistry, SideE
 import type { JsonSchema } from "../contracts/schema"
 import type { ArtifactStore } from "../contracts/artifact"
 import type { ToolDescriptor } from "../../tools/registry"
+import type { ToolExecutionContext } from "./execution-context"
 import { projectToolContract, type ToolContract } from "../../tools/tool-contract"
 import { inferToolCategory } from "../../agent/permission"
 import { executeSingleTool } from "../../agent/tool-execution/single-executor"
@@ -92,10 +93,15 @@ export function toolCapabilityHandler(tool: ToolDescriptor): CapabilityHandler {
   return {
     async execute(input, context) {
       try {
+        // RC-19 Phase 2 (D7): node-mode callers hand the run-scoped context
+        // through metadata — thread its projectRoot so tools resolve relative
+        // paths against the authority, never cwd (fail-closed: absent → "").
+        const runContext = context?.metadata?.runContext as ToolExecutionContext | undefined
         const { result, startedAt } = await executeSingleTool({
           tool,
           params: (input ?? {}) as Record<string, unknown>,
           abortSignal: context?.abortSignal,
+          projectRoot: runContext?.projectRoot ?? "",
         })
         return { ok: result.success, output: { ...result, startedAt } }
       } catch (error) {

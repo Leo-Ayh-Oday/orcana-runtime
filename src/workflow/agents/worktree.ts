@@ -8,7 +8,7 @@
 import { spawnSyncLegacy } from "../../runtime/legacy-process"
 const spawnSync = spawnSyncLegacy
 import { cpSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { isAbsolute, join, resolve, sep } from "node:path"
 
 export interface WorktreeHandle {
   agentId: string
@@ -16,6 +16,23 @@ export interface WorktreeHandle {
   /** git worktree or directory snapshot. */
   mode: "git" | "snapshot"
   dispose: () => void
+}
+
+/** M2: an agent id must be a plain identifier, never a path — the worktree
+ *  root and (deleted) directory join it directly. */
+export function isValidAgentId(agentId: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(agentId)
+}
+
+/** M3: fail closed when a resolved owner-file path escapes its base — the
+ *  snapshot source must stay under the project, the target under the
+ *  worktree root (no `../secret.txt` reads or writes). */
+function assertContained(root: string, file: string, label: string): void {
+  const base = resolve(root)
+  const candidate = resolve(base, file)
+  if (candidate !== base && !candidate.startsWith(base + sep)) {
+    throw new Error(`worktree: ownerFile "${file}" escapes ${label} (${candidate})`)
+  }
 }
 
 /** Resolve the worktree root for an agent under the project. */
@@ -42,9 +59,26 @@ function snapshotCopy(src: string, dst: string): void {
   }
 }
 
-/** Create an isolated worktree for an agent. */
-export function createWorktree(projectRoot: string, agentId: string, files?: string[]): WorktreeHandle {
-  const root = worktreeRoot(projectRoot, agentId)
+/** Create an isolated worktree for an agent.
+ *  `declaredRoot` (M18): the AgentSpec.worktree root is authoritative when
+ *  declared — the execution root must match what the pool configured. */
+export function createWorktree(projectRoot: string, agentId: string, files?: string[], declaredRoot?: string): WorktreeHandle {
+  // M2/M3: validate BEFORE any fs mutation — an escaping agent id would make
+  // the rmSync below target an arbitrary directory; escaping owner files
+  // would read from / write to outside the project. Both fail closed.
+  if (!isValidAgentId(agentId)) {
+    throw new Error(
+      `worktree: invalid agent id "${agentId}" (must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$)`,
+    )
+  }
+  if (declaredRoot !== undefined && !isAbsolute(declaredRoot)) {
+    throw new Error(`worktree: declared root for agent "${agentId}" must be an absolute path (got "${declaredRoot}")`)
+  }
+  for (const file of files ?? []) {
+    assertContained(projectRoot, file, "project root")
+    assertContained(declaredRoot ?? worktreeRoot(projectRoot, agentId), file, "worktree root")
+  }
+  const root = declaredRoot ?? worktreeRoot(projectRoot, agentId)
   rmSync(root, { recursive: true, force: true })
   mkdirSync(root, { recursive: true })
 

@@ -37,9 +37,11 @@ export interface LedgerCapacity {
   concurrentCells: number
 }
 
-/** 以 100ms 周期为单位的 CPU 配额。 */
+/** LNXF-R2 10.2：CPU 容量单位 = cpuMillis（1000 = 1 核）。
+ *  与 ExecutionCellSpec.resources.cpuMillis 记账单位统一（旧值为
+ *  cores×10000，与 broker 换算不一致导致 1000 倍错配）。 */
 export function cpuQuotaFromCores(cores: number): number {
-  return Math.round(cores * 10_000)
+  return Math.round(cores * 1000)
 }
 
 export class ResourceLedger {

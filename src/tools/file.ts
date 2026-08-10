@@ -1,11 +1,12 @@
 /** File tools — read, write, edit. */
 
 import { readFile } from "node:fs/promises"
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
+import { existsSync, readFileSync } from "node:fs"
+import { isAbsolute, join, relative, resolve } from "node:path"
 import * as ts from "typescript"
 import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
 import { Result } from "./registry"
+import { projectRelativePath, resolveToolPath } from "./path-authority"
 import { FimEditor } from "../provider/fim"
 import { cascadeAwareDecision, formatRippleBlock, getRippleProgram, previewEdit, tightenRippleDecision } from "../ripple/engine"
 import { getRuntimeContextBudgetMode } from "../agent/runtime-context"
@@ -118,13 +119,24 @@ function checkpointMetadata(
   }
 }
 
-function safeResultPath(path: string): string {
-  const canonicalPath = resolve(path)
-  const workspaceRelative = relative(process.cwd(), canonicalPath)
-  if (workspaceRelative && !workspaceRelative.startsWith("..") && !isAbsolute(workspaceRelative)) {
-    return workspaceRelative.replace(/\\/g, "/")
-  }
-  return "path"
+/** RC-19 Phase 2 (D7): display path — project-relative when an authority is
+ *  known, absolute otherwise. NEVER cwd-relative (PROCESS_CWD_AFFECTS_TOOL=0). */
+function safeResultPath(path: string, root?: string): string {
+  if (root) return projectRelativePath(root, path)
+  return resolve(path).replace(/\\/g, "/")
+}
+
+/** RC-19 Phase 2 (D7): the single path-resolution entry — resolveToolPath()
+ *  binds relative paths to projectRoot; escapes surface as blocked policy
+ *  violations (CROSS_PROJECT_READ / CROSS_PROJECT_WRITE / SYMLINK_PROJECT_ESCAPE). */
+function authoritativePath(
+  context: ToolExecutionContext | undefined,
+  rawPath: string,
+  mode: "read" | "write",
+): { ok: true; path: string } | { ok: false; result: ToolResult } {
+  const resolution = resolveToolPath(context, rawPath, mode)
+  if (resolution.ok) return { ok: true, path: resolution.path }
+  return { ok: false, result: Result.blocked(resolution.message, { gate: "path_authority" }) }
 }
 
 function approvedBaseHash(
@@ -184,13 +196,13 @@ function revalidateApprovedSnapshot(
     : result.actual === null
       ? "file was deleted after freshness approval"
       : "disk content changed after freshness approval"
-  const displayPath = safeResultPath(path)
+  const displayPath = safeResultPath(path, fileToolRoot(context))
   return Result.freshnessBlocked(displayPath, status, reason)
 }
 
-function fileToolFailure(error: unknown): ToolResult {
+function fileToolFailure(error: unknown, root?: string): ToolResult {
   if (error instanceof PatchPathConflictError) {
-    const path = safeResultPath(error.path)
+    const path = safeResultPath(error.path, root)
     return Result.blocked(`PathPolicy blocked write for ${path}: ${error.reason}`, {
       gate: "path_policy",
       pathPolicy: { path, reason: error.reason },
@@ -211,9 +223,20 @@ function fileToolFailure(error: unknown): ToolResult {
         : error.actualState === "file"
           ? "disk content changed before commit"
           : "target became unreadable or stopped being a regular file before commit"
-    return Result.freshnessBlocked(safeResultPath(error.path), status, reason)
+    return Result.freshnessBlocked(safeResultPath(error.path, root), status, reason)
   }
   return Result.fail(error instanceof Error ? error.message : String(error))
+}
+
+function fileToolRoot(context: ToolExecutionContext | undefined): string | undefined {
+  return context?.projectRoot || undefined
+}
+
+/** Transaction-relative path: project-relative when an authority is known,
+ *  absolute otherwise — never cwd-relative (RC-19 Phase 2, D7). */
+function toolRelativePath(context: ToolExecutionContext | undefined, p: string): string {
+  const root = fileToolRoot(context)
+  return root ? projectRelativePath(root, p) : resolve(p).replace(/\\/g, "/")
 }
 
 function isRuntimeArtifact(path: string): boolean {
@@ -226,7 +249,7 @@ function isRuntimeArtifact(path: string): boolean {
   )
 }
 
-async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
+async function read_file(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const path = String(params.path ?? "")
   const offset = Number(params.offset ?? 0)
   const limit = params.limit ? Number(params.limit) : undefined
@@ -237,7 +260,10 @@ async function read_file(params: Record<string, unknown>): Promise<ToolResult> {
     if (isRuntimeArtifact(path)) {
       return Result.blocked(`Runtime artifact is hidden from agent reads: ${path}. Continue with the user task instead of inspecting agent logs.`)
     }
-    const p = resolve(path)
+    // RC-19 Phase 2 (D7): relative paths bind to projectRoot, never cwd.
+    const resolution = authoritativePath(context, path, "read")
+    if (!resolution.ok) return resolution.result
+    const p = resolution.path
     if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
     const buffer = await readFile(p)
     const content = buffer.toString("utf-8")
@@ -315,7 +341,9 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
   const content = String(params.content ?? "")
 
   try {
-    const p = resolve(path)
+    const resolution = authoritativePath(context, path, "write")
+    if (!resolution.ok) return resolution.result
+    const p = resolution.path
     const snapshot = approvedContent(context, p)
     const existedBefore = snapshot.found ? snapshot.content !== null : existsSync(p)
     const oldContent = snapshot.found
@@ -325,7 +353,7 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
         : ""
     const freshnessBlock = revalidateApprovedSnapshot(context, p, existedBefore ? oldContent : null)
     if (freshnessBlock) return freshnessBlock
-    const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+    const relPath = toolRelativePath(context, p)
     const baseHash = approvedBaseHash(
       context,
       p,
@@ -343,6 +371,7 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
     const mpt = await applyAndCommit(
       {
         tool: "write_file",
+        cwd: fileToolRoot(context),
         files: [{
           relativePath: relPath,
           oldContent: existedBefore ? oldContent : null,
@@ -371,7 +400,7 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
-    return fileToolFailure(e)
+    return fileToolFailure(e, fileToolRoot(context))
   }
 }
 
@@ -381,7 +410,9 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
   const newStr = String(params.new_string ?? "")
 
   try {
-    const p = resolve(path)
+    const resolution = authoritativePath(context, path, "write")
+    if (!resolution.ok) return resolution.result
+    const p = resolution.path
     const snapshot = approvedContent(context, p)
     if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
     if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
@@ -395,7 +426,7 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
     if (count > 1) return Result.fail(`Found ${count} occurrences — provide more context for a unique match`)
 
     const newContent = content.replace(oldStr, newStr)
-    const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+    const relPath = toolRelativePath(context, p)
 
     // Ripple pre-check
     const ripple = previewEdit({ targetFile: p, oldContent: content, newContent, mode: "edit_file" })
@@ -408,6 +439,7 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
     const mpt = await applyAndCommit(
       {
         tool: "edit_file",
+        cwd: fileToolRoot(context),
         files: [{
           relativePath: relPath,
           oldContent: content,
@@ -431,7 +463,7 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
-    return fileToolFailure(e)
+    return fileToolFailure(e, fileToolRoot(context))
   }
 }
 
@@ -451,7 +483,9 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
       const newStr = String(edit.new_string ?? "")
       if (!path || !oldStr) return Result.fail("Each edit requires path and old_string")
 
-      const p = resolve(path)
+      const resolution = authoritativePath(context, path, "write")
+      if (!resolution.ok) return resolution.result
+      const p = resolution.path
       if (!originals.has(p)) {
         const snapshot = approvedContent(context, p)
         if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
@@ -470,7 +504,7 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
       displayPaths.push(path)
     }
 
-    const modifiedFiles = new Set([...proposed.keys()].map(p => relativePath(p)))
+    const modifiedFiles = new Set([...proposed.keys()].map(p => relativePath(p, fileToolRoot(context))))
     const reports = [...proposed.entries()].map(([p, newContent]) => {
       const oldContent = originals.get(p) ?? ""
       return previewEdit({ targetFile: p, oldContent, newContent, mode: "edit_file" })
@@ -486,7 +520,7 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
     // PR-4.2: Build files array for state machine
     const files = [...proposed.entries()].map(([p, newContent]) => {
       const oldContent = originals.get(p) ?? ""
-      const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+      const relPath = toolRelativePath(context, p)
       return {
         relativePath: relPath,
         oldContent,
@@ -498,7 +532,7 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
     // PR-4.2: Atomic multi-file write via state machine (temp → verify → commit)
     // applyAndCommit handles rollback on partial failure internally
     const mpt = await applyAndCommit(
-      { tool: "multi_edit", files },
+      { tool: "multi_edit", cwd: fileToolRoot(context), files },
       async (_mpt: ManagedPatchTransaction) => true,
     )
 
@@ -524,12 +558,14 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
       fileStates,
     })
   } catch (e) {
-    return fileToolFailure(e)
+    return fileToolFailure(e, fileToolRoot(context))
   }
 }
 
-function relativePath(path: string): string {
-  return relative(process.cwd(), resolve(path)).replace(/\\/g, "/")
+/** Display/ledger path — project-relative when a root is known, absolute
+ *  otherwise; never cwd-relative (RC-19 Phase 2, D7). */
+function relativePath(path: string, root?: string): string {
+  return root ? projectRelativePath(root, path) : resolve(path).replace(/\\/g, "/")
 }
 
 // Tool definitions
@@ -563,7 +599,7 @@ export const READ_FILE: ToolDef = {
     },
     required: ["path"],
   },
-  execute: read_file,
+  execute: (params, _onProgress, context) => read_file(params, context),
 }
 
 /** RT-6: TypeScript-AST symbol span (function/method/class/interface/type
@@ -599,53 +635,88 @@ const EDIT_SYMBOL_SCHEMA = {
   required: ["path", "symbol"],
 } as const
 
-function edit_symbol(params: Record<string, unknown>): ToolResult {
+async function edit_symbol(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const path = String(params["path"] ?? "")
   const symbol = String(params["symbol"] ?? "")
   const newText = typeof params["newText"] === "string" ? params["newText"] : undefined
   const dryRun = params["dryRun"] === true
 
-  const p = resolve(path)
-  if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
-  const content = readFileSync(p, "utf-8")
-  const span = findSymbolSpan(content, symbol)
-  if (!span) return Result.fail(`Symbol not found: ${symbol} in ${path}`)
+  try {
+    const resolution = authoritativePath(context, path, "write")
+    if (!resolution.ok) return resolution.result
+    const p = resolution.path
+    const snapshot = approvedContent(context, p)
+    if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
+    if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
+    const content = snapshot.found ? snapshot.content! : readFileSync(p, "utf-8")
+    const freshnessBlock = revalidateApprovedSnapshot(context, p, content)
+    if (freshnessBlock) return freshnessBlock
+    const span = findSymbolSpan(content, symbol)
+    if (!span) return Result.fail(`Symbol not found: ${symbol} in ${path}`)
 
-  const lines = content.split("\n")
-  const current = lines.slice(span.start, span.end).join("\n")
+    const lines = content.split("\n")
+    const current = lines.slice(span.start, span.end).join("\n")
 
-  if (dryRun) {
-    return Result.ok(current, {
+    if (dryRun) {
+      return Result.ok(current, {
+        path,
+        symbol,
+        symbolKind: "ast",
+        authority: "compiler",
+        startLine: span.start,
+        endLine: span.end,
+        dryRun: true,
+      })
+    }
+    if (newText === undefined) {
+      return Result.fail(`edit_symbol requires newText (or dryRun=true to preview): ${symbol}`)
+    }
+
+    const before = lines.slice(0, span.start).join("\n")
+    const after = lines.slice(span.end).join("\n")
+    const replacement = before + (before ? "\n" : "") + newText + (after ? "\n" : "") + after
+    const baseHash = approvedBaseHash(context, p, () => computeBaseHash(content))
+    const relPath = toolRelativePath(context, p)
+
+    const ripple = previewEdit({ targetFile: p, oldContent: content, newContent: replacement, mode: "edit_file" })
+    const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
+    if (effectiveDecision !== "allow") {
+      return Result.blocked(formatRippleBlock(ripple))
+    }
+
+    const mpt = await applyAndCommit(
+      {
+        tool: "edit_symbol",
+        cwd: fileToolRoot(context),
+        files: [{
+          relativePath: relPath,
+          oldContent: content,
+          newContent: replacement,
+          expectedBaseHash: baseHash,
+        }],
+      },
+      async (_mpt: ManagedPatchTransaction) => true,
+    )
+
+    getRippleProgram().invalidateFile(p)
+    const fileState = recordRuntimeFileWrite({ path: p, content: replacement })
+    return Result.ok(`edited symbol ${symbol} (lines ${span.start + 1}-${span.end})`, {
       path,
       symbol,
       symbolKind: "ast",
       authority: "compiler",
       startLine: span.start,
       endLine: span.end,
-      dryRun: true,
+      dryRun: false,
+      transactionId: mpt.patch.fileTransaction.id,
+      patchTransactionId: mpt.txId,
+      rippleReport: ripple,
+      checkpoint: checkpointMetadata(path, content, baseHash),
+      fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
+  } catch (e) {
+    return fileToolFailure(e, fileToolRoot(context))
   }
-  if (newText === undefined) {
-    return Result.fail(`edit_symbol requires newText (or dryRun=true to preview): ${symbol}`)
-  }
-
-  const before = lines.slice(0, span.start).join("\n")
-  const after = lines.slice(span.end).join("\n")
-  const replacement = before + (before ? "\n" : "") + newText + (after ? "\n" : "") + after
-  const temp = join(dirname(p), `.tmp-${process.pid}-${Date.now()}`)
-  writeFileSync(temp, replacement, "utf-8")
-  renameSync(temp, p)
-  recordRuntimeFileWrite({ path: p, content: replacement })
-
-  return Result.ok(`edited symbol ${symbol} (lines ${span.start + 1}-${span.end})`, {
-    path,
-    symbol,
-    symbolKind: "ast",
-    authority: "compiler",
-    startLine: span.start,
-    endLine: span.end,
-    dryRun: false,
-  })
 }
 
 export const EDIT_SYMBOL_TOOL: ToolDef = {
@@ -654,8 +725,14 @@ export const EDIT_SYMBOL_TOOL: ToolDef = {
   isReadonly: false,
   category: "file",
   requiresConfirmation: true,
+  managesFreshnessApproval: true,
+  contract: {
+    pathPolicy: "workspace_only",
+    stateRequirement: "fresh_full_baseline",
+    stateUpdates: ["file_state", "checkpoint"],
+  },
   inputSchema: EDIT_SYMBOL_SCHEMA as unknown as Record<string, unknown>,
-  execute: edit_symbol,
+  execute: (params, _onProgress, context) => edit_symbol(params, context),
 }
 
 export const WRITE_FILE: ToolDef = {
@@ -754,10 +831,13 @@ async function edit_fim(params: Record<string, unknown>, context?: ToolExecution
 
   let generatedPreview = ""
   try {
-    const p = resolve(path)
-    const pathCheck = checkForbiddenFile(p, process.cwd())
+    const resolution = authoritativePath(context, path, "write")
+    if (!resolution.ok) return resolution.result
+    const p = resolution.path
+    const root = fileToolRoot(context)
+    const pathCheck = checkForbiddenFile(p, root ?? p)
     if (!pathCheck.allowed) {
-      const displayPath = safeResultPath(path)
+      const displayPath = safeResultPath(path, root)
       return Result.blocked(`PathPolicy blocked edit_fim for ${displayPath}: ${pathCheck.reason ?? "forbidden path"}`, {
         gate: "path_policy",
         pathPolicy: { path: displayPath, reason: pathCheck.reason ?? "forbidden path" },
@@ -783,10 +863,11 @@ async function edit_fim(params: Record<string, unknown>, context?: ToolExecution
     if (effectiveDecision !== "allow") {
       return Result.blocked(`${formatRippleBlock(ripple)}\n\nFIM preview:\n${result.newText.slice(0, 500)}`)
     }
-    const relPath = relative(process.cwd(), p).replace(/\\/g, "/")
+    const relPath = toolRelativePath(context, p)
     const mpt = await applyAndCommit(
       {
         tool: "edit_fim",
+        cwd: fileToolRoot(context),
         files: [{
           relativePath: relPath,
           oldContent,
@@ -809,18 +890,24 @@ async function edit_fim(params: Record<string, unknown>, context?: ToolExecution
       fileState: { path: fileState.path, status: fileState.status, source: fileState.source },
     })
   } catch (e) {
-    if (e instanceof PatchFreshnessConflictError || e instanceof PatchPathConflictError) return fileToolFailure(e)
+    if (e instanceof PatchFreshnessConflictError || e instanceof PatchPathConflictError) {
+      return fileToolFailure(e, fileToolRoot(context))
+    }
     return Result.fail(`FIM generated edit but file write failed: ${e}\n\n${generatedPreview}`)
   }
 }
 
-async function rollback_transaction(params: Record<string, unknown>): Promise<ToolResult> {
+async function rollback_transaction(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const transactionId = String(params.transactionId ?? params.transaction_id ?? "")
   if (!transactionId) return Result.fail("transactionId is required")
   try {
     // SS-Next-2B: rollback invalidates pre-rollback evidence (write-generation
     // L2 + commit-history binding L3) while keeping the binding usable.
-    const result = rollbackCommittedTransaction(transactionId)
+    // RC-19 Phase 2 (D7): look up the transaction under the authority root —
+    // never process.cwd() (the store is anchored at the root that wrote it).
+    const root = fileToolRoot(context)
+    if (!root) return Result.blocked("rollback_transaction requires a projectRoot authority (RC-19 Phase 2)", { gate: "path_authority" })
+    const result = rollbackCommittedTransaction(transactionId, root)
     const changed = [...result.restored, ...result.deleted]
     return Result.ok(`Rolled back ${transactionId}: restored ${result.restored.length}, deleted ${result.deleted.length}`, {
       transactionId,
@@ -847,7 +934,7 @@ export const ROLLBACK_TRANSACTION: ToolDef = {
     },
     required: ["transactionId"],
   },
-  execute: rollback_transaction,
+  execute: (params, _onProgress, context) => rollback_transaction(params, context),
 }
 
 export const EDIT_FIM: ToolDef = {

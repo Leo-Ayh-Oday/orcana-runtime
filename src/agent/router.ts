@@ -28,6 +28,43 @@ export interface ThinkingProfile {
   contextUsagePercent?: number
   /** Objective auto-max triggers (model self-upgrade signal) */
   autoMaxSignals?: AutoMaxSignals
+  /**
+   * GATE-02: response budget stage. Decides the action-token reserve that
+   * must survive thinking. Errors push the run into recovery (reasoning
+   * shrinks, action reserve grows) — never into deeper thinking (that was
+   * the OTS-013 feedback amplifier).
+   */
+  stage?: ThinkingStage
+  /**
+   * GATE-03: ProgressGovernor ACTION_FIRST mode — reasoning is cut to a
+   * small budget so the round has room to emit an actual tool call.
+   */
+  actionFirst?: boolean
+}
+
+export type ThinkingStage = "planning" | "execution" | "recovery" | "verification"
+
+/**
+ * GATE-02 (GS-04): ResponseBudget invariant.
+ *
+ * Thinking and tool action share one provider output envelope
+ * (max_tokens counts thinking tokens). OTS-013 starved tool calls by pairing
+ * a 32K thinking intent with a 6K max_tokens cap: thinking burned the whole
+ * envelope, the response truncated before the tool block could be emitted,
+ * and the loop retried the same doomed request forever.
+ *
+ * reasoningCap + actionReserve <= maxTokens  (always)
+ *
+ * Initial reserves per stage (tunable via benchmark):
+ *   planning 25% — the plan itself is cheap, keep room to act on it
+ *   execution 40% — the working stage needs the most tool space
+ *   recovery  50% — recovery must act, not think
+ */
+const STAGE_ACTION_RESERVE: Record<ThinkingStage, number> = {
+  planning: 0.25,
+  execution: 0.4,
+  recovery: 0.5,
+  verification: 0.4,
 }
 
 export interface AutoMaxSignals {
@@ -147,19 +184,22 @@ export function decideThinkingPlan(
   const hadWrite = state.priorTools.some(tool => !READONLY_TOOLS.has(tool))
   const readonlyOnly = state.priorTools.length > 0 && !hadWrite
 
-  // ── Objective auto-max: force upgrade on error cascade or broad edit ──
+  // ── Objective auto-max: broad edits may justify deeper thinking, error
+  // cascades must NOT (GATE-02). Errors ≥3 used to force max thinking here —
+  // that was the OTS-013 amplifier: truncation → error → deeper thinking →
+  // more truncation. Error-rich runs now route to the recovery stage, which
+  // shrinks reasoning and grows the action reserve instead. ──
   const autoMax = profile?.autoMaxSignals
-  const forceMax = profile?.intentMode !== "readonly" && autoMax && (
-    autoMax.consecutiveErrors >= 3 || autoMax.modifiedFiles >= 5
-  )
+  const forceMax = profile?.intentMode !== "readonly" && (autoMax?.modifiedFiles ?? 0) >= 5
   if (forceMax && effortOverride !== "high") {
+    const bounded = applyResponseBudget({ type: "enabled", budget_tokens: 32768, effort: "max" }, state, profile)
     return {
-      thinking: { type: "enabled", budget_tokens: 32768, effort: "max" },
-      maxTokens: 8192,
+      thinking: bounded.thinking,
+      maxTokens: bounded.maxTokens,
       score: Math.max(score, 11),
-      reason: `auto-max: ${autoMax!.consecutiveErrors >= 3 ? `${autoMax!.consecutiveErrors} errors` : ""}${autoMax!.consecutiveErrors >= 3 && autoMax!.modifiedFiles >= 5 ? " + " : ""}${autoMax!.modifiedFiles >= 5 ? `${autoMax!.modifiedFiles} files` : ""}`,
+      reason: `auto-max: ${autoMax!.modifiedFiles} files`,
       factors: [...factors, "auto-max"],
-      visibleStatus: `深度思考：最高 32K · auto-max · ${autoMax!.consecutiveErrors} errors / ${autoMax!.modifiedFiles} files`,
+      visibleStatus: `深度思考：最高 ${Math.round((bounded.thinking.budget_tokens ?? 0) / 1024)}K · auto-max · ${autoMax!.modifiedFiles} files`,
     }
   }
 
@@ -184,14 +224,42 @@ export function decideThinkingPlan(
     thinking = { type: "enabled", budget_tokens: 8192, effort: effortOverride ?? "high" }
   }
 
+  const bounded = applyResponseBudget(thinking, state, profile)
+
   return {
-    thinking,
-    maxTokens: decideMaxTokens(thinking, state),
+    thinking: bounded.thinking,
+    maxTokens: bounded.maxTokens,
     score,
     reason,
     factors,
-    visibleStatus: formatThinkingStatus(thinking, score, reason, factors),
+    visibleStatus: formatThinkingStatus(bounded.thinking, score, reason, factors),
   }
+}
+
+/**
+ * GATE-02: apply the ResponseBudget invariant to a thinking intent.
+ *
+ * The provider output envelope (maxTokens) is fixed first, then the thinking
+ * budget is capped so `reasoningCap + actionReserve <= maxTokens` always
+ * holds. Without this, a 32K thinking intent paired with a 6K cap lets
+ * thinking burn the entire envelope and starve tool emission (OTS-013).
+ */
+function applyResponseBudget(
+  thinking: ThinkingConfig,
+  state: RoundState,
+  profile?: ThinkingProfile,
+): { thinking: ThinkingConfig; maxTokens: number } {
+  const maxTokens = decideMaxTokens(thinking, state)
+  const stage = profile?.stage ?? (state.hadError ? "recovery" : "execution")
+  const reserve = STAGE_ACTION_RESERVE[stage]
+  let reasoningCap = Math.floor(maxTokens * (1 - reserve))
+  // GATE-03: ACTION_FIRST 模式下思考预算压到 2K——本轮必须发出工具调用，
+  // 深度思考不是进展。
+  if (profile?.actionFirst) reasoningCap = Math.min(reasoningCap, 2048)
+  if (thinking.budget_tokens && thinking.budget_tokens > reasoningCap) {
+    return { thinking: { ...thinking, budget_tokens: reasoningCap }, maxTokens }
+  }
+  return { thinking, maxTokens }
 }
 
 function noThinkingDecision(
@@ -226,12 +294,16 @@ export function decideThinking(
 }
 
 export function decideMaxTokens(thinking: ThinkingConfig | undefined, state: RoundState): number {
-  if (state.hadFim) return 4096
+  // GATE-02: maxTokens is the full output envelope (thinking + text + tool
+  // input all count against it). The old caps (6144 @ 32K thinking intent)
+  // made the envelope smaller than the thinking budget it was supposed to
+  // contain — truncation was structural. Envelopes now leave room for the
+  // stage action reserve inside applyResponseBudget.
+  if (state.hadFim) return 8192
   if (state.priorTools.includes("write_file")) return 16384
-  if (thinking?.budget_tokens && thinking.budget_tokens >= 32768) return 6144
-  if (state.priorFiles.size >= 3 && thinking) return 6144
-  if (thinking) return 3072
-  return 1024
+  if (thinking?.budget_tokens && thinking.budget_tokens >= 16384) return 16384
+  if (thinking) return 12288
+  return 4096
 }
 
 export function updateState(state: RoundState, toolNames: string[], filePaths: string[], hadError: boolean): void {

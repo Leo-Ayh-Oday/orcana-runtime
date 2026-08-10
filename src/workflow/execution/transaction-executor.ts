@@ -26,6 +26,8 @@ export async function runWriteNode(
   tool: ContractToolDescriptor,
   input: Record<string, unknown>,
   lock: WriteLockHandle,
+  /** RC-19 D7: tool path authority root (fail-closed when absent). */
+  projectRoot?: string,
 ): Promise<WorkflowNodeResult> {
   const startedAt = Date.now()
   if (tool.defn.isReadonly === true) {
@@ -33,7 +35,7 @@ export async function runWriteNode(
     return fail(nodeId, startedAt, `workflow: read-only tool "${tool.defn.name}" cannot run as a write node`)
   }
   try {
-    const result = await tool.execute(input)
+    const result = await tool.execute(input, projectRoot ? { projectRoot } : undefined)
     if (!result.success) {
       return fail(nodeId, startedAt, result.error ?? result.content ?? `tool ${tool.defn.name} failed`)
     }

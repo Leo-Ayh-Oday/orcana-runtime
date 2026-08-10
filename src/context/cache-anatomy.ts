@@ -43,12 +43,18 @@ export function summarizeMessages(messages: ProviderMessage[]): {
   volatileTokens: number
   budgetGuardTokens: number
   currentPromptTokens: number
+  memoryAnchorTokens: number
+  memoryDeltasTokens: number
+  memoryRetrievalTokens: number
 } {
   let conversationTokens = 0
   let stableContextTokens = 0
   let volatileTokens = 0
   let budgetGuardTokens = 0
   let currentPromptTokens = 0
+  let memoryAnchorTokens = 0
+  let memoryDeltasTokens = 0
+  let memoryRetrievalTokens = 0
 
   messages.forEach((message, index) => {
     const tokens = estimateTokens(message.content)
@@ -59,6 +65,12 @@ export function summarizeMessages(messages: ProviderMessage[]): {
       volatileTokens += tokens
     } else if (content.includes("## Context Budget Guard")) {
       budgetGuardTokens += tokens
+    } else if (content.includes("## M0 Base Checkpoint") || content.includes("## Memory Manifest")) {
+      memoryAnchorTokens += tokens
+    } else if (content.includes("## Recent Delta Memories")) {
+      memoryDeltasTokens += tokens
+    } else if (content.includes("## Earlier Conversation Digest") || content.includes("## Older Context Signals")) {
+      memoryRetrievalTokens += tokens
     } else if (message.role === "user" && index === messages.length - 1) {
       currentPromptTokens += tokens
     } else {
@@ -66,7 +78,7 @@ export function summarizeMessages(messages: ProviderMessage[]): {
     }
   })
 
-  return { conversationTokens, stableContextTokens, volatileTokens, budgetGuardTokens, currentPromptTokens }
+  return { conversationTokens, stableContextTokens, volatileTokens, budgetGuardTokens, currentPromptTokens, memoryAnchorTokens, memoryDeltasTokens, memoryRetrievalTokens }
 }
 
 /** Budget ratio above which thinking overhead triggers compaction. */
@@ -91,13 +103,13 @@ export function buildCacheAnatomy(input: {
     { kind: "system", tokens: estimateTokens(input.system), stable: true },
     { kind: "tools", tokens: estimateTokens(input.tools ?? []), stable: true },
     { kind: "stableContext", tokens: messageSummary.stableContextTokens, stable: true },
-    { kind: "conversation", tokens: messageSummary.conversationTokens, stable: true },
+    { kind: "conversation", tokens: messageSummary.conversationTokens, stable: false },
     { kind: "volatileContext", tokens: messageSummary.volatileTokens, stable: false },
     { kind: "contextBudgetGuard", tokens: messageSummary.budgetGuardTokens, stable: false },
     { kind: "currentPrompt", tokens: messageSummary.currentPromptTokens, stable: false },
-    { kind: "memoryAnchor", tokens: 0, stable: true },
-    { kind: "memoryDeltas", tokens: 0, stable: false },
-    { kind: "memoryRetrieval", tokens: 0, stable: false },
+    { kind: "memoryAnchor", tokens: messageSummary.memoryAnchorTokens, stable: true },
+    { kind: "memoryDeltas", tokens: messageSummary.memoryDeltasTokens, stable: false },
+    { kind: "memoryRetrieval", tokens: messageSummary.memoryRetrievalTokens, stable: false },
     { kind: "thinking", tokens: thinkingTokens, stable: false },
   ]
   return summarizeSections(sections, thinkingTokens, thinkingOverBudget)

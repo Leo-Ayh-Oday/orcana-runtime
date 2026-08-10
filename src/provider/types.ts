@@ -11,10 +11,27 @@ export interface ProviderMessage {
 }
 
 export interface StreamEvent {
-  type: "text" | "tool_call" | "tool_result" | "thinking_blocks" | "status" | "error" | "done" | "confirm" | "token_usage" | "plan_ready" | "task_progress" | "clarification_ready" | "user_question"
+  type: "text" | "tool_call" | "tool_result" | "thinking_blocks" | "status" | "error" | "done" | "confirm" | "token_usage" | "plan_ready" | "task_progress" | "clarification_ready" | "user_question" | "truncated"
   /** For confirm: { tool: string, params: Record<string,unknown>, message: string } */
   data?: unknown
 }
+
+/**
+ * GATE-02 (GS-03/GS-05): provider response envelope class.
+ *
+ * `max_tokens` is TRUNCATED, not an error: tool blocks that closed before the
+ * cut are complete side effects and are emitted; a blind generic retry is
+ * forbidden (that was the OTS-013 loop). Truncation continuation is a distinct
+ * round, never a retry of the same request.
+ */
+export type ProviderStopClass =
+  | "COMPLETED"
+  | "TOOL_USE"
+  | "TRUNCATED"
+  | "RATE_LIMITED"
+  | "TRANSPORT_FAILURE"
+  | "AUTH_FAILURE"
+  | "PROVIDER_FAILURE"
 
 export type ProviderCallPurpose =
   | "agent_main"
@@ -78,6 +95,12 @@ export interface ProviderCallOptions {
   abortSignal?: AbortSignal
   /** PR-6.4: API-level structured output (response_format). */
   responseFormat?: StructuredOutputRequest
+  /**
+   * PR-GATE-06: Run 级统一重试预算。注入后 provider 的 transport/rateLimit
+   * 重试由 RetryLedger 限次（与 capability/repair 等层共享同一预算，
+   * 禁止各层独立无限重试）；未注入时回退构造时 maxRetries（legacy）。
+   */
+  retryLedger?: import("../runtime/retry-ledger").RetryLedger
 }
 
 export interface LLMProvider {

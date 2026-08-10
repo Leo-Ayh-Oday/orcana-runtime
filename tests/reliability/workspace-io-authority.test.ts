@@ -41,6 +41,7 @@ import type { ToolExecutionContext } from "../../src/tools/registry"
 let ROOT = ""
 let OUTSIDE = ""
 let DECOY = ""
+let PROJECT_LINK = ""
 
 beforeAll(() => {
   ROOT = mkdtempSync(join(tmpdir(), "orcana-ic01-ws-"))
@@ -62,12 +63,20 @@ beforeAll(() => {
   writeFileSync(join(ROOT, ".npmrc"), "//npm:token=abc")
   writeFileSync(join(OUTSIDE, "outside.txt"), "OUTSIDE-SECRET")
   writeFileSync(join(OUTSIDE, "secret-dir", "payload.txt"), "OUTSIDE-PAYLOAD")
+  // P0-1 攻击面：projectRoot 为 workspace 的 symlink alias（P2-7 语义）。
+  PROJECT_LINK = join(tmpdir(), `orcana-ic01-link-${process.pid}`)
+  try {
+    symlinkSync(ROOT, PROJECT_LINK)
+  } catch {
+    // exists
+  }
 })
 
 afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true })
   rmSync(OUTSIDE, { recursive: true, force: true })
   rmSync(DECOY, { recursive: true, force: true })
+  rmSync(PROJECT_LINK, { recursive: true, force: true })
 })
 
 function makeContext(overrides: Partial<ToolExecutionContext> = {}): ToolExecutionContext {
@@ -262,6 +271,50 @@ describe("IC01 SECRET_READ — 统一 secret deny policy", () => {
         gate: "workspace_io",
         workspaceIo: { code: "SECRET_READ" },
       })
+    })
+  })
+
+  test("P0-1: workspace 内 benign symlink alias → workspace 内 .env → SECRET_READ（canonical target 二次检查）", async () => {
+    const alias = join(ROOT, "src", "env-alias.txt")
+    try {
+      symlinkSync("../.env", alias)
+    } catch {
+      // exists
+    }
+    await withAuthority(authorityFor(ROOT), async () => {
+      const result = await read.execute({ path: "src/env-alias.txt" }, makeContext())
+      expect(result.success).toBe(false)
+      expect((result.metadata?.workspaceIo as { code?: string } | undefined)?.code).toBe("SECRET_READ")
+    })
+  })
+
+  test("P2-7: projectRoot = workspace symlink alias → 正常读取 ALLOW（canonical containment）", async () => {
+    await withAuthority(authorityFor(ROOT), async () => {
+      const result = await read.execute(
+        { path: "src/a.txt" },
+        makeContext({ projectRoot: PROJECT_LINK }),
+      )
+      expect(result.success).toBe(true)
+      expect(result.content).toContain("WORKSPACE-CONTENT")
+    })
+  })
+
+  test("P2-7: projectRoot = workspace symlink alias 时，alias 下 symlink 逃逸仍拒绝", async () => {
+    const alias = join(ROOT, "src", "alias-escape.txt")
+    try {
+      symlinkSync(join(OUTSIDE, "outside.txt"), alias)
+    } catch {
+      // exists
+    }
+    await withAuthority(authorityFor(ROOT), async () => {
+      // readableRoots 放行 OUTSIDE → resolveToolPath 层放行；权威层（canonical
+      // containment）必须仍拒绝。
+      const result = await read.execute(
+        { path: "src/alias-escape.txt" },
+        makeContext({ projectRoot: PROJECT_LINK, readableRoots: [OUTSIDE] }),
+      )
+      expect(result.success).toBe(false)
+      expect((result.metadata?.workspaceIo as { code?: string } | undefined)?.code).toBe("SYMLINK_READ_ESCAPE")
     })
   })
 

@@ -41,14 +41,18 @@ export function resolveToolPath(
     }
   }
   const base = resolve(root)
+  // IC01（P2-7）：projectRoot 可能是 workspace 的 symlink alias（如
+  // /project-link -> /real/project）。canonical target 比较必须对照 canonical
+  // root，否则 alias 下一切正常读取被误判 SYMLINK_PROJECT_ESCAPE。
+  const baseCanonical = canonicalProjectRoot(root)
   // Relative paths always bind to projectRoot — never process.cwd() (D7).
   // Absolute paths are checked lexically first, then against symlink reality.
   const candidate = isAbsolute(rawPath) ? normalize(rawPath) : resolve(base, rawPath)
-  if (candidate === base) return { ok: true, path: candidate }
+  if (candidate === base || candidate === baseCanonical) return { ok: true, path: candidate }
 
   const allowedRoots = mode === "write"
-    ? [base, ...(authority.writableRoots ?? [])]
-    : [base, ...(authority.readableRoots ?? [])]
+    ? [base, baseCanonical, ...(authority.writableRoots ?? [])]
+    : [base, baseCanonical, ...(authority.readableRoots ?? [])]
 
   if (!allowedRoots.some(root => isWithin(root, candidate))) {
     return {
@@ -95,6 +99,14 @@ export function deepestExistingRealpath(candidate: string): string | undefined {
     current = parent
   }
   return undefined
+}
+
+/** projectRoot 的 canonical 根（realpath 归一化；不存在时退回规范化绝对路径）。
+ *  IC01（P2-7）：symlink alias 场景下 canonical root 也是合法 root。 */
+function canonicalProjectRoot(root: string): string {
+  const base = resolve(root)
+  const real = deepestExistingRealpath(base)
+  return real ?? base
 }
 
 /** Deterministic project-relative display path (never cwd-dependent). */

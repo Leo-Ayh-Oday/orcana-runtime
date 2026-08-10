@@ -7,9 +7,14 @@
  *    - WORKSPACE_PATH_BASE_DRIFT = 0 —— ToolExecutionContext.projectRoot 与权威
  *      读取根不一致时 fail closed（同一物理目录的别名路径经 realpath 归一化后
  *      不算漂移）。
- *    - OUTSIDE_WORKSPACE_READ = 0 —— 解析结果必须在 readRoot 之内。
- *    - SYMLINK_READ_ESCAPE = 0 —— 解析路径的 deepest realpath 不得离开 readRoot。
- *    - SECRET_READ = 0 —— .env/私钥/credentials 等拒绝读取；.env.example 允许；
+ *    - OUTSIDE_WORKSPACE_READ = 0 —— 解析结果（canonical target）必须在
+ *      readRoot 之内。
+ *    - SYMLINK_READ_ESCAPE = 0 —— 解析路径的 deepest realpath 不得离开 readRoot；
+ *      open 后的 fd canonical 路径（/proc/self/fd）不得离开 readRoot
+ *      （check/open race 由 IC01 在 open 侧闭环，完整 rename TOCTOU 由 IC14 覆盖）。
+ *    - SECRET_READ = 0 —— .env/私钥/credentials 等拒绝读取；秘密判定对
+ *      lexical 路径与 canonical target（realpath 后）各执行一次，workspace 内
+ *      symlink alias 指向秘密文件同样拒绝；.env.example 允许；
  *      显式 secret grant 只能由 Runtime 提供（secretGrants 集合），绝不从
  *      Tool 参数接收（read_file 无 grant 参数）。
  *
@@ -18,6 +23,7 @@
  */
 
 import { realpathSync } from "node:fs"
+import { readlink } from "node:fs/promises"
 import { basename, resolve } from "node:path"
 import type { TrustedExecutionAuthority } from "../linux/contracts"
 import { deepestExistingRealpath, isWithin } from "../../tools/path-authority"
@@ -91,30 +97,74 @@ export function checkWorkspaceBaseDrift(
   return null
 }
 
-/** 权威读取强制：秘密文件 / 工作区外 / symlink 逃逸。 */
+/** 权威读取强制：秘密文件 / 工作区外 / symlink 逃逸。
+ *
+ *  判定基于 canonical target（deepest realpath）：
+ *    - 秘密文件对 lexical 路径与 canonical target 各执行一次 —— workspace 内
+ *      symlink alias 指向 .env 等秘密文件同样拒绝（SECRET_READ）。
+ *    - containment 用 canonical target（realpath 归一化后）判定 —— projectRoot
+ *      为 workspace 的 symlink alias 时（如 /project-link -> /real/project），
+ *      lexical 前缀不在 readRoot 内但 canonical 在，正常读取放行。
+ *    - lexical 在 projectRoot（lexical 形式，alias 场景区别于 canonical 根）
+ *      之内而 canonical 逃出根 → SYMLINK_READ_ESCAPE；lexical 直接逃逸 →
+ *      OUTSIDE_WORKSPACE_READ。
+ *
+ *  lexicalRoot 为 ToolExecutionContext.projectRoot（canonical 前的形式）；
+ *  未提供时退回 readRoot（非 alias 项目两者一致）。 */
 export function enforceWorkspaceRead(
   workspace: WorkspaceIoAuthority,
   resolvedPath: string,
   rawPath: string,
+  lexicalRoot?: string,
 ): WorkspaceIoViolation | null {
+  const realTarget = deepestExistingRealpath(resolvedPath)
+  // SECRET_READ：lexical + canonical 双查（symlink alias → 秘密文件必须命中）。
   const secret = checkSecretRead(workspace, resolvedPath)
+    ?? (realTarget !== undefined ? checkSecretRead(workspace, realTarget) : null)
   if (secret) return secret
 
-  if (!isWithin(workspace.readRoot, resolvedPath)) {
+  const lexicalRootNorm = lexicalRoot ? resolve(lexicalRoot) : workspace.readRoot
+  const lexicalInRoot = isWithin(lexicalRootNorm, resolvedPath)
+  const canonicalTarget = realTarget ?? resolvedPath
+  if (!isWithin(workspace.readRoot, canonicalTarget)) {
     return {
-      code: "OUTSIDE_WORKSPACE_READ",
-      reason: `OUTSIDE_WORKSPACE_READ: path 超出权威工作区读取根 (${workspace.readRoot}): ${rawPath}`,
+      code: lexicalInRoot ? "SYMLINK_READ_ESCAPE" : "OUTSIDE_WORKSPACE_READ",
+      reason: lexicalInRoot
+        ? `SYMLINK_READ_ESCAPE: path 经 symlink 逃逸出权威工作区读取根: ${rawPath}`
+        : `OUTSIDE_WORKSPACE_READ: path 超出权威工作区读取根 (${workspace.readRoot}): ${rawPath}`,
     }
   }
+  return null
+}
 
-  const realTarget = deepestExistingRealpath(resolvedPath)
-  if (realTarget !== undefined && !isWithin(workspace.readRoot, realTarget)) {
-    return {
-      code: "SYMLINK_READ_ESCAPE",
-      reason: `SYMLINK_READ_ESCAPE: path 经 symlink 逃逸出权威工作区读取根: ${rawPath}`,
+/** open 后 fd canonical 校验（关闭 check/open race 的读取侧）：
+ *  通过 /proc/self/fd/{fd} 取得 open 目标的当前 canonical 路径，确认仍在
+ *  权威读取根内（SYMLINK_READ_ESCAPE）。readlink 不可用（非 Linux）或 fd
+ *  无 canonical 路径时返回 null —— 该边界由 IC14 的完整 TOCTOU 闭环覆盖。 */
+export async function validateOpenFileCanonical(
+  workspace: WorkspaceIoAuthority,
+  resolvedPath: string,
+  fd: number,
+): Promise<WorkspaceIoViolation | null> {
+  try {
+    const canonical = await readlink(`/proc/self/fd/${fd}`)
+    // open 目标已被 rename/替换（deleted）—— TOCTOU 窗口，fail closed。
+    if (canonical.endsWith(" (deleted)")) {
+      return {
+        code: "SYMLINK_READ_ESCAPE",
+        reason: `SYMLINK_READ_ESCAPE: open 目标已被替换或删除（TOCTOU），fail closed: ${resolvedPath}`,
+      }
     }
+    if (!isWithin(workspace.readRoot, canonical)) {
+      return {
+        code: "SYMLINK_READ_ESCAPE",
+        reason: `SYMLINK_READ_ESCAPE: open 目标 canonical 路径逃逸权威工作区读取根: ${resolvedPath} -> ${canonical}`,
+      }
+    }
+  } catch {
+    // 非 Linux /proc 不可用：完整 TOCTOU 由 IC14 覆盖（文档边界）。
+    return null
   }
-
   return null
 }
 

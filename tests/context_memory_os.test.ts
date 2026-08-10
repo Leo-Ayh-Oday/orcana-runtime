@@ -8,6 +8,7 @@ import {
   evaluateMemoryRetrieval,
   isDefaultInjectableCapsule,
   loadMemoryIndex,
+  MEMORY_INDEX_READ_CAP_BYTES,
   proposeMemoryUpdate,
   resolveMemoryIndexFiles,
   type MemoryCapsule,
@@ -109,6 +110,32 @@ describe("Context Memory OS", () => {
       expect(index.recentDecisions).toEqual(["D-1: keep TaskPacket across epoch rollover"])
       expect(index.raw).not.toContain("large project details")
       expect(files.some(file => file.endsWith(join(".orcana", "memory", "project.md")))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("P1-4: 巨型 MEMORY.md → 有界读取，只读前缀（UNBOUNDED_RUNTIME_FILE_READ = 0）", () => {
+    const root = tempRoot()
+    try {
+      const layout = ensureContextMemoryLayout(root)
+      // 头部放有效 sections，主体填充到 cap 之上（512 KiB >> 256 KiB cap）。
+      const head = [
+        "# Orcana Memory Index",
+        "",
+        "## Always Load",
+        "- project.md",
+        "",
+      ].join("\n") + "\n"
+      const padding = "x".repeat(512 * 1024 - head.length) + "\n"
+      writeFileSync(layout.files.memoryIndex, head + padding, "utf-8")
+
+      const index = loadMemoryIndex(root)
+      expect(index.alwaysLoad).toEqual(["project.md"])
+      // 有界：raw 不得超过读取 cap（不完整读入）。
+      expect(index.raw.length).toBeLessThanOrEqual(MEMORY_INDEX_READ_CAP_BYTES)
+      // 巨型文件尾部哨兵不应出现在 raw 中（截断验证）。
+      expect(index.raw.endsWith("x\n")).toBe(false)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -1,6 +1,11 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
+import { existsSync, readdirSync, statSync } from "node:fs"
 import { basename, join, relative } from "node:path"
 import { createHash } from "node:crypto"
+import { BoundedFileReader } from "../runtime/io/bounded-file-reader"
+
+/** IC01: 有界读取器（readKernelFile 同步管线用）—— 完整 read 后 slice 是
+ *  UNBOUNDED_RUNTIME_FILE_READ = 0 禁止的模式；此处只按需读 head/tail。 */
+const KERNEL_READER = new BoundedFileReader()
 
 export interface ContextKernel {
   text: string
@@ -25,24 +30,35 @@ function hash(text: string): string {
  *  strategy: keep the head (rules context) AND the tail (the end of the file
  *  is no longer lost), mark the omission inline, and report truncation +
  *  total length in the kernel meta (`fileNotes`).
+ *
+ *  IC01: 有界读取 —— 大文件只按需读取 head/tail 窗口（BoundedFileReader），
+ *  绝不 readFileSync 完整读入后再 slice（UNBOUNDED_RUNTIME_FILE_READ = 0）。
+ *  字节级截断点可能落在 UTF-8 多字节字符中间（marker 已声明截断）。
  */
 function readKernelFile(path: string, maxChars: number): { content: string; truncated: boolean; totalChars: number } {
   if (!existsSync(path)) return { content: "", truncated: false, totalChars: 0 }
   try {
-    const full = readFileSync(path, "utf-8")
-    if (full.length <= maxChars) return { content: full, truncated: false, totalChars: full.length }
+    const info = KERNEL_READER.statSync(path)
+    if (!info.isRegular) return { content: "", truncated: false, totalChars: 0 }
+    const totalChars = info.size
+    if (totalChars <= maxChars) {
+      return { content: KERNEL_READER.readSync(path, maxChars).toString("utf-8"), truncated: false, totalChars }
+    }
     const head = Math.floor(maxChars * 0.6)
-    const marker = `\n[context kernel: middle ${full.length - maxChars} chars omitted; file total ${full.length} chars - head+tail preserved]\n`
+    const marker = `\n[context kernel: middle ${totalChars - maxChars} chars omitted; file total ${totalChars} chars - head+tail preserved]\n`
     const tail = maxChars - head - marker.length
     if (tail < 64) {
       // Degenerate budget: the tail cannot fit — keep a full head but mark
       // the omission explicitly so truncation is never silent.
-      return { content: full.slice(0, Math.max(64, maxChars)) + marker, truncated: true, totalChars: full.length }
+      const headText = KERNEL_READER.readSync(path, Math.max(64, maxChars)).toString("utf-8")
+      return { content: headText + marker, truncated: true, totalChars }
     }
+    const headText = KERNEL_READER.readSync(path, head).toString("utf-8")
+    const tailText = KERNEL_READER.readSyncRange(path, totalChars - tail, tail).toString("utf-8")
     return {
-      content: full.slice(0, head) + marker + full.slice(full.length - tail),
+      content: headText + marker + tailText,
       truncated: true,
-      totalChars: full.length,
+      totalChars,
     }
   } catch {
     return { content: "", truncated: false, totalChars: 0 }

@@ -8,10 +8,18 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve, sep } from "node:path"
 import type { ProviderMessage } from "../provider/types"
+import { BoundedFileReader } from "../runtime/io/bounded-file-reader"
 
 // ── Layout ──
 
 export const ORCANA_MEMORY_DIR = ".orcana/memory"
+
+// IC01: memory index 有界读取上限 —— 巨型 MEMORY.md 绝不完整读入
+// （loadProjectConstitution → loadMemoryIndex 间接全量读路径关闭）。
+export const MEMORY_INDEX_READ_CAP_BYTES = 256 * 1024
+
+/** IC01: memory index 有界读取器（只读前缀；同步管线用）。 */
+const MEMORY_INDEX_READER = new BoundedFileReader()
 
 export interface ContextMemoryLayout {
   root: string
@@ -102,7 +110,8 @@ export interface MemoryIndex {
 export function loadMemoryIndex(root = process.cwd()): MemoryIndex {
   const layout = contextMemoryLayout(root)
   const raw = existsSync(layout.files.memoryIndex)
-    ? readFileSync(layout.files.memoryIndex, "utf-8")
+    // IC01: 有界读取 —— 巨型 MEMORY.md 只读前缀（UNBOUNDED_RUNTIME_FILE_READ = 0）。
+    ? MEMORY_INDEX_READER.readSync(layout.files.memoryIndex, MEMORY_INDEX_READ_CAP_BYTES).toString("utf-8")
     : ""
   const sections = parseMarkdownListSections(raw)
   return {

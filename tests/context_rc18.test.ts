@@ -160,6 +160,20 @@ describe("K39 project kernel tail preservation", () => {
     const root = tmpProject({ "AGENTS.md": "head\n" + "mid-".repeat(900) + "\nend" })
     expect(buildContextKernel(root).hash).toBe(buildContextKernel(root).hash)
   })
+
+  test("giant kernel file read is bounded (head+tail windows only, no full allocation)", () => {
+    // 8 MiB 文件：旧实现 readFileSync 完整读入再 slice；新实现只读 head/tail
+    // 窗口（≈ 数千字节）。RSS 增长必须远小于完整 8 MiB 分配。
+    const root = tmpProject({ "AGENTS.md": "head-rule\n" + "x".repeat(8 * 1024 * 1024) + "\ntail-sentinel-END" })
+    const before = process.memoryUsage().rss
+    const kernel = buildContextKernel(root)
+    const after = process.memoryUsage().rss
+    expect(kernel.text).toContain("tail-sentinel-END")
+    expect(kernel.text).toContain("omitted")
+    expect(kernel.fileNotes?.some(n => n.file === "AGENTS.md" && n.truncated)).toBe(true)
+    // 绝不完整分配 8 MiB（阈值 4 MiB 远小于文件大小）。
+    expect(after - before).toBeLessThan(4 * 1024 * 1024)
+  })
 })
 
 // ── K40 FORK_STABLE_CONTEXT_IMMUTABLE ──

@@ -63,6 +63,44 @@ function createRepo(): string {
 }
 
 describe("Context Map Pipeline", () => {
+  test("IC01 #9: giant README 只读 cap，不完整读入（ContextMap 合理降级）", () => {
+    const root = createRepo()
+    try {
+      const giant = [
+        "# Runtime",
+        "- Agent runtime must keep evidence across rollover.",
+      ].join("\n") + "\n" + "x".repeat(512 * 1024) + "\ntail sentinel MUST NOT appear in rules\n"
+      writeFileSync(join(root, "README.md"), giant, "utf-8")
+
+      const constitution = loadProjectConstitution(root)
+      // 正常返回（合理降级，不崩溃）。
+      expect(constitution.importantFiles).toContain("README.md")
+      // 头部内容（cap 之内）正常进入 notes。
+      expect(constitution.architectureNotes.some(n => n.includes("runtime must keep evidence"))).toBe(true)
+      // 尾部哨兵行（超出 20_000 字节 cap）不得进入任何分类结果 ——
+      // 证明只读取前缀，没有完整读入。
+      const all = constitution.architectureNotes.concat(constitution.codingRules, constitution.forbiddenActions).join("\n")
+      expect(all).not.toContain("tail sentinel MUST NOT appear")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("IC01 #9: giant bun.lock 只读 cap，不完整读入", () => {
+    const root = createRepo()
+    try {
+      const giant = "x".repeat(512 * 1024) + "\nlockfile tail sentinel MUST NOT appear\n"
+      writeFileSync(join(root, "bun.lock"), giant, "utf-8")
+
+      const constitution = loadProjectConstitution(root)
+      expect(constitution.importantFiles).toContain("bun.lock")
+      const all = constitution.architectureNotes.concat(constitution.codingRules, constitution.forbiddenActions).join("\n")
+      expect(all).not.toContain("lockfile tail sentinel")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test("loads project constitution from docs, memory index, and package scripts", () => {
     const root = createRepo()
     try {

@@ -325,6 +325,7 @@ describe("R2 broker transaction", () => {
 import { hierarchyPaths } from "../../../src/runtime/linux/cgroup/manager"
 import type { BrokerFaultPoint, BrokerTestHooks } from "../../../src/runtime/linux/broker"
 import type { RuntimeStateStore } from "../../../src/runtime/linux/recovery/state-store"
+import type { ExecutionBackend } from "../../../src/runtime/linux/backends/backend"
 
 /** IC02：确定性 PRNG（mulberry32）—— 100 轮 fault gate 可复现。 */
 function mulberry32(seed: number): () => number {
@@ -371,7 +372,6 @@ describe("IC02 acquisition transaction — fault injection", () => {
   test("F1: materialize 之后抛错 → reservation/lock/materialization 全释放（sealed secret 无残留）", async () => {
     const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
     const { tmpdir } = await import("node:os")
-    const { join } = await import("node:path")
     const { existsSync } = await import("node:fs")
     const binding = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/reg", expiresAt: Date.now() + 60_000 })
     const ledger = makeLedger()
@@ -393,16 +393,33 @@ describe("IC02 acquisition transaction — fault injection", () => {
     expect(existsSync(secretRoot)).toBe(false)
   })
 
-  test("F2: lock acquisition 失败 → reservation 必须释放（pre-registration window）", async () => {
+  test("P1-1 regression: after-register-starting 抛错 → starting record 也由 cleanupAcquired 收尾", async () => {
     const ledger = makeLedger()
-    const broker = createLinuxBroker({ mode: "enabled", ledger })
+    const broker = createLinuxBroker({ mode: "enabled", ledger, testHooks: faultAtOnce("after-register-starting") })
+    let caught: unknown = null
+    try {
+      for await (const _ of broker.execute(cellSpec())) { /* drain */ }
+    } catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(Error)
+    await assertClean(broker, ledger, undefined)
+  })
+
+  test("F2: lock acquisition 失败（deterministic barrier，无 sleep）→ reservation 必须释放", async () => {
+    const ledger = makeLedger()
+    let barrierReached!: () => void
+    const barrier = new Promise<void>(r => { barrierReached = r })
+    let reached = false
+    const hooks: BrokerTestHooks = {
+      waitAt: p => { if (p === "after-lock" && !reached) { reached = true; barrierReached() } },
+    }
+    const broker = createLinuxBroker({ mode: "enabled", ledger, testHooks: hooks })
     const lockSpec = cellSpec({
-      command: { executable: "/bin/sh", args: ["-c", "sleep 2"], cwd: "/tmp", stdin: "closed" },
+      command: { executable: "/bin/sh", args: ["-c", "sleep 1"], cwd: "/tmp", stdin: "closed" },
       filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt/same" },
     })
     const other = cellSpec({ filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt/same" } })
     const p1 = (async () => { for await (const _ of broker.execute(lockSpec)) { /* hold */ } })()
-    await new Promise(r => setTimeout(r, 200))
+    await barrier // 第一条已拿锁（after-lock checkpoint）——确定性同步点，无 sleep
     let caught: unknown = null
     try {
       for await (const _ of broker.execute(other)) { /* drain */ }
@@ -414,81 +431,121 @@ describe("IC02 acquisition transaction — fault injection", () => {
     expect(ledger.outstanding().length).toBe(0)
   })
 
-  test("F3: createRun 抛错 → 无 cgroup 残留、reservation/lock 释放", async () => {
+  test("F3: createRun 部分创建后抛错（ensure 已 mkdir → controller 授权失败）→ run hierarchy 清理", async () => {
     const fs = mockCgroupFs()
+    const origRead = fs.read.bind(fs)
+    // createRun 内部顺序：ensure(run) 先 mkdir → requireControllers(run) 抛错。
+    fs.read = (p) => {
+      if (p.endsWith("cgroup.subtree_control") && p.includes("/run-")) throw new Error("CGROUP_CONTROLLER_UNAVAILABLE")
+      return origRead(p)
+    }
     const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
     const ledger = makeLedger()
-    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, testHooks: faultAtOnce("before-create-run") })
-    let caught: unknown = null
-    try {
-      for await (const _ of broker.execute(cellSpec())) { /* drain */ }
-    } catch (e) { caught = e }
-    expect(caught).toBeInstanceOf(Error)
-    expect((caught as Error).message).toMatch(/IC02-FAULT/)
-    await assertClean(broker, ledger, cgroup, {
-      cgroupPaths: [hierarchyPaths(cgroup.base, "r1", undefined, "x").run],
-    })
-  })
-
-  test("F4: createAgent 抛错 → run 已建（agent 未建）→ run hierarchy 清理", async () => {
-    const fs = mockCgroupFs()
-    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
-    const ledger = makeLedger()
-    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, testHooks: faultAtOnce("after-create-run") })
-    let caught: unknown = null
-    try {
-      for await (const _ of broker.execute(cellSpec())) { /* drain */ }
-    } catch (e) { caught = e }
-    expect(caught).toBeInstanceOf(Error)
-    expect((caught as Error).message).toMatch(/IC02-FAULT/)
-    const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
-    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, join(run, "agent-a1")] })
-  })
-
-  test("F5: createCell 抛错 → run+agent 已建（cell 未建）→ 全部清理", async () => {
-    const fs = mockCgroupFs()
-    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
-    const ledger = makeLedger()
-    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, testHooks: faultAtOnce("after-create-agent") })
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup })
     const spec = cellSpec()
     let caught: unknown = null
     try {
       for await (const _ of broker.execute(spec)) { /* drain */ }
     } catch (e) { caught = e }
     expect(caught).toBeInstanceOf(Error)
-    expect((caught as Error).message).toMatch(/IC02-FAULT/)
+    expect((caught as Error).message).toMatch(/CGROUP_CONTROLLER_UNAVAILABLE/)
+    // CGROUP_CONTROLLER_UNAVAILABLE 只可能发生在 ensure(run)（mkdir）之后 ——
+    // run 目录确已被部分创建，cleanup 必须把它清掉（此处断言清理后不存在）。
+    const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run] })
+  })
+
+  test("F4: createAgent 部分创建后抛错（agent 目录已建 → 授权失败）→ run+agent 清理", async () => {
+    const fs = mockCgroupFs()
+    const origRead = fs.read.bind(fs)
+    // createRun 正常；createAgent: ensure(agent) mkdir → requireControllers(agent) 抛错。
+    fs.read = (p) => {
+      if (p.endsWith("cgroup.subtree_control") && p.includes("/agent-")) throw new Error("CGROUP_CONTROLLER_UNAVAILABLE")
+      return origRead(p)
+    }
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    const ledger = makeLedger()
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup })
+    const spec = cellSpec()
+    let caught: unknown = null
+    try {
+      for await (const _ of broker.execute(spec)) { /* drain */ }
+    } catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toMatch(/CGROUP_CONTROLLER_UNAVAILABLE/)
+    // 授权失败发生在 ensure(agent)（mkdir）之后 —— agent 目录确已被部分创建。
+    const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
+    const agent = join(run, "agent-a1")
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, agent] })
+  })
+
+  test("F5: createCell 部分创建后抛错（cell 目录已建 → 属性写入失败）→ run+agent+cell 清理", async () => {
+    const fs = mockCgroupFs()
+    const origWrite = fs.write.bind(fs)
+    // createCell: ensure(cell) mkdir → writeAttr(cell, cpu.max) 抛错。
+    fs.write = (p, c) => {
+      if (p.includes("/cell-")) throw new Error("EACCES")
+      return origWrite(p, c)
+    }
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    const ledger = makeLedger()
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup })
+    const spec = cellSpec()
+    let caught: unknown = null
+    try {
+      for await (const _ of broker.execute(spec)) { /* drain */ }
+    } catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toMatch(/EACCES/)
     const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
     const agent = join(run, "agent-a1")
     const cell = hierarchyPaths(cgroup.base, "r1", "a1", spec.identity.cellId).cell
+    // EACCES 只可能发生在 ensure(cell)（mkdir）之后 —— cell 目录确已被部分创建，
+    // cleanup 必须把它连同 run/agent 一起清掉（此处断言的是清理后不存在）。
     await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, agent, cell] })
   })
 
-  test("F6: backend 启动前抛错（cell cgroup 已建）→ 全部资源释放", async () => {
+  test("F6: backend compile throws → 已获取资源全释放（真实 backend.compile 抛错）", async () => {
+    const { registerBackend } = await import("../../../src/runtime/linux/broker")
+    const { createHostAuditBackend } = await import("../../../src/runtime/linux/backends/host-audit")
+    const base = createHostAuditBackend()
+    // 覆盖 host-audit：compile 抛错（backend.run 内部调用真实 compile path）。
+    // 测试结束将 failCompile 置 false —— 同一覆盖对象恢复真实 compile 行为，
+    // 不污染后续测试（registerBackend 无 unregister，闭包开关是唯一恢复通道）。
+    let failCompile = true
+    registerBackend({
+      ...base,
+      compile: (spec: unknown, caps: unknown, materialization?: unknown) => {
+        if (failCompile) throw new Error("IC02-COMPILE-FAULT")
+        return base.compile(spec as Parameters<typeof base.compile>[0], caps as Parameters<typeof base.compile>[1], materialization as Parameters<typeof base.compile>[2])
+      },
+    } as unknown as ExecutionBackend)
     const fs = mockCgroupFs()
     const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
     const ledger = makeLedger()
-    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, testHooks: faultAtOnce("before-backend-run") })
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup })
     const spec = cellSpec()
     let caught: unknown = null
     try {
       for await (const _ of broker.execute(spec)) { /* drain */ }
     } catch (e) { caught = e }
     expect(caught).toBeInstanceOf(Error)
-    expect((caught as Error).message).toMatch(/IC02-FAULT/)
-    const cellPath = hierarchyPaths(cgroup.base, "r1", "a1", spec.identity.cellId).cell
+    expect((caught as Error).message).toMatch(/IC02-COMPILE-FAULT/)
     const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
-    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, cellPath] })
+    const cell = hierarchyPaths(cgroup.base, "r1", "a1", spec.identity.cellId).cell
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, cell] })
+    failCompile = false // 恢复真实 compile（不污染后续测试）
   })
 
-  test("F7: backend start 抛错（进程启动失败）→ 已获取资源全释放", async () => {
+  test("F7: backend start 失败（exitCode 127）→ 已获取资源全释放且失败证据确凿", async () => {
     const ledger = makeLedger()
     const broker = createLinuxBroker({ mode: "enabled", ledger })
-    // host-audit 后端对不存在命令：事件流报错/结束（不抛到调用方）——
-    // 无论何种形态，资源必须全部释放。
     const spec = cellSpec({ command: { executable: "/nonexistent-orcana-ic02", args: [], cwd: "/tmp", stdin: "closed" } })
-    const events: unknown[] = []
-    for await (const e of broker.execute(spec)) events.push(e)
-    // 执行失败形态（事件流内 cell.error 或 receipt degradation）不影响资源清理断言。
+    const events: Array<{ type: string; receipt?: { exitCode?: number; process?: { exitCode?: number } } }> = []
+    for await (const e of broker.execute(spec)) events.push(e as { type: string; receipt?: { exitCode?: number; process?: { exitCode?: number } } })
+    const receipt = events.find(e => e.type === "cell.receipt")?.receipt
+    // start failure 确实发生（exec 失败 → 127），而不是 fixture 未触发目标故障。
+    expect(receipt?.process?.exitCode ?? receipt?.exitCode).toBe(127)
     await assertClean(broker, ledger, undefined)
   })
 
@@ -553,35 +610,88 @@ describe("IC02 acquisition transaction — fault injection", () => {
     }
   })
 
-  test("IC02 100-run fault gate: seeded pseudo-random fault points → RESOURCE_LEAK/LOCK_LEAK/WRONG_STATE = 0", async () => {
-    const points: BrokerFaultPoint[] = [
-      "after-materialize",
-      "before-lock",
-      "after-lock",
-      "before-create-run",
-      "after-create-run",
-      "after-create-agent",
-      "before-create-cell",
-      "after-create-cell",
-      "before-backend-run",
+  test("IC02 100-run fault gate: 9 mandatory fault categories seeded 随机 → RESOURCE_LEAK/LOCK_LEAK/WRONG_STATE = 0", async () => {
+    const { RuntimeStateStore } = await import("../../../src/runtime/linux/recovery/state-store")
+    const { createHostAuditBackend } = await import("../../../src/runtime/linux/backends/host-audit")
+    const { registerBackend } = await import("../../../src/runtime/linux/broker")
+    const { mkdtempSync, rmSync } = await import("node:fs")
+    const { tmpdir } = await import("node:os")
+    const storeRoot = mkdtempSync(tmpdir() + "/ic02-100run-")
+    // backend compile 共享开关（覆盖 host-audit，仅在 compile category 轮抛错）。
+    const hostAuditBase = createHostAuditBackend()
+    let compileFail = false
+    registerBackend({
+      ...hostAuditBase,
+      compile: (spec: unknown, caps: unknown, materialization?: unknown) => {
+        if (compileFail) throw new Error("IC02-COMPILE-FAULT")
+        return hostAuditBase.compile(spec as Parameters<typeof hostAuditBase.compile>[0], caps as Parameters<typeof hostAuditBase.compile>[1], materialization as Parameters<typeof hostAuditBase.compile>[2])
+      },
+    } as unknown as ExecutionBackend)
+
+    type Category = {
+      name: string
+      /** 轮内准备（fs/cgroup/ledger/hooks/stateStore）。 */
+      prepare: (fs: CgroupFs, cgroup: CgroupManager, round: number) => { hooks?: BrokerTestHooks; spec?: ExecutionCellSpec; preLock?: boolean; failPersist?: boolean }
+    }
+    const categories: Category[] = [
+      { name: "materialize-throws", prepare: () => ({ hooks: faultAtOnce("after-materialize", `IC02-ROUND`) }) },
+      { name: "lock-acquisition-fails", prepare: () => ({ preLock: true }) },
+      { name: "createRun-partial", prepare: (fs) => {
+        const orig = fs.read.bind(fs)
+        fs.read = (p) => { if (p.endsWith("cgroup.subtree_control") && p.includes("/run-")) throw new Error("CGROUP_CONTROLLER_UNAVAILABLE"); return orig(p) }
+        return {}
+      } },
+      { name: "createAgent-partial", prepare: (fs) => {
+        const orig = fs.read.bind(fs)
+        fs.read = (p) => { if (p.endsWith("cgroup.subtree_control") && p.includes("/agent-")) throw new Error("CGROUP_CONTROLLER_UNAVAILABLE"); return orig(p) }
+        return {}
+      } },
+      { name: "createCell-partial", prepare: (fs) => {
+        const orig = fs.write.bind(fs)
+        fs.write = (p, c) => { if (p.includes("/cell-")) throw new Error("EACCES"); return orig(p, c) }
+        return {}
+      } },
+      { name: "backend-compile", prepare: () => { compileFail = true; return {} } },
+      { name: "backend-start", prepare: () => ({ spec: cellSpec({ command: { executable: "/nonexistent-orcana-ic02", args: [], cwd: "/tmp", stdin: "closed" } }) }) },
+      { name: "receipt-persist", prepare: () => ({ failPersist: true }) },
+      { name: "cancel-starting", prepare: (fs, cgroup, round) => {
+        let released = false
+        return { hooks: { waitAt: async (point) => {
+          if (point === "after-register-starting" && !released) {
+            released = true
+            // 无 cgroup 依赖：starting record 可被 cancelAgent 找到。
+            await cancelTarget.cancelAgent("a1")
+          }
+        } } }
+      } },
     ]
+
     const rand = mulberry32(20260810)
+    let cancelTarget: ReturnType<typeof createLinuxBroker>
     for (let round = 0; round < 100; round++) {
-      const chosen = points[Math.floor(rand() * points.length)]!
+      const category = categories[Math.floor(rand() * categories.length)]!
       const fs = mockCgroupFs()
       const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
       const ledger = makeLedger()
-      const broker = createLinuxBroker({
-        mode: "enabled",
-        ledger,
-        cgroup,
-        testHooks: faultAtOnce(chosen, `IC02-ROUND-${round}`),
-      })
+      const prep = category.prepare(fs, cgroup, round)
+      const store = new RuntimeStateStore({ root: storeRoot })
+      if (prep.failPersist) store.appendReceipt = () => { throw new Error("PERSIST-BOOM") }
+      const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, stateStore: store, testHooks: prep.hooks })
+      cancelTarget = broker
+      if (prep.preLock) {
+        // deterministic lock 竞争：先占 worktree 锁（broker 内 locks 实例）。
+        broker.runtimeContext().locks.acquire("worktree:a1", "exclusive", "ic02-100run-holder")
+      }
       try {
-        for await (const _ of broker.execute(cellSpec())) { /* drain */ }
+        for await (const _ of broker.execute(prep.spec ?? cellSpec())) { /* drain */ }
       } catch (error) {
-        // fault 抛错是预期路径。
         expect(error instanceof Error).toBe(true)
+      }
+      compileFail = false // backend-compile 开关只影响本轮
+      if (prep.preLock) {
+        // 释放测试自持的"外部竞争者"锁（模拟其他 agent 的合法持有；
+        // broker 自己的 lockKeys 已由 cleanupAcquired 释放）。
+        broker.runtimeContext().locks.release("worktree:a1", "ic02-100run-holder")
       }
       expect(ledger.outstanding().length).toBe(0) // RESOURCE_LEAK = 0
       expect(broker.activeCells().length).toBe(0)  // WRONG_STATE = 0
@@ -591,5 +701,6 @@ describe("IC02 acquisition transaction — fault injection", () => {
       const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
       expect(cgroup.fs.exists(run)).toBe(false) // GHOST_CGROUP = 0
     }
-  })
+    rmSync(storeRoot, { recursive: true, force: true })
+  }, 120_000)
 })

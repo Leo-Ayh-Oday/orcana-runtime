@@ -5,11 +5,12 @@
  * the agent loop so it can be tested and later wired into TaskPacket planning.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { basename, extname, join, relative, resolve, sep } from "node:path"
 import ts from "typescript"
 import { loadMemoryIndex } from "../memory/context-memory-os"
 import type { TaskPacket } from "../agent/task-packet"
+import { BoundedFileReader, readCapBytes } from "../runtime/io/bounded-file-reader"
 
 // ── Types ──
 
@@ -117,7 +118,8 @@ export function loadProjectConstitution(root = process.cwd()): ProjectConstituti
     const abs = resolveInside(root, file)
     if (!abs || !existsSync(abs)) continue
     importantFiles.push(file)
-    const text = readFileSync(abs, "utf-8").slice(0, 20_000)
+    // IC01: 有界读取 —— 大型 README/规则文件/lockfile 绝不整体读入。
+    const text = boundedReadText(abs, 20_000)
     classifyConstitutionText(file, text, { notes, rules, forbidden, buildCommands, testCommands, pitfalls })
   }
 
@@ -500,15 +502,39 @@ export function loadContextMap(root: string, id: string): ContextMap | null {
   if (!/^ctx-[a-f0-9]{12}$/.test(id)) return null
   const file = resolve(root, ".orcana", "state", "context-maps", `${id}.json`)
   if (!existsSync(file)) return null
-  return JSON.parse(readFileSync(file, "utf-8")) as ContextMap
+  // IC01: 有界读取（ContextMap 归档文件超限不整体读入）。
+  const text = boundedReadText(file)
+  if (!text) return null
+  try {
+    return JSON.parse(text) as ContextMap
+  } catch {
+    return null
+  }
 }
 
 // ── Internal helpers ──
 
+/** ContextMap 共用的有界读取器（无状态，只读配置）。 */
+const WORKSPACE_CONTEXT_READER = new BoundedFileReader()
+
+/** IC01: 有界文本读取 —— 只分配 min(fileSize, capBytes, maxFileBytes) 字节；
+ *  超限部分截断（大型 README/规则文件/lockfile 绝不整体读入）。 */
+function boundedReadText(path: string, capBytes = readCapBytes()): string {
+  try {
+    const info = WORKSPACE_CONTEXT_READER.statSync(path)
+    if (!info.isRegular) return ""
+    const limit = Math.min(info.size, capBytes, WORKSPACE_CONTEXT_READER.maxFileBytes)
+    return WORKSPACE_CONTEXT_READER.readSync(path, limit).toString("utf-8")
+  } catch {
+    return ""
+  }
+}
+
 function readJsonFile(path: string): unknown {
   if (!existsSync(path)) return null
   try {
-    return JSON.parse(readFileSync(path, "utf-8"))
+    // IC01: 有界读取（package.json/lockfile 超限即截断，不整体读入）。
+    return JSON.parse(boundedReadText(path, readCapBytes()))
   } catch {
     return null
   }
@@ -552,7 +578,8 @@ function safeReadDir(dir: string): import("node:fs").Dirent[] {
 
 function safeReadText(path: string): string {
   try {
-    return readFileSync(path, "utf-8")
+    // IC01: 有界读取 —— 候选源文件超限即截断，不整体读入。
+    return boundedReadText(path)
   } catch {
     return ""
   }

@@ -3,6 +3,10 @@ import { createPlanStore, type PlanStore } from "../agent/run/plan-store"
 import type { AgentRunToolRegistry } from "../agent/run/tool-registry"
 import type { TrustedExecutionAuthority } from "./linux/contracts"
 import { createRetryLedger, type RetryLedger } from "./retry-ledger"
+import {
+  workspaceIoAuthorityFromTrusted,
+  type WorkspaceIoAuthority,
+} from "./io/workspace-io-authority"
 
 export interface RuntimeContextKey<T> {
   readonly id: symbol
@@ -168,6 +172,28 @@ export function requireExecutionAuthority(): TrustedExecutionAuthority {
     throw new Error("No trusted execution authority: Linux execution requires an AgentRunScope with registered workspace")
   }
   return authority
+}
+
+// ── IC01：统一 Workspace I/O Authority（读取根 = workspace.hostRoot） ──
+
+const WORKSPACE_IO_AUTHORITY = createRuntimeContextKey<WorkspaceIoAuthority | undefined>(
+  "workspace-io-authority",
+  () => undefined,
+)
+
+/** 注入统一工作区 I/O 权威（AgentRunScope 进入前设置；undefined 清除）。 */
+export function setWorkspaceIoAuthority(authority: WorkspaceIoAuthority | undefined): void {
+  setRuntimeContextValue(WORKSPACE_IO_AUTHORITY, authority)
+}
+
+/** 当前工作区 I/O 权威：显式注入优先；否则从 TrustedExecutionAuthority
+ *  workspace.hostRoot 惰性派生（production 语义一致）。未设置时 undefined
+ *  —— 工具保持既有 projectRoot 行为（向后兼容）。 */
+export function getWorkspaceIoAuthority(): WorkspaceIoAuthority | undefined {
+  const explicit = getRuntimeContextValue(WORKSPACE_IO_AUTHORITY)
+  if (explicit) return explicit
+  const trusted = getExecutionAuthority()
+  return trusted ? workspaceIoAuthorityFromTrusted(trusted) : undefined
 }
 
 // ── PR-GATE-06：Run 级 RetryLedger（各层统一重试预算） ──

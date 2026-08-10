@@ -22,6 +22,21 @@ import {
   type ManagedPatchTransaction,
 } from "../agent/patch-transaction"
 import { fingerprintContent, recordRuntimeFileRead, recordRuntimeFileWrite } from "../file-state"
+import {
+  BoundedFileReader,
+  FileReadError,
+  readCapBytes,
+  type BoundedRangeReadResult,
+} from "../runtime/io/bounded-file-reader"
+import {
+  checkWorkspaceBaseDrift,
+  enforceWorkspaceRead,
+} from "../runtime/io/workspace-io-authority"
+import { getWorkspaceIoAuthority } from "../runtime/execution-context"
+
+/** IC01: 统一有界读取器（stat/range/chunk/流式哈希/abort/二进制/限额）。
+ *  无状态（只读配置），模块级单例。 */
+const WORKSPACE_FILE_READER = new BoundedFileReader()
 
 /** Threshold: files larger than this get sub-agent analysis instead of raw dump. */
 const LARGE_FILE_LINES = 400
@@ -128,15 +143,45 @@ function safeResultPath(path: string, root?: string): string {
 
 /** RC-19 Phase 2 (D7): the single path-resolution entry — resolveToolPath()
  *  binds relative paths to projectRoot; escapes surface as blocked policy
- *  violations (CROSS_PROJECT_READ / CROSS_PROJECT_WRITE / SYMLINK_PROJECT_ESCAPE). */
+ *  violations (CROSS_PROJECT_READ / CROSS_PROJECT_WRITE / SYMLINK_PROJECT_ESCAPE).
+ *  IC01: 统一 Workspace I/O Authority —— 基线漂移 fail closed（WORKSPACE_PATH_BASE_DRIFT），
+ *  权威读取强制（SECRET_READ / OUTSIDE_WORKSPACE_READ / SYMLINK_READ_ESCAPE）。 */
 function authoritativePath(
   context: ToolExecutionContext | undefined,
   rawPath: string,
   mode: "read" | "write",
 ): { ok: true; path: string } | { ok: false; result: ToolResult } {
+  // IC01: ToolExecutionContext.projectRoot 必须与权威读取根一致（realpath 归一化）。
+  const workspace = getWorkspaceIoAuthority()
+  if (workspace) {
+    const drift = checkWorkspaceBaseDrift(workspace, context?.projectRoot)
+    if (drift) {
+      return {
+        ok: false,
+        result: Result.blocked(drift.reason, {
+          gate: "workspace_io",
+          workspaceIo: { code: drift.code },
+        }),
+      }
+    }
+  }
   const resolution = resolveToolPath(context, rawPath, mode)
-  if (resolution.ok) return { ok: true, path: resolution.path }
-  return { ok: false, result: Result.blocked(resolution.message, { gate: "path_authority" }) }
+  if (!resolution.ok) return { ok: false, result: Result.blocked(resolution.message, { gate: "path_authority" }) }
+  // IC01: 权威读取强制（秘密文件 / 工作区外 / symlink 逃逸）——读取根以
+  // TrustedExecutionAuthority.workspace.hostRoot 为权威。
+  if (mode === "read" && workspace) {
+    const violation = enforceWorkspaceRead(workspace, resolution.path, rawPath)
+    if (violation) {
+      return {
+        ok: false,
+        result: Result.blocked(violation.reason, {
+          gate: "workspace_io",
+          workspaceIo: { code: violation.code },
+        }),
+      }
+    }
+  }
+  return { ok: true, path: resolution.path }
 }
 
 function approvedBaseHash(
@@ -261,51 +306,162 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
       return Result.blocked(`Runtime artifact is hidden from agent reads: ${path}. Continue with the user task instead of inspecting agent logs.`)
     }
     // RC-19 Phase 2 (D7): relative paths bind to projectRoot, never cwd.
+    // IC01: 统一 Workspace I/O Authority（漂移/秘密/工作区外/symlink 强制）。
     const resolution = authoritativePath(context, path, "read")
     if (!resolution.ok) return resolution.result
     const p = resolution.path
     if (!existsSync(p)) return Result.fail(`File not found: ${path}`)
-    const buffer = await readFile(p)
-    const content = buffer.toString("utf-8")
-    const fingerprint = fingerprintContent(buffer)
-    // RT-6: expectedHash freshness — a stale read is a conflict, not a silent dump.
-    if (expectedHash && fingerprint.sha256 !== expectedHash) {
-      return Result.fail(`STALE_FILE: ${path} content hash does not match expectedHash (file changed since you read it)`)
-    }
-    const lines = content.split("\n")
-    const total = lines.length
 
-    // RT-6: selector support — lines / byte_range / symbol ranges.
-    let selectorLines: string[] | null = null
-    if (selector?.kind === "lines" && typeof selector.start === "number") {
-      const start = selector.start
-      const end = typeof selector.end === "number" ? selector.end : start + (selector.length ?? 1)
-      selectorLines = lines.slice(start, end)
-    } else if (selector?.kind === "byte_range" && typeof selector.start === "number") {
+    // IC01: 有界读取 —— stat 校验普通文件；range/窗口路径绝不完整分配。
+    let info: { size: number; isRegular: boolean; mtimeMs: number }
+    try {
+      info = await WORKSPACE_FILE_READER.stat(p)
+    } catch {
+      return Result.fail(`File not found: ${path}`)
+    }
+    if (!info.isRegular) return Result.fail(`Not a regular file: ${path}`)
+
+    // ── selector: byte_range —— 直接 range read（绝不分配整个文件） ──
+    if (selector?.kind === "byte_range" && typeof selector.start === "number") {
       const length = selector.length ?? 0
-      const bytes = Buffer.from(content, "utf-8").subarray(selector.start, selector.start + length).toString("utf-8")
-      selectorLines = bytes.split("\n")
-    } else if (selector?.kind === "symbol" && typeof selector.name === "string") {
+      const range = await WORKSPACE_FILE_READER.readRange(p, selector.start, length, {
+        signal: context?.abortSignal,
+      })
+      if (range.binary) return binaryFileResult(path, range)
+      const selected = range.buffer.toString("utf-8").split("\n").join("\n")
+      const fingerprint = fingerprintContent(range.buffer)
+      if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
+      const fileState = recordRuntimeFileRead({
+        path: p,
+        range: { kind: "selector" as never },
+        content: selected,
+        fingerprint,
+        totalLines: undefined,
+      })
+      return Result.ok(selected, {
+        path,
+        selected: true,
+        selectorKind: "byte_range",
+        bytes: range.byteCount,
+        fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+      })
+    }
+
+    // ── selector: symbol —— 有界全量（maxFileBytes 上限）+ AST 定位 ──
+    if (selector?.kind === "symbol" && typeof selector.name === "string") {
+      const full = await WORKSPACE_FILE_READER.readFile(p, { signal: context?.abortSignal })
+      if (full.binary) return binaryFileResult(path, full)
+      const content = full.buffer.toString("utf-8")
+      const fingerprint = fingerprintContent(full.buffer)
+      if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
       const span = findSymbolSpan(content, selector.name)
       if (!span) return Result.fail(`Symbol not found: ${selector.name} in ${path}`)
-      selectorLines = lines.slice(span.start, span.end)
-    }
-    if (selectorLines) {
-      const fileState = recordRuntimeFileRead({ path: p, range: { kind: "selector" as never }, content: selectorLines.join("\n"), fingerprint, totalLines: total })
+      const lines = content.split("\n")
+      const total = lines.length
+      const selectorLines = lines.slice(span.start, span.end)
+      const fileState = recordRuntimeFileRead({
+        path: p,
+        range: { kind: "selector" as never },
+        content: selectorLines.join("\n"),
+        fingerprint,
+        totalLines: total,
+        truncated: full.truncated,
+      })
       return Result.ok(selectorLines.join("\n"), {
         path,
         selected: true,
-        selectorKind: selector!.kind,
+        selectorKind: "symbol",
         totalLines: total,
         fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
       })
     }
 
-    // Sub-agent mode: large file, no explicit range → return structural analysis
-    // instead of raw dump. The agent can then request specific sections with offset/limit.
-    if (total > LARGE_FILE_LINES && offset <= 0 && !limit) {
+    // ── offset/limit 或 selector:lines —— 流式行窗口（绝不先完整分配） ──
+    const hasWindowParams = selector?.kind === "lines" || offset > 0 || limit !== undefined
+    if (hasWindowParams) {
+      const startLine = selector?.kind === "lines"
+        ? Math.max(0, Math.floor(selector.start ?? 0))
+        : Math.max(0, Math.floor(offset))
+      const windowCount = selector?.kind === "lines"
+        ? Math.max(0, Math.floor((selector.end ?? startLine + (selector.length ?? 1)) - startLine))
+        : limit !== undefined
+          ? Math.max(0, Math.floor(limit))
+          : Number.POSITIVE_INFINITY
+
+      // count=0：空窗口（与旧 slice().slice(0,0) 语义一致）。
+      if (windowCount === 0) {
+        const header = `[${path}] lines ${startLine + 1}-${startLine} of ?\n`
+        const fileState = recordRuntimeFileRead({
+          path: p,
+          range: { kind: "range" as const, startLine: startLine + 1, endLine: startLine },
+          content: "",
+          fingerprint: fingerprintContent(""),
+          totalLines: undefined,
+          truncated: true,
+        })
+        return Result.ok(header, {
+          path,
+          lines: 0,
+          fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+        })
+      }
+
+      const window = await readLineWindow(p, startLine, windowCount, {
+        signal: context?.abortSignal,
+        totalBytes: info.size,
+        // IC01: 文件在有界全量预算内 → 窗口找到后继续扫描到 EOF，
+        // 得到全文件流式哈希与精确 totalLines（freshness 基线语义不变）。
+        scanToEof: info.size <= readCapBytes(),
+      })
+      if (window.binary) return binaryFileResult(path, { totalBytes: info.size, sha256: window.sha256 })
+      // 全文件哈希已知时构造完整基线指纹（sha256 语义与旧全量读一致）；
+      // 超限文件只指纹窗口内容。
+      const fingerprint = window.wholeFileSha256
+        ? { sha256: window.wholeFileSha256, mtimeMs: info.mtimeMs, size: info.size }
+        : fingerprintContent(Buffer.from(window.text, "utf-8"))
+      if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
+      const header = selector?.kind === "lines"
+        ? ""
+        : window.totalLines === null
+          ? `[${path}] lines ${startLine + 1}-${startLine + window.linesCount}\n`
+          : `[${path}] lines ${startLine + 1}-${startLine + window.linesCount} of ${window.totalLines}\n`
+      const fileState = recordRuntimeFileRead({
+        path: p,
+        range: { kind: "range" as const, startLine: startLine + 1, endLine: startLine + window.linesCount },
+        content: window.text,
+        fingerprint,
+        totalLines: window.totalLines ?? undefined,
+        truncated: !window.scannedToEof,
+      })
+      return Result.ok(header + window.text, {
+        path,
+        lines: window.linesCount,
+        ...(window.totalLines === null ? {} : { total: window.totalLines }),
+        fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+      })
+    }
+
+    // ── 全量有界读取（无 range 参数）—— maxFileBytes 上限，超出即截断 ──
+    const full = await WORKSPACE_FILE_READER.readFile(p, { signal: context?.abortSignal })
+    if (full.binary) return binaryFileResult(path, full)
+    const content = full.buffer.toString("utf-8")
+    const fingerprint = fingerprintContent(full.buffer)
+    // RT-6: expectedHash freshness — a stale read is a conflict, not a silent dump.
+    if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
+    const lines = content.split("\n")
+    const total = lines.length
+
+    // Sub-agent mode: large file → structural analysis instead of raw dump.
+    if (total > LARGE_FILE_LINES) {
       const analysis = analyzeCodeStructure(content, path)
-      const fileState = recordRuntimeFileRead({ path: p, range: { kind: "full" }, content: analysis, fingerprint, totalLines: total, truncated: true })
+      const fileState = recordRuntimeFileRead({
+        path: p,
+        range: { kind: "full" },
+        content: analysis,
+        fingerprint,
+        totalLines: total,
+        truncated: true,
+      })
       return Result.ok(analysis, {
         path,
         analyzed: true,
@@ -315,24 +471,145 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
       })
     }
 
-    let selected = lines
-    if (offset > 0) selected = selected.slice(offset)
-    if (limit) selected = selected.slice(0, limit)
-
-    const header = `[${path}] lines ${offset + 1}-${offset + selected.length} of ${total}\n`
-    const selectedContent = selected.join("\n")
-    const range = offset > 0 || typeof limit === "number"
-      ? { kind: "range" as const, startLine: offset + 1, endLine: offset + selected.length }
-      : { kind: "full" as const }
-    const fileState = recordRuntimeFileRead({ path: p, range, content: selectedContent, fingerprint, totalLines: total })
-    return Result.ok(header + selectedContent, {
+    const header = `[${path}] lines 1-${total} of ${total}\n`
+    const fileState = recordRuntimeFileRead({
+      path: p,
+      range: { kind: "full" },
+      content,
+      fingerprint,
+      totalLines: total,
+      truncated: full.truncated,
+    })
+    return Result.ok(header + content, {
       path,
-      lines: selected.length,
+      lines: total,
       total,
       fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
     })
   } catch (e) {
+    if (e instanceof FileReadError && e.code === "ABORTED") {
+      return Result.fail(`Read aborted: ${path}`)
+    }
     return Result.fail(e instanceof Error ? e.message : String(e))
+  }
+}
+
+function staleFileResult(path: string): ToolResult {
+  return Result.fail(`STALE_FILE: ${path} content hash does not match expectedHash (file changed since you read it)`)
+}
+
+/** IC01: 二进制文件结果 —— 只回注记，不倾倒原始字节。 */
+function binaryFileResult(path: string, result: { totalBytes: number; sha256: string }): ToolResult {
+  return Result.ok(
+    `<binary file ${path}: ${result.totalBytes} bytes, sha256 ${result.sha256.slice(0, 16)}>`,
+    { path, binary: true, bytes: result.totalBytes, sha256: result.sha256.slice(0, 16) },
+  )
+}
+
+/** IC01: 流式行窗口读取 —— 顺序扫描计数换行，只对窗口字节做 range read，
+ *  绝不把整个文件读进内存（RANGE_READ_FULL_ALLOCATION = 0）；扫描到 EOF
+ *  时给出精确 totalLines。 */
+async function readLineWindow(
+  path: string,
+  startLine: number,
+  count: number,
+  opts: { signal?: AbortSignal; totalBytes: number; scanToEof: boolean },
+): Promise<{
+  text: string
+  linesCount: number
+  totalLines: number | null
+  scannedToEof: boolean
+  binary: boolean
+  sha256: string
+  /** 全文件流式哈希（scanToEof 时可用）。 */
+  wholeFileSha256: string | null
+}> {
+  const { open } = await import("node:fs/promises")
+  const { createHash } = await import("node:crypto")
+  const signal = opts.signal
+  signal?.throwIfAborted()
+  const handle = await open(path, "r")
+  const hash = createHash("sha256")
+  const chunk = Buffer.allocUnsafe(64 * 1024)
+  let lineNumber = 0
+  let lineStartByte = 0
+  let windowStartByte: number | null = null
+  let windowEndByte: number | null = null
+  let seenBinary = false
+  let probeRemaining = 8 * 1024
+  let scannedToEof = false
+  let position = 0
+  try {
+    while (true) {
+      signal?.throwIfAborted()
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position)
+      if (bytesRead <= 0) break
+      // 二进制嗅探（首个 probe 窗口内的 NUL）。
+      if (probeRemaining > 0 && !seenBinary) {
+        const probeLen = Math.min(bytesRead, probeRemaining)
+        if (chunk.subarray(0, probeLen).includes(0)) seenBinary = true
+        probeRemaining -= probeLen
+      }
+      hash.update(chunk.subarray(0, bytesRead))
+      const absoluteEnd = position + bytesRead
+      let cursor = 0
+      while (cursor < bytesRead) {
+        const newline = chunk.indexOf(0x0a, cursor)
+        if (newline < 0) break
+        const lineEndAbsolute = position + newline + 1
+        if (windowStartByte === null && lineNumber === startLine) windowStartByte = lineStartByte
+        // 窗口结束 = 窗口最后一行行尾（不含换行）—— 与旧 slice/join 语义一致。
+        if (windowStartByte !== null && windowEndByte === null && lineNumber === startLine + count - 1) {
+          windowEndByte = position + newline
+        }
+        // 始终统计行数（scanToEof 时需要精确 totalLines）。
+        lineNumber++
+        lineStartByte = lineEndAbsolute
+        cursor = newline + 1
+      }
+      position = absoluteEnd
+      // IC01: 有界文件 → 窗口找到后继续扫描到 EOF（完整哈希 + 精确行数）。
+      if (windowEndByte !== null && !opts.scanToEof) break
+    }
+    scannedToEof = position >= opts.totalBytes
+    const wholeHash = hash.digest("hex")
+    if (windowStartByte === null) {
+      return {
+        text: "",
+        linesCount: 0,
+        totalLines: scannedToEof ? lineNumber : null,
+        scannedToEof,
+        binary: seenBinary,
+        sha256: wholeHash,
+        wholeFileSha256: scannedToEof ? wholeHash : null,
+      }
+    }
+    const end = windowEndByte ?? position
+    const rangeBuffer = Buffer.allocUnsafe(Math.max(0, end - windowStartByte))
+    let readPos = windowStartByte
+    let offset = 0
+    while (readPos < end) {
+      signal?.throwIfAborted()
+      const { bytesRead } = await handle.read(rangeBuffer, offset, end - readPos, readPos)
+      if (bytesRead <= 0) break
+      offset += bytesRead
+      readPos += bytesRead
+    }
+    const text = rangeBuffer.subarray(0, offset).toString("utf-8")
+    const split = text.split("\n")
+    // 尾部空行不计（与 slice/join 语义对齐）。
+    const linesCount = split.length > 0 && split[split.length - 1] === "" ? split.length - 1 : split.length
+    return {
+      text,
+      linesCount,
+      totalLines: scannedToEof ? lineNumber + (text.length > 0 && !text.endsWith("\n") ? 1 : 0) : null,
+      scannedToEof,
+      binary: seenBinary,
+      sha256: wholeHash,
+      wholeFileSha256: scannedToEof ? wholeHash : null,
+    }
+  } finally {
+    await handle.close()
   }
 }
 

@@ -16,6 +16,7 @@ import type { AgentRun } from "../contracts/run"
 import type { AgentRunInput } from "../contracts/run"
 import type { AgentSession } from "../contracts/session"
 import type { LoopDecision } from "../../agent/kernel/types"
+import type { RunOutcome } from "../contracts/outcome"
 import { createInterruptForDecision } from "../interrupts/interrupt-manager"
 import { cleanupRun } from "./cleanup"
 import { failureOutcome, mapDecisionToOutcome } from "./outcome-mapper"
@@ -81,7 +82,7 @@ export async function* runControlledRun(
         payload: { interrupt },
       } as HarnessEvent)
     }
-    machine.transitionTo(mapped.status)
+    machine.transitionTo(mapped.status, lifecycleExtra(mapped))
     run.outcome = mapped.outcome
     // Lifecycle event (run.completed / run.waiting / run.blocked /
     // run.paused / run.cancelled) — appended before the trace closes.
@@ -111,6 +112,21 @@ export async function* runControlledRun(
     }
     cleanupRun({ session, runId: run.runId, controller })
   }
+}
+
+/** Extract the TB2-1 Resume handle (checkpointId/reason) from a mapped
+ *  outcome so the run.paused/run.blocked lifecycle event can carry it. */
+function lifecycleExtra(mapped: { status: string; outcome: RunOutcome }): { checkpointId?: string; reason?: string } | undefined {
+  if (mapped.outcome.kind === "paused") {
+    return { checkpointId: mapped.outcome.checkpointId, reason: mapped.outcome.reason }
+  }
+  if (mapped.outcome.kind === "blocked") {
+    return { reason: mapped.outcome.blocker.reason }
+  }
+  if (mapped.outcome.kind === "waiting") {
+    return { checkpointId: mapped.outcome.checkpointId, reason: mapped.outcome.interruptId }
+  }
+  return undefined
 }
 
 /** Yield lifecycle events while appending each to the typed trace. */

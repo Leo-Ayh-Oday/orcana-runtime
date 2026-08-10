@@ -118,8 +118,16 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
         result = { status: "cancelled", output: nodeOutput, evidence: newEvidence, diagnostics: [], usage, retryable: false }
       } else if (decision.kind === "break" && decision.reason === "orchestrator_done") {
         result = { status: "succeeded", output: nodeOutput, evidence: newEvidence, diagnostics: [], usage }
-      } else if (decision.kind === "break" && decision.reason === "round_budget" && finalText) {
-        result = { status: "succeeded", output: nodeOutput, evidence: newEvidence, diagnostics: [{ code: "round_budget", message: "natural end", severity: "info", source: nodeOptions.id }], usage }
+      } else if (decision.kind === "break" && decision.reason === "round_budget") {
+        // TB2-1: 轮次耗尽 = budget_exhausted = incomplete。暂停提示文本不是
+        // 交付成果——节点必须 paused，不得被调度器认作 succeeded。
+        result = {
+          status: "paused",
+          output: nodeOutput,
+          evidence: newEvidence,
+          diagnostics: [{ code: "round_budget", message: "incomplete: round budget exhausted, resume from checkpoint", severity: "warning", source: nodeOptions.id }],
+          usage,
+        }
       } else if (decision.kind === "break" && (decision.reason === "orchestrator_plan_ready" || decision.reason === "orchestrator_blocked")) {
         result = {
           status: "blocked",

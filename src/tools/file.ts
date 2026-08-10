@@ -1,7 +1,7 @@
 /** File tools — read, write, edit. */
 
 import { readFile } from "node:fs/promises"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { isAbsolute, join, relative, resolve } from "node:path"
 import * as ts from "typescript"
 import type { ToolDef, ToolExecutionContext, ToolResult } from "./registry"
@@ -31,12 +31,56 @@ import {
 import {
   checkWorkspaceBaseDrift,
   enforceWorkspaceRead,
+  validateOpenFileCanonical,
 } from "../runtime/io/workspace-io-authority"
 import { getWorkspaceIoAuthority } from "../runtime/execution-context"
+import type { WorkspaceIoAuthority } from "../runtime/io/workspace-io-authority"
 
 /** IC01: 统一有界读取器（stat/range/chunk/流式哈希/abort/二进制/限额）。
  *  无状态（只读配置），模块级单例。 */
 const WORKSPACE_FILE_READER = new BoundedFileReader()
+
+/** IC01: open 侧 fd canonical 校验（check/open race 读取侧闭环）。
+ *  无 workspace（旧路径/非 production）时不接线 —— 由 resolveToolPath
+ *  的静态检查兜底。 */
+function openValidatorFor(
+  workspace: WorkspaceIoAuthority | undefined,
+  p: string,
+): ((fd: number) => Promise<string | null>) | undefined {
+  if (!workspace) return undefined
+  return async (fd: number) => {
+    const violation = await validateOpenFileCanonical(workspace, p, fd)
+    return violation?.reason ?? null
+  }
+}
+
+/** IC01: 有界预读（write/edit/multi_edit/edit_symbol 共享）——
+ *  UNBOUNDED_RUNTIME_FILE_READ = 0：写路径预读同样服从 maxFileBytes，
+ *  超限文件 fail closed（完整读取一个 1 GiB 仓库文件重新引入原问题）。 */
+async function boundedPreRead(
+  p: string,
+  signal: AbortSignal | undefined,
+): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
+  try {
+    const info = WORKSPACE_FILE_READER.statSync(p)
+    if (info.size > readCapBytes()) {
+      return {
+        ok: false,
+        reason: `FILE_TOO_LARGE_FOR_SAFE_EDIT: ${p} is ${info.size} bytes (cap ${readCapBytes()}) — bounded edits refuse to pre-read beyond the cap; use read_file with range/selector instead`,
+      }
+    }
+    const full = await WORKSPACE_FILE_READER.readFile(p, { signal })
+    if (full.truncated) {
+      return {
+        ok: false,
+        reason: `FILE_TOO_LARGE_FOR_SAFE_EDIT: ${p} exceeds the bounded read budget`,
+      }
+    }
+    return { ok: true, content: full.buffer.toString("utf-8") }
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+  }
+}
 
 /** Threshold: files larger than this get sub-agent analysis instead of raw dump. */
 const LARGE_FILE_LINES = 400
@@ -170,7 +214,7 @@ function authoritativePath(
   // IC01: 权威读取强制（秘密文件 / 工作区外 / symlink 逃逸）——读取根以
   // TrustedExecutionAuthority.workspace.hostRoot 为权威。
   if (mode === "read" && workspace) {
-    const violation = enforceWorkspaceRead(workspace, resolution.path, rawPath)
+    const violation = enforceWorkspaceRead(workspace, resolution.path, rawPath, context?.projectRoot)
     if (violation) {
       return {
         ok: false,
@@ -324,8 +368,10 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
     // ── selector: byte_range —— 直接 range read（绝不分配整个文件） ──
     if (selector?.kind === "byte_range" && typeof selector.start === "number") {
       const length = selector.length ?? 0
+      const wsRead = getWorkspaceIoAuthority()
       const range = await WORKSPACE_FILE_READER.readRange(p, selector.start, length, {
         signal: context?.abortSignal,
+        validateOpen: openValidatorFor(wsRead, p),
       })
       if (range.binary) return binaryFileResult(path, range)
       const selected = range.buffer.toString("utf-8").split("\n").join("\n")
@@ -349,7 +395,11 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
 
     // ── selector: symbol —— 有界全量（maxFileBytes 上限）+ AST 定位 ──
     if (selector?.kind === "symbol" && typeof selector.name === "string") {
-      const full = await WORKSPACE_FILE_READER.readFile(p, { signal: context?.abortSignal })
+      const wsRead = getWorkspaceIoAuthority()
+      const full = await WORKSPACE_FILE_READER.readFile(p, {
+        signal: context?.abortSignal,
+        validateOpen: openValidatorFor(wsRead, p),
+      })
       if (full.binary) return binaryFileResult(path, full)
       const content = full.buffer.toString("utf-8")
       const fingerprint = fingerprintContent(full.buffer)
@@ -406,12 +456,14 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
         })
       }
 
-      const window = await readLineWindow(p, startLine, windowCount, {
+      const workspace = getWorkspaceIoAuthority()
+      const window = await WORKSPACE_FILE_READER.readLineWindow(p, startLine, windowCount, {
         signal: context?.abortSignal,
-        totalBytes: info.size,
         // IC01: 文件在有界全量预算内 → 窗口找到后继续扫描到 EOF，
         // 得到全文件流式哈希与精确 totalLines（freshness 基线语义不变）。
         scanToEof: info.size <= readCapBytes(),
+        // P1-6: open 后 fd canonical 校验（check/open race 读取侧闭环）。
+        validateOpen: openValidatorFor(workspace, p),
       })
       if (window.binary) return binaryFileResult(path, { totalBytes: info.size, sha256: window.sha256 })
       // 全文件哈希已知时构造完整基线指纹（sha256 语义与旧全量读一致）；
@@ -431,7 +483,7 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
         content: window.text,
         fingerprint,
         totalLines: window.totalLines ?? undefined,
-        truncated: !window.scannedToEof,
+        truncated: window.truncated || !window.scannedToEof,
       })
       return Result.ok(header + window.text, {
         path,
@@ -442,7 +494,11 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
     }
 
     // ── 全量有界读取（无 range 参数）—— maxFileBytes 上限，超出即截断 ──
-    const full = await WORKSPACE_FILE_READER.readFile(p, { signal: context?.abortSignal })
+    const wsRead = getWorkspaceIoAuthority()
+    const full = await WORKSPACE_FILE_READER.readFile(p, {
+      signal: context?.abortSignal,
+      validateOpen: openValidatorFor(wsRead, p),
+    })
     if (full.binary) return binaryFileResult(path, full)
     const content = full.buffer.toString("utf-8")
     const fingerprint = fingerprintContent(full.buffer)
@@ -506,113 +562,6 @@ function binaryFileResult(path: string, result: { totalBytes: number; sha256: st
   )
 }
 
-/** IC01: 流式行窗口读取 —— 顺序扫描计数换行，只对窗口字节做 range read，
- *  绝不把整个文件读进内存（RANGE_READ_FULL_ALLOCATION = 0）；扫描到 EOF
- *  时给出精确 totalLines。 */
-async function readLineWindow(
-  path: string,
-  startLine: number,
-  count: number,
-  opts: { signal?: AbortSignal; totalBytes: number; scanToEof: boolean },
-): Promise<{
-  text: string
-  linesCount: number
-  totalLines: number | null
-  scannedToEof: boolean
-  binary: boolean
-  sha256: string
-  /** 全文件流式哈希（scanToEof 时可用）。 */
-  wholeFileSha256: string | null
-}> {
-  const { open } = await import("node:fs/promises")
-  const { createHash } = await import("node:crypto")
-  const signal = opts.signal
-  signal?.throwIfAborted()
-  const handle = await open(path, "r")
-  const hash = createHash("sha256")
-  const chunk = Buffer.allocUnsafe(64 * 1024)
-  let lineNumber = 0
-  let lineStartByte = 0
-  let windowStartByte: number | null = null
-  let windowEndByte: number | null = null
-  let seenBinary = false
-  let probeRemaining = 8 * 1024
-  let scannedToEof = false
-  let position = 0
-  try {
-    while (true) {
-      signal?.throwIfAborted()
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position)
-      if (bytesRead <= 0) break
-      // 二进制嗅探（首个 probe 窗口内的 NUL）。
-      if (probeRemaining > 0 && !seenBinary) {
-        const probeLen = Math.min(bytesRead, probeRemaining)
-        if (chunk.subarray(0, probeLen).includes(0)) seenBinary = true
-        probeRemaining -= probeLen
-      }
-      hash.update(chunk.subarray(0, bytesRead))
-      const absoluteEnd = position + bytesRead
-      let cursor = 0
-      while (cursor < bytesRead) {
-        const newline = chunk.indexOf(0x0a, cursor)
-        if (newline < 0) break
-        const lineEndAbsolute = position + newline + 1
-        if (windowStartByte === null && lineNumber === startLine) windowStartByte = lineStartByte
-        // 窗口结束 = 窗口最后一行行尾（不含换行）—— 与旧 slice/join 语义一致。
-        if (windowStartByte !== null && windowEndByte === null && lineNumber === startLine + count - 1) {
-          windowEndByte = position + newline
-        }
-        // 始终统计行数（scanToEof 时需要精确 totalLines）。
-        lineNumber++
-        lineStartByte = lineEndAbsolute
-        cursor = newline + 1
-      }
-      position = absoluteEnd
-      // IC01: 有界文件 → 窗口找到后继续扫描到 EOF（完整哈希 + 精确行数）。
-      if (windowEndByte !== null && !opts.scanToEof) break
-    }
-    scannedToEof = position >= opts.totalBytes
-    const wholeHash = hash.digest("hex")
-    if (windowStartByte === null) {
-      return {
-        text: "",
-        linesCount: 0,
-        totalLines: scannedToEof ? lineNumber : null,
-        scannedToEof,
-        binary: seenBinary,
-        sha256: wholeHash,
-        wholeFileSha256: scannedToEof ? wholeHash : null,
-      }
-    }
-    const end = windowEndByte ?? position
-    const rangeBuffer = Buffer.allocUnsafe(Math.max(0, end - windowStartByte))
-    let readPos = windowStartByte
-    let offset = 0
-    while (readPos < end) {
-      signal?.throwIfAborted()
-      const { bytesRead } = await handle.read(rangeBuffer, offset, end - readPos, readPos)
-      if (bytesRead <= 0) break
-      offset += bytesRead
-      readPos += bytesRead
-    }
-    const text = rangeBuffer.subarray(0, offset).toString("utf-8")
-    const split = text.split("\n")
-    // 尾部空行不计（与 slice/join 语义对齐）。
-    const linesCount = split.length > 0 && split[split.length - 1] === "" ? split.length - 1 : split.length
-    return {
-      text,
-      linesCount,
-      totalLines: scannedToEof ? lineNumber + (text.length > 0 && !text.endsWith("\n") ? 1 : 0) : null,
-      scannedToEof,
-      binary: seenBinary,
-      sha256: wholeHash,
-      wholeFileSha256: scannedToEof ? wholeHash : null,
-    }
-  } finally {
-    await handle.close()
-  }
-}
-
 async function write_file(params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
   const path = String(params.path ?? "")
   const content = String(params.content ?? "")
@@ -623,11 +572,15 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
     const p = resolution.path
     const snapshot = approvedContent(context, p)
     const existedBefore = snapshot.found ? snapshot.content !== null : existsSync(p)
-    const oldContent = snapshot.found
-      ? snapshot.content ?? ""
-      : existedBefore
-        ? await readFile(p, "utf-8")
-        : ""
+    // IC01: 写路径预读走有界读取 —— 超限文件 fail closed（UNBOUNDED_RUNTIME_FILE_READ = 0）。
+    let oldContent = ""
+    if (snapshot.found) {
+      oldContent = snapshot.content ?? ""
+    } else if (existedBefore) {
+      const pre = await boundedPreRead(p, context?.abortSignal)
+      if (!pre.ok) return Result.fail(pre.reason)
+      oldContent = pre.content
+    }
     const freshnessBlock = revalidateApprovedSnapshot(context, p, existedBefore ? oldContent : null)
     if (freshnessBlock) return freshnessBlock
     const relPath = toolRelativePath(context, p)
@@ -693,7 +646,12 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
     const snapshot = approvedContent(context, p)
     if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
     if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
-    const content = snapshot.found ? snapshot.content! : await readFile(p, "utf-8")
+    // IC01: 有界预读 —— 超限文件 fail closed。
+    const preRead = snapshot.found
+      ? { ok: true as const, content: snapshot.content! }
+      : await boundedPreRead(p, context?.abortSignal)
+    if (!preRead.ok) return Result.fail(preRead.reason)
+    const content = preRead.content
     const freshnessBlock = revalidateApprovedSnapshot(context, p, content)
     if (freshnessBlock) return freshnessBlock
     const baseHash = approvedBaseHash(context, p, () => computeBaseHash(content))
@@ -767,7 +725,12 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
         const snapshot = approvedContent(context, p)
         if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
         if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
-        const original = snapshot.found ? snapshot.content! : await readFile(p, "utf-8")
+        // IC01: 有界预读 —— 超限文件 fail closed。
+        const preRead = snapshot.found
+          ? { ok: true as const, content: snapshot.content! }
+          : await boundedPreRead(p, context?.abortSignal)
+        if (!preRead.ok) return Result.fail(preRead.reason)
+        const original = preRead.content
         originals.set(p, original)
         const freshnessBlock = revalidateApprovedSnapshot(context, p, original)
         if (freshnessBlock) return freshnessBlock
@@ -925,7 +888,12 @@ async function edit_symbol(params: Record<string, unknown>, context?: ToolExecut
     const snapshot = approvedContent(context, p)
     if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
     if (!snapshot.found && !existsSync(p)) return Result.fail(`File not found: ${path}`)
-    const content = snapshot.found ? snapshot.content! : readFileSync(p, "utf-8")
+    // IC01: 有界预读 —— 超限文件 fail closed。
+    const preRead = snapshot.found
+      ? { ok: true as const, content: snapshot.content! }
+      : await boundedPreRead(p, context?.abortSignal)
+    if (!preRead.ok) return Result.fail(preRead.reason)
+    const content = preRead.content
     const freshnessBlock = revalidateApprovedSnapshot(context, p, content)
     if (freshnessBlock) return freshnessBlock
     const span = findSymbolSpan(content, symbol)
@@ -1122,8 +1090,13 @@ async function edit_fim(params: Record<string, unknown>, context?: ToolExecution
     }
 
     const snapshot = approvedContent(context, p)
-    const oldContent = snapshot.found ? snapshot.content : await readFile(p, "utf-8")
-    if (oldContent === null) return Result.fail(`File not found: ${path}`)
+    if (snapshot.found && snapshot.content === null) return Result.fail(`File not found: ${path}`)
+    // IC01: 有界预读 —— 超限文件 fail closed。
+    const preRead = snapshot.found
+      ? { ok: true as const, content: snapshot.content! }
+      : await boundedPreRead(p, context?.abortSignal)
+    if (!preRead.ok) return Result.fail(preRead.reason)
+    const oldContent = preRead.content
     const freshnessBlock = revalidateApprovedSnapshot(context, p, oldContent)
     if (freshnessBlock) return freshnessBlock
     const baseHash = approvedBaseHash(context, p, () => computeBaseHash(oldContent))

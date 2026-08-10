@@ -246,4 +246,61 @@ describe("IC01 read_file 行窗口（工具级）—— 不分配整个文件", 
     expect(result.content).toBe("sparse line ")
     expect(result.metadata?.bytes).toBe(12)
   })
+
+  test("P0-3: 1 GiB sparse 文件 offset>0 无 limit → 窗口有界（扫描/返回双重预算，无巨型分配）", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(SPARSE, 1, Number.POSITIVE_INFINITY, {
+      maxReturnBytes: 4096,
+      scanBudgetBytes: 128 * 1024,
+    })
+    expect(result.truncated).toBe(true)
+    expect(result.text.length).toBeLessThanOrEqual(4096)
+    // 预算耗尽 → 未到 EOF，不能给出精确 totalLines。
+    expect(result.scannedToEof).toBe(false)
+    expect(result.totalLines).toBeNull()
+  })
+
+  test("P0-3: 极长单行 → 窗口分配受 maxReturnBytes 限制（不 OOM、truncated）", async () => {
+    const LONG = join(ROOT, "src", "long-line.txt")
+    // 第 0 行 = 1 MiB 单行（带行尾，使窗口可定位且超返回预算）。
+    writeFileSync(LONG, "x".repeat(MIB) + "\ny\n", "utf-8")
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(LONG, 0, 1, { maxReturnBytes: 256 * 1024 })
+    expect(result.truncated).toBe(true)
+    expect(result.text.length).toBeLessThanOrEqual(256 * 1024)
+    expect(result.text.startsWith("x")).toBe(true)
+  })
+
+  test("P1-6: validateOpen 拒绝 → AUTHORITY_REJECTED（readFile）", async () => {
+    const reader = new BoundedFileReader()
+    let caught: unknown
+    try {
+      await reader.readFile(join(ROOT, "src", "small.txt"), {
+        validateOpen: () => "SYMLINK_READ_ESCAPE: test rejection",
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("AUTHORITY_REJECTED")
+  })
+
+  test("P1-6: validateOpen 拒绝 → AUTHORITY_REJECTED（readRange / readLineWindow / readSync）", async () => {
+    const reader = new BoundedFileReader()
+    const reject = () => "SYMLINK_READ_ESCAPE: test rejection"
+    for (const attempt of [
+      () => reader.readRange(join(ROOT, "src", "small.txt"), 0, 16, { validateOpen: reject }),
+      () => reader.readLineWindow(join(ROOT, "src", "small.txt"), 0, 1, { validateOpen: reject }),
+      () => Promise.resolve(reader.readSync(join(ROOT, "src", "small.txt"), 16, { validateOpenSync: reject })),
+    ]) {
+      let caught: unknown
+      try {
+        await attempt()
+      } catch (e) {
+        caught = e
+      }
+      expect(caught).toBeInstanceOf(FileReadError)
+      expect((caught as FileReadError).code).toBe("AUTHORITY_REJECTED")
+    }
+  })
 })

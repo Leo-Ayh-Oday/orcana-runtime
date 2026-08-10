@@ -105,7 +105,7 @@ describe("Agent kernel L7 terminal switch", () => {
     expect(trace.events.filter(event => event.type === "agent_loop_finished")).toHaveLength(1)
   })
 
-  test("round budget exhaustion emits one budget message and one Stop hook", async () => {
+  test("round budget exhaustion is PAUSED — never completed (TB2-1)", async () => {
     const trace = new MemoryTrace()
     const stopReasons: string[] = []
     const hooks = new HookSystem()
@@ -129,11 +129,12 @@ describe("Agent kernel L7 terminal switch", () => {
       event.type === "status" && String(event.data).startsWith("round-budget: exhausted")
     )).toHaveLength(1)
     expect(events.filter(event => event.type === "text")).toHaveLength(1)
-    expect(stopReasons).toEqual(["completed"])
+    // TB2-1: 轮次耗尽 = budget_exhausted = paused，绝不认作 completed。
+    expect(stopReasons).toEqual(["paused"])
     expect(trace.events.filter(event => event.type === "agent_loop_finished")).toHaveLength(1)
   })
 
-  test("empty round breaks to the completed terminal with no final text", async () => {
+  test("empty round breaks to the blocked terminal with no final text (TB2-1)", async () => {
     const stopReasons: string[] = []
     const hooks = new HookSystem()
     hooks.on(HookEvent.Stop, input => {
@@ -153,7 +154,8 @@ describe("Agent kernel L7 terminal switch", () => {
       event.type === "status" && event.data === "empty-round: no tool calls or final text"
     )).toBe(true)
     expect(events.filter(event => event.type === "text")).toHaveLength(0)
-    expect(stopReasons).toEqual(["completed"])
+    // TB2-1: 空轮无产出 = blocked，不是 completed。
+    expect(stopReasons).toEqual(["blocked"])
   })
 })
 

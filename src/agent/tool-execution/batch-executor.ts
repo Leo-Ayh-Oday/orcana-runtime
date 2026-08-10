@@ -458,12 +458,15 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
     const path = tc.input.path as string | undefined
     if (path) {
       filePaths.push(path)
+      // TB2-1: taskFiles = 观察过的文件（读/发现都算）……
       taskFiles.add(normalizeProjectPath(path))
       const isWriteTool = tc.name === "write_file" || tc.name === "edit_file" || tc.name === "edit_fim"
       if (resultObj.success && isWriteTool) {
         const normalizedPath = normalizeProjectPath(path)
         modifiedFilesThisRound.add(normalizedPath)
         changedFilesForLedger.add(normalizedPath)
+        // TB2-1: ……modifiedFiles = 写工具实际成功修改的文件（完成判定权威）。
+        execution.modifiedFiles.add(normalizedPath)
         execution.taskHadWrite = true
         execution.modifiedFileCount += 1
       }
@@ -492,6 +495,8 @@ export async function* executeToolBatch(ctx: ToolBatchContext): AsyncGenerator<S
           modifiedFilesThisRound.add(normalized)
           changedFilesForLedger.add(normalized)
           taskFiles.add(normalized)
+          // TB2-1: 工具声明实际产出的文件 → run-level modifiedFiles。
+          execution.modifiedFiles.add(normalized)
           execution.taskHadWrite = true
           execution.modifiedFileCount += 1
           if (stagedContext) stagedContext.markEdited(path)

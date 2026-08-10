@@ -577,7 +577,7 @@ export async function* runRound(
       maxRounds: ctx.maxRounds,
       finalText,
       taskTracker: planning.taskTracker,
-      changedFiles: [...taskFiles],
+      changedFiles: [...execution.modifiedFiles],
       retryLedger: getRunRetryLedger(),
     })
     for (const message of recovery.messages) rawMessages.push(message)
@@ -608,7 +608,7 @@ export async function* runRound(
       taskTracker: planning.taskTracker,
       pendingRippleObligations: verificationState.rippleObligations,
       verificationResults: verificationState.lastResults,
-      changedFiles: [...taskFiles],
+      changedFiles: [...execution.modifiedFiles],
       taskHadWrite: execution.taskHadWrite,
       taskToolErrors: execution.toolErrors,
       taskModifiedFiles: execution.modifiedFileCount,
@@ -859,21 +859,24 @@ export async function* runRound(
   // STALLED）。工具执行后清 blocked files 记录。
   ctx.sandbox.clearBlockedFiles()
 
-  // ── Revise plan: stuck detection → push back to planning ──
+  // ── Revise plan: only a plan step that ACTUALLY executed but failed may
+  // push back to planning. Provider-empty rounds (truncated with no tool
+  // calls) never trigger revise-plan — they are handled by GATE-03
+  // ProgressGovernor (action_first → replan_once → STALLED). ──
+  const providerEmptiedRound = providerRoundResult.stopReason === "truncated" && completedToolCalls.length === 0
   if (
     planning.taskTracker &&
     planning.taskTracker.phase === "building" &&
-    completedToolCalls.length === 0 &&
+    !providerEmptiedRound &&
+    completedToolCalls.length > 0 &&
     modifiedFilesThisRound.size === 0 &&
     verificationResultsThisRound.length === 0 &&
-    (execution.consecutiveErrors >= 3 || !planning.taskTracker.steps.some(s => s.status === "done"))
+    execution.consecutiveErrors >= 3
   ) {
     // Only use singleton revisePlan when MasterPlan is not active.
     // MasterPlan-level revisePlan (with frozen nodes) is deferred to PR 2.
     if (!planStore.current) {
-    const reason = execution.consecutiveErrors >= 3
-      ? `连续 ${execution.consecutiveErrors} 次工具错误`
-      : "步骤未推进，当前方案可能有问题"
+    const reason = `连续 ${execution.consecutiveErrors} 次工具错误`
     const reviseMsg = revisePlan(planning.taskTracker, reason)
     ctx.deferredGateMessages.push(reviseMsg)
     yield stream({ type: "status", data: `revise-plan: ${reason}` })
@@ -1102,7 +1105,7 @@ function buildProgressInput(
     committedToolCalls: completedToolCalls,
     toolResults: roundState.toolResults,
     verificationResults: roundState.verificationResults,
-    fileCount: ctx.taskFiles.size,
+    fileCount: ctx.execution.modifiedFiles.size,
     completedNodes: nodes.filter(n => n.status === "done").length,
     completedSteps: steps.filter(s => s.status === "done").length,
     currentNode: ctx.planStore.current?.current ?? "",

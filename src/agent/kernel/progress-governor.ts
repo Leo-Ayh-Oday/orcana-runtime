@@ -265,10 +265,15 @@ export class ProgressGovernor {
     let novelCount = 0
 
     // ── 阶段转换 = control 进展（DIAGNOSIS_COMPLETE → IMPLEMENT 等）；预算随阶段重置 ──
+    // TB2-1: 进入 FINALIZE 必须伴随真实通过证据（本轮验证新增/翻转），纯状态
+    // 迁移（RECON→FINALIZE 无证据）不算 control 进展——轮次耗尽不再能进入 DONE。
     if (this.lastPhase !== null && phase !== this.lastPhase) {
-      control += 1
-      this.phaseChanges += 1
-      reasons.push(`阶段转换 ${this.lastPhase}→${phase}`)
+      const finalizeWithoutEvidence = phase === "FINALIZE" && evidence === 0
+      if (!finalizeWithoutEvidence) {
+        control += 1
+        this.phaseChanges += 1
+        reasons.push(`阶段转换 ${this.lastPhase}→${phase}`)
+      }
       this.recon.reset()
     }
     this.lastPhase = phase

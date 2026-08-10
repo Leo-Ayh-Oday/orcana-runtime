@@ -4,14 +4,19 @@
 
 **Do not open a public issue.** Send details to the project maintainer via GitHub Security Advisory or the repository's private vulnerability reporting channel.
 
-## Supported Versions
+## Version Channels
 
-| Version | Supported |
-|---------|-----------|
-| 0.7.x   | ✅ Yes    |
-| 0.6.x   | ✅ Yes    |
-| 0.5.x   | ✅ Critical fixes only |
-| < 0.5.0 | ❌ No     |
+| Channel | Version | Security status |
+|---|---:|---|
+| npm / GitHub Latest Release | `0.8.16` | Current public baseline |
+| `origin/main` source | `0.8.26.1` | Unreleased source; not an installable public release |
+| Active repair line | `0.8.26.2` | Unreleased candidate; not release-ready until its gates and audit pass |
+
+The project does not currently promise long-term support for older minor
+versions. Use the latest published package for ordinary installations and read
+the release notes before upgrading. A version in `package.json` is not a
+published or supported release until the tag, GitHub Release, npm package and
+installation smoke test all exist.
 
 ## Security Model
 
@@ -23,29 +28,73 @@ API keys are stored in `~/.orcana/auth.json` (0600) or read from environment var
 
 ### 2. Sandbox
 
-The sandbox uses defense-in-depth with platform-specific capabilities. Run `orcana doctor` to see the exact capability matrix of your platform.
+The sandbox is defense-in-depth and platform-specific. The authoritative
+description is the [Linux sandbox current status and degradation matrix](./docs/linux-foundation/current-status.md).
+`orcana doctor` and the startup capability banner are diagnostics, not proof
+that a specific child process received a boundary. For an individual Linux
+execution, use the selected backend and its `SandboxReceipt`.
 
-**Windows** (strong):
-- **Job Object** — kernel32 `CreateJobObject`, process tree kill-on-close, memory limits
-- **Path Guard** — post-exec file change detection (audit, not real-time prevention)
-- **Env Filtering** — whitelist-only environment variables
-- **Timeout** — hard cap on shell execution time
-- **Ripple Blocks** — shell commands writing to ripple-blocked files are denied
+**Linux short-process path**:
 
-**macOS / Linux** (degraded):
-- **Env Filtering** — whitelist-only environment variables ✅
-- **Timeout** — hard cap on shell execution time ✅
-- **Path Guard** — post-exec file change detection ✅
-- **cgroups process isolation** (Linux, partial) — no Job Object equivalent on macOS ❌/🟡
-- **No Network Isolation** — requires admin/root ❌
-- **No Filesystem Interception during execution** — requires kernel driver ❌
+```text
+ProcessExecutor → LinuxExecutionBroker → Host Audit | Bubblewrap | Rootless Podman
+```
 
-> ⚠️ **macOS/Linux users**: the sandbox is degraded to env filtering + timeout + post-hoc path audit. For production use on these platforms, consider running Orcana inside a container or VM. The sandbox capability is printed at startup — always verify it matches your expectations.
+- **Host Audit (degraded)** — explicit environment, timeout/process-group
+  handling and post-execution PathGuard. It does not prevent filesystem reads,
+  filesystem writes or network access in real time.
+- **Bubblewrap (namespace)** — can enforce mount, PID, IPC, UTS, user and
+  network namespace boundaries, an empty Home and explicit workspace mounts.
+  It is valid only when the real backend runs successfully.
+- **Rootless Podman (container)** — can enforce a digest-approved image,
+  explicit mounts, read-only container state, dropped capabilities and network
+  isolation. A rootless container still shares the host kernel and is not a VM.
+- **cgroup v2** — resource and process-tree claims require delegated cgroup
+  authority, verified attachment and verified cleanup for that run.
+- **seccomp** — applied as an additional hardening profile when supported; it
+  is not a standalone sandbox.
+- **Landlock** — currently probed/compiled only and not wired into production
+  execution. It is unavailable on the current WSL2 development kernel.
 
-**Honest limitations** (all platforms):
-- Path Guard is post-hoc, not real-time
-- No network isolation (requires admin)
-- No filesystem interception during execution (requires kernel driver)
+`inspect` and `build` may explicitly degrade to Host Audit. Strict profiles
+(`test`, `dependency`, `service`, `untrusted`, `evolution`) must reject an
+unavailable required boundary. A zero-step CI job, conditional skip, mock test
+or installed backend binary is not evidence of enforcement.
+
+**Transitional process paths**:
+
+- service/MCP/LSP use `ServiceCell` with sanitized environment and optional
+  durable leases, but currently spawn outside the Linux Broker/cgroup path;
+- `legacy-process` still has synchronous callers;
+- therefore the repository cannot yet claim one production process-creation
+  authority for every `src/` execution path.
+
+**Windows**:
+
+- environment filtering, timeout and post-execution PathGuard are available;
+- Job Object code exists, but its production `track()` path is not wired, so
+  process-tree control must be described as partial, not strong;
+- no production filesystem or network sandbox is provided.
+
+**macOS**:
+
+- environment filtering, timeout and post-execution PathGuard are available;
+- there is no integrated filesystem, network, cgroup or Job Object equivalent;
+- use an external container/VM for untrusted execution.
+
+**Honest limitations across the current source**:
+
+- PathGuard is post-hoc detection, not real-time prevention;
+- ordinary workspace file reads still need a unified secret-read policy and
+  bounded reader; a secret stored inside the workspace must not be assumed
+  protected merely because path traversal is blocked;
+- strict filesystem TOCTOU protection is not yet closed with dirfd/openat2-like
+  primitives;
+- `proxy-allowlist` is not a complete production egress enforcement path;
+- service readiness is not yet cryptographically/structurally bound to the
+  listener owned by the Service Cell;
+- cleanup, resource and isolation claims are invalid when the Receipt reports
+  degradation or unverified cleanup.
 
 ### 3. Permission System
 
@@ -59,6 +108,11 @@ Configure via `settings.json` or the `permissions.json` files directly.
 ### 4. MCP Server Isolation
 
 MCP servers run as child processes with their own environment. Server configs are stored in `~/.orcana/mcp.json`. **The default trust policy is `untrusted`** — MCP-discovered tools are read-only unless explicitly opted in, and a deny/allowlist applies per server.
+
+MCP process lifecycle currently uses the transitional `ServiceCell` path. Its
+environment is sanitized and its lease can be recorded, but it does not yet
+inherit Linux Broker/cgroup isolation. Treat the configured MCP executable as
+trusted host code unless you place Orcana in an additional container or VM.
 
 **Risks**:
 - **RCE via server command**: `mcp.json` `command` and `args` fields execute arbitrary binaries. Only add servers from trusted sources.
@@ -125,4 +179,6 @@ The agent is prevented from editing its own source files (`src/agent/`, `src/too
 
 ## Acknowledgments
 
-We appreciate responsible disclosure. Critical security issues will be addressed within 48 hours.
+We appreciate responsible disclosure. Reports are triaged as quickly as
+maintainer capacity permits; the project does not currently publish a fixed
+response-time SLA.

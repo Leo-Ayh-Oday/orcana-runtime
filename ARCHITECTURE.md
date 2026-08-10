@@ -1,5 +1,11 @@
 # Architecture — Orcana Runtime
 
+> **Status scope (2026-08-10):** This document describes the module layout and
+> design intent. It is not a release manifest. For current release/source
+> versions and conservative subsystem status, see [`docs/status.md`](docs/status.md).
+> For Linux enforcement and degradation, see the
+> [Linux sandbox current status matrix](docs/linux-foundation/current-status.md).
+
 ## Design Philosophy
 
 > Every design decision answers one question: **"Does this make it harder for AI to write bad code?"**
@@ -23,8 +29,9 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 | Flash Judge | 🟢 stable | Independent completion verifier, circuit breaker |
 | Ripple Engine 2.0 | 🟢 stable | 7 layers, 212 tests, 8.5/10 score |
 | Context Budget / Epoch | 🟢 stable | 4-layer context, tool chain guard |
-| Sandbox (Windows) | 🟢 stable | Job Object, PathGuard, env filtering, timeout |
-| Sandbox (macOS/Linux) | 🟡 partial | Degraded to env filtering + timeout + post-hoc path audit |
+| Sandbox (Windows) | 🟡 partial | Env filtering, timeout and PathGuard are active; Job Object implementation is not production-wired |
+| Sandbox (Linux) | 🟡 partial | Broker + real Bubblewrap/Podman/cgroup lanes exist; enforcement is host/run dependent and transitional long-lived process paths remain |
+| Sandbox (macOS) | 🟡 partial | Env filtering + timeout + post-hoc PathGuard; no integrated kernel sandbox |
 | MasterPlan / TaskPacket | 🟢 stable | Zod adapter deferred (no Zod dependency); schema validation fail-closed, mode auto-flow wired |
 | ModeContract | 🟢 stable | 5 modes, shared transition context, per-run isolation |
 | PatchTransaction | 🟢 stable | Managed lifecycle (propose→apply→verify→commit), freshness base-hash, partial-commit rollback, **rollback-aware evidence invalidation (SS-Next-2B, v0.7.4)** |
@@ -35,9 +42,9 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 | MCP Bridge | 🟡 partial | Tools only, trust policy (default untrusted), resources/prompts deferred |
 | Capability Registry (H9) | 🟢 stable | Unified capability descriptors + 8-step CapabilityExecutor — single execution entry for loop and future Node Runtime |
 | Context Pipeline (H10) | 🟢 stable | 13 layered context providers → ContextSlice; loop context assembly moved into the pipeline (byte-frozen) |
-| Node Runtime (H11) | 🟢 stable | HarnessNode primitives (function/tool/llm_agent/verification/human) + sequential runner; single agent = one LlmAgentNode; mandatory policy gate and evidence chain (Closure R1); scheduler/Graph deferred |
+| Node Runtime (H11) | 🟢 stable | HarnessNode primitives (function/tool/llm_agent/verification/human) + sequential runner; single agent = one LlmAgentNode; mandatory policy gate and evidence chain (Closure R1); the later G0-G6 Graph layer now consumes these primitives |
 | AgentHarness 2.0 | 🟢 stable | Production entry via AgentHarness → LegacyLoopAdapter → agentLoop; replay-verified scripted provider/tools |
-| Typed Execution Graph (G0–G6, v0.7.x) | 🟢 stable | `src/workflow/`: shadow projection (G0), read-only DAG scheduler (G1), compiler + templates (G2), single-writer transactions (G3), convergent repair loop (G4), result cache + replay (G5), dynamic compiler + permission gate (G6); kernel untouched |
+| Typed Execution Graph (G0–G6, v0.7.x) | 🟢 core implemented / 🟡 authority closure | `src/workflow/`: shadow projection (G0), read-only DAG scheduler (G1), compiler + templates (G2), single-writer transactions (G3), convergent repair loop (G4), result cache + replay (G5), dynamic compiler + permission gate (G6). Strict replay, immutable approval, cache provenance and resource/retry authority remain closure work |
 | Replay harness / Mini benchmark | 🟢 stable | 70 deterministic fixtures + H12 scripted E2E (12/12) + `bench:mini` (pass@1 / false-done / cost, regression gate) |
 | `orcana doctor` | 🟢 stable | 8-check environment self-check (PR-10.4), `--json`, CI exit codes |
 | FreshnessGate / FileState | 🟢 stable | Canonical ToolContract preflight, approved-snapshot transactions, write-generation |
@@ -47,7 +54,7 @@ Orcana is a single-agent terminal coding assistant. Its core differentiator is n
 | State Machine | 🟡 partial | Monitoring layer, not primary behavioral driver |
 | TUI | 🟡 partial | Core working, missing plan approval/evidence/rewind UX |
 | Secret Redaction | 🟢 stable | `redactForTrace` with `allowedKeyPatterns` token-metering whitelist; trace/snapshot/cache/checkpoint all share the redactor boundary |
-| Context Map Pipeline | 🔵 planned | Interfaces exist, not fully wired |
+| Context Map Pipeline | 🟡 partial | Runtime acquisition is wired, but bounded file I/O and gate authority still need closure |
 | Context Memory OS | 🔵 planned | Protocol-level, separate integration PR |
 | Recursive Evolution OS | 🔵 planned | Protocol-level, separate integration PR |
 | Multi-Agent (T3R) | 🔵 planned | Post-v1.0, single-agent first |
@@ -197,23 +204,34 @@ old + new content
 
 **Key features**: semantic-first caller discovery · 8 structured change kinds · 14 usage pattern classifier · waiver-with-reason obligation system · convention-based test file discovery · ast-grep external enrichment · zero-cost graceful degradation
 
-### 6. Sandbox — Defense-in-Depth 🟢 stable / 🟡 partial
+### 6. Sandbox — Defense-in-Depth 🟡 host/run dependent
 
-`src/sandbox/sandbox.ts`
+There are two generations of sandbox code:
 
-| Layer | Mechanism | Scope |
-|-------|-----------|-------|
-| **Job Object** | kernel32 `CreateJobObject` — process tree kill-on-close | Windows only |
-| **Path Guard** | Post-exec file change detection (audit, not prevention) | Cross-platform |
-| **Env Filtering** | Whitelist-only environment variables (42 vars) | Cross-platform |
-| **Timeout** | Hard cap on shell execution time | Cross-platform |
-| **Ripple Blocks** | Shell commands that write to ripple-blocked files are denied | Cross-platform |
+- `src/sandbox/*` is the cross-platform/legacy guard layer (environment,
+  timeout, PathGuard and Windows Job Object implementation);
+- `src/runtime/linux/*` is the Linux execution foundation used by the normal
+  Linux short-process path.
 
-**Honest limitations documented in code:**
-- Path Guard is post-hoc, not real-time
-- No network isolation (requires admin)
-- No filesystem interception during execution (requires kernel driver)
-- macOS/Linux: degraded to env filtering + timeout only
+| Layer | Mechanism | Current boundary |
+|---|---|---|
+| **Policy Compiler** | Runtime-owned immutable Cell spec | Prevents the model/tool from choosing trusted identity or relaxing strict Profile defaults |
+| **Host Audit** | Explicit env, timeout/process group, post-hoc PathGuard | Observable degradation only; no real-time filesystem/network boundary |
+| **Bubblewrap** | user/mount/PID/IPC/UTS/net namespaces, empty Home, explicit mounts | Namespace isolation when the real backend executes |
+| **Rootless Podman** | approved digest, read-only container, explicit mounts, network none, dropped caps | Container isolation when rootless preflight and the real backend execute |
+| **cgroup v2** | run/agent/cell hierarchy, attach, limits, kill/cleanup | Valid only with delegation and verified membership/cleanup |
+| **seccomp** | BPF/OCI hardening profile | Additional layer, not a standalone sandbox |
+| **Landlock** | probe/rules surface | Not production-wired; unavailable on the current WSL2 kernel |
+| **Receipt/Evidence** | backend and policy digests, degradation and cleanup | Run-level source of truth; incomplete/unverified receipts cannot satisfy strong criteria |
+
+The service/MCP/LSP `ServiceCell` path sanitizes environment and records
+leases, but currently spawns outside the Linux Broker/cgroup path. The legacy
+`src/sandbox/capability.ts` banner also does not fully represent the Linux
+Broker. Use the run Receipt and real backend lane, not the banner, to make an
+enforcement claim.
+
+See [`docs/linux-foundation/current-status.md`](docs/linux-foundation/current-status.md)
+for the full degradation matrix and known closure gaps.
 
 ### 7. Context Budget — Three-Tier Token Management
 
@@ -670,7 +688,7 @@ These are hard-won lessons from development, recorded to prevent regression:
 | MCP | Custom bridge → `~/.orcana/mcp.json` |
 | LSP | TypeScript compiler API + `ts.createProgram` |
 | Memory | SQLite (FTS5) + JSONL on disk |
-| Sandbox | Win32 Job Objects + PathGuard |
+| Sandbox | Linux Broker (Host Audit/Bubblewrap/Rootless Podman/cgroup) + cross-platform PathGuard; Windows Job Object pending production wiring |
 | Config | JSON flat-files (settings.json, mcp.json, permissions.json) |
 
 ## Context Systems 🟡 partial / 🔵 planned

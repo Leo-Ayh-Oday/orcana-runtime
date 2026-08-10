@@ -1,5 +1,8 @@
 # Orcana Runtime Typed Execution Graph Runtime 完整实施方案
 
+> [!IMPORTANT]
+> **历史实施计划，不是当前状态页。** 本文按 `0.4.0` 基线编写，保留原始设计与分阶段验收语境。G0-G6 已在后续 `0.7.x` 源码中实现；当前实现状态与未闭环边界以 [`status.md`](status.md)、[`graph-runtime/execution-plan.md`](graph-runtime/execution-plan.md) 和当前源码/测试为准。现阶段仍需完成严格重放、不可变审批、缓存溯源以及资源/重试/活性权威闭环。
+
 **方案版本：** GEP-1.0  
 **仓库基线：** `Leo-Ayh-Oday/orcana-runtime`
 **基线提交：** `2207db20eb284d8b2f695c13951a3078bbff3682`  

@@ -2,6 +2,12 @@
 
 All notable changes to Orcana Runtime.
 
+> **Version notice (2026-08-10):** the current public npm package and GitHub
+> Release are `0.8.16`; newer repository version declarations are unreleased.
+> The `0.8.17` section below is a historical development ledger, not proof that
+> every listed capability is present in the public package or fully closed in
+> the current source. See [`docs/status.md`](docs/status.md) for current truth.
+
 ## [0.8.17] — in progress (reliability-freeze)
 
 ### Added (RC-00 基线)

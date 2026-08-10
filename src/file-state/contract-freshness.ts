@@ -71,21 +71,27 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-function safeDisplayPath(parameterPath: string, value: string, canonicalPath: string): string {
+function safeDisplayPath(parameterPath: string, value: string, canonicalPath: string, base: string): string {
   if (!isAbsolute(value) && !value.replace(/\\/g, "/").startsWith("../")) return value
-  const workspaceRelative = relative(process.cwd(), canonicalPath)
+  const workspaceRelative = relative(base, canonicalPath)
   if (workspaceRelative && !workspaceRelative.startsWith("..") && !isAbsolute(workspaceRelative)) {
     return workspaceRelative.replace(/\\/g, "/")
   }
   return parameterPath
 }
 
-/** Enforce the state requirement declared by a canonical ToolContract. */
+/** Enforce the state requirement declared by a canonical ToolContract.
+ *
+ *  IC01（PROJECT_ROOT_CWD_MISMATCH = 0）：path 参数解析必须与工具执行
+ *  authority base 一致 —— 相对路径绑定 projectRoot（context.projectRoot），
+ *  绝不绑定 process.cwd()。未提供 projectRoot 时退回 cwd（无 authority
+ *  场景保持兼容，同 resolveToolPath 的缺省语义）。 */
 export async function validateToolContractFreshness(
   contract: ToolContract,
   params: Record<string, unknown>,
-  options: { abortSignal?: AbortSignal } = {},
+  options: { abortSignal?: AbortSignal; projectRoot?: string } = {},
 ): Promise<ToolContractFreshnessResult> {
+  const base = options.projectRoot ?? process.cwd()
   const requirement = contract.state.requirement
   if (requirement === "none") return { ok: true, approval: EMPTY_APPROVAL }
   if (contract.path.parameters.length === 0) {
@@ -106,9 +112,9 @@ export async function validateToolContractFreshness(
         invalid = { ok: false, path: parameter, status: "missing", reason: `path parameter ${parameter} must be a non-empty string` }
         return false
       }
-      const canonicalPath = resolve(value)
+      const canonicalPath = isAbsolute(value) ? resolve(value) : resolve(base, value)
       targets.set(canonicalPath, {
-        displayPath: safeDisplayPath(parameter, value, canonicalPath),
+        displayPath: safeDisplayPath(parameter, value, canonicalPath, base),
         canonicalPath,
       })
       if (targets.size > MAX_FRESHNESS_TARGETS) {

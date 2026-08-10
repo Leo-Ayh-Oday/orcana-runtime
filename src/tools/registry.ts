@@ -154,7 +154,12 @@ export function buildTool(defn: ToolDef): ContractToolDescriptor {
         result: Result.blocked(`${defn.userFacingName ?? defn.name} requires confirmation — set confirm: true`),
       }
     }
-    const freshness = await validateToolContractFreshness(contract, params, { abortSignal: context?.abortSignal })
+    // IC01（PROJECT_ROOT_CWD_MISMATCH = 0）：freshness preflight 与工具执行
+    // 使用同一 authority base —— 相对路径绑定 context.projectRoot。
+    const freshness = await validateToolContractFreshness(contract, params, {
+      abortSignal: context?.abortSignal,
+      projectRoot: context?.projectRoot,
+    })
     if (!freshness.ok) {
       return {
         ok: false,

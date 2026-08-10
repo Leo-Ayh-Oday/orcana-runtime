@@ -454,9 +454,9 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   /** IC02: 统一 cleanup routine —— 以 acquired 为唯一资源真相，幂等，
    *  任一步 throw 不跳过后续释放，输出 cleanup outcome 供 Receipt 使用。
    *
-   *  固定顺序：abort/kill → backend cleanup → cgroup → receipt 持久化
-   *  （失败不阻断）→ locks/lease → reservation → materialization →
-   *  registry removal（最后）。
+   *  固定顺序（与 IC02 计划 §11 一致）：
+   *  abort/kill → backend → cgroup → locks/lease → reservation →
+   *  materialization.dispose → receipt 持久化（失败不阻断）→ registry。
    */
   const cleanupAcquired = (
     acquired: BrokerAcquiredResources,
@@ -485,10 +485,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       try { rmSync(acquired.podmanCidfile, { force: true }) } catch { /* best-effort */ }
     }
 
-    // 3. cgroup cleanup：本事务创建的部分 hierarchy 全部清理。
-    //    - cell：总是（本 cell 专属）。
-    //    - run/agent：仅 brokerCreatedHierarchy（复用 AgentDomain 的不动，
-    //      且 run 下不得有其它 active cell —— 共享 hierarchy 不误删）。
+    // 3. cgroup cleanup：intended paths（调用前记录）为清理目标 ——
+    //    createXxx 部分创建后抛错同样能移除。
+    //    - cell：总是尝试（cell-<cellId> 专属本 cell，无共享风险）。
+    //    - run/agent：仅 brokerCreatedHierarchy（本事务创建）且 run 下
+    //      无其它 active cell（共享 hierarchy 不误删）；复用 AgentDomain
+    //      的（domain.cgroupPath）不触碰 Domain 资源。
     let cgroupRemoved = false
     if (cgroup && acquired.cgroupCellPath) {
       try {
@@ -508,11 +510,23 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       }
     }
 
-    // 3.5 materialization dispose（宿主物化材料：seccomp/sealed-secret/cache）
-    //     —— 先于 receipt 组装（cleanupActions/secretRecords 回填进 Receipt）。
+    // 4. locks / workspace lease —— 无条件释放（acquired 内真相）。
+    for (const key of acquired.lockKeys) {
+      try { locks.release(key, acquired.cellId) } catch { /* best-effort */ }
+    }
+    try { acquired.leaseRelease?.() } catch { /* best-effort */ }
+
+    // 5. reservation —— 从 acquired 释放，绝不从 registry 找。
+    if (acquired.reservationId) {
+      try { ledger.release(acquired.reservationId) } catch { /* best-effort */ }
+    }
+
+    // 6. materialization dispose（seccomp/sealed-secret/cache 宿主材料）——
+    //    先于 receipt 组装（cleanupActions/secretRecords 回填进 Receipt）。
     try { acquired.materialization?.dispose?.() } catch { /* best-effort */ }
 
-    // 4. receipt 持久化 —— 成功或失败都不阻止后续释放（IC02 §12）。
+    // 7. receipt 组装 + 持久化 —— 成功或失败都不阻止 registry removal
+    //    （IC02 §12：persistence failure 不重新造成 resource leak）。
     let receiptPersisted = false
     if (ctx.cellReceipt) {
       // GATE（GS-11）：清理真值 —— 空 cgroup 删除成功 ≠ 原进程已清理。
@@ -555,18 +569,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       }
     }
 
-    // 5. locks / workspace lease —— 无条件释放（acquired 内真相）。
-    for (const key of acquired.lockKeys) {
-      try { locks.release(key, acquired.cellId) } catch { /* best-effort */ }
-    }
-    try { acquired.leaseRelease?.() } catch { /* best-effort */ }
-
-    // 6. reservation —— 从 acquired 释放，绝不从 registry 找。
-    if (acquired.reservationId) {
-      try { ledger.release(acquired.reservationId) } catch { /* best-effort */ }
-    }
-
-    // 7. registry removal —— 最后阶段。
+    // 8. registry removal —— 最后阶段。
     cellRuns.delete(acquired.cellId)
     cells.delete(acquired.cellId)
 
@@ -749,9 +752,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       let attachVerified = false
 
       // ── starting visibility（acquisition 期间 cancelCell/cancelAgent 可达）──
-      cellRuns.set(cellId, { runId, agentId, phase: "starting", acquired })
-      await checkpoint("after-register-starting")
+      // 从 registration 起即进入 try/finally —— after-register-starting 等
+      // checkpoint 抛错也由 cleanupAcquired 收尾（registry removal 统一）。
       try {
+        cellRuns.set(cellId, { runId, agentId, phase: "starting", acquired })
+        await checkpoint("after-register-starting")
         const requested = resourceRequestOf(compiled)
         const reservation = ledger.reserve(requested, runId, cellId, agentId)
         if (!reservation.ok) {
@@ -797,34 +802,64 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         // AgentDomainManager 创建 —— 此处直接使用其 cgroupPath）。
         const domain = executeOptions?.domain
 
-        // Cell cgroup（有委托时）。路径在调用前预计算并写入 acquired ——
-        // createXXX 部分创建（目录已建/controller 授权失败）后 cleanup 仍
-        // 有完整路径（IC02 §10：部分创建可恢复）。
+        // Cell cgroup（有委托时）。intended paths 在调用前记录并写入
+        // acquired —— createRun/createAgent/createCell 内部部分创建后
+        // 抛错（ensure 已 mkdir、controller 授权失败等）cleanup 仍有
+        // 完整路径（IC02 §10：部分创建可恢复；P0-1 复审闭环）。
         if (cgroup) {
-          acquired.cgroupRunPath = hierarchyPaths(cgroup.base, runId, undefined, "x").run
-          acquired.cgroupAgentPath = domain?.cgroupPath ?? hierarchyPaths(cgroup.base, runId, agentId, "x").agent
+          const runPath = hierarchyPaths(cgroup.base, runId, undefined, "x").run
+          const agentPath = domain?.cgroupPath ?? hierarchyPaths(cgroup.base, runId, agentId, "x").agent
+          const cellPath = hierarchyPaths(cgroup.base, runId, agentId, cellId).cell
+          acquired.cgroupRunPath = runPath
+          acquired.cgroupAgentPath = agentPath
+          // cell 路径专属本 cell —— 调用前记录，createCell 抛错也能清理。
+          acquired.cgroupCellPath = cellPath
           if (!domain?.cgroupPath) {
             // PR-5：Run/Agent 层不重复使用单个 Cell 的预算 —— 聚合预算只来自
             // AgentDomain（createAgentDomain 已按 budget 创建）；无 Domain 时
             // 上层不设限（资源约束由 Cell 层承担），避免"单 Cell 预算冒充聚合"。
+            // pre-existing 判定：同 run 并行 cell 的 run/agent 层属于第一个
+            // cell（非本事务创建，不得整树清理）。
+            const runPreExisting = cgroup.fs.exists(runPath)
+            const agentPreExisting = cgroup.fs.exists(agentPath)
             await checkpoint("before-create-run")
-            cgroup.createRun(runId)
-            acquired.brokerCreatedHierarchy = true
+            try {
+              cgroup.createRun(runId)
+            } catch (error) {
+              // createRun 部分创建（ensure 已 mkdir 后 controller 授权抛错）：
+              // run 调用前不存在 → 本事务负责清理该 hierarchy。
+              if (!runPreExisting) acquired.brokerCreatedHierarchy = true
+              throw error
+            }
+            if (!runPreExisting) acquired.brokerCreatedHierarchy = true
             await checkpoint("after-create-run")
             if (agentId) {
-              cgroup.createAgent(runId, agentId)
-              await checkpoint("after-create-agent")
+              try {
+                cgroup.createAgent(runId, agentId)
+              } catch (error) {
+                // createAgent 部分创建（agent 目录已 mkdir 后授权抛错）：
+                // run 层仍属本事务 → 整树清理。
+                if (!runPreExisting) acquired.brokerCreatedHierarchy = true
+                throw error
+              }
             }
+            await checkpoint("after-create-agent")
           }
           await checkpoint("before-create-cell")
-          acquired.cgroupCellPath = cgroup.createCell(runId, agentId, cellId, {
-            memoryMaxBytes: compiled.resources.memoryMaxBytes,
-            memoryHighBytes: compiled.resources.memoryHighBytes,
-            pidsMax: compiled.resources.pidsMax,
-            cpuQuotaMicros: compiled.resources.cpuQuotaMicros,
-            cpuPeriodMicros: compiled.resources.cpuPeriodMicros,
-            oomGroup: true,
-          })
+          try {
+            cgroup.createCell(runId, agentId, cellId, {
+              memoryMaxBytes: compiled.resources.memoryMaxBytes,
+              memoryHighBytes: compiled.resources.memoryHighBytes,
+              pidsMax: compiled.resources.pidsMax,
+              cpuQuotaMicros: compiled.resources.cpuQuotaMicros,
+              cpuPeriodMicros: compiled.resources.cpuPeriodMicros,
+              oomGroup: true,
+            })
+          } catch (error) {
+            // cell 部分创建（ensure(cell) 后属性写入抛错）：cgroupCellPath
+            // 已在调用前记录 → cleanup 尝试 removeCell。
+            throw error
+          }
           await checkpoint("after-create-cell")
         }
 

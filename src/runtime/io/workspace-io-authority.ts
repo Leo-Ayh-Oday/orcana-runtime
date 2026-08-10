@@ -138,9 +138,14 @@ export function enforceWorkspaceRead(
 }
 
 /** open 后 fd canonical 校验（关闭 check/open race 的读取侧）：
- *  通过 /proc/self/fd/{fd} 取得 open 目标的当前 canonical 路径，确认仍在
- *  权威读取根内（SYMLINK_READ_ESCAPE）。readlink 不可用（非 Linux）或 fd
- *  无 canonical 路径时返回 null —— 该边界由 IC14 的完整 TOCTOU 闭环覆盖。 */
+ *  通过 /proc/self/fd/{fd} 取得 open 目标的当前 canonical 路径，并对其
+ *  重新执行完整 authority 验证（SECRET_READ 闭环）：
+ *    1. 未 deleted/replaced（TOCTOU 窗口 fail closed）。
+ *    2. canonical target 仍在权威读取根内（SYMLINK_READ_ESCAPE）。
+ *    3. canonical target 不是秘密文件（除非 Runtime grant）—— post-open
+ *       看到的最终真实对象与 open 前 policy 判定一致（SECRET_READ）。
+ *  readlink 不可用（非 Linux）或 fd 无 canonical 路径时返回 null ——
+ *  该边界由 IC14 的完整 TOCTOU 闭环覆盖。 */
 export async function validateOpenFileCanonical(
   workspace: WorkspaceIoAuthority,
   resolvedPath: string,
@@ -159,6 +164,15 @@ export async function validateOpenFileCanonical(
       return {
         code: "SYMLINK_READ_ESCAPE",
         reason: `SYMLINK_READ_ESCAPE: open 目标 canonical 路径逃逸权威工作区读取根: ${resolvedPath} -> ${canonical}`,
+      }
+    }
+    // P1-6 复审：post-open 对 fd 真实目标重跑 secret policy —— open 前的
+    // lexical/canonical 检查无法覆盖 check→open 间的对象替换。
+    const secret = checkSecretRead(workspace, canonical)
+    if (secret) {
+      return {
+        code: "SECRET_READ",
+        reason: `SECRET_READ: open 目标为秘密文件（post-open canonical）: ${resolvedPath} -> ${canonical}`,
       }
     }
   } catch {

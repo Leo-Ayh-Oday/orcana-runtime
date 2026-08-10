@@ -143,6 +143,44 @@ export class BoundedFileReader {
     return { size: info.size, isRegular: info.isFile(), mtimeMs: info.mtimeMs }
   }
 
+  /** 同步有界 range 读取（同步管线用）：只分配 min(length, 预算, size-offset)
+   *  字节，绝不分配整个文件；offset 越界返回空 buffer。 */
+  readSyncRange(
+    path: string,
+    offset: number,
+    length: number,
+    options: { validateOpenSync?: (fd: number) => string | null } = {},
+  ): Buffer {
+    const info = this.statSync(path)
+    if (!info.isRegular) {
+      throw new FileReadError(`not a regular file: ${path}`, "NOT_REGULAR_FILE")
+    }
+    const start = Math.max(0, Math.floor(offset))
+    const requested = Math.max(0, Math.floor(length))
+    if (start >= info.size || requested === 0) return Buffer.alloc(0)
+    const want = Math.min(requested, this.maxFileBytes, this.operationBudgetBytes, info.size - start)
+    const fd = openSync(path, "r")
+    try {
+      const fstat = fstatSync(fd)
+      if (!fstat.isFile()) {
+        throw new FileReadError(`not a regular file (after open): ${path}`, "NOT_REGULAR_FILE")
+      }
+      if (options.validateOpenSync) {
+        const violation = options.validateOpenSync(fd)
+        if (violation) throw new FileReadError(violation, "AUTHORITY_REJECTED")
+      }
+      const buffer = Buffer.allocUnsafe(want)
+      const bytesRead = readSync(fd, buffer, 0, want, start)
+      return buffer.subarray(0, Math.max(0, bytesRead))
+    } finally {
+      try {
+        closeSync(fd)
+      } catch {
+        // best-effort close
+      }
+    }
+  }
+
   /** 同步有界读取（同步管线用）：只分配 min(limitBytes, maxFileBytes,
    *  operationBudgetBytes) 字节；返回截断前缀。 */
   readSync(path: string, limitBytes: number, options: { validateOpenSync?: (fd: number) => string | null } = {}): Buffer {

@@ -18,7 +18,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { buildTool, buildTools } from "../../src/tools/registry"
@@ -33,6 +33,7 @@ import {
   workspaceIoAuthorityFromTrusted,
   checkWorkspaceBaseDrift,
   checkSecretRead,
+  validateOpenFileCanonical,
 } from "../../src/runtime/io/workspace-io-authority"
 import { createAgentRunScope } from "../../src/agent/run/scope"
 import type { WorkspaceIoAuthority } from "../../src/runtime/io/workspace-io-authority"
@@ -316,6 +317,31 @@ describe("IC01 SECRET_READ — 统一 secret deny policy", () => {
       expect(result.success).toBe(false)
       expect((result.metadata?.workspaceIo as { code?: string } | undefined)?.code).toBe("SYMLINK_READ_ESCAPE")
     })
+  })
+
+  test("复审 P0-1/P1-6: post-open fd canonical 重跑 secret policy（open 后真实目标为 .env → SECRET_READ）", async () => {
+    // 直接打开 .env（合法 fd），用 benign 路径作为用户请求路径调用
+    // validateOpenFileCanonical —— open 后的真实对象是秘密文件必须被拒绝。
+    const fd = openSync(join(ROOT, ".env"), "r")
+    try {
+      const ws = authorityFor(ROOT)
+      const violation = await validateOpenFileCanonical(ws, join(ROOT, "src", "benign.txt"), fd)
+      expect(violation).not.toBeNull()
+      expect(violation?.code).toBe("SECRET_READ")
+    } finally {
+      closeSync(fd)
+    }
+  })
+
+  test("复审 P1-6: post-open fd canonical 在权威根内且非秘密 → null（放行）", async () => {
+    const fd = openSync(join(ROOT, "src", "a.txt"), "r")
+    try {
+      const ws = authorityFor(ROOT)
+      const violation = await validateOpenFileCanonical(ws, join(ROOT, "src", "a.txt"), fd)
+      expect(violation).toBeNull()
+    } finally {
+      closeSync(fd)
+    }
   })
 
   test("嵌套 .env（src/.env）同样拒绝", async () => {

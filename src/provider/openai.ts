@@ -15,6 +15,13 @@ import type { StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage 
 import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt, providerBackoffWait, recordProviderRetry } from "./retry"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
+import {
+  buildToolProtocolDiagnostic,
+  createToolCallAssembler,
+  formatToolProtocolDiagnostic,
+  validateToolCallInput,
+  type ToolProtocolFailureKind,
+} from "./tool-call-assembler"
 
 interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool"
@@ -260,8 +267,16 @@ export class OpenAIProvider implements LLMProvider {
     if (!response.ok) {
       const text = await response.text().catch(() => "")
       const message = `OpenAI ${response.status}${text ? `: ${text.slice(0, 500)}` : ""}`
+      // TB2-1: 类型化 auth/quota 失败（不再全部落入 truncation 重试账本）。
+      const typedKind: ToolProtocolFailureKind | undefined =
+        response.status === 401 || response.status === 403
+          ? "auth_failure"
+          : response.status === 402 || /quota|insufficient|额度|余额|欠费/i.test(text)
+            ? "quota_failure"
+            : undefined
       throw Object.assign(new Error(message), {
         status: response.status,
+        kind: typedKind,
         response: {
           status: response.status,
           body: parseErrorBody(text),
@@ -270,7 +285,9 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     const textChunks: string[] = []
-    const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+    // TB2-1: 流式 tool call 组装状态机（真增量/累积快照/重叠/交错/repeated id）。
+    const toolAssembler = createToolCallAssembler()
+    const requestId = `openai-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`
     let finishReason: string | null = null
     let sawDoneSentinel = false
     let malformedSseChunk = false
@@ -317,18 +334,11 @@ export class OpenAIProvider implements LLMProvider {
               if (delta.tool_calls) {
                 markUnsafeToRetry(true)
                 for (const tc of delta.tool_calls) {
-                  const existing = toolCalls.get(tc.index)
-                  if (!existing || (tc.id && existing.id && tc.id !== existing.id)) {
-                    toolCalls.set(tc.index, {
-                      id: tc.id ?? "",
-                      name: tc.function?.name ?? "",
-                      arguments: tc.function?.arguments ?? "",
-                    })
-                    continue
-                  }
-                  if (tc.id) existing.id = tc.id
-                  if (tc.function?.name) existing.name = mergeStreamedField(existing.name, tc.function.name)
-                  if (tc.function?.arguments) existing.arguments = mergeStreamedField(existing.arguments, tc.function.arguments)
+                  toolAssembler.feed(tc.index, {
+                    id: tc.id,
+                    name: tc.function?.name,
+                    arguments: tc.function?.arguments,
+                  })
                 }
               }
 
@@ -363,38 +373,85 @@ export class OpenAIProvider implements LLMProvider {
       return
     }
 
-    // Validate every tool call before emitting any of them. A partially parsed
-    // batch must never execute its valid prefix and then fail halfway through.
-    const parsedToolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
-    for (const [, tc] of toolCalls) {
+    // ── 组装 + 校验（fail-closed） ──
+    // 未完整解析的工具调用绝不执行；多工具批次中有一个损坏时，不执行
+    // 任何前面的副作用工具。
+    const assembledCalls = toolAssembler.finish()
+    const parsedToolCalls: Array<{ id: string; name: string; input: Record<string, unknown>; native: boolean }> = []
+    for (const tc of assembledCalls) {
       let input: Record<string, unknown> = {}
+      let native = true
       try {
-        input = JSON.parse(tc.arguments)
+        const parsed: unknown = JSON.parse(tc.arguments)
+        // 工具入参必须是 JSON 对象（数组/标量 = 协议错误）。
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error("tool call arguments must be a JSON object")
+        }
+        input = parsed as Record<string, unknown>
       } catch {
+        native = false
         const repaired = repairToolCall(tc.arguments)
         if (!repaired) {
-          yield { type: "error", data: `provider returned invalid tool call JSON for ${tc.name}` }
+          const diagnostic = buildToolProtocolDiagnostic({
+            requestId,
+            toolName: tc.name,
+            arguments: tc.arguments,
+            fragmentCount: tc.fragmentCount,
+            finishReason,
+            parseFailureKind: "tool_protocol_invalid_json",
+          })
+          yield { type: "error", data: `provider returned invalid tool call JSON for ${tc.name}\n${formatToolProtocolDiagnostic(diagnostic)}` }
           return
         }
         input = repaired
       }
-      parsedToolCalls.push({ id: tc.id, name: tc.name, input })
-    }
-    // GATE-02 (GS-03/GS-05): TRUNCATED is not an error. Tool calls that
-    // parsed before the cut are complete side effects — emit them so the
-    // round executes them instead of discarding (OTS-013 lost every tool
-    // block this way and retried the same doomed request forever). The
-    // kernel continues as a fresh round; no blind generic retry.
-    if (finishReason === "length" || finishReason === "max_tokens") {
-      for (const toolCall of parsedToolCalls) {
-        yield { type: "tool_call", data: toolCall }
+      // 修复后的参数还必须通过该工具的 schema（fail-closed，仅 required 校验）。
+      const schemaCheck = validateToolCallInput(options.tools, tc.name, input)
+      if (!schemaCheck.ok) {
+        const diagnostic = buildToolProtocolDiagnostic({
+          requestId,
+          toolName: tc.name,
+          arguments: tc.arguments,
+          fragmentCount: tc.fragmentCount,
+          finishReason,
+          parseFailureKind: "tool_protocol_invalid_json",
+        })
+        yield { type: "error", data: `provider tool call ${tc.name} missing required fields (${schemaCheck.missing.join(",")})\n${formatToolProtocolDiagnostic(diagnostic)}` }
+        return
       }
-      yield { type: "truncated", data: { stopReason: finishReason, toolCalls: parsedToolCalls.length } }
+      parsedToolCalls.push({ id: tc.id, name: tc.name, input, native })
+    }
+
+    // GATE-02 (GS-03/GS-05): TRUNCATED is not an error — tool calls that
+    // parsed natively before the cut are complete side effects and execute.
+    // TB2-1: 被截断后"勉强补括号"（repair 过）的调用不是完整副作用——
+    // 写入/删除类工具绝不自动执行；批次中任一调用不完整 → 整批不执行。
+    if (finishReason === "length" || finishReason === "max_tokens") {
+      const completeCalls = parsedToolCalls.filter(call => call.native)
+      if (completeCalls.length !== parsedToolCalls.length) {
+        const broken = parsedToolCalls.find(call => !call.native)!
+        const diagnostic = buildToolProtocolDiagnostic({
+          requestId,
+          toolName: broken.name,
+          arguments: "",
+          fragmentCount: 0,
+          finishReason,
+          parseFailureKind: "tool_protocol_incomplete",
+        })
+        // 无 error 事件：这是 GATE-02 的正常截断流——kernel 以新 round 继续，
+        // 不烧 truncation 重试账本；但损坏的调用绝不执行。
+        yield { type: "truncated", data: { stopReason: finishReason, toolCalls: 0, incomplete: formatToolProtocolDiagnostic(diagnostic) } }
+        return
+      }
+      for (const toolCall of completeCalls) {
+        yield { type: "tool_call", data: { id: toolCall.id, name: toolCall.name, input: toolCall.input } }
+      }
+      yield { type: "truncated", data: { stopReason: finishReason, toolCalls: completeCalls.length } }
       return
     }
 
     for (const toolCall of parsedToolCalls) {
-      yield { type: "tool_call", data: toolCall }
+      yield { type: "tool_call", data: { id: toolCall.id, name: toolCall.name, input: toolCall.input } }
     }
 
     // Emit token usage
@@ -412,7 +469,7 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     const finalText = textChunks.join("")
-    if (finalText && toolCalls.size === 0) yield { type: "done", data: finalText }
+    if (finalText && assembledCalls.length === 0) yield { type: "done", data: finalText }
   }
 }
 
@@ -421,14 +478,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const NORMAL_OPENAI_FINISH_REASONS = new Set<string>(["stop", "tool_calls", "function_call"])
-
-/** Compatible relays vary between true deltas and cumulative snapshots. */
-function mergeStreamedField(current: string, incoming: string): string {
-  if (!current) return incoming
-  if (incoming === current || current.endsWith(incoming)) return current
-  if (incoming.startsWith(current)) return incoming
-  return current + incoming
-}
 
 function parseErrorBody(text: string): Record<string, unknown> | undefined {
   const trimmed = text.trim()

@@ -19,6 +19,9 @@ export function isNonRetryableProviderStreamError(error: string): boolean {
   // request was the OTS-013 loop.
   return /stop_reason=max_tokens|finish_reason=(length|max_tokens)/i.test(error)
     || /^(auth|client|quota)(?:\s|:)/i.test(error)
+    // TB2-1: 工具协议/SSE/传输中断错误不重试同一请求（受约束恢复由
+    // tool_protocol_invalid_json 分支处理，其余直接 break，不进 truncation 账本）。
+    || /tool-protocol:|malformed SSE|ended unexpectedly without finish_reason/i.test(error)
     || /insufficient[_\s-]*quota|quota[_\s-]*(?:exceeded|insufficient)|(?:exceeded|insufficient)[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|额度|余额|欠费|账户余额|资源包|套餐/i.test(error)
 }
 
@@ -26,21 +29,25 @@ export function isNonRetryableProviderStreamError(error: string): boolean {
  * Provider error events historically default to retryable unless they carry a
  * known auth/client/quota marker.
  */
-export function failureFromProviderEvent(message: string): ProviderFailure {
+export function failureFromProviderEvent(message: string, kind?: string): ProviderFailure {
   return {
     message,
     retryable: !isNonRetryableProviderStreamError(message),
     yielded: true,
+    kind,
   }
 }
 
 /** Thrown failures use the provider transport classifier. */
 export function failureFromProviderException(error: unknown): ProviderFailure {
   const classified = classifyProviderError(error)
+  const record = isRecord(error) ? error : {}
   return {
     message: error instanceof Error ? error.message : String(error),
     retryable: classified.retryable,
     yielded: true,
+    // TB2-1: 类型化失败（auth_failure / quota_failure 等）随 error 对象携带。
+    kind: typeof record.kind === "string" ? record.kind : undefined,
   }
 }
 
@@ -63,6 +70,22 @@ export interface ProviderFailureRecoveryDecision {
   text?: string
   emitError: boolean
   trace: Record<string, unknown>
+  /** TB2-1: 受约束恢复——下一轮压低 thinking budget（只重发一个工具调用）。 */
+  reduceThinking?: boolean
+}
+
+/** TB2-1: 工具协议受约束恢复提示——禁止重新规划、只重发一个工具调用。 */
+export function constrainedToolRecoveryPrompt(): ProviderMessage {
+  return {
+    role: "user",
+    content: [
+      "## 工具调用协议错误（受约束恢复）",
+      "上一条回复中的工具调用参数不是合法 JSON（或缺少必填字段），所有工具均未执行。",
+      "本轮只做一件事：**只重发一个工具调用**，参数必须是合法 JSON 并包含全部必填字段。",
+      "禁止重新规划，禁止长篇解释，禁止输出多余文本。",
+      "若你仍无法生成合法 JSON，请直接说明无法继续——不要再次尝试。",
+    ].join("\n"),
+  }
 }
 
 /**
@@ -74,6 +97,43 @@ export function decideProviderFailureRecovery(
   input: ProviderFailureRecoveryInput,
 ): ProviderFailureRecoveryDecision {
   const { failure } = input
+
+  // TB2-1: invalid tool JSON 只允许一次受约束恢复（tool 类 ledger 上限 = 1）：
+  // 降低 thinking budget、禁止重新规划、只重发一个工具调用；第二次仍失败
+  // 立即 provider_failure，不再烧完整上下文和剩余轮次。
+  if (failure.kind === "tool_protocol_invalid_json" || /invalid tool call JSON/i.test(failure.message)) {
+    // TB2-1: run 级指纹（非 per-round）——整次运行最多恢复一次，
+    // 第二次仍失败立即 provider_failure，不烧完整上下文和剩余轮次。
+    const fingerprint = "tool_protocol:run"
+    const ledgerAllows = !input.retryLedger || input.retryLedger.canRetry("tool", fingerprint)
+    if (ledgerAllows && input.round + 1 < input.maxRounds) {
+      input.retryLedger?.record("tool", fingerprint)
+      return {
+        action: "continue",
+        reduceThinking: true,
+        status: "provider-tool-protocol: constrained recovery (single tool call re-send)",
+        messages: [constrainedToolRecoveryPrompt()],
+        emitError: !failure.yielded,
+        trace: {
+          gate: "provider_tool_protocol",
+          decision: "continue",
+          kind: failure.kind ?? "tool_protocol_invalid_json",
+        },
+      }
+    }
+    return {
+      action: "break",
+      status: "provider-tool-protocol: failed after one constrained recovery",
+      messages: [],
+      emitError: !failure.yielded,
+      trace: {
+        gate: "provider_tool_protocol",
+        decision: "blocked",
+        kind: failure.kind ?? "tool_protocol_invalid_json",
+      },
+    }
+  }
+
   if (!failure.retryable) {
     return {
       action: "break",
@@ -181,4 +241,8 @@ export function decideProviderFailureRecovery(
       error: failure.message,
     },
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
 }

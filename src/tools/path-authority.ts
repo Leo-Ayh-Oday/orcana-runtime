@@ -78,8 +78,9 @@ export function isWithin(root: string, candidate: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
 }
 
-/** realpath of the deepest ancestor of `candidate` that exists on disk. */
-function deepestExistingRealpath(candidate: string): string | undefined {
+/** realpath of the deepest ancestor of `candidate` that exists on disk.
+ *  IC01: 导出供 WorkspaceIoAuthority 复用 —— 全库唯一的 symlink 现实检查。 */
+export function deepestExistingRealpath(candidate: string): string | undefined {
   let current = candidate
   for (let guard = 0; guard < 256; guard++) {
     if (existsSync(current)) {

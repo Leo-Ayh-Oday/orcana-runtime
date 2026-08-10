@@ -149,6 +149,8 @@ export async function* runRound(
         : "execution",
     // GATE-03: 无进展 streak >= 2 → ACTION_FIRST（思考压到 2K，本轮必须动工具）。
     actionFirst: ctx.progressGovernor.consecutiveNoProgress >= 2,
+    // TB2-1: 工具协议受约束恢复——thinking 预算进一步压低（只重发一个调用）。
+    protocolRecovery: execution.protocolRecoveryActive,
     autoMaxSignals: { consecutiveErrors: execution.consecutiveErrors, modifiedFiles: execution.modifiedFileCount },
   })
   const thinking = thinkingDecision.thinking
@@ -585,7 +587,14 @@ export async function* runRound(
     yield stream({ type: "status", data: recovery.status })
     if (recovery.text) yield stream({ type: "text", data: recovery.text })
     yield trace("gate_decision", recovery.trace)
-    if (recovery.action === "continue") return { kind: "continue" }
+    if (recovery.action === "continue") {
+      // TB2-1: 工具协议错误受约束恢复——下一轮压低 thinking budget（重发
+      // 单一工具调用，禁止重新规划），恢复结束立即复位。
+      if (recovery.reduceThinking) {
+        yield patch({ execution: { protocolRecoveryActive: true } })
+      }
+      return { kind: "continue" }
+    }
     return { kind: "break", reason: "provider_failure" }
   }
 
@@ -771,6 +780,11 @@ export async function* runRound(
     projectRoot: ctx.options.projectRoot,
   }))
   if (batchResult.aborted) return { kind: "return", reason: "tool_batch_aborted" }
+
+  // TB2-1: 受约束恢复结束——本轮成功执行了工具调用，复位 thinking 降级。
+  if (execution.protocolRecoveryActive && completedToolCalls.length > 0) {
+    yield patch({ execution: { protocolRecoveryActive: false } })
+  }
 
   // L5: VerificationCoordinator context — shared across the verification phase.
   const verificationCtx = {

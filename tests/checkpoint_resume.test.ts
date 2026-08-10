@@ -241,4 +241,46 @@ describe("RC-11 D4 CHECKPOINT_RESUME_USED", () => {
     expect(snapshot.total).toBe(3)
     expect(snapshot.steps.find(s => s.id === "2")!.status).toBe("running")
   })
+
+  test("TB2-1: 「继续」后 tracker 不从 0/N 重新开始（done 计数延续）", async () => {
+    // 第一次 run：检查点 round=2（已 done 1 步）。
+    const events1 = await collect(agentLoop(RESUME_PROMPT, {
+      provider: new CapturingProvider(),
+      model: "test",
+      tools: probeTool(),
+      resumeFromCheckpoint: makeCheckpoint(),
+      contextMapPolicy: "off",
+      maxRounds: 2,
+    }))
+    const progress1 = events1.filter(e => e.type === "task_progress")
+    const snapshot1 = progress1[0]!.data as { done: number; total: number; steps: Array<{ id: string; status: string }> }
+    expect(snapshot1.done).toBe(1)
+    expect(snapshot1.total).toBe(3)
+
+    // 第二次 run：继续用同一 checkpoint（模拟用户再次「继续」）——
+    // tracker 必须从 1/3 继续，而不是从 0/3 重新规划。
+    const events2 = await collect(agentLoop(RESUME_PROMPT, {
+      provider: new CapturingProvider(),
+      model: "test",
+      tools: probeTool(),
+      resumeFromCheckpoint: makeCheckpoint(),
+      contextMapPolicy: "off",
+      maxRounds: 2,
+    }))
+    const progress2 = events2.filter(e => e.type === "task_progress")
+    const snapshot2 = progress2[0]!.data as {
+      done: number
+      total: number
+      steps: Array<{ id: string; status: string }>
+      currentNode: string
+    }
+    expect(snapshot2.done).toBe(1) // 非 0
+    expect(snapshot2.total).toBe(3)
+    expect(snapshot2.steps.find(s => s.id === "1")!.status).toBe("done")
+    expect(snapshot2.steps.find(s => s.id === "2")!.status).toBe("running")
+    // 完成的步骤不被重置。
+    const all = events2.filter(e => e.type === "task_progress")
+    const first = all[0]!.data as { steps: Array<{ id: string; status: string }> }
+    expect(first.steps.filter(s => s.status === "done").length).toBeGreaterThanOrEqual(1)
+  })
 })

@@ -93,7 +93,7 @@ export type HarnessDisplayKind =
 
 /** The event union surfaced by AgentHarness.run()/resume(). */
 export type HarnessEvent =
-  | EventEnvelope<{ status: RunStatus }>
+  | EventEnvelope<{ status: RunStatus; checkpointId?: string; reason?: string }>
   | EventEnvelope<{ text: string }>
   | EventEnvelope<{ toolName: string; content: string; success: boolean; toolCallId?: string }>
   | EventEnvelope<{ usage: unknown }>

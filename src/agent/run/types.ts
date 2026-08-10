@@ -11,7 +11,7 @@ import type { UILanguage } from "../language"
 import type { UsageStats } from "../loop-types"
 import type { PlanStore } from "./plan-store"
 
-export type AgentRunStopReason = "completed" | "aborted" | "error" | "blocked" | "stalled"
+export type AgentRunStopReason = "completed" | "aborted" | "error" | "blocked" | "stalled" | "paused"
 
 export interface AgentRunLifecycleState {
   startedAt: number
@@ -59,7 +59,12 @@ export interface AgentRunState {
     consecutiveErrors: number
     requestedMaxThinking: boolean
     runtimeSelfEditFiles: Set<string>
+    /** TB2-1: 观察过（读/发现）的文件——与 modifiedFiles 分开，只读不算修改。 */
     taskFiles: Set<string>
+    /** TB2-1: 写工具实际成功修改的文件（完成判定/checkpoint/报告的权威来源）。 */
+    modifiedFiles: Set<string>
+    /** TB2-1: 工具协议错误受约束恢复中——下一轮压低 thinking budget。 */
+    protocolRecoveryActive: boolean
     lastToolNames: string[]
     rippleBlockActive: boolean
   }
@@ -116,6 +121,8 @@ export interface ProviderFailure {
   message: string
   retryable: boolean
   yielded: boolean
+  /** TB2-1: 类型化工具协议/传输失败分类（tool_protocol_invalid_json 等）。 */
+  kind?: string
 }
 
 export interface RoundState {

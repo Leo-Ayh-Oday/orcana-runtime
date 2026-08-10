@@ -74,6 +74,8 @@ export type LoopDecision =
         | "self_edit" // runtime self-edit gate break
         | "verified_write" // completion gate text verified stop
         | "progress_stalled" // GATE-03: ProgressGovernor — 4 no-progress rounds
+      /** TB2-1: finalizeRun 在 paused/blocked/stalled 终态强制保存的 checkpoint id。 */
+      checkpointId?: string
     }
   | {
       kind: "return"

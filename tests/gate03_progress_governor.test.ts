@@ -122,6 +122,23 @@ describe("ProgressGovernor 状态机（GS-P2）", () => {
     expect(rp).toContain("仅此一次")
     expect(rp).toContain("不要重复")
   })
+
+  test("TB2-1: RECON→FINALIZE 无真实通过证据 → 不算 control 进展", () => {
+    const governor = new ProgressGovernor()
+    // 首轮 RECON 基准。
+    governor.evaluate(roundInput({ round: 1 }))
+    // DONE 状态（无任何验证证据）→ 阶段切到 FINALIZE 但不算 control 进展。
+    const bare = governor.evaluate(roundInput({ round: 2, agentState: AgentState.DONE }))
+    expect(governor.consecutiveNoProgress).toBe(1)
+    expect(bare.delta?.effective).toBe(false)
+    // 有真实通过证据的 FINALIZE 才算进展（阶段转换 + evidence）。
+    governor.evaluate(roundInput({
+      round: 3,
+      agentState: AgentState.DONE,
+      verificationResults: [{ kind: "test", command: "bun test", passed: true } as never],
+    }))
+    expect(governor.consecutiveNoProgress).toBe(0)
+  })
 })
 
 describe("状态机 STALLED 终态", () => {

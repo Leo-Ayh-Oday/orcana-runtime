@@ -45,7 +45,8 @@ export function mapDecisionToOutcome(
             outcome: { kind: "waiting", interruptId: "plan-approval", checkpointId: "" },
           }
         case "round_budget":
-          return paused("round_budget")
+          // TB2-1: round_budget 是 paused（budget_exhausted），不是完成。
+          return paused("round_budget", decision.checkpointId)
         case "context_budget":
           return blocked("context_budget", "Context budget hard block")
         case "orchestrator_blocked":
@@ -104,10 +105,10 @@ export function mapDecisionToOutcome(
   }
 }
 
-function paused(reason: string): MappedOutcome {
+function paused(reason: string, checkpointId = ""): MappedOutcome {
   return {
     status: "paused",
-    outcome: { kind: "paused", checkpointId: "", reason },
+    outcome: { kind: "paused", checkpointId, reason },
   }
 }
 

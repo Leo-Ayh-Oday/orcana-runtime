@@ -330,7 +330,8 @@ describe("Agent loop L0 behavior baseline", () => {
 
       expect(provider.calls).toBe(1)
       expect(events.filter(event => event.type === "clarification_ready")).toHaveLength(1)
-      expect(stopReasons).toEqual(["aborted"])
+      // TB2-1: clarification 是等待用户输入的暂停态（paused），不是 aborted。
+      expect(stopReasons).toEqual(["paused"])
       expect(dispose).toHaveBeenCalledTimes(1)
       assertFallbackRuntimeIsClean()
     } finally {

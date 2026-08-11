@@ -54,6 +54,7 @@ import {
   buildContextMap,
   hybridLocate,
   loadProjectConstitution,
+  scanRepoStructure,
 } from "../../src/context/context-map"
 import { fingerprintContent } from "../../src/file-state"
 import type { ToolExecutionContext } from "../../src/tools/registry"
@@ -879,6 +880,67 @@ describe("IC01-R3 ContextMap authority fail-closed 与 top-K 输入归一化", (
       const normal = hybridLocate(root, { userRequest: "maxkmarker", maxFiles: 2 }, { workspace: ws })
       expect(normal.primaryFiles.length).toBeGreaterThan(0)
       expect(normal.primaryFiles.length + normal.secondaryFiles.length).toBeLessThanOrEqual(2)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── IC01-R4: ContextMap 无 authority 零元数据泄漏 ──
+
+describe("IC01-R4 CONTEXT_METADATA_WITHOUT_AUTHORITY=0 —— 无 authority 零元数据泄漏", () => {
+  test("scanRepoStructure 在任何 existsSync/stat/readdir/readJsonFile 前返回确定性空结构", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-ic01-r4-meta-"))
+    try {
+      mkdirSync(join(root, "src"), { recursive: true })
+      mkdirSync(join(root, "tests"), { recursive: true })
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "x", main: "dist/index.js", scripts: { build: "tsc" } }), "utf-8")
+      writeFileSync(join(root, "bun.lock"), "", "utf-8")
+      writeFileSync(join(root, "tsconfig.json"), "{}", "utf-8")
+      writeFileSync(join(root, "src", "index.ts"), "export const x = 1\n", "utf-8")
+      writeFileSync(join(root, ".env"), "META-SECRET=1", "utf-8")
+      const session = new ContextMapReadSession({})
+      const structure = scanRepoStructure(root, { session })
+      // 零元数据泄漏：sourceRoots / testRoots / configFiles / entrypoints /
+      // packageManager / workspaces / moduleHints 全部确定性空。
+      expect(structure.packageManager).toBe("unknown")
+      expect(structure.workspaces).toEqual([])
+      expect(structure.sourceRoots).toEqual([])
+      expect(structure.testRoots).toEqual([])
+      expect(structure.configFiles).toEqual([])
+      expect(structure.entrypoints).toEqual([])
+      expect(structure.moduleHints).toEqual([])
+      expect(session.bytesRead).toBe(0)
+      // loadProjectConstitution 同样零泄漏。
+      const constitution = loadProjectConstitution(root, { session })
+      expect(constitution.importantFiles).toEqual([])
+      // 对照：显式 authority 时元数据正常（空结构只源于无 authority，而非文件不存在）。
+      const ws = createWorkspaceIoAuthority(root)
+      const normal = scanRepoStructure(root, { workspace: ws })
+      expect(normal.sourceRoots).toContain("src")
+      expect(normal.testRoots).toContain("tests")
+      expect(normal.configFiles).toContain("package.json")
+      expect(normal.entrypoints).toContain("dist/index.js")
+      expect(normal.packageManager).toBe("bun")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("无 ALS 的 buildContextMap 结果中不出现任何文件路径/元数据（含 .env 存在性）", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-ic01-r4-noleak-"))
+    try {
+      mkdirSync(join(root, "src"), { recursive: true })
+      writeFileSync(join(root, "package.json"), '{"name":"x"}', "utf-8")
+      writeFileSync(join(root, ".env"), "NOPE-SECRET=1", "utf-8")
+      writeFileSync(join(root, "src", "m.ts"), "NOPE-MARKER", "utf-8")
+      const map = buildContextMap(root, { taskId: "t", userRequest: "NOPE-MARKER" })
+      const serialized = JSON.stringify(map)
+      expect(serialized).not.toContain("src/")
+      expect(serialized).not.toContain("package.json")
+      expect(serialized).not.toContain("NOPE-MARKER")
+      expect(serialized).not.toContain("NOPE-SECRET")
+      expect(serialized).not.toContain("bun")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -236,6 +236,18 @@ export function loadProjectConstitution(
   options: ContextMapReadOptions = {},
 ): ProjectConstitution {
   const session = options.session ?? new ContextMapReadSession(options)
+  const empty = {
+    architectureNotes: [] as string[],
+    codingRules: [] as string[],
+    forbiddenActions: [] as string[],
+    buildCommands: [] as string[],
+    testCommands: [] as string[],
+    knownPitfalls: [] as string[],
+    importantFiles: [] as string[],
+  }
+  // IC01-R4: 无 authority 时零元数据泄漏 —— 在任何 existsSync / stat / read 之前
+  // 直接返回确定性空结构（不得泄漏文件存在性/文件名）。
+  if (session.authorityMissing) return empty
   const notes: string[] = []
   const rules: string[] = []
   const forbidden: string[] = []
@@ -344,6 +356,19 @@ export function scanRepoStructure(
   options: ContextMapReadOptions = {},
 ): RepoStructureMap {
   const session = options.session ?? new ContextMapReadSession(options)
+  // IC01-R4: 无 authority 时零元数据泄漏 —— 在任何 readJsonFile、existsSync、
+  // stat、readdir、detectPackageManager 之前直接返回确定性空结构。
+  if (session.authorityMissing) {
+    return {
+      packageManager: "unknown",
+      workspaces: [],
+      sourceRoots: [],
+      testRoots: [],
+      configFiles: [],
+      entrypoints: [],
+      moduleHints: [],
+    }
+  }
   const packageJson = readJsonFile(resolve(root, "package.json"), session, root) as { workspaces?: string[] | { packages?: string[] }; main?: string; bin?: Record<string, string> | string } | null
   const workspaces = Array.isArray(packageJson?.workspaces)
     ? packageJson.workspaces

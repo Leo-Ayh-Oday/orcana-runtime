@@ -14,12 +14,27 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs"
 import { open, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { BoundedFileReader, FileReadError } from "../../src/runtime/io/bounded-file-reader"
 import { fingerprintContent } from "../../src/file-state"
+
+/** ext4 的 mtime/ctime 是 jiffy 粒度 —— 单次写入可能与 open 落在同一 jiffy，
+ *  时间戳比较会不确定。重复同内容写入直到 mtime 越过下一个 jiffy 边界，
+ *  保证最终写入后的 mtime 与 open 时（更早 jiffy）不同 → SNAPSHOT_CHANGED
+ *  判定确定性。 */
+async function rewriteUntilTick(path: string, content: string): Promise<void> {
+  writeFileSync(path, content)
+  const first = statSync(path).mtimeMs
+  for (let i = 0; i < 200; i++) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+    writeFileSync(path, content)
+    if (statSync(path).mtimeMs !== first) return
+  }
+  throw new Error(`mtime did not advance for ${path}`)
+}
 
 const GIB = 1024 * 1024 * 1024
 const MIB = 1024 * 1024
@@ -328,25 +343,32 @@ describe("IC01-R3 readAtomicSnapshot —— 选区与全文件哈希来自同一
     expect(snap.wholeFileSha256).toBe(fingerprintContent("whole content line\n").sha256)
   })
 
-  test("两次路径切换攻击：validateOpen 只调用一次；内容/哈希来自打开时的原文件（绝不二次按路径 open）", async () => {
+  test("两次路径切换攻击：validateOpen 只调用一次；路径切换 + 同大小改写 → SNAPSHOT_CHANGED fail closed（绝不二次按路径 open、绝不返回混版成功结果）", async () => {
     const p = join(ROOT, "snap-swap.txt")
     writeFileSync(p, "original-content-1\nsecond line\n", "utf-8")
     const reader = new BoundedFileReader()
     let validateCalls = 0
-    const snap = await reader.readAtomicSnapshot(p, { start: 0, length: 9 }, {
-      validateOpen: async () => {
-        validateCalls++
-        // 模拟 check→read 窗口内的路径切换：rename 原文件并在原路径放新文件。
-        renameSync(p, p + ".moved")
-        writeFileSync(p, "REPLACED-CONTENT-XXX", "utf-8")
-        return null
-      },
-    })
-    // 单次 open —— 若实现先读后关、再按路径二次 open 做哈希，这里会读
-    // 到 REPLACED 内容（哈希不一致）且 validateCalls=2。
+    let caught: unknown
+    try {
+      await reader.readAtomicSnapshot(p, { start: 0, length: 9 }, {
+        validateOpen: async () => {
+          validateCalls++
+          // 模拟 check→read 窗口内的路径切换：rename 原文件并在原路径放新文件；
+          // 同时对被打开文件（已改名）做同大小原地改写 —— 身份变化必须被
+          // 最终 fstat（bigint mtimeNs/ctimeNs）捕获 → fail closed。
+          renameSync(p, p + ".moved")
+          writeFileSync(p, "REPLACED-CONTENT-XXX", "utf-8")
+          await rewriteUntilTick(p + ".moved", "R".repeat(31)) // 同大小 31
+          return null
+        },
+      })
+    } catch (e) {
+      caught = e
+    }
+    // 单次 open —— 若实现先读后关、再按路径二次 open 做哈希，validateCalls=2。
     expect(validateCalls).toBe(1)
-    expect(snap.buffer.toString("utf-8")).toBe("original-")
-    expect(snap.wholeFileSha256).toBe(fingerprintContent("original-content-1\nsecond line\n").sha256)
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
   })
 
   test("同 fd 哈希期间 append（size 增长）→ SNAPSHOT_CHANGED fail closed", async () => {
@@ -387,21 +409,27 @@ describe("IC01-R3 readAtomicSnapshot —— 选区与全文件哈希来自同一
     expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
   })
 
-  test("同 fd 哈希期间 replace（路径被换）→ 读取来自已验证句柄：返回原版本内容与哈希（选区=哈希通过版本）", async () => {
+  test("同 fd 哈希期间 replace（路径被换 + 同大小改写）→ SNAPSHOT_CHANGED fail closed（IC01-R4：身份变化必须 fail closed）", async () => {
     const p = join(ROOT, "snap-replace.txt")
     writeFileSync(p, "ORIGINAL-VERSION", "utf-8")
     const reader = new BoundedFileReader()
-    const snap = await reader.readAtomicSnapshot(p, { start: 0, length: 8 }, {
-      validateOpen: async () => {
-        // 在 validateOpen 之后、读取之前替换路径（fd 保持原文件）。
-        // 返回内容必须是打开时已验证的原版本 —— 与哈希一致。
-        renameSync(p, p + ".old")
-        writeFileSync(p, "NEW-VERSION-AT-PATH", "utf-8")
-        return null
-      },
-    })
-    expect(snap.buffer.toString("utf-8")).toBe("ORIGINAL")
-    expect(snap.wholeFileSha256).toBe(fingerprintContent("ORIGINAL-VERSION").sha256)
+    let caught: unknown
+    try {
+      await reader.readAtomicSnapshot(p, { start: 0, length: 8 }, {
+        validateOpen: async () => {
+          // 在 validateOpen 之后、读取之前替换路径（fd 保持原 inode），并对
+          // 被打开文件做同大小原地改写 —— 最终 fstat 必须 fail closed。
+          renameSync(p, p + ".old")
+          writeFileSync(p, "NEW-VERSION-AT-PATH", "utf-8")
+          await rewriteUntilTick(p + ".old", "X".repeat(16)) // 同大小 16
+          return null
+        },
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
   })
 
   test("全文件哈希预算不足（size > budget）→ hashBudgeted=false，且不做无意义读取", async () => {
@@ -465,5 +493,134 @@ describe("IC01-R3 readAtomicSnapshot —— 选区与全文件哈希来自同一
     expect(result.wholeFileHashBudgeted).toBe(false)
     expect(result.wholeFileSha256).toBeNull()
     expect(result.text.length).toBeGreaterThan(0)
+  })
+})
+
+describe("IC01-R4 单遍快照 —— 同一批 chunk 消费（READ_OFFSET_DUPLICATION / POST_HASH_WINDOW_REREAD / SAME_SIZE / EXACT_BUDGET）", () => {
+  test("READ_OFFSET_DUPLICATION=0：expectedHash 路径每个文件字节最多读取一次（单遍单调连续，无 offset 0 重读）", async () => {
+    const p = join(ROOT, "r4-single-pass.txt")
+    const size = 100 * 1024
+    const content = "head-line\n" + "z".repeat(size - 10)
+    writeFileSync(p, content, "utf-8")
+    const reader = new BoundedFileReader({ chunkSize: 4096 })
+    const offsets: number[] = []
+    let total = 0
+    const snap = await reader.readAtomicSnapshot(p, { start: 5000, length: 300 }, {
+      onChunk: (bytesRead) => {
+        offsets.push(total)
+        total += bytesRead
+      },
+    })
+    // 单遍：chunk 数 == ceil(size/chunkSize)，偏移严格递增且连续，总字节 == size。
+    expect(offsets.length).toBe(Math.ceil(size / 4096))
+    expect(total).toBe(size)
+    for (let i = 0; i < offsets.length; i++) {
+      expect(offsets[i]).toBe(i * 4096)
+    }
+    // 选区内容与哈希来自同一遍字节流。
+    expect(snap.buffer.toString("utf-8")).toBe(content.slice(5000, 5300))
+    expect(snap.wholeFileSha256).toBe(fingerprintContent(content).sha256)
+    expect(snap.hashBudgeted).toBe(true)
+  })
+
+  test("POST_HASH_WINDOW_REREAD=0：readLineWindow 行定位/窗口捕获/哈希消费同一批 chunk（含 expectedHash 续扫）", async () => {
+    const p = join(ROOT, "r4-win-pass.txt")
+    const size = 120 * 1024
+    const content = "first line\nsecond line\n" + "m".repeat(size - 23)
+    writeFileSync(p, content, "utf-8")
+    const reader = new BoundedFileReader({ chunkSize: 4096 })
+    const offsets: number[] = []
+    let total = 0
+    const result = await reader.readLineWindow(p, 0, 2, {
+      wholeFileHashBudgetBytes: 1024 * 1024,
+      onChunk: (bytesRead) => {
+        offsets.push(total)
+        total += bytesRead
+      },
+    })
+    // 扫描 + 哈希续扫 = 恰好 ceil(size/chunkSize) 个连续 chunk —— 无窗口重读。
+    expect(offsets.length).toBe(Math.ceil(content.length / 4096))
+    expect(total).toBe(content.length)
+    expect(result.text).toBe("first line\nsecond line")
+    expect(result.wholeFileSha256).toBe(fingerprintContent(content).sha256)
+    expect(result.wholeFileHashBudgeted).toBe(true)
+
+    // 无 expectedHash：窗口在首个 chunk 内定位并捕获 —— 只有 1 次读取。
+    const offsets2: number[] = []
+    let total2 = 0
+    const r2 = await reader.readLineWindow(p, 0, 2, {
+      onChunk: (bytesRead) => {
+        offsets2.push(total2)
+        total2 += bytesRead
+      },
+    })
+    expect(offsets2.length).toBe(1)
+    expect(r2.text).toBe("first line\nsecond line")
+  })
+
+  test("SAME_SIZE_INPLACE_MUTATION：扫描期间同大小原地改写 → SNAPSHOT_CHANGED（readAtomicSnapshot）", async () => {
+    const p = join(ROOT, "r4-same-size-snap.txt")
+    const content = "A".repeat(50 * 1024)
+    writeFileSync(p, content, "utf-8")
+    const reader = new BoundedFileReader({ chunkSize: 4096 })
+    let caught: unknown
+    try {
+      await reader.readAtomicSnapshot(p, { start: 0, length: 100 }, {
+        onChunk: async (_bytes, index) => {
+          if (index === 2) {
+            // 同 inode、同大小、内容不同的原地改写（mtime 前进到新 jiffy）。
+            await rewriteUntilTick(p, "B".repeat(content.length))
+          }
+        },
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
+  })
+
+  test("SAME_SIZE_INPLACE_MUTATION：扫描期间同大小原地改写 → SNAPSHOT_CHANGED（readLineWindow + expectedHash 续扫）", async () => {
+    const p = join(ROOT, "r4-same-size-win.txt")
+    const content = "L0\n" + "A".repeat(50 * 1024)
+    writeFileSync(p, content, "utf-8")
+    const reader = new BoundedFileReader({ chunkSize: 4096 })
+    let caught: unknown
+    try {
+      await reader.readLineWindow(p, 0, 1, {
+        wholeFileHashBudgetBytes: 1024 * 1024,
+        onChunk: async (_bytes, index) => {
+          if (index === 2) {
+            await rewriteUntilTick(p, "L0\n" + "B".repeat(50 * 1024))
+          }
+        },
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
+  })
+
+  test("EXACT_BUDGET_EMPTY_SELECTION=0：文件大小恰好等于哈希预算 → 正常返回请求选区（非空）", async () => {
+    const p = join(ROOT, "r4-exact-budget.txt")
+    const size = 1024 * 1024 // 1 MiB
+    const fd = await open(p, "w")
+    try {
+      await fd.write("exact-budget-head\n", 0, "utf-8")
+      await fd.truncate(size)
+    } finally {
+      await fd.close()
+    }
+    const reader = new BoundedFileReader({ operationBudgetBytes: size }) // 预算 == 文件大小
+    const snap = await reader.readAtomicSnapshot(p, { start: 0, length: 18 })
+    expect(snap.hashBudgeted).toBe(true)
+    expect(snap.byteCount).toBe(18)
+    expect(snap.buffer.toString("utf-8")).toBe("exact-budget-head\n")
+    expect(snap.wholeFileSha256.length).toBe(64)
+    // full 快照同样正常返回（内容覆盖预算内全部字节）。
+    const full = await reader.readAtomicSnapshot(p, null)
+    expect(full.hashBudgeted).toBe(true)
+    expect(full.byteCount).toBe(size)
   })
 })

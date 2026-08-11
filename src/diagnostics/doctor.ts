@@ -16,7 +16,7 @@ import { loadConfig, readGlobalConfig, listProviderIds } from "../config/config-
 import { globalConfigPath } from "../config/paths"
 import { diagnoseModelConfiguration } from "../config/diagnostics"
 import { detectCapabilities } from "../sandbox/capability"
-import { probeLinuxCapabilities, capabilitiesDigest } from "../runtime/linux/capability-probe"
+import { probeLinuxCapabilities, capabilitiesDigest, probePodmanStorageDriver } from "../runtime/linux/capability-probe"
 import { loadMCPConfig, getEnabledServers, validateServerConfig } from "../mcp/config"
 import type { ProviderConfig } from "../config/config-schema"
 
@@ -206,6 +206,7 @@ function checkLinuxFoundation(): DoctorCheck {
     return { id: "linux-foundation", label: "Linux 执行底座", status: "warn", detail: "非 Linux 平台 —— 底座未启用（Windows 沿用既有路径）" }
   }
   const caps = probeLinuxCapabilities()
+  probePodmanStorageDriver()
   const parts: string[] = []
   parts.push(`cgroup v2 ${caps.cgroup.version === 2 ? "✓" : "✗"}${caps.cgroup.delegated ? "（已委托）" : "（未委托）"}`)
   parts.push(`bubblewrap ${caps.bubblewrap.available ? (caps.bubblewrap.unprivilegedUsable ? "✓" : "✗ 无用户命名空间") : "✗"}`)
@@ -213,6 +214,7 @@ function checkLinuxFoundation(): DoctorCheck {
   parts.push(`Landlock ${caps.landlock.available ? `✓ ABI ${caps.landlock.abi}` : "✗"}`)
   parts.push(`seccomp ${caps.seccomp.available ? "✓" : "✗"}`)
   parts.push(`capability digest ${capabilitiesDigest(caps)}`)
+  if (caps.podman.storageDriver) parts.push(`podman storage ${caps.podman.storageDriver}`)
   const degraded = caps.degradationReasons.length > 0
   return {
     id: "linux-foundation",

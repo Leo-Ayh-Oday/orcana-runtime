@@ -56,10 +56,12 @@ function openValidatorFor(
 
 /** IC01: 有界预读（write/edit/multi_edit/edit_symbol 共享）——
  *  UNBOUNDED_RUNTIME_FILE_READ = 0：写路径预读同样服从 maxFileBytes，
- *  超限文件 fail closed（完整读取一个 1 GiB 仓库文件重新引入原问题）。 */
+ *  超限文件 fail closed（完整读取一个 1 GiB 仓库文件重新引入原问题）。
+ *  IC01-R2: 预读同样接入 open 后 fd canonical 校验（fail closed）。 */
 async function boundedPreRead(
   p: string,
   signal: AbortSignal | undefined,
+  validateOpen?: (fd: number) => Promise<string | null>,
 ): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
   try {
     const info = WORKSPACE_FILE_READER.statSync(p)
@@ -69,7 +71,7 @@ async function boundedPreRead(
         reason: `FILE_TOO_LARGE_FOR_SAFE_EDIT: ${p} is ${info.size} bytes (cap ${readCapBytes()}) — bounded edits refuse to pre-read beyond the cap; use read_file with range/selector instead`,
       }
     }
-    const full = await WORKSPACE_FILE_READER.readFile(p, { signal })
+    const full = await WORKSPACE_FILE_READER.readFile(p, { signal, validateOpen })
     if (full.truncated) {
       return {
         ok: false,
@@ -376,7 +378,11 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
       if (range.binary) return binaryFileResult(path, range)
       const selected = range.buffer.toString("utf-8").split("\n").join("\n")
       const fingerprint = fingerprintContent(range.buffer)
-      if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
+      // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 绝不比较 range 选区哈希。
+      if (expectedHash) {
+        const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
+        if (blocked) return blocked
+      }
       const fileState = recordRuntimeFileRead({
         path: p,
         range: { kind: "selector" as never },
@@ -403,7 +409,11 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
       if (full.binary) return binaryFileResult(path, full)
       const content = full.buffer.toString("utf-8")
       const fingerprint = fingerprintContent(full.buffer)
-      if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
+      // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 绝不比较选区哈希。
+      if (expectedHash) {
+        const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
+        if (blocked) return blocked
+      }
       const span = findSymbolSpan(content, selector.name)
       if (!span) return Result.fail(`Symbol not found: ${selector.name} in ${path}`)
       const lines = content.split("\n")
@@ -471,7 +481,12 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
       const fingerprint = window.wholeFileSha256
         ? { sha256: window.wholeFileSha256, mtimeMs: info.mtimeMs, size: info.size }
         : fingerprintContent(Buffer.from(window.text, "utf-8"))
-      if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
+      // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 超限文件的窗口哈希
+      // 绝不冒充全文件哈希；预算内流式计算全文件哈希，超出则结构化拒绝。
+      if (expectedHash) {
+        const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
+        if (blocked) return blocked
+      }
       const header = selector?.kind === "lines"
         ? ""
         : window.totalLines === null
@@ -503,7 +518,12 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
     const content = full.buffer.toString("utf-8")
     const fingerprint = fingerprintContent(full.buffer)
     // RT-6: expectedHash freshness — a stale read is a conflict, not a silent dump.
-    if (expectedHash && fingerprint.sha256 !== expectedHash) return staleFileResult(path)
+    // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 截断 buffer 的部分哈希
+    // 绝不冒充全文件哈希；预算内流式计算全文件哈希，超出则结构化拒绝。
+    if (expectedHash) {
+      const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
+      if (blocked) return blocked
+    }
     const lines = content.split("\n")
     const total = lines.length
 
@@ -550,6 +570,36 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
   }
 }
 
+/** IC01-R2: expectedHash 只能是全文件 SHA-256。预算内流式计算全文件哈希；
+ *  文件超出全文件哈希预算 → 结构化拒绝该组合（WHOLE_FILE_HASH_UNBUDGETED），
+ *  绝不静默降级成窗口/range 哈希。返回 blocked 结果或 undefined（通过）。 */
+async function verifyWholeFileHash(
+  path: string,
+  expectedHash: string,
+  signal: AbortSignal | undefined,
+  workspace: WorkspaceIoAuthority | undefined,
+): Promise<ToolResult | undefined> {
+  let hash
+  try {
+    hash = await WORKSPACE_FILE_READER.hashWholeFile(path, {
+      signal,
+      validateOpen: openValidatorFor(workspace, path),
+    })
+  } catch (e) {
+    if (e instanceof FileReadError && e.code === "ABORTED") {
+      return Result.fail(`Read aborted: ${path}`)
+    }
+    return Result.fail(e instanceof Error ? e.message : String(e))
+  }
+  if (!hash.budgeted) {
+    return Result.fail(
+      `WHOLE_FILE_HASH_UNBUDGETED: expectedHash requires a whole-file SHA-256, but ${path} is ${hash.totalBytes} bytes (whole-file hash budget ${WORKSPACE_FILE_READER.operationBudgetBytes} bytes); window/range hashes are never substituted for the whole-file hash — read without expectedHash instead`,
+    )
+  }
+  if (hash.sha256 !== expectedHash) return staleFileResult(path)
+  return undefined
+}
+
 function staleFileResult(path: string): ToolResult {
   return Result.fail(`STALE_FILE: ${path} content hash does not match expectedHash (file changed since you read it)`)
 }
@@ -577,7 +627,7 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
     if (snapshot.found) {
       oldContent = snapshot.content ?? ""
     } else if (existedBefore) {
-      const pre = await boundedPreRead(p, context?.abortSignal)
+      const pre = await boundedPreRead(p, context?.abortSignal, openValidatorFor(getWorkspaceIoAuthority(), p))
       if (!pre.ok) return Result.fail(pre.reason)
       oldContent = pre.content
     }
@@ -649,7 +699,7 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
     // IC01: 有界预读 —— 超限文件 fail closed。
     const preRead = snapshot.found
       ? { ok: true as const, content: snapshot.content! }
-      : await boundedPreRead(p, context?.abortSignal)
+      : await boundedPreRead(p, context?.abortSignal, openValidatorFor(getWorkspaceIoAuthority(), p))
     if (!preRead.ok) return Result.fail(preRead.reason)
     const content = preRead.content
     const freshnessBlock = revalidateApprovedSnapshot(context, p, content)
@@ -728,7 +778,7 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
         // IC01: 有界预读 —— 超限文件 fail closed。
         const preRead = snapshot.found
           ? { ok: true as const, content: snapshot.content! }
-          : await boundedPreRead(p, context?.abortSignal)
+          : await boundedPreRead(p, context?.abortSignal, openValidatorFor(getWorkspaceIoAuthority(), p))
         if (!preRead.ok) return Result.fail(preRead.reason)
         const original = preRead.content
         originals.set(p, original)
@@ -891,7 +941,7 @@ async function edit_symbol(params: Record<string, unknown>, context?: ToolExecut
     // IC01: 有界预读 —— 超限文件 fail closed。
     const preRead = snapshot.found
       ? { ok: true as const, content: snapshot.content! }
-      : await boundedPreRead(p, context?.abortSignal)
+      : await boundedPreRead(p, context?.abortSignal, openValidatorFor(getWorkspaceIoAuthority(), p))
     if (!preRead.ok) return Result.fail(preRead.reason)
     const content = preRead.content
     const freshnessBlock = revalidateApprovedSnapshot(context, p, content)
@@ -1094,7 +1144,7 @@ async function edit_fim(params: Record<string, unknown>, context?: ToolExecution
     // IC01: 有界预读 —— 超限文件 fail closed。
     const preRead = snapshot.found
       ? { ok: true as const, content: snapshot.content! }
-      : await boundedPreRead(p, context?.abortSignal)
+      : await boundedPreRead(p, context?.abortSignal, openValidatorFor(getWorkspaceIoAuthority(), p))
     if (!preRead.ok) return Result.fail(preRead.reason)
     const oldContent = preRead.content
     const freshnessBlock = revalidateApprovedSnapshot(context, p, oldContent)

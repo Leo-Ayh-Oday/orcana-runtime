@@ -14,12 +14,18 @@
 
 import { createHash } from "node:crypto"
 import { open, stat } from "node:fs/promises"
-import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs"
+import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs"
 
 export const DEFAULT_MAX_FILE_BYTES = 16 * 1024 * 1024
 export const DEFAULT_OPERATION_BUDGET_BYTES = 64 * 1024 * 1024
 export const DEFAULT_BINARY_PROBE_BYTES = 8 * 1024
 export const DEFAULT_CHUNK_SIZE = 64 * 1024
+
+/** IC01-R2: Linux 安全 open —— O_NOFOLLOW 拒绝 final-component symlink 的
+ *  open（策略层已放行的 in-root symlink 由中间段别名路径承载；final symlink
+ *  一律不打开，避免 check/open race 里 symlink 被换入）。非 Linux 平台无
+ *  O_NOFOLLOW 时退回 0（fd canonical 校验仍 fail closed 兜底）。 */
+const NOFOLLOW = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0
 
 /** 结构化读取错误（非普通文件、预算中止、权威拒绝等）——与 transport 错误区分。 */
 export class FileReadError extends Error {
@@ -159,7 +165,7 @@ export class BoundedFileReader {
     const requested = Math.max(0, Math.floor(length))
     if (start >= info.size || requested === 0) return Buffer.alloc(0)
     const want = Math.min(requested, this.maxFileBytes, this.operationBudgetBytes, info.size - start)
-    const fd = openSync(path, "r")
+    const fd = openSync(path, constants.O_RDONLY | NOFOLLOW)
     try {
       const fstat = fstatSync(fd)
       if (!fstat.isFile()) {
@@ -189,7 +195,7 @@ export class BoundedFileReader {
       throw new FileReadError(`not a regular file: ${path}`, "NOT_REGULAR_FILE")
     }
     const limit = Math.min(info.size, limitBytes, this.maxFileBytes, this.operationBudgetBytes)
-    const fd = openSync(path, "r")
+    const fd = openSync(path, constants.O_RDONLY | NOFOLLOW)
     try {
       const fstat = fstatSync(fd)
       if (!fstat.isFile()) {
@@ -240,7 +246,7 @@ export class BoundedFileReader {
     } catch {
       throw new FileReadError(`read aborted: ${path}`, "ABORTED")
     }
-    const handle = await open(path, "r")
+    const handle = await open(path, constants.O_RDONLY | NOFOLLOW)
     const chunks: Buffer[] = []
     const hash = createHash("sha256")
     let position = 0
@@ -321,7 +327,9 @@ export class BoundedFileReader {
         totalBytes: info.size,
       }
     }
-    const want = Math.min(requested, budget, info.size - start)
+    // IC01-R2: want 同时受 requested、operationBudgetBytes、maxFileBytes 与
+    // 文件剩余长度约束（maxFileBytes=16 MiB 时 range 绝不可能读到 64 MiB）。
+    const want = Math.min(requested, budget, this.maxFileBytes, info.size - start)
     const truncated = want < requested
 
     try {
@@ -329,7 +337,7 @@ export class BoundedFileReader {
     } catch {
       throw new FileReadError(`read aborted: ${path}`, "ABORTED")
     }
-    const handle = await open(path, "r")
+    const handle = await open(path, constants.O_RDONLY | NOFOLLOW)
     const chunks: Buffer[] = []
     const hash = createHash("sha256")
     let position = start
@@ -383,6 +391,60 @@ export class BoundedFileReader {
   }
 
   /**
+   * IC01-R2: 流式全文件 SHA-256（expectedHash 专用）—— 不保留文件内容，
+   * 边读边哈希；文件大小超过预算时返回 budgeted=false（调用方必须结构化
+   * 拒绝该组合，绝不静默降级成窗口/range 哈希）。O_NOFOLLOW + fstat +
+   * validateOpen（fd canonical 校验）与其余读取路径一致。
+   */
+  async hashWholeFile(
+    path: string,
+    options: BoundedReadOptions = {},
+  ): Promise<{ sha256: string; totalBytes: number; budgeted: boolean }> {
+    const signal = options.signal
+    const budget = options.budgetBytes ?? this.operationBudgetBytes
+    const info = await this.stat(path)
+    if (!info.isRegular) {
+      throw new FileReadError(`not a regular file: ${path}`, "NOT_REGULAR_FILE")
+    }
+    if (info.size > budget) {
+      return { sha256: "", totalBytes: info.size, budgeted: false }
+    }
+    try {
+      signal?.throwIfAborted()
+    } catch {
+      throw new FileReadError(`read aborted: ${path}`, "ABORTED")
+    }
+    const handle = await open(path, constants.O_RDONLY | NOFOLLOW)
+    const hash = createHash("sha256")
+    const chunk = Buffer.allocUnsafe(this.chunkSize)
+    let position = 0
+    try {
+      const fstat = await handle.stat()
+      if (!fstat.isFile()) {
+        throw new FileReadError(`not a regular file (after open): ${path}`, "NOT_REGULAR_FILE")
+      }
+      if (options.validateOpen) {
+        const violation = await options.validateOpen(handle.fd)
+        if (violation) throw new FileReadError(violation, "AUTHORITY_REJECTED")
+      }
+      while (position < info.size) {
+        signal?.throwIfAborted()
+        const take = Math.min(chunk.length, info.size - position)
+        const { bytesRead } = await handle.read(chunk, 0, take, position)
+        if (bytesRead <= 0) break
+        hash.update(chunk.subarray(0, bytesRead))
+        position += bytesRead
+      }
+      return { sha256: hash.digest("hex"), totalBytes: info.size, budgeted: true }
+    } catch (error) {
+      if (signal?.aborted) throw new FileReadError(`read aborted: ${path}`, "ABORTED")
+      throw error
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /**
    * 有界行窗口读取（IC01）：顺序扫描计数换行定位窗口，只对窗口字节做
    *  range 分配 —— RANGE_READ_FULL_ALLOCATION = 0 且窗口分配受 maxReturnBytes
    *  上限（极长单行不会导致巨型分配）。
@@ -414,7 +476,7 @@ export class BoundedFileReader {
     } catch {
       throw new FileReadError(`read aborted: ${path}`, "ABORTED")
     }
-    const handle = await open(path, "r")
+    const handle = await open(path, constants.O_RDONLY | NOFOLLOW)
     const hash = createHash("sha256")
     const chunk = Buffer.allocUnsafe(this.chunkSize)
     let lineNumber = 0
@@ -457,8 +519,11 @@ export class BoundedFileReader {
         const absoluteEnd = position + bytesRead
         let cursor = 0
         while (cursor < bytesRead) {
+          // IC01-R2: indexOf 只允许命中 [cursor, bytesRead) 内的真实数据 ——
+          // chunk 缓冲区复用（allocUnsafe），越界字节是陈旧数据，绝不能当作
+          // 换行参与行计数/窗口定位（否则 totalLines 不确定）。
           const newline = chunk.indexOf(0x0a, cursor)
-          if (newline < 0) break
+          if (newline < 0 || newline >= bytesRead) break
           const lineEndAbsolute = position + newline + 1
           if (windowStartByte === null && lineNumber === startLine) windowStartByte = lineStartByte
           // 窗口结束 = 窗口最后一行行尾（不含换行）—— 与旧 slice/join 语义一致。
@@ -475,6 +540,15 @@ export class BoundedFileReader {
         if (windowEndByte !== null && !options.scanToEof) break
       }
       scannedToEof = position >= info.size && !scanBudgetExhausted
+      const atEof = position >= info.size
+      // IC01-R2: EOF 无尾换行 —— 窗口起始行即最后一行（无 \n 终止）时，
+      // 窗口必须从 lineStartByte 延伸到 EOF（alpha\nomega 第二行 → omega）。
+      if (windowStartByte === null && atEof && lineNumber === startLine) {
+        windowStartByte = lineStartByte
+      }
+      if (windowEndByte === null && atEof && windowStartByte !== null) {
+        windowEndByte = position
+      }
       const wholeHash = hash.digest("hex")
       if (windowStartByte === null) {
         return {
@@ -488,8 +562,13 @@ export class BoundedFileReader {
           truncated: scanBudgetExhausted,
         }
       }
-      const end = Math.min(windowEndByte ?? position, windowStartByte + maxReturn)
-      const windowTruncated = end < (windowEndByte ?? position) || scanBudgetExhausted
+      // IC01-R2: 返回窗口必须同时受 maxReturn 与扫描剩余预算约束 —— 扫描
+      // 字节 + 返回字节合计不得超过 scanBudget（offset-only / 无换行大文件
+      // 不得把分配放大到预算之外）。
+      const budgetRemaining = Math.max(0, scanBudget - position)
+      const windowEnd = windowEndByte ?? position
+      const end = Math.min(windowEnd, windowStartByte + maxReturn, windowStartByte + budgetRemaining)
+      const windowTruncated = end < windowEnd || scanBudgetExhausted
       const rangeBuffer = Buffer.allocUnsafe(Math.max(0, end - windowStartByte))
       let readPos = windowStartByte
       let offset = 0

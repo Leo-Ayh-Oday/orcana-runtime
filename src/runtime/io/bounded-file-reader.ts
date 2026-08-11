@@ -101,6 +101,9 @@ export interface LineWindowOptions {
    *  从同一 fd 继续流式哈希到 EOF/预算，并对 identity/size/mtime 做结束复核
    *  （增长/截断/替换 → SNAPSHOT_CHANGED fail closed）。绝不二次按路径 open。 */
   wholeFileHashBudgetBytes?: number
+  /** 诊断/测试钩子：每读完一个 chunk 调用一次（bytesRead > 0），与
+   *  BoundedReadOptions.onChunk 语义一致（扫描 + 哈希续扫均计数）。 */
+  onChunk?: (bytesRead: number, chunkIndex: number) => void
 }
 
 export interface LineWindowResult {
@@ -425,6 +428,8 @@ export class BoundedFileReader {
   }> {
     const signal = options.signal
     const budget = options.budgetBytes ?? this.operationBudgetBytes
+    // open 前 stat 仅用于“不存在/非普通文件”的早期错误映射；权威状态一律以
+    // open 后 fstat（bigint）为准。
     const info = await this.stat(path)
     if (!info.isRegular) {
       throw new FileReadError(`not a regular file: ${path}`, "NOT_REGULAR_FILE")
@@ -436,7 +441,7 @@ export class BoundedFileReader {
     }
     const handle = await open(path, constants.O_RDONLY | NOFOLLOW)
     try {
-      const fstat = await handle.stat()
+      const fstat = await handle.stat({ bigint: true })
       if (!fstat.isFile()) {
         throw new FileReadError(`not a regular file (after open): ${path}`, "NOT_REGULAR_FILE")
       }
@@ -444,105 +449,114 @@ export class BoundedFileReader {
         const violation = await options.validateOpen(handle.fd)
         if (violation) throw new FileReadError(violation, "AUTHORITY_REJECTED")
       }
-      // 打开后 fstat 是权威状态：dev/ino/size/mtimeMs。
-      const identity = { dev: fstat.dev, ino: fstat.ino, size: fstat.size, mtimeMs: fstat.mtimeMs }
+      // 打开后 fstat 是权威状态（bigint）：dev / ino / size / mtimeNs / ctimeNs。
+      const identity = {
+        dev: fstat.dev,
+        ino: fstat.ino,
+        size: fstat.size,
+        mtimeNs: fstat.mtimeNs,
+        ctimeNs: fstat.ctimeNs,
+      }
+      const fileSize = Number(identity.size)
 
       // 全文件哈希预算不足 → 不做无意义读取，直接拒绝该组合。
-      if (identity.size > budget) {
+      // （size === budget 恰好相等时必须正常返回选区 —— 单遍读取只消费 size
+      // 字节，同一字节绝不重复读取/重复计费。）
+      if (identity.size > BigInt(budget)) {
         return {
           buffer: Buffer.alloc(0),
           byteCount: 0,
           wholeFileSha256: "",
           hashBudgeted: false,
-          totalBytes: identity.size,
+          totalBytes: fileSize,
           binary: false,
           truncated: false,
         }
       }
 
-      // ── 选区/内容读取（同一 fd；绝不按路径二次 open）──
-      const chunks: Buffer[] = []
-      let byteCount = 0
-      let binary = false
+      // 选区复制边界（分配上限 = min(requested, maxFileBytes)，与 readRange
+      // 语义一致；单遍读取下复制不产生额外 I/O）。
+      let copyFrom = 0
+      let copyLen = 0
       let truncated = false
-      let probeRemaining = this.binaryProbeBytes
-      let contentWant = 0
-      let readFrom = 0
       if (range) {
         const start = Math.max(0, Math.floor(range.start))
         const requested = Math.max(0, Math.floor(range.length))
-        if (start < identity.size && requested > 0) {
-          // 内容 + 全文件哈希合计受 operationBudget 约束。
-          contentWant = Math.min(requested, this.maxFileBytes, identity.size - start, Math.max(0, budget - identity.size))
-          truncated = contentWant < requested
-          readFrom = start
+        if (start >= fileSize || requested === 0) {
+          copyFrom = 0
+          copyLen = 0
+          truncated = false
+        } else {
+          const selCap = Math.min(requested, this.maxFileBytes)
+          copyFrom = start
+          copyLen = Math.min(selCap, fileSize - start)
+          truncated = copyLen < requested
         }
       } else {
-        contentWant = Math.min(identity.size, this.maxFileBytes, Math.max(0, budget - identity.size))
-        truncated = contentWant < identity.size
-        readFrom = 0
+        copyLen = Math.min(fileSize, this.maxFileBytes)
+        truncated = copyLen < fileSize
       }
-      let position = readFrom
-      let remaining = contentWant
-      while (remaining > 0) {
-        signal?.throwIfAborted()
-        const take = Math.min(this.chunkSize, remaining)
-        const buffer = Buffer.allocUnsafe(take)
-        const { bytesRead } = await handle.read(buffer, 0, take, position)
-        if (bytesRead <= 0) break
-        if (probeRemaining > 0 && !binary) {
-          const probeLen = Math.min(bytesRead, probeRemaining)
-          binary = buffer.subarray(0, probeLen).includes(0)
-          probeRemaining -= probeLen
-        }
-        const slice = buffer.subarray(0, bytesRead)
-        chunks.push(slice)
-        position += bytesRead
-        remaining -= bytesRead
-        byteCount += bytesRead
-      }
-      const buffer = Buffer.concat(chunks)
 
-      // ── 全文件 SHA-256（同一 fd）── 内容已覆盖全文件时直接哈希缓冲区，
-      // 否则从 fd 流式补齐（只受 operationBudget 约束，不保留内容）。
-      let wholeFileSha256: string
-      if (byteCount === identity.size && readFrom === 0) {
-        wholeFileSha256 = createHash("sha256").update(buffer).digest("hex")
-      } else {
-        const hash = createHash("sha256")
-        const chunk = Buffer.allocUnsafe(this.chunkSize)
-        let pos = 0
-        while (pos < identity.size) {
-          signal?.throwIfAborted()
-          const take = Math.min(chunk.length, identity.size - pos)
-          const { bytesRead } = await handle.read(chunk, 0, take, pos)
-          if (bytesRead <= 0) break
-          hash.update(chunk.subarray(0, bytesRead))
-          pos += bytesRead
-        }
-        if (pos < identity.size) {
-          // 文件在读取期间缩小：identity 已过期 → 结束复核必然失败。
+      // ── IC01-R4：真正单遍读取。从同一已验证 fd 顺序遍历一次；每个 chunk
+      // 同时 (a) 更新全文件 SHA-256，(b) 复制与请求选区重叠的有限字节，
+      // (c) 前 binaryProbeBytes 二进制嗅探。同一字节只读一次、只计费一次。
+      const hash = createHash("sha256")
+      const chunk = Buffer.allocUnsafe(this.chunkSize)
+      const selection: Buffer[] = []
+      let copied = 0
+      let binary = false
+      let probeRemaining = this.binaryProbeBytes
+      let position = 0
+      let chunkIndex = 0
+      while (position < fileSize) {
+        signal?.throwIfAborted()
+        const take = Math.min(chunk.length, fileSize - position)
+        const { bytesRead } = await handle.read(chunk, 0, take, position)
+        if (bytesRead <= 0) {
+          // 文件在读取期间缩短：读取少于权威 size → fail closed。
           throw new FileReadError(`file changed while being read: ${path}`, "SNAPSHOT_CHANGED")
         }
-        wholeFileSha256 = hash.digest("hex")
+        if (probeRemaining > 0 && !binary) {
+          const probeLen = Math.min(bytesRead, probeRemaining)
+          binary = chunk.subarray(0, probeLen).includes(0)
+          probeRemaining -= probeLen
+        }
+        hash.update(chunk.subarray(0, bytesRead))
+        // 选区重叠复制（仅复制有限重叠字节；chunk 复用后视图失效，必须拷贝）。
+        const chunkStart = position
+        const chunkEnd = position + bytesRead
+        const overlapStart = Math.max(chunkStart, copyFrom)
+        const overlapEnd = Math.min(chunkEnd, copyFrom + copyLen)
+        if (overlapStart < overlapEnd) {
+          selection.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
+          copied += overlapEnd - overlapStart
+        }
+        position = chunkEnd
+        chunkIndex++
+        // IC01-R4: await 钩子 —— 测试可在 chunk 边界确定性同步改写文件。
+        await options.onChunk?.(bytesRead, chunkIndex)
       }
+      const wholeFileSha256 = hash.digest("hex")
 
-      // ── 结束复核：identity / size / mtime 必须与 open 时一致（fail closed）。
-      const end = await handle.stat()
+      // ── 最终 fstat（bigint）：dev / ino / size / mtimeNs / ctimeNs 必须与
+      // open 时一致（增长、截断、替换、同大小原地改写 → SNAPSHOT_CHANGED）。
+      // 最终 fstat 之后不得再从文件读取任何返回内容。
+      const end = await handle.stat({ bigint: true })
       if (
         end.dev !== identity.dev ||
         end.ino !== identity.ino ||
         end.size !== identity.size ||
-        end.mtimeMs !== identity.mtimeMs
+        end.mtimeNs !== identity.mtimeNs ||
+        end.ctimeNs !== identity.ctimeNs
       ) {
         throw new FileReadError(`file changed while being read: ${path}`, "SNAPSHOT_CHANGED")
       }
       return {
-        buffer,
-        byteCount,
+        buffer: Buffer.concat(selection),
+        byteCount: copied,
         wholeFileSha256,
         hashBudgeted: true,
-        totalBytes: identity.size,
+        totalBytes: fileSize,
         binary,
         truncated,
       }
@@ -653,19 +667,40 @@ export class BoundedFileReader {
     let scanBudgetExhausted = false
     let position = 0
     try {
-      const fstat = await handle.stat()
-      if (!fstat.isFile()) {
+      // IC01-R4: 打开后 fstat（bigint）是权威状态 —— isRegular、EOF、文件
+      // 大小和边界全部以 fd identity 为准（不能使用 open 前 stat）。
+      const fstatBig = await handle.stat({ bigint: true })
+      if (!fstatBig.isFile()) {
         throw new FileReadError(`not a regular file (after open): ${path}`, "NOT_REGULAR_FILE")
       }
       if (options.validateOpen) {
         const violation = await options.validateOpen(handle.fd)
         if (violation) throw new FileReadError(violation, "AUTHORITY_REJECTED")
       }
-      // IC01-R3: 打开后 fstat 是权威状态（结束复核基准）。
-      const identity = { dev: fstat.dev, ino: fstat.ino, size: fstat.size, mtimeMs: fstat.mtimeMs }
+      const identity = {
+        dev: fstatBig.dev,
+        ino: fstatBig.ino,
+        size: fstatBig.size,
+        mtimeNs: fstatBig.mtimeNs,
+        ctimeNs: fstatBig.ctimeNs,
+      }
+      const fileSize = Number(identity.size)
       // count=Infinity（offset>0 无 limit）：窗口结束条件永不满足 → 延伸到
       // EOF 或扫描预算耗尽；count 有限时窗口 = 第 startLine..startLine+count-1 行。
       const lastWindowLine = startLine + count - 1
+      let chunkIndex = 0
+      // IC01-R4 单遍捕获：行定位、窗口字节捕获与哈希消费同一批 chunk
+      // （POST_HASH_WINDOW_REREAD=0）。
+      //  - 窗口起始行尚未结束（windowStartByte === null）→ 尾部捕获
+      //    [lineStartByte, +maxReturn)（当前未终止行，新换行重置）；
+      //  - 起始行的 \n 被找到 → 尾部即时晋升为窗口捕获（起始行字节在
+      //    窗口起点确定前已扫描，必须来自同一批 chunk）；
+      //  - 之后捕获 [windowStartByte, +maxReturn)（受 windowEndByte 约束）；
+      //  - EOF 时若窗口起始行即无尾换行的最后一行，尾部就是窗口字节。
+      const windowSlices: Buffer[] = []
+      const tailSlices: Buffer[] = []
+      let tailCaptured = 0
+      let foundNewlineInChunk = false
       while (true) {
         signal?.throwIfAborted()
         if (position >= scanBudget) {
@@ -683,6 +718,9 @@ export class BoundedFileReader {
         }
         hash.update(chunk.subarray(0, bytesRead))
         const absoluteEnd = position + bytesRead
+        const chunkStart = position
+        const chunkEnd = position + bytesRead
+        foundNewlineInChunk = false
         let cursor = 0
         while (cursor < bytesRead) {
           // IC01-R2: indexOf 只允许命中 [cursor, bytesRead) 内的真实数据 ——
@@ -690,8 +728,18 @@ export class BoundedFileReader {
           // 换行参与行计数/窗口定位（否则 totalLines 不确定）。
           const newline = chunk.indexOf(0x0a, cursor)
           if (newline < 0 || newline >= bytesRead) break
+          foundNewlineInChunk = true
           const lineEndAbsolute = position + newline + 1
-          if (windowStartByte === null && lineNumber === startLine) windowStartByte = lineStartByte
+          if (windowStartByte === null && lineNumber === startLine) {
+            windowStartByte = lineStartByte
+            // 起始行的字节在窗口起点确定前已扫描 —— 尾部（当前未终止行 =
+            // 起始行）晋升为窗口捕获，窗口字节与哈希来自同一批 chunk。
+            if (tailCaptured > 0) {
+              windowSlices.push(...tailSlices)
+              tailSlices.length = 0
+              tailCaptured = 0
+            }
+          }
           // 窗口结束 = 窗口最后一行行尾（不含换行）—— 与旧 slice/join 语义一致。
           if (windowEndByte === null && lineNumber === lastWindowLine) {
             windowEndByte = position + newline
@@ -701,12 +749,40 @@ export class BoundedFileReader {
           lineStartByte = lineEndAbsolute
           cursor = newline + 1
         }
+        // ── 窗口字节捕获（同一批 chunk；chunk 复用后视图失效 → 必须拷贝）──
+        if (windowStartByte !== null) {
+          const cap = windowStartByte + maxReturn
+          const overlapStart = Math.max(chunkStart, windowStartByte)
+          const overlapEnd = Math.min(chunkEnd, windowEndByte ?? chunkEnd, cap)
+          if (overlapStart < overlapEnd) {
+            windowSlices.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
+          }
+        } else {
+          // 尾部捕获：当前未终止行（新换行重置；cap = lineStartByte + maxReturn）。
+          if (foundNewlineInChunk) {
+            tailSlices.length = 0
+            tailCaptured = 0
+          }
+          if (tailCaptured < maxReturn) {
+            const cap = lineStartByte + maxReturn
+            const overlapStart = Math.max(chunkStart, lineStartByte)
+            const overlapEnd = Math.min(chunkEnd, cap)
+            if (overlapStart < overlapEnd) {
+              tailSlices.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
+              tailCaptured += overlapEnd - overlapStart
+            }
+          }
+        }
         position = absoluteEnd
+        chunkIndex++
+        // IC01-R4: await 钩子 —— 测试可在 chunk 边界确定性同步改写文件。
+        await options.onChunk?.(bytesRead, chunkIndex)
         // 有界文件 → 窗口找到后继续扫描到 EOF（完整哈希 + 精确行数）。
         if (windowEndByte !== null && !options.scanToEof) break
       }
-      scannedToEof = position >= info.size && !scanBudgetExhausted
-      const atEof = position >= info.size
+      const hadWindowStartBeforeEofFix = windowStartByte !== null
+      scannedToEof = position >= fileSize && !scanBudgetExhausted
+      const atEof = position >= fileSize
       // IC01-R2: EOF 无尾换行 —— 窗口起始行即最后一行（无 \n 终止）时，
       // 窗口必须从 lineStartByte 延伸到 EOF（alpha\nomega 第二行 → omega）。
       if (windowStartByte === null && atEof && lineNumber === startLine) {
@@ -717,39 +793,43 @@ export class BoundedFileReader {
       }
       const scanPosition = position
 
-      // IC01-R3: 全文件 SHA-256（同一已验证 fd）—— 窗口扫描后从同一 fd 继续
-      // 流式哈希到 EOF/预算；结束后复核 identity/size/mtime（增长、截断、
-      // 替换 → SNAPSHOT_CHANGED fail closed）。绝不二次按路径 open。
+      // IC01-R3/R4: 全文件 SHA-256（同一已验证 fd）—— 扫描后从同一 fd 继续
+      // 流式哈希到 EOF/预算（与扫描消费的 chunk 前后相接，同一字节只读一次）。
       const hashBudget = options.wholeFileHashBudgetBytes ?? 0
       let wholeFileHashBudgeted = true
-      if (hashBudget > 0) {
-        if (identity.size > hashBudget) {
-          wholeFileHashBudgeted = false
-        } else {
-          while (position < identity.size) {
-            signal?.throwIfAborted()
-            const take = Math.min(chunk.length, identity.size - position)
-            const { bytesRead } = await handle.read(chunk, 0, take, position)
-            if (bytesRead <= 0) break
-            hash.update(chunk.subarray(0, bytesRead))
-            position += bytesRead
-          }
-          wholeFileHashBudgeted = position >= identity.size
-          const end = await handle.stat()
-          if (
-            end.dev !== identity.dev ||
-            end.ino !== identity.ino ||
-            end.size !== identity.size ||
-            end.mtimeMs !== identity.mtimeMs
-          ) {
-            throw new FileReadError(`file changed while being read: ${path}`, "SNAPSHOT_CHANGED")
-          }
+      if (hashBudget > 0 && identity.size > BigInt(hashBudget)) {
+        wholeFileHashBudgeted = false
+      } else if (hashBudget > 0) {
+        while (position < fileSize) {
+          signal?.throwIfAborted()
+          const take = Math.min(chunk.length, fileSize - position)
+          const { bytesRead } = await handle.read(chunk, 0, take, position)
+          if (bytesRead <= 0) break
+          hash.update(chunk.subarray(0, bytesRead))
+          position += bytesRead
+          chunkIndex++
+          await options.onChunk?.(bytesRead, chunkIndex)
         }
+        wholeFileHashBudgeted = position >= fileSize
       }
       const wholeHash = hash.digest("hex")
       const wholeFileSha256 = hashBudget > 0
         ? (wholeFileHashBudgeted ? wholeHash : null)
         : (scannedToEof ? wholeHash : null)
+
+      // ── IC01-R4: 返回前最终 fstat（bigint）：dev / ino / size / mtimeNs /
+      // ctimeNs 必须与 open 时一致（增长、截断、替换、同大小原地改写 →
+      // SNAPSHOT_CHANGED）。最终 fstat 之后不得再从文件读取任何内容。
+      const endStat = await handle.stat({ bigint: true })
+      if (
+        endStat.dev !== identity.dev ||
+        endStat.ino !== identity.ino ||
+        endStat.size !== identity.size ||
+        endStat.mtimeNs !== identity.mtimeNs ||
+        endStat.ctimeNs !== identity.ctimeNs
+      ) {
+        throw new FileReadError(`file changed while being read: ${path}`, "SNAPSHOT_CHANGED")
+      }
       if (windowStartByte === null) {
         return {
           text: "",
@@ -770,17 +850,13 @@ export class BoundedFileReader {
       const windowEnd = windowEndByte ?? scanPosition
       const end = Math.min(windowEnd, windowStartByte + maxReturn, windowStartByte + budgetRemaining)
       const windowTruncated = end < windowEnd || scanBudgetExhausted
-      const rangeBuffer = Buffer.allocUnsafe(Math.max(0, end - windowStartByte))
-      let readPos = windowStartByte
-      let offset = 0
-      while (readPos < end) {
-        signal?.throwIfAborted()
-        const { bytesRead } = await handle.read(rangeBuffer, offset, end - readPos, readPos)
-        if (bytesRead <= 0) break
-        offset += bytesRead
-        readPos += bytesRead
-      }
-      const text = rangeBuffer.subarray(0, offset).toString("utf-8")
+      // IC01-R4: 窗口字节在扫描期间已捕获（与哈希同一批 chunk），此处仅做
+      // 内存装配 —— 绝不重新读取文件（POST_HASH_WINDOW_REREAD=0）。
+      const captured = hadWindowStartBeforeEofFix ? windowSlices : tailSlices
+      const capturedTotal = captured.reduce((n, s) => n + s.length, 0)
+      const text = Buffer.concat(captured)
+        .subarray(0, Math.min(capturedTotal, Math.max(0, end - windowStartByte)))
+        .toString("utf-8")
       const split = text.split("\n")
       // 尾部空行不计（与 slice/join 语义对齐）。
       const linesCount = split.length > 0 && split[split.length - 1] === "" ? split.length - 1 : split.length

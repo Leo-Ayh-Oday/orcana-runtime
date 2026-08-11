@@ -350,3 +350,41 @@ describe("IC04 P0-1 integration: 每 completed logical round exactly-once progre
     else process.env.ORCANA_FLASH_TRIAGE = SAVED_TRIAGE
   })
 })
+
+describe("IC04 P1-10: env 级 physical budget（真实 env 路径）", () => {
+  test("ORCANA_MAX_ROUNDS=10 + 无 explicit maxRounds → logical=10 → derived physical=20", async () => {
+    const SAVED_ROUNDS = process.env.ORCANA_MAX_ROUNDS
+    const SAVED_REQUESTS = process.env.ORCANA_MAX_PROVIDER_REQUESTS
+    process.env.ORCANA_MAX_ROUNDS = "10"
+    delete process.env.ORCANA_MAX_PROVIDER_REQUESTS
+    const { RunRegistry } = await import("../src/harness/runtime/run-registry")
+    const registry = new RunRegistry()
+    const registered = registry.create({
+      sessionId: "sess-env-rounds",
+      projectRoot: "/tmp",
+      input: { prompt: "x" } as never,
+    })
+    expect(registered.run.budget.limits.maxModelCalls).toBe(20)
+    expect(registered.run.scope.retryCoordinator!.maxPhysicalProviderRequests).toBe(20)
+    if (SAVED_ROUNDS === undefined) delete process.env.ORCANA_MAX_ROUNDS
+    else process.env.ORCANA_MAX_ROUNDS = SAVED_ROUNDS
+    if (SAVED_REQUESTS === undefined) delete process.env.ORCANA_MAX_PROVIDER_REQUESTS
+    else process.env.ORCANA_MAX_PROVIDER_REQUESTS = SAVED_REQUESTS
+  })
+
+  test("ORCANA_MAX_PROVIDER_REQUESTS=7 → physical=7（优先于 derived）", async () => {
+    const SAVED_REQUESTS = process.env.ORCANA_MAX_PROVIDER_REQUESTS
+    process.env.ORCANA_MAX_PROVIDER_REQUESTS = "7"
+    const { RunRegistry } = await import("../src/harness/runtime/run-registry")
+    const registry = new RunRegistry()
+    const registered = registry.create({
+      sessionId: "sess-env-req",
+      projectRoot: "/tmp",
+      input: { prompt: "x", maxRounds: 50 } as never,
+    })
+    expect(registered.run.budget.limits.maxModelCalls).toBe(7)
+    expect(registered.run.scope.retryCoordinator!.maxPhysicalProviderRequests).toBe(7)
+    if (SAVED_REQUESTS === undefined) delete process.env.ORCANA_MAX_PROVIDER_REQUESTS
+    else process.env.ORCANA_MAX_PROVIDER_REQUESTS = SAVED_REQUESTS
+  })
+})

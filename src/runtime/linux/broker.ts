@@ -136,14 +136,14 @@ export interface BrokerAcquiredResources {
   cgroupRunPath?: string
   cgroupAgentPath?: string
   cgroupCellPath?: string
-  /** 本事务创建了 run 层（pre-existing 判定后置真）—— 可整树清理。
-   *  复用 AgentDomain（domain.cgroupPath）或 run 已由并行 Cell 创建
-   *  → false（不得删其它 Cell/Domain 的资源）。 */
-  cgroupRunOwned: boolean
-  /** 本事务创建了 agent 层（agentPreExisting 判定后置真）—— run 可能
-   *  pre-existing（并行 Cell 创建），但 agent-a1 是本事务新建：createAgent
-   *  部分失败后必须单独清理 agent 层，同时保留 pre-existing run。 */
-  cgroupAgentOwned: boolean
+  /** run 层属于 broker-managed hierarchy（无 AgentDomain 时整个 run/agent
+   *  层都由 Broker Cell 管理）。任一 Cell 成为最后使用者时都可清理 ——
+   *  last-user cleanup（creator 先退不残留：并行 Cell 存在时不删，
+   *  最后使用者回收）。AgentDomain parent（domain.cgroupPath）→ false，
+   *  Broker Cell 永不删。 */
+  cgroupRunBrokerManaged: boolean
+  /** agent 层属于 broker-managed hierarchy（语义同 run 层）。 */
+  cgroupAgentBrokerManaged: boolean
   podmanCidfile?: string
   materialization?: ExecutionMaterialization
   controller: AbortController
@@ -509,11 +509,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     // 3. cgroup cleanup：intended paths（调用前记录）为清理目标 ——
     //    createXxx 部分创建后抛错同样能移除。
     //    - cell：总是尝试（cell-<cellId> 专属本 cell，无共享风险）。
-    //    - agent：仅 cgroupAgentOwned（本事务新建）且 agent 下无其它
-    //      active cell —— pre-existing run / txn-created agent 场景单独
-    //      清理 agent 层，保留其它 Cell 的 run 层。
-    //    - run：仅 cgroupRunOwned（本事务创建）且 run 下无其它 active
-    //      cell —— 复用 AgentDomain（domain.cgroupPath）不触碰 Domain。
+    //    - agent/run：仅 broker-managed hierarchy（无 AgentDomain）——
+    //      任一 Cell 作为最后使用者（registry 中无其它 Cell 使用该
+    //      parent）时回收；不要求是创建者（last-user ownership：
+    //      creator 先退时并行 Cell 仍在 → 不删；最后 Cell 回收共享
+    //      parent，零残留）。AgentDomain parent 永不删。
     let cgroupRemoved = false
     if (cgroup && acquired.cgroupCellPath) {
       try {
@@ -522,7 +522,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         cgroupRemoved = false
       }
     }
-    if (cgroup && acquired.cgroupAgentOwned && acquired.cgroupAgentPath) {
+    if (cgroup && acquired.cgroupAgentBrokerManaged && acquired.cgroupAgentPath) {
       const otherCellInAgent = [...cellRuns.values()].some(r =>
         r.acquired.cgroupAgentPath === acquired.cgroupAgentPath
         && r.acquired.cellId !== acquired.cellId
@@ -532,7 +532,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         try { cgroup.removeRun(acquired.cgroupAgentPath) } catch { /* best-effort */ }
       }
     }
-    if (cgroup && acquired.cgroupRunOwned && acquired.cgroupRunPath) {
+    if (cgroup && acquired.cgroupRunBrokerManaged && acquired.cgroupRunPath) {
       const otherCellInRun = [...cellRuns.values()].some(r =>
         r.runId === acquired.runId
         && r.acquired.cellId !== acquired.cellId
@@ -761,8 +761,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         agentId,
         backendId: selection.backend,
         lockKeys: [],
-        cgroupRunOwned: false,
-        cgroupAgentOwned: false,
+        cgroupRunBrokerManaged: false,
+        cgroupAgentBrokerManaged: false,
         podmanCidfile,
         controller: new AbortController(),
         cleanupStarted: false,
@@ -852,33 +852,27 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             // PR-5：Run/Agent 层不重复使用单个 Cell 的预算 —— 聚合预算只来自
             // AgentDomain（createAgentDomain 已按 budget 创建）；无 Domain 时
             // 上层不设限（资源约束由 Cell 层承担），避免"单 Cell 预算冒充聚合"。
-            // pre-existing 判定：同 run 并行 cell 的 run/agent 层属于其它 cell
-            // （非本事务创建）。run pre-existing + agent txn-created 是合法
-            // 组合 —— agent 层独立 ownership（P0-1 复审闭环）。
-            const runPreExisting = cgroup.fs.exists(runPath)
-            const agentPreExisting = cgroup.fs.exists(agentPath)
+            // 无 domain → run/agent 层属于 broker-managed hierarchy：无论由本
+            // 事务还是并行 Cell 创建，任一最后使用者可清理（last-user
+            // ownership —— creator 先退不残留，最后 Cell 回收共享 parent）。
+            acquired.cgroupRunBrokerManaged = true
+            acquired.cgroupAgentBrokerManaged = true
+            // pre-existing 判定仅用于部分创建后的 ownership 记录（createRun/
+            // createAgent 内部抛错时 hierarchy 是否已存在由谁负责），
+            // 不决定 broker-managed 归属。
             await checkpoint("before-create-run")
             try {
               cgroup.createRun(runId)
             } catch (error) {
-              // createRun 部分创建（ensure 已 mkdir 后 controller 授权抛错）：
-              // run 调用前不存在 → 本事务负责清理该 hierarchy。
-              if (!runPreExisting) acquired.cgroupRunOwned = true
               throw error
             }
-            if (!runPreExisting) acquired.cgroupRunOwned = true
             await checkpoint("after-create-run")
             if (agentId) {
               try {
                 cgroup.createAgent(runId, agentId)
               } catch (error) {
-                // createAgent 部分创建（agent 目录已 mkdir 后授权抛错）：
-                // agent 调用前不存在 → 本事务负责清理 agent 层（run 可能
-                // pre-existing，不动）。
-                if (!agentPreExisting) acquired.cgroupAgentOwned = true
                 throw error
               }
-              if (!agentPreExisting) acquired.cgroupAgentOwned = true
             }
             await checkpoint("after-create-agent")
           }

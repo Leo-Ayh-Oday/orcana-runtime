@@ -3,14 +3,33 @@
  * The pipeline turns "read docs -> inspect structure -> locate code -> read
  * source" into deterministic runtime data. It is deliberately independent from
  * the agent loop so it can be tested and later wired into TaskPacket planning.
+ *
+ * IC01-R2: 整次 ContextMap 操作（constitution / lockfile / README / 源文件
+ * 定位）统一经过 WorkspaceIoAuthority —— 秘密文件、工作区外、symlink 逃逸
+ * 与 hardlink 秘密 alias 一律拒绝；所有打开后的 fd 执行 canonical 校验
+ * （fail closed）；全部文件读取共享同一个累计字节预算与 AbortSignal；
+ * 候选源文件采用 bounded top-K（未入选内容不长期保留）。
  */
 
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { basename, extname, join, relative, resolve, sep } from "node:path"
 import ts from "typescript"
-import { loadMemoryIndex } from "../memory/context-memory-os"
+import { contextMemoryLayout, MEMORY_INDEX_READ_CAP_BYTES } from "../memory/context-memory-os"
 import type { TaskPacket } from "../agent/task-packet"
-import { BoundedFileReader, readCapBytes } from "../runtime/io/bounded-file-reader"
+import { getWorkspaceIoAuthority } from "../runtime/execution-context"
+import { isWithin, deepestExistingRealpath } from "../tools/path-authority"
+import {
+  enforceWorkspaceRead,
+  validateOpenFileCanonicalSync,
+  type WorkspaceIoAuthority,
+  type WorkspaceIoViolation,
+} from "../runtime/io/workspace-io-authority"
+import {
+  BoundedFileReader,
+  DEFAULT_OPERATION_BUDGET_BYTES,
+  FileReadError,
+  readCapBytes,
+} from "../runtime/io/bounded-file-reader"
 
 // ── Types ──
 
@@ -90,6 +109,113 @@ export interface ContextReadiness {
 
 export type ContextMapTaskLevel = "small" | "medium" | "long" | "high_risk"
 
+// ── IC01-R2: 共享读取会话（权威 + 累计预算 + AbortSignal） ──
+
+export interface ContextMapReadOptions {
+  /** 注入工作区 I/O 权威；未提供时取当前 ALS 权威（production 语义一致）。 */
+  workspace?: WorkspaceIoAuthority
+  /** 整次 ContextMap 操作共享累计字节预算（默认 64 MiB）。 */
+  budgetBytes?: number
+  /** 操作级 AbortSignal（每个文件读取边界检查）。 */
+  signal?: AbortSignal
+  /** 复用既有会话（同一操作的多次调用共享预算与权威）。 */
+  session?: ContextMapReadSession
+}
+
+/** IC01-R2/R3: ContextMap 读取会话 —— 整次操作共享累计字节预算与 AbortSignal；
+ *  所有文件读取经过权威强制 + open 后 fd canonical 校验（fail closed）。
+ *  IC01-R3: 无 WorkspaceIoAuthority（无 ALS、未显式注入）时 fail closed ——
+ *  任何读取都被拒绝（authorityMissing=true），绝不隐式跳过强制与 fd 校验。 */
+export class ContextMapReadSession {
+  readonly workspace: WorkspaceIoAuthority | undefined
+  readonly signal: AbortSignal | undefined
+  readonly budgetBytes: number
+  /** 已读取的文件字节（累计）。 */
+  bytesRead = 0
+  /** 预算耗尽（后续读取返回空）。 */
+  budgetExhausted = false
+  /** 信号中止（后续读取返回空）。 */
+  aborted = false
+  /** IC01-R3: 无权威（无 ALS / 未显式注入）→ true；全部读取被拒绝。 */
+  readonly authorityMissing: boolean
+  private readonly reader: BoundedFileReader
+
+  constructor(options: ContextMapReadOptions = {}) {
+    this.budgetBytes = options.budgetBytes ?? DEFAULT_OPERATION_BUDGET_BYTES
+    this.workspace = options.workspace ?? getWorkspaceIoAuthority()
+    this.authorityMissing = this.workspace === undefined
+    this.signal = options.signal
+    this.reader = new BoundedFileReader({ operationBudgetBytes: this.budgetBytes })
+  }
+
+  get budgetRemaining(): number {
+    return this.budgetBytes - this.bytesRead
+  }
+
+  /** 有界 + 权威强制的同步文本读取。
+   *  - 无权威（authorityMissing）→ fail closed，返回 ""（绝不放行）
+   *  - 权威拒绝（秘密 / 越界 / symlink 逃逸 / hardlink 未授权）→ ""
+   *  - open 后 fd canonical 校验失败（fail closed）→ ""
+   *  - 预算耗尽 / 中止 → ""（并置位标记，调用方循环提前退出）
+   *  - 只分配 min(size, capBytes, maxFileBytes, 剩余预算) 字节。 */
+  readText(path: string, capBytes: number, lexicalRoot: string): string {
+    if (this.aborted || this.budgetExhausted) return ""
+    if (this.signal?.aborted) {
+      this.aborted = true
+      return ""
+    }
+    if (this.authorityMissing) return ""
+    // 权威读取强制（秘密 / 越界 / symlink 逃逸）—— lexical + canonical 双查。
+    const violation = enforceWorkspaceRead(this.workspace!, path, path, lexicalRoot)
+    if (violation) return ""
+    let info
+    try {
+      info = this.reader.statSync(path)
+    } catch {
+      return ""
+    }
+    if (!info.isRegular) return ""
+    const limit = Math.min(info.size, capBytes, this.reader.maxFileBytes, this.budgetRemaining)
+    if (limit <= 0) {
+      if (info.size > 0) this.budgetExhausted = true
+      return ""
+    }
+    try {
+      const buffer = this.reader.readSync(path, limit, {
+        validateOpenSync: (fd: number): string | null => {
+          const violation = validateOpenFileCanonicalSync(this.workspace!, path, fd)
+          return violation?.reason ?? null
+        },
+      })
+      this.bytesRead += buffer.length
+      if (this.bytesRead >= this.budgetBytes) this.budgetExhausted = true
+      return buffer.toString("utf-8")
+    } catch (error) {
+      if (error instanceof FileReadError && error.code === "ABORTED") {
+        this.aborted = true
+      }
+      return ""
+    }
+  }
+
+  /** 权威目录放行检查：目录 canonical 目标必须在权威读取根内（symlink 目录
+   *  指向根外时不做内容枚举，防止目录列表泄漏）。无权威时 fail closed。 */
+  isReadableDir(dir: string): boolean {
+    if (this.authorityMissing) return false
+    const real = deepestExistingRealpath(dir)
+    if (real === undefined) return false
+    return isWithin(this.workspace!.readRoot, real)
+  }
+
+  /** 权威拒绝原因（诊断用）。 */
+  violationFor(path: string, lexicalRoot: string): WorkspaceIoViolation | null {
+    if (this.authorityMissing) {
+      return { code: "SECRET_READ", reason: `SECRET_READ: ContextMap 无 WorkspaceIoAuthority，fail closed: ${path}` }
+    }
+    return enforceWorkspaceRead(this.workspace!, path, path, lexicalRoot)
+  }
+}
+
 // ── Project constitution loader ──
 
 const CONSTITUTION_FILES = [
@@ -105,7 +231,23 @@ const CONSTITUTION_FILES = [
   "pnpm-lock.yaml",
 ]
 
-export function loadProjectConstitution(root = process.cwd()): ProjectConstitution {
+export function loadProjectConstitution(
+  root = process.cwd(),
+  options: ContextMapReadOptions = {},
+): ProjectConstitution {
+  const session = options.session ?? new ContextMapReadSession(options)
+  const empty = {
+    architectureNotes: [] as string[],
+    codingRules: [] as string[],
+    forbiddenActions: [] as string[],
+    buildCommands: [] as string[],
+    testCommands: [] as string[],
+    knownPitfalls: [] as string[],
+    importantFiles: [] as string[],
+  }
+  // IC01-R4: 无 authority 时零元数据泄漏 —— 在任何 existsSync / stat / read 之前
+  // 直接返回确定性空结构（不得泄漏文件存在性/文件名）。
+  if (session.authorityMissing) return empty
   const notes: string[] = []
   const rules: string[] = []
   const forbidden: string[] = []
@@ -115,21 +257,27 @@ export function loadProjectConstitution(root = process.cwd()): ProjectConstituti
   const importantFiles: string[] = []
 
   for (const file of CONSTITUTION_FILES) {
+    if (session.aborted || session.budgetExhausted) break
     const abs = resolveInside(root, file)
     if (!abs || !existsSync(abs)) continue
+    // IC01-R2: 读取经过权威强制（README/src symlink 指向根外或 secret →
+    // 拒绝，不进入 importantFiles）；有界读取 —— 大型 README/规则文件/
+    // lockfile 绝不整体读入（共享累计预算内）。
+    const text = session.readText(abs, 20_000, root)
+    if (!text) continue
     importantFiles.push(file)
-    // IC01: 有界读取 —— 大型 README/规则文件/lockfile 绝不整体读入。
-    const text = boundedReadText(abs, 20_000)
     classifyConstitutionText(file, text, { notes, rules, forbidden, buildCommands, testCommands, pitfalls })
   }
 
-  try {
-    const index = loadMemoryIndex(root)
-    if (index.alwaysLoad.length || index.topicFiles.length) {
-      notes.push(`memory index: ${index.alwaysLoad.length} always-load files, ${index.topicFiles.length} topic files`)
+  if (!session.aborted && !session.budgetExhausted) {
+    // IC01-R2: memory index 读取与 constitution 其余文件同路径（权威强制 +
+    // 共享预算）—— 不经过 context-memory-os 的直接读取（该模块无 authority）。
+    const layout = contextMemoryLayout(root)
+    const memoryRaw = session.readText(layout.files.memoryIndex, MEMORY_INDEX_READ_CAP_BYTES, root)
+    const counts = countMemoryIndexSections(memoryRaw)
+    if (counts.alwaysLoad || counts.topicFiles) {
+      notes.push(`memory index: ${counts.alwaysLoad} always-load files, ${counts.topicFiles} topic files`)
     }
-  } catch {
-    // Memory index is optional in early repos.
   }
 
   return {
@@ -141,6 +289,27 @@ export function loadProjectConstitution(root = process.cwd()): ProjectConstituti
     knownPitfalls: unique(pitfalls),
     importantFiles: unique(importantFiles),
   }
+}
+
+/** memory index 的 Always Load / Topic Files 计数（与 context-memory-os 的
+ *  loadMemoryIndex 语义一致；本管线只使用计数）。 */
+function countMemoryIndexSections(raw: string): { alwaysLoad: number; topicFiles: number } {
+  let section: "always" | "topic" | null = null
+  let alwaysLoad = 0
+  let topicFiles = 0
+  for (const line of raw.split(/\r?\n/)) {
+    const heading = line.match(/^##\s+(.+?)\s*$/)
+    if (heading) {
+      const title = heading[1]!
+      section = title === "Always Load" ? "always" : title === "Topic Files" ? "topic" : null
+      continue
+    }
+    if (section !== null && /^-\s+/.test(line)) {
+      if (section === "always") alwaysLoad++
+      else topicFiles++
+    }
+  }
+  return { alwaysLoad, topicFiles }
 }
 
 function classifyConstitutionText(
@@ -182,8 +351,25 @@ function classifyConstitutionText(
 
 // ── Repo structure scanner ──
 
-export function scanRepoStructure(root = process.cwd()): RepoStructureMap {
-  const packageJson = readJsonFile(resolve(root, "package.json")) as { workspaces?: string[] | { packages?: string[] }; main?: string; bin?: Record<string, string> | string } | null
+export function scanRepoStructure(
+  root = process.cwd(),
+  options: ContextMapReadOptions = {},
+): RepoStructureMap {
+  const session = options.session ?? new ContextMapReadSession(options)
+  // IC01-R4: 无 authority 时零元数据泄漏 —— 在任何 readJsonFile、existsSync、
+  // stat、readdir、detectPackageManager 之前直接返回确定性空结构。
+  if (session.authorityMissing) {
+    return {
+      packageManager: "unknown",
+      workspaces: [],
+      sourceRoots: [],
+      testRoots: [],
+      configFiles: [],
+      entrypoints: [],
+      moduleHints: [],
+    }
+  }
+  const packageJson = readJsonFile(resolve(root, "package.json"), session, root) as { workspaces?: string[] | { packages?: string[] }; main?: string; bin?: Record<string, string> | string } | null
   const workspaces = Array.isArray(packageJson?.workspaces)
     ? packageJson.workspaces
     : packageJson?.workspaces?.packages ?? []
@@ -208,7 +394,7 @@ export function scanRepoStructure(root = process.cwd()): RepoStructureMap {
     testRoots,
     configFiles,
     entrypoints: unique(entrypoints),
-    moduleHints: buildModuleHints(root, sourceRoots, testRoots),
+    moduleHints: buildModuleHints(root, sourceRoots, testRoots, session),
   }
 }
 
@@ -220,11 +406,11 @@ function detectPackageManager(root: string): RepoStructureMap["packageManager"] 
   return "unknown"
 }
 
-function buildModuleHints(root: string, sourceRoots: string[], testRoots: string[]): RepoStructureMap["moduleHints"] {
+function buildModuleHints(root: string, sourceRoots: string[], testRoots: string[], session: ContextMapReadSession): RepoStructureMap["moduleHints"] {
   const hints: RepoStructureMap["moduleHints"] = []
   for (const dir of sourceRoots) {
     if (dir === "src") {
-      for (const child of safeReadDir(resolve(root, dir))) {
+      for (const child of safeReadDir(resolve(root, dir), session, root)) {
         if (child.isDirectory()) hints.push({ path: `src/${child.name}`, purpose: inferPurpose(child.name) })
       }
     } else {
@@ -253,17 +439,58 @@ export interface HybridLocateInput {
   maxFiles?: number
 }
 
-export function hybridLocate(root: string, input: HybridLocateInput): LocateResult {
-  const repo = scanRepoStructure(root)
+/** IC01-R6: 确定性空定位结果 factory —— 每次调用创建全新对象及全部嵌套数组
+ *  （绝不允许返回模块级共享可变对象：调用方修改 primaryFiles 等会跨调用污染
+ *  后续 hybridLocate / buildContextMap 的结果）。maxFiles<=0 与 authorityMissing
+ *  两条路径都必须独立实例。 */
+function emptyLocateResult(): LocateResult {
+  return {
+    primaryFiles: [],
+    secondaryFiles: [],
+    relevantSymbols: [],
+    definitions: [],
+    references: [],
+    suspectedTests: [],
+    confidence: 0.2,
+    unresolvedQuestions: ["No source files matched the request keywords."],
+  }
+}
+
+export function hybridLocate(
+  root: string,
+  input: HybridLocateInput,
+  options: ContextMapReadOptions = {},
+): LocateResult {
+  const session = options.session ?? new ContextMapReadSession(options)
+  // IC01-R3: maxFiles 归一化 —— undefined 保持默认 12；非有限数（NaN/
+  // Infinity）或 <1（0/负数）统一归约为 0 → 安全空结果，且不进行任何
+  // 文件扫描/读取；有限正数 floor 并封顶 64（病态大值不得放大保留量）。
+  const rawMax = input.maxFiles
+  const maxK = rawMax === undefined
+    ? 12
+    : typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax >= 1
+      ? Math.min(Math.floor(rawMax), 64)
+      : 0
+  // IC01-R5: 无 authority 时在 scanRepoStructure（及其 existsSync/readdir）
+  // 之前确定性早退 —— 返回与「无匹配」完全相同的结构，存在路径与不存在
+  // 路径结果一致（不得形成路径存在性 oracle）。
+  if (session.authorityMissing || maxK <= 0) return emptyLocateResult()
+  const repo = scanRepoStructure(root, { session })
   const terms = unique([...tokenize(input.userRequest), ...(input.keywords ?? [])]).slice(0, 16)
-  const files = listCandidateSourceFiles(root, [...repo.sourceRoots, ...repo.testRoots])
-  const scored = files.map(file => {
-    const text = safeReadText(resolve(root, file))
+  const files = listCandidateSourceFiles(root, [...repo.sourceRoots, ...repo.testRoots], session)
+
+  // IC01-R2: bounded top-K —— 单趟迭代只保留得分最高的 K 个候选（连同其
+  // 文本），未入选内容不长期保留在内存（配合共享累计预算，绝无 N × 16 MiB）。
+  const scored: Array<{ file: string; text: string; score: number }> = []
+  for (const file of files) {
+    if (session.aborted || session.budgetExhausted) break
+    const text = session.readText(resolve(root, file), readCapBytes(), root)
+    if (!text) continue
     const score = terms.reduce((sum, term) => sum + countTerm(text, term), 0)
-    return { file, text, score }
-  }).filter(hit => hit.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, input.maxFiles ?? 12)
+    if (score <= 0) continue
+    pushTopK(scored, { file, text, score }, maxK)
+  }
+  scored.sort((a, b) => b.score - a.score)
 
   const primaryFiles = scored.slice(0, 5).map(hit => hit.file)
   const secondaryFiles = scored.slice(5).map(hit => hit.file)
@@ -300,6 +527,22 @@ export function hybridLocate(root: string, input: HybridLocateInput): LocateResu
     suspectedTests,
     confidence: primaryFiles.length === 0 ? 0.2 : clamp01(0.45 + Math.min(primaryFiles.length, 5) * 0.08 + Math.min(definitions.length, 10) * 0.02),
     unresolvedQuestions,
+  }
+}
+
+/** bounded top-K 插入：数组长度恒 ≤ K，超出时替换最低分（未入选文本立即
+ *  失去引用，可被 GC 回收 —— 不长期保留）。 */
+function pushTopK<T extends { score: number }>(arr: T[], entry: T, k: number): void {
+  if (arr.length < k) {
+    arr.push(entry)
+    return
+  }
+  let minIdx = 0
+  for (let i = 1; i < arr.length; i++) {
+    if (arr[i]!.score < arr[minIdx]!.score) minIdx = i
+  }
+  if (entry.score > arr[minIdx]!.score) {
+    arr[minIdx] = entry
   }
 }
 
@@ -348,7 +591,26 @@ function findTextReferences(file: string, text: string, term: string): SymbolLoc
 
 // ── Source understanding ──
 
-export function buildSourceUnderstanding(root: string, files: string[]): SourceUnderstanding {
+export function buildSourceUnderstanding(
+  root: string,
+  files: string[],
+  options: ContextMapReadOptions = {},
+): SourceUnderstanding {
+  const session = options.session ?? new ContextMapReadSession(options)
+  // IC01-R5: 无 authority 时在任何 existsSync / resolveInside / stat / read
+  // 之前确定性早退 —— 返回与「无文件」完全相同的空结构（assumptions 固定
+  // 文案），存在路径与不存在路径结果一致（不得形成路径存在性 oracle）。
+  if (session.authorityMissing) {
+    return {
+      filesRead: [],
+      dataFlowNotes: [],
+      callFlow: [],
+      invariants: [],
+      assumptions: ["No concrete source files were read."],
+      risks: [],
+      likelyEditTargets: [],
+    }
+  }
   const uniqueFiles = unique(files).filter(file => resolveInside(root, file) && existsSync(resolve(root, file))).slice(0, 12)
   const dataFlowNotes: SourceUnderstanding["dataFlowNotes"] = []
   const callFlow: SourceUnderstanding["callFlow"] = []
@@ -358,7 +620,12 @@ export function buildSourceUnderstanding(root: string, files: string[]): SourceU
   const likelyEditTargets: SourceUnderstanding["likelyEditTargets"] = []
 
   for (const file of uniqueFiles) {
-    const text = safeReadText(resolve(root, file))
+    if (session.aborted || session.budgetExhausted) break
+    const abs = resolve(root, file)
+    // IC01-R2: 读取经过权威强制（源文件 symlink 指向根外或 secret → 拒绝，
+    // 不计入 filesRead）；共享累计预算内截断。
+    const text = session.readText(abs, readCapBytes(), root)
+    if (!text) continue
     const imports = (text.match(/^import\s.+$/gm) ?? []).length
     const exports = (text.match(/^export\s.+$/gm) ?? []).length
     const tests = /describe\(|test\(|expect\(/.test(text)
@@ -371,7 +638,7 @@ export function buildSourceUnderstanding(root: string, files: string[]): SourceU
 
   if (!uniqueFiles.length) assumptions.push("No concrete source files were read.")
   return {
-    filesRead: uniqueFiles,
+    filesRead: uniqueFiles.filter(file => likelyEditTargets.some(t => t.file === file)),
     dataFlowNotes,
     callFlow,
     invariants: unique(invariants),
@@ -383,11 +650,18 @@ export function buildSourceUnderstanding(root: string, files: string[]): SourceU
 
 // ── Context map and readiness ──
 
-export function buildContextMap(root: string, input: { taskId: string; userRequest: string; keywords?: string[] }): ContextMap {
-  const projectConstitution = loadProjectConstitution(root)
-  const repoStructure = scanRepoStructure(root)
-  const locateResult = hybridLocate(root, { userRequest: input.userRequest, keywords: input.keywords })
-  const sourceUnderstanding = buildSourceUnderstanding(root, [...locateResult.primaryFiles, ...locateResult.secondaryFiles])
+export function buildContextMap(
+  root: string,
+  input: { taskId: string; userRequest: string; keywords?: string[] },
+  options: ContextMapReadOptions = {},
+): ContextMap {
+  // IC01-R2: 整次操作共享同一会话（累计预算 / AbortSignal / 权威）——
+  // 预算绝不按文件重置。
+  const session = options.session ?? new ContextMapReadSession(options)
+  const projectConstitution = loadProjectConstitution(root, { session })
+  const repoStructure = scanRepoStructure(root, { session })
+  const locateResult = hybridLocate(root, { userRequest: input.userRequest, keywords: input.keywords }, { session })
+  const sourceUnderstanding = buildSourceUnderstanding(root, [...locateResult.primaryFiles, ...locateResult.secondaryFiles], { session })
   const verificationCommands = unique([
     ...projectConstitution.testCommands,
     ...projectConstitution.buildCommands,
@@ -498,12 +772,21 @@ export function saveContextMap(root: string, map: ContextMap): string {
   return file
 }
 
-export function loadContextMap(root: string, id: string): ContextMap | null {
+export function loadContextMap(
+  root: string,
+  id: string,
+  options: ContextMapReadOptions = {},
+): ContextMap | null {
   if (!/^ctx-[a-f0-9]{12}$/.test(id)) return null
+  // IC01-R5: session 在 existsSync 之前创建 —— 无 authority 时确定性早退
+  // 返回 null（与文件不存在一致，.orcana/state/context-maps/<id>.json 的
+  // 存在性不得形成 oracle）。
+  const session = options.session ?? new ContextMapReadSession(options)
+  if (session.authorityMissing) return null
   const file = resolve(root, ".orcana", "state", "context-maps", `${id}.json`)
   if (!existsSync(file)) return null
-  // IC01: 有界读取（ContextMap 归档文件超限不整体读入）。
-  const text = boundedReadText(file)
+  // IC01-R2: 归档读取同样经过权威强制（秘密 / 越界 / symlink 逃逸拒绝）。
+  const text = session.readText(file, readCapBytes(), root)
   if (!text) return null
   try {
     return JSON.parse(text) as ContextMap
@@ -514,47 +797,38 @@ export function loadContextMap(root: string, id: string): ContextMap | null {
 
 // ── Internal helpers ──
 
-/** ContextMap 共用的有界读取器（无状态，只读配置）。 */
-const WORKSPACE_CONTEXT_READER = new BoundedFileReader()
-
-/** IC01: 有界文本读取 —— 只分配 min(fileSize, capBytes, maxFileBytes) 字节；
- *  超限部分截断（大型 README/规则文件/lockfile 绝不整体读入）。 */
-function boundedReadText(path: string, capBytes = readCapBytes()): string {
-  try {
-    const info = WORKSPACE_CONTEXT_READER.statSync(path)
-    if (!info.isRegular) return ""
-    const limit = Math.min(info.size, capBytes, WORKSPACE_CONTEXT_READER.maxFileBytes)
-    return WORKSPACE_CONTEXT_READER.readSync(path, limit).toString("utf-8")
-  } catch {
-    return ""
-  }
-}
-
-function readJsonFile(path: string): unknown {
+function readJsonFile(path: string, session: ContextMapReadSession, lexicalRoot: string): unknown {
   if (!existsSync(path)) return null
   try {
-    // IC01: 有界读取（package.json/lockfile 超限即截断，不整体读入）。
-    return JSON.parse(boundedReadText(path, readCapBytes()))
+    // IC01-R2: 有界读取（package.json/lockfile 超限即截断，不整体读入）；
+    // 读取经过权威强制（hardlink/symlink → secret 拒绝）。
+    const text = session.readText(path, readCapBytes(), lexicalRoot)
+    if (!text) return null
+    return JSON.parse(text)
   } catch {
     return null
   }
 }
 
-function listCandidateSourceFiles(root: string, roots: string[]): string[] {
+function listCandidateSourceFiles(root: string, roots: string[], session: ContextMapReadSession): string[] {
   const files: string[] = []
   for (const dir of roots) {
     const abs = resolveInside(root, dir)
-    if (abs && existsSync(abs)) walkFiles(root, abs, files)
+    if (abs && existsSync(abs)) walkFiles(root, abs, files, session)
   }
   return files.filter(file => isReadableSource(file))
 }
 
-function walkFiles(root: string, dir: string, out: string[]): void {
-  for (const entry of safeReadDir(dir)) {
+function walkFiles(root: string, dir: string, out: string[], session: ContextMapReadSession): void {
+  // 排序保证遍历确定性（readdirSync 顺序与文件系统哈希有关）。
+  const entries = safeReadDir(dir, session, root)
+    .slice()
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  for (const entry of entries) {
     const abs = join(dir, entry.name)
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue
-      walkFiles(root, abs, out)
+      walkFiles(root, abs, out, session)
     } else if (entry.isFile()) {
       out.push(toRepoPath(root, abs))
     }
@@ -568,20 +842,14 @@ function isReadableSource(file: string): boolean {
   return SOURCE_EXTS.has(extname(file).toLowerCase())
 }
 
-function safeReadDir(dir: string): import("node:fs").Dirent[] {
+/** 目录枚举：目录 canonical 目标逃逸权威读取根 → 不枚举（symlink 目录指向
+ *  根外时不做列表泄漏）；Dirent 不跟随符号链接（symlink 文件/目录不枚举）。 */
+function safeReadDir(dir: string, session: ContextMapReadSession, lexicalRoot: string): import("node:fs").Dirent[] {
   try {
+    if (!session.isReadableDir(dir)) return []
     return readdirSync(dir, { withFileTypes: true })
   } catch {
     return []
-  }
-}
-
-function safeReadText(path: string): string {
-  try {
-    // IC01: 有界读取 —— 候选源文件超限即截断，不整体读入。
-    return boundedReadText(path)
-  } catch {
-    return ""
   }
 }
 

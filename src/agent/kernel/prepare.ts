@@ -12,6 +12,7 @@ import { shouldRunResearch } from "../research-router"
 import { buildResearchEvidenceContext, buildResearchInsufficientEvidenceMessage } from "../research-answer"
 import { collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMapTaskLevel } from "../../context/context-map"
+import { getWorkspaceIoAuthority } from "../../runtime/execution-context"
 import { markPlanAccepted } from "../task-tracker"
 import { planProgress } from "../master-plan"
 import { activateMasterPlan } from "./master-plan"
@@ -137,11 +138,13 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
       explicitFilesForContext.length > 0
     ))
   if (shouldBuildContextMap) {
+    // IC01-R3: production 路径显式注入 WorkspaceIoAuthority —— 无权威时
+    // ContextMapReadSession fail closed（所有读取拒绝，绝不隐式放行）。
     const runtimeContextMap = buildContextMap(ctx.options.projectRoot ?? process.cwd(), {
       taskId: "runtime-task",
       userRequest: ctx.effectivePrompt,
       keywords: explicitFilesForContext,
-    })
+    }, { workspace: getWorkspaceIoAuthority() })
     const readiness = evaluateContextReadiness(runtimeContextMap, contextMapLevel)
     const blockers = readiness.blockers
     const blocked = contextMapLevel === "high_risk" && blockers.length > 0

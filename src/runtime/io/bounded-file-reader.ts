@@ -53,8 +53,10 @@ export interface BoundedReadOptions {
   signal?: AbortSignal
   /** 覆盖操作级字节预算。 */
   budgetBytes?: number
-  /** 诊断/测试钩子：每读完一个 chunk 调用一次（bytesRead > 0）。 */
-  onChunk?: (bytesRead: number, chunkIndex: number) => void
+  /** 每 chunk 回调：报告生产 handle.read 实际使用的 absolute position（读取前）。
+   *  position 单调、连续 —— 测试据此直接断言读取区间恰好覆盖一次，禁止自行
+   *  累计 bytesRead 推算。同步读取路径同步调用；流式路径 await。 */
+  onChunk?: (position: number, bytesRead: number, chunkIndex: number) => void | Promise<void>
   /** open 后、读取前校验（fstat isRegular 之后调用）：返回非空描述 →
    *  AUTHORITY_REJECTED；null = 通过。用于关闭 check/open race 的读取侧
    *  （WorkspaceIoAuthority.validateOpenFileCanonical 按 fd 校验 canonical 根）。 */
@@ -101,9 +103,10 @@ export interface LineWindowOptions {
    *  从同一 fd 继续流式哈希到 EOF/预算，并对 identity/size/mtime 做结束复核
    *  （增长/截断/替换 → SNAPSHOT_CHANGED fail closed）。绝不二次按路径 open。 */
   wholeFileHashBudgetBytes?: number
-  /** 诊断/测试钩子：每读完一个 chunk 调用一次（bytesRead > 0），与
-   *  BoundedReadOptions.onChunk 语义一致（扫描 + 哈希续扫均计数）。 */
-  onChunk?: (bytesRead: number, chunkIndex: number) => void
+  /** 每 chunk 回调：与 BoundedReadOptions.onChunk 语义一致 —— 报告生产
+   *  handle.read 实际使用的 absolute position（读取前；扫描与哈希续扫均计数，
+   *  同一字节只报告一次）。 */
+  onChunk?: (position: number, bytesRead: number, chunkIndex: number) => void | Promise<void>
 }
 
 export interface LineWindowResult {
@@ -288,9 +291,10 @@ export class BoundedFileReader {
         const slice = buffer.subarray(0, bytesRead)
         hash.update(slice)
         chunks.push(slice)
+        const readPosition = position
         position += bytesRead
         chunkIndex++
-        options.onChunk?.(bytesRead, chunkIndex)
+        options.onChunk?.(readPosition, bytesRead, chunkIndex)
       }
       const truncated = position < info.size
       return {
@@ -379,10 +383,11 @@ export class BoundedFileReader {
         const slice = buffer.subarray(0, bytesRead)
         hash.update(slice)
         chunks.push(slice)
+        const readPosition = position
         position += bytesRead
         remaining -= bytesRead
         chunkIndex++
-        options.onChunk?.(bytesRead, chunkIndex)
+        options.onChunk?.(readPosition, bytesRead, chunkIndex)
       }
       return {
         buffer: Buffer.concat(chunks),
@@ -534,7 +539,7 @@ export class BoundedFileReader {
         position = chunkEnd
         chunkIndex++
         // IC01-R4: await 钩子 —— 测试可在 chunk 边界确定性同步改写文件。
-        await options.onChunk?.(bytesRead, chunkIndex)
+        await options.onChunk?.(chunkStart, bytesRead, chunkIndex)
       }
       const wholeFileSha256 = hash.digest("hex")
 
@@ -697,12 +702,21 @@ export class BoundedFileReader {
       //    窗口起点确定前已扫描，必须来自同一批 chunk）；
       //  - 之后捕获 [windowStartByte, +maxReturn)（受 windowEndByte 约束）；
       //  - EOF 时若窗口起始行即无尾换行的最后一行，尾部就是窗口字节。
+      // IC01-R5: tail 绑定具体行号 —— tail 捕获的是「当前未终止行」的字节，
+      // tailLineNumber 记录其归属行。越过任何换行（含非目标行）时 tail 立即
+      // 作废并归属到新的当前未终止行；窗口提升只允许属于 startLine 的 tail：
+      // 前一行跨 chunk、下一 chunk 同时包含前一行与目标行换行时，绝不把
+      // 前一行字节提升进目标窗口（不得返回 startLine 之前的任何字节）。
       const windowSlices: Buffer[] = []
       const tailSlices: Buffer[] = []
       let tailCaptured = 0
-      let foundNewlineInChunk = false
+      let tailLineNumber: number | null = null
       while (true) {
         signal?.throwIfAborted()
+        // IC01-R5: 先 EOF、后 scanBudget —— scanBudget === fileSize 时读到
+        // EOF 属完整成功（scannedToEof=true、truncated=false），绝不误标
+        // scanBudgetExhausted；scanBudget === fileSize - 1 才诚实截断。
+        if (position >= fileSize) break
         if (position >= scanBudget) {
           scanBudgetExhausted = true
           break
@@ -717,10 +731,8 @@ export class BoundedFileReader {
           probeRemaining -= probeLen
         }
         hash.update(chunk.subarray(0, bytesRead))
-        const absoluteEnd = position + bytesRead
         const chunkStart = position
-        const chunkEnd = position + bytesRead
-        foundNewlineInChunk = false
+        const absoluteEnd = position + bytesRead
         let cursor = 0
         while (cursor < bytesRead) {
           // IC01-R2: indexOf 只允许命中 [cursor, bytesRead) 内的真实数据 ——
@@ -728,17 +740,15 @@ export class BoundedFileReader {
           // 换行参与行计数/窗口定位（否则 totalLines 不确定）。
           const newline = chunk.indexOf(0x0a, cursor)
           if (newline < 0 || newline >= bytesRead) break
-          foundNewlineInChunk = true
           const lineEndAbsolute = position + newline + 1
           if (windowStartByte === null && lineNumber === startLine) {
             windowStartByte = lineStartByte
-            // 起始行的字节在窗口起点确定前已扫描 —— 尾部（当前未终止行 =
-            // 起始行）晋升为窗口捕获，窗口字节与哈希来自同一批 chunk。
+            // 只提升属于 startLine 的 tail；陈旧/错位 tail（更早行）丢弃。
             if (tailCaptured > 0) {
               windowSlices.push(...tailSlices)
-              tailSlices.length = 0
-              tailCaptured = 0
             }
+            tailSlices.length = 0
+            tailCaptured = 0
           }
           // 窗口结束 = 窗口最后一行行尾（不含换行）—— 与旧 slice/join 语义一致。
           if (windowEndByte === null && lineNumber === lastWindowLine) {
@@ -748,37 +758,44 @@ export class BoundedFileReader {
           lineNumber++
           lineStartByte = lineEndAbsolute
           cursor = newline + 1
+          // 该换行结束了「当前未终止行」→ 旧 tail（若仍挂着）立即作废，
+          // 并归属到新的当前未终止行（空 tail）。
+          tailSlices.length = 0
+          tailCaptured = 0
+          tailLineNumber = lineNumber
         }
         // ── 窗口字节捕获（同一批 chunk；chunk 复用后视图失效 → 必须拷贝）──
         if (windowStartByte !== null) {
           const cap = windowStartByte + maxReturn
           const overlapStart = Math.max(chunkStart, windowStartByte)
-          const overlapEnd = Math.min(chunkEnd, windowEndByte ?? chunkEnd, cap)
+          const overlapEnd = Math.min(absoluteEnd, windowEndByte ?? absoluteEnd, cap)
           if (overlapStart < overlapEnd) {
             windowSlices.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
           }
-        } else {
-          // 尾部捕获：当前未终止行（新换行重置；cap = lineStartByte + maxReturn）。
-          if (foundNewlineInChunk) {
-            tailSlices.length = 0
-            tailCaptured = 0
-          }
-          if (tailCaptured < maxReturn) {
-            const cap = lineStartByte + maxReturn
-            const overlapStart = Math.max(chunkStart, lineStartByte)
-            const overlapEnd = Math.min(chunkEnd, cap)
-            if (overlapStart < overlapEnd) {
-              tailSlices.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
-              tailCaptured += overlapEnd - overlapStart
-            }
+        } else if (tailCaptured < maxReturn) {
+          // 尾部捕获：当前未终止行（cap = lineStartByte + maxReturn）；归属
+          // 行号 = lineNumber（捕获在行遍历之后，已是当前未终止行）。
+          const cap = lineStartByte + maxReturn
+          const overlapStart = Math.max(chunkStart, lineStartByte)
+          const overlapEnd = Math.min(absoluteEnd, cap)
+          if (overlapStart < overlapEnd) {
+            tailSlices.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
+            tailCaptured += overlapEnd - overlapStart
+            tailLineNumber = lineNumber
           }
         }
+        const readPosition = position
         position = absoluteEnd
         chunkIndex++
         // IC01-R4: await 钩子 —— 测试可在 chunk 边界确定性同步改写文件。
-        await options.onChunk?.(bytesRead, chunkIndex)
+        await options.onChunk?.(readPosition, bytesRead, chunkIndex)
         // 有界文件 → 窗口找到后继续扫描到 EOF（完整哈希 + 精确行数）。
-        if (windowEndByte !== null && !options.scanToEof) break
+        if (windowEndByte !== null && !options.scanToEof) {
+          // IC01-R5: 窗口完整但扫描恰好耗尽预算且未到 EOF → 诚实标记截断
+          // （scanBudget === fileSize - 1 必须 truncated=true）。
+          if (position >= scanBudget && position < fileSize) scanBudgetExhausted = true
+          break
+        }
       }
       const hadWindowStartBeforeEofFix = windowStartByte !== null
       scannedToEof = position >= fileSize && !scanBudgetExhausted
@@ -803,12 +820,13 @@ export class BoundedFileReader {
         while (position < fileSize) {
           signal?.throwIfAborted()
           const take = Math.min(chunk.length, fileSize - position)
+          const readPosition = position
           const { bytesRead } = await handle.read(chunk, 0, take, position)
           if (bytesRead <= 0) break
           hash.update(chunk.subarray(0, bytesRead))
           position += bytesRead
           chunkIndex++
-          await options.onChunk?.(bytesRead, chunkIndex)
+          await options.onChunk?.(readPosition, bytesRead, chunkIndex)
         }
         wholeFileHashBudgeted = position >= fileSize
       }
@@ -843,12 +861,11 @@ export class BoundedFileReader {
           truncated: scanBudgetExhausted,
         }
       }
-      // IC01-R2: 返回窗口必须同时受 maxReturn 与扫描剩余预算约束 —— 扫描
-      // 字节 + 返回字节合计不得超过 scanBudget（offset-only / 无换行大文件
-      // 不得把分配放大到预算之外）。
-      const budgetRemaining = Math.max(0, scanBudget - scanPosition)
+      // IC01-R5: 单遍捕获完成后，返回内存只由实际捕获范围、windowEnd 与
+      // maxReturnBytes 决定 —— 不再按旧「窗口重读 I/O」逻辑扣减 scanBudget。
+      // （捕获本身在扫描期间已受 scanBudget 物理约束：扫描停止处即捕获停止处。）
       const windowEnd = windowEndByte ?? scanPosition
-      const end = Math.min(windowEnd, windowStartByte + maxReturn, windowStartByte + budgetRemaining)
+      const end = Math.min(windowEnd, windowStartByte + maxReturn)
       const windowTruncated = end < windowEnd || scanBudgetExhausted
       // IC01-R4: 窗口字节在扫描期间已捕获（与哈希同一批 chunk），此处仅做
       // 内存装配 —— 绝不重新读取文件（POST_HASH_WINDOW_REREAD=0）。
@@ -860,10 +877,15 @@ export class BoundedFileReader {
       const split = text.split("\n")
       // 尾部空行不计（与 slice/join 语义对齐）。
       const linesCount = split.length > 0 && split[split.length - 1] === "" ? split.length - 1 : split.length
+      // IC01-R5: totalLines = 扫描换行数 + 1（旧 split 语义，含尾空元素；
+      // 空文件为 0）。不得用窗口文本判断（count 有限时窗口无尾换行 ≠ 文件如此）。
+      const totalLinesValue = scannedToEof
+        ? (fileSize > 0 ? lineNumber + 1 : 0)
+        : null
       return {
         text,
         linesCount,
-        totalLines: scannedToEof ? lineNumber + (text.length > 0 && !text.endsWith("\n") ? 1 : 0) : null,
+        totalLines: totalLinesValue,
         scannedToEof,
         binary: seenBinary,
         sha256: wholeHash,

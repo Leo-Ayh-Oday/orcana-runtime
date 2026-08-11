@@ -439,6 +439,19 @@ export interface HybridLocateInput {
   maxFiles?: number
 }
 
+/** IC01-R5: 无 authority / maxK<=0 的确定性空定位结果（与「无匹配」完全一致，
+ *  存在路径与不存在路径不可区分 —— 不得形成路径存在性 oracle）。 */
+const EMPTY_LOCATE_RESULT: LocateResult = {
+  primaryFiles: [],
+  secondaryFiles: [],
+  relevantSymbols: [],
+  definitions: [],
+  references: [],
+  suspectedTests: [],
+  confidence: 0.2,
+  unresolvedQuestions: ["No source files matched the request keywords."],
+}
+
 export function hybridLocate(
   root: string,
   input: HybridLocateInput,
@@ -454,18 +467,10 @@ export function hybridLocate(
     : typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax >= 1
       ? Math.min(Math.floor(rawMax), 64)
       : 0
-  if (maxK <= 0) {
-    return {
-      primaryFiles: [],
-      secondaryFiles: [],
-      relevantSymbols: [],
-      definitions: [],
-      references: [],
-      suspectedTests: [],
-      confidence: 0.2,
-      unresolvedQuestions: ["No source files matched the request keywords."],
-    }
-  }
+  // IC01-R5: 无 authority 时在 scanRepoStructure（及其 existsSync/readdir）
+  // 之前确定性早退 —— 返回与「无匹配」完全相同的结构，存在路径与不存在
+  // 路径结果一致（不得形成路径存在性 oracle）。
+  if (session.authorityMissing || maxK <= 0) return EMPTY_LOCATE_RESULT
   const repo = scanRepoStructure(root, { session })
   const terms = unique([...tokenize(input.userRequest), ...(input.keywords ?? [])]).slice(0, 16)
   const files = listCandidateSourceFiles(root, [...repo.sourceRoots, ...repo.testRoots], session)
@@ -588,6 +593,20 @@ export function buildSourceUnderstanding(
   options: ContextMapReadOptions = {},
 ): SourceUnderstanding {
   const session = options.session ?? new ContextMapReadSession(options)
+  // IC01-R5: 无 authority 时在任何 existsSync / resolveInside / stat / read
+  // 之前确定性早退 —— 返回与「无文件」完全相同的空结构（assumptions 固定
+  // 文案），存在路径与不存在路径结果一致（不得形成路径存在性 oracle）。
+  if (session.authorityMissing) {
+    return {
+      filesRead: [],
+      dataFlowNotes: [],
+      callFlow: [],
+      invariants: [],
+      assumptions: ["No concrete source files were read."],
+      risks: [],
+      likelyEditTargets: [],
+    }
+  }
   const uniqueFiles = unique(files).filter(file => resolveInside(root, file) && existsSync(resolve(root, file))).slice(0, 12)
   const dataFlowNotes: SourceUnderstanding["dataFlowNotes"] = []
   const callFlow: SourceUnderstanding["callFlow"] = []
@@ -755,10 +774,14 @@ export function loadContextMap(
   options: ContextMapReadOptions = {},
 ): ContextMap | null {
   if (!/^ctx-[a-f0-9]{12}$/.test(id)) return null
+  // IC01-R5: session 在 existsSync 之前创建 —— 无 authority 时确定性早退
+  // 返回 null（与文件不存在一致，.orcana/state/context-maps/<id>.json 的
+  // 存在性不得形成 oracle）。
+  const session = options.session ?? new ContextMapReadSession(options)
+  if (session.authorityMissing) return null
   const file = resolve(root, ".orcana", "state", "context-maps", `${id}.json`)
   if (!existsSync(file)) return null
   // IC01-R2: 归档读取同样经过权威强制（秘密 / 越界 / symlink 逃逸拒绝）。
-  const session = options.session ?? new ContextMapReadSession(options)
   const text = session.readText(file, readCapBytes(), root)
   if (!text) return null
   try {

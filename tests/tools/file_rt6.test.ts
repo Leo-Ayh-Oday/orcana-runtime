@@ -117,3 +117,49 @@ describe("RT-6 edit_symbol", () => {
     }
   })
 })
+
+// ── IC01-R5: 生产路径跨 chunk 行窗口（WORKSPACE_FILE_READER chunkSize=64KiB）──
+
+describe("IC01-R5 read_file 生产路径 —— 前一行跨 chunk 时 TARGET 精确返回", () => {
+  const prevLens = [64 * 1024 - 1, 64 * 1024, 64 * 1024 + 7, 3 * 64 * 1024 + 13]
+
+  for (const prevLen of prevLens) {
+    test(`前一行 ${prevLen}B（跨 chunk 边界）→ lines selector 精确返回 TARGET，不含上一行`, async () => {
+      const cwd = mkdtempSync(join(tmpdir(), "rt6-r5-prod-"))
+      try {
+        const p = join(cwd, "big.txt")
+        const prev = "X".repeat(prevLen)
+        const target = "TARGET-ABCDEFGHIJ-LINE"
+        writeFileSync(p, "first line\n" + prev + "\n" + target + "\n" + "tail line\n", "utf-8")
+        // 0-based 行：0=first line，1=P 行，2=TARGET，3=tail。
+        const result = await READ_FILE.execute!({ path: p, selector: { kind: "lines", start: 2, end: 3 } }, undefined, { projectRoot: cwd })
+        expect(result.success).toBe(true)
+        expect(result.content).toBe(target)
+        expect(result.content).not.toContain("X")
+        // 多行窗口：3-4 → TARGET + tail。
+        const two = await READ_FILE.execute!({ path: p, selector: { kind: "lines", start: 2, end: 4 } }, undefined, { projectRoot: cwd })
+        expect(two.success).toBe(true)
+        expect(two.content).toBe(target + "\ntail line")
+      } finally {
+        rmSync(cwd, { recursive: true, force: true })
+      }
+    })
+  }
+
+  test("前一行跨 chunk + 目标行无尾随换行（EOF）→ 精确返回", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "rt6-r5-eof-"))
+    try {
+      const p = join(cwd, "big.txt")
+      const prev = "X".repeat(64 * 1024 + 3)
+      const target = "LAST-TARGET-NO-NEWLINE"
+      writeFileSync(p, "prelude\n" + prev + "\n" + target, "utf-8")
+      // 0-based 行：0=prelude，1=P 行，2=TARGET（EOF）。
+      const result = await READ_FILE.execute!({ path: p, selector: { kind: "lines", start: 2, end: 3 } }, undefined, { projectRoot: cwd })
+      expect(result.success).toBe(true)
+      expect(result.content).toBe(target)
+      expect(result.content).not.toContain("X")
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+})

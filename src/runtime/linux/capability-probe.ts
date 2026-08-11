@@ -118,15 +118,29 @@ function probeBubblewrap(): LinuxCapabilities["bubblewrap"] {
   return { available: true, path, version, unprivilegedUsable }
 }
 
+// podman info is expensive on WSL (5-16s of system time per invocation) and
+// storageDriver is a diagnostic-only field (asserted nowhere). Keep the probe
+// fast and deterministic: probe availability via --version synchronously, and
+// fill storageDriver lazily on first access. Memoize per process — this is a
+// performance fix only, it never changes what is probed.
+let podmanProbeCache: LinuxCapabilities["podman"] | null = null
+let podmanStorageDriver: string | undefined
+
+/** Lazily fill storageDriver (slow on WSL). Diagnostic paths call this after probe; never on the probe hot path. */
+export function probePodmanStorageDriver(): void {
+  if (podmanStorageDriver !== undefined) return
+  const info = spawnSync("/usr/bin/podman", ["info", "--format", "{{.Store.GraphDriverName}}"], { encoding: "utf8", timeout: 15_000 })
+  podmanStorageDriver = info.status === 0 ? info.stdout.trim() || undefined : undefined
+}
+
 function probePodman(): LinuxCapabilities["podman"] {
+  if (podmanProbeCache) return podmanProbeCache
   const path = which("podman")
-  if (!path) return { available: false, rootlessReady: false }
+  if (!path) return (podmanProbeCache = { available: false, rootlessReady: false })
   const version = spawnSync(path, ["--version"], { encoding: "utf8", timeout: 5000 }).stdout.trim() || undefined
-  const info = spawnSync(path, ["info", "--format", "{{.Store.GraphDriverName}}"], { encoding: "utf8", timeout: 10_000 })
-  const storageDriver = info.status === 0 ? info.stdout.trim() || undefined : undefined
   // Rootless readiness: newuidmap/newgidmap or shadow-utils present, and userns usable.
   const rootlessReady = (which("newuidmap") !== undefined || which("uidmap") !== undefined) && unshareProbe()
-  return { available: true, path, version, rootlessReady, storageDriver }
+  return (podmanProbeCache = { available: true, path, version, rootlessReady, storageDriver: podmanStorageDriver })
 }
 
 function unshareProbe(): boolean {

@@ -297,6 +297,10 @@ export class BoundedFileReader {
         // IC01-R6: await —— onChunk 可返回 Promise；下一 chunk 必须在 resolve
         // 后开始；rejection 由调用方正常接收（不得 unhandled rejection）。
         await options.onChunk?.(readPosition, bytesRead, chunkIndex)
+        // IC01-R7: onChunk 后立即复核 abort —— 即使 onChunk 不存在（await
+        // undefined 直接通过），最后一次 handle.read 期间发生的 abort 也
+        // 必须在成功返回前被捕获（catch 统一映射 ABORTED）。
+        signal?.throwIfAborted()
       }
       const truncated = position < info.size
       return {
@@ -391,6 +395,7 @@ export class BoundedFileReader {
         chunkIndex++
         // IC01-R6: await —— 同 readFile（Promise 合约）。
         await options.onChunk?.(readPosition, bytesRead, chunkIndex)
+        signal?.throwIfAborted() // IC01-R7: 同 readFile 复核
       }
       return {
         buffer: Buffer.concat(chunks),
@@ -543,6 +548,7 @@ export class BoundedFileReader {
         chunkIndex++
         // IC01-R4: await 钩子 —— 测试可在 chunk 边界确定性同步改写文件。
         await options.onChunk?.(chunkStart, bytesRead, chunkIndex)
+        signal?.throwIfAborted() // IC01-R7: 复核（同 fd 哈希期间 abort → ABORTED）
       }
       const wholeFileSha256 = hash.digest("hex")
 
@@ -788,6 +794,8 @@ export class BoundedFileReader {
         chunkIndex++
         // IC01-R4: await 钩子 —— 测试可在 chunk 边界确定性同步改写文件。
         await options.onChunk?.(readPosition, bytesRead, chunkIndex)
+        // IC01-R7: 窗口立即结束时（windowEnd break 前）同样必须复核 abort。
+        signal?.throwIfAborted()
         // 有界文件 → 窗口找到后继续扫描到 EOF（完整哈希 + 精确行数）。
         if (windowEndByte !== null && !options.scanToEof) {
           // IC01-R5: 窗口完整但扫描恰好耗尽预算且未到 EOF → 诚实标记截断
@@ -826,6 +834,7 @@ export class BoundedFileReader {
           position += bytesRead
           chunkIndex++
           await options.onChunk?.(readPosition, bytesRead, chunkIndex)
+          signal?.throwIfAborted() // IC01-R7: expectedHash 续扫末 chunk 复核
         }
         wholeFileHashBudgeted = position >= fileSize
       }

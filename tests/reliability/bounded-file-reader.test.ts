@@ -777,11 +777,19 @@ describe("IC01-R5 exact scan budget —— EOF 优先于预算，预算恰等于
 // ── IC01-R6: onChunk Promise 合约（readFile / readRange 必须 await）──
 
 describe("IC01-R6 onChunk Promise 合约 —— readFile/readRange await 语义", () => {
+  let fixtureDir = ""
   let bigP = ""
-  beforeAll(() => {
-    const dir = mkdtempSync(join(tmpdir(), "orcana-ic01-r6-onchunk-"))
-    bigP = join(dir, "big.txt")
-    writeFileSync(bigP, "line-0\n" + "m".repeat(5000) + "\nline-last\n", "utf-8") // > 5 个 1024 chunk
+  let chunkCount = 0
+  beforeAll(async () => {
+    // IC01-R7 测试卫生：保存临时目录路径，afterAll 精确 rmSync（不清理其他 /tmp）。
+    fixtureDir = mkdtempSync(join(tmpdir(), "orcana-ic01-r6-onchunk-"))
+    bigP = join(fixtureDir, "big.txt")
+    // 约 5 KiB fixture（5018 字节 → 5 个 1024 字节 chunk —— 不是 >8 KiB）。
+    writeFileSync(bigP, "line-0\n" + "m".repeat(5000) + "\nline-last\n", "utf-8")
+    chunkCount = Math.ceil((await stat(bigP)).size / 1024)
+  })
+  afterAll(() => {
+    rmSync(fixtureDir, { recursive: true, force: true })
   })
 
   test("readFile：onChunk 返回延迟 Promise → 下一 chunk 在 resolve 前不开始", async () => {
@@ -794,7 +802,9 @@ describe("IC01-R6 onChunk Promise 合约 —— readFile/readRange await 语义"
         order.push(`end${index}`)
       },
     })
-    expect(order.length).toBeGreaterThanOrEqual(8) // 文件 > 8 KiB → ≥8 个 chunk
+    // 真实 chunk 数：每 chunk 恰好一个 start+end 事件对（不能用事件数当 chunk 数）。
+    expect(order.length).toBe(2 * chunkCount)
+    expect(chunkCount).toBe(5)
     // 每个 start 必须紧跟在前一个 end 之后（串行 await，绝不并发重叠）。
     for (let i = 1; i < order.length; i++) {
       if (order[i]!.startsWith("start")) {
@@ -863,5 +873,100 @@ describe("IC01-R6 onChunk Promise 合约 —— readFile/readRange await 语义"
     }
     const rangeCovered = rangeReads.reduce((n, r) => n + r.bytesRead, 0)
     expect(rangeCovered).toBe(3000)
+  })
+})
+
+// ── IC01-R7: onChunk 后 abort 复核 —— 最后 chunk 期间 abort 也必须 ABORTED ──
+
+describe("IC01-R7 chunk abort 闭合 —— 每个 onChunk 后立即复核 abort", () => {
+  let fixtureDir = ""
+  let smallP = "" // 单 chunk（< 1024 字节）
+  let multiP = "" // 3 个 1024 字节 chunk
+  beforeAll(() => {
+    fixtureDir = mkdtempSync(join(tmpdir(), "orcana-ic01-r7-abort-"))
+    smallP = join(fixtureDir, "small.txt")
+    writeFileSync(smallP, "single-chunk-content\n", "utf-8")
+    multiP = join(fixtureDir, "multi.txt")
+    writeFileSync(multiP, "head-line\n" + "m".repeat(2048) + "\ntail-line\n", "utf-8") // 3 chunk
+  })
+  afterAll(() => {
+    rmSync(fixtureDir, { recursive: true, force: true })
+  })
+
+  test("1. readFile 单 chunk：onChunk 内 abort 后 resolve → ABORTED（不得 success）", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const controller = new AbortController()
+    await expect(
+      reader.readFile(smallP, {
+        signal: controller.signal,
+        onChunk: async () => {
+          controller.abort()
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ABORTED" })
+  })
+
+  test("2. readRange 单 chunk：onChunk 内 abort 后 resolve → ABORTED", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const controller = new AbortController()
+    await expect(
+      reader.readRange(smallP, 0, 500, {
+        signal: controller.signal,
+        onChunk: async () => {
+          controller.abort()
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ABORTED" })
+  })
+
+  test("3. readAtomicSnapshot 单 chunk：onChunk 内 abort 后 resolve → ABORTED", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const controller = new AbortController()
+    await expect(
+      reader.readAtomicSnapshot(smallP, { start: 0, length: 10 }, {
+        signal: controller.signal,
+        onChunk: async () => {
+          controller.abort()
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ABORTED" })
+  })
+
+  test("4. readLineWindow 窗口立即结束：scanToEof=false 窗口在首 chunk 找到；onChunk abort 后即将 break → ABORTED", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const controller = new AbortController()
+    await expect(
+      reader.readLineWindow(smallP, 0, 1, {
+        signal: controller.signal,
+        scanToEof: false,
+        onChunk: async () => {
+          controller.abort()
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ABORTED" })
+  })
+
+  test("5. readLineWindow expectedHash 续扫：窗口首 chunk 找到，哈希至最后 chunk；最后 chunk onChunk abort → ABORTED", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const controller = new AbortController()
+    await expect(
+      reader.readLineWindow(multiP, 0, 1, {
+        signal: controller.signal,
+        wholeFileHashBudgetBytes: 1024 * 1024,
+        onChunk: async (_position, _bytes, index) => {
+          // index 1 = 主扫描首 chunk（窗口找到后 break）；2、3 = 续扫；3 = 最后 chunk。
+          if (index === 3) controller.abort()
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ABORTED" })
+  })
+
+  test("无 onChunk：读取前 abort → 返回前复核 → ABORTED（await undefined 后复核路径）", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      reader.readFile(smallP, { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "ABORTED" })
   })
 })

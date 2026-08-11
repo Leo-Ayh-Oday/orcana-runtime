@@ -116,11 +116,16 @@ describe("TB2-1: 轮次耗尽 = budget_exhausted ≠ 完成", () => {
       maxRounds: 4,
     }))
 
-    expect(decision).toMatchObject({ kind: "break", reason: "round_budget" })
-    // 不是 DONE：Stop 钩子拿到的必须是 paused，不是 completed。
-    expect(stopReasons).toEqual(["paused"])
-    // 没有 STALLED（截断轮在轮次上限内结束）、没有 "task complete" 类终态。
-    expect(trace.events.find(e => e.type === "agent_loop_stalled")).toBeUndefined()
+    // IC04 §13（TRUNCATION_LADDER_UNBOUNDED = 0）：首轮读文件（streak reset）
+    // 后连续 3 次 no-action truncation → 第 3 次截断轮 STALLED(truncation)，
+    // 不得发起第 4 个同类 Provider round（早于 maxRounds 轮次上限）。
+    expect(decision).toMatchObject({ kind: "break", reason: "progress_stalled" })
+    // 不是 DONE：Stop 钩子拿到的必须是 stalled（TB2-1：轮次相关终止永不 completed）。
+    expect(stopReasons).toEqual(["stalled"])
+    // 截断 ladder 的 STALLED 必须存在（reason=truncation）——不是旧版"轮次耗尽"。
+    const stalledTrace = trace.events.find(e => e.type === "agent_loop_stalled")
+    expect(stalledTrace).toBeDefined()
+    expect((stalledTrace!.data as { reason?: string }).reason).toBe("truncation")
     expect(events.some(e => e.type === "status" && String(e.data).includes("task complete"))).toBe(false)
 
     // TB2-1: 只读 decomp.c 不产生 changedFiles —— agent_loop_finished 必须为空。

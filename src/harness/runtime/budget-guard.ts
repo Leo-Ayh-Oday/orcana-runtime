@@ -29,6 +29,18 @@ interface UsagePayload {
   cacheMissInputTokens?: number
 }
 
+export interface BudgetGuardOptions {
+  /**
+   * IC04 §27: model_call 消费来源。
+   *   "event"  = legacy —— 每个 logical round 的首个 token_usage 事件消费 1 次
+   *   "source" = IC04 —— model usage 事件只做 token accounting；model_call
+   *              unit 由 RetryCoordinator 在 physical attempt 授权时消费
+   *              （retry 也算真实 Provider call，事件计数看不到）。
+   * 默认 "event"（legacy compatibility）。
+   */
+  modelCallAuthority?: "event" | "source"
+}
+
 export class BudgetGuard {
   private readonly seenRounds = new Set<number>()
   // H12: the kernel's provider usage events are CUMULATIVE snapshots — round N
@@ -40,10 +52,30 @@ export class BudgetGuard {
   private lastOutputTokens = 0
   private lastCacheMissTokens = 0
 
+  private readonly modelCallAuthority: "event" | "source"
+
   constructor(
     private readonly ledger: BudgetLedger,
     private readonly abort: (reason: string) => void,
-  ) {}
+    options: BudgetGuardOptions = {},
+  ) {
+    this.modelCallAuthority = options.modelCallAuthority ?? "event"
+  }
+
+  /**
+   * IC04 §26/§27: physical provider request source accounting ——
+   * RetryCoordinator 在请求发出前调用（authorizeProviderAttempt 内部）。
+   * "source" 模式下唯一消费 model_call 的入口；"event" 模式返回 allowed
+   * （不消费，由 observeUsage 负责 legacy 语义）。
+   */
+  tryConsumeModelCall(): { allowed: boolean; reason?: string } {
+    if (this.modelCallAuthority !== "source") {
+      return { allowed: true }
+    }
+    return this.consume({ kind: "model_call" })
+      ? { allowed: true }
+      : { allowed: false, reason: "model_call_budget" }
+  }
 
   /** Observe one event. Returns false when the budget is exhausted (abort fired). */
   observe(event: HarnessEvent): boolean {
@@ -65,6 +97,12 @@ export class BudgetGuard {
   }
 
   private observeUsage(usage: UsagePayload): boolean {
+    // IC04 §27: "source" 模式下 usage 事件只做 token accounting ——
+    // model_call unit 由 RetryCoordinator source-counted（retry 也消耗
+    // 真实 Provider call，事件流看不到；避免 double count）。
+    if (this.modelCallAuthority === "source") {
+      return this.observeTokens(usage)
+    }
     // Model calls: the round's FIRST usage event (estimate or provider) —
     // the kernel emits an estimate before the provider-final usage, so
     // counting on the first event trips the guard before any tool of that

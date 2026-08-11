@@ -166,8 +166,8 @@ describe("状态机 STALLED 终态", () => {
   })
 })
 
-describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 承接 GS-P2）", () => {
-  test("provider 每轮只有截断无产出 → stopReason=stalled，不无限循环", async () => {
+describe("kernel 级：截断空轮 3 连 → STALLED 终止（IC04 truncation ladder，§13）", () => {
+  test("provider 每轮只有截断无产出 → stopReason=stalled，第 4 次 provider round 不得发生", async () => {
     const SAVED_ORCANA_FLASH_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
     process.env.ORCANA_FLASH_TRIAGE = "off"
 
@@ -187,9 +187,10 @@ describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 承接 GS-P
       stopReasons.push(input.reason)
       return {}
     })
+    const provider = new TruncatedEmptyProvider()
     const events: StreamEvent[] = []
     for await (const event of agentLoop("inspect the project state", {
-      provider: new TruncatedEmptyProvider(),
+      provider,
       model: "test",
       tools: probeTool(),
       hooks,
@@ -203,18 +204,19 @@ describe("kernel 级：截断空轮 4 连 → STALLED 终止（GS-01 承接 GS-P
     if (SAVED_ORCANA_FLASH_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
     else process.env.ORCANA_FLASH_TRIAGE = SAVED_ORCANA_FLASH_TRIAGE
 
-    // GS-P2：连续 4 轮无进展必须终止 STALLED（而非无限重试）
+    // IC04 §13: 连续 3 轮 no-action truncation → STALLED(truncation)，
+    // 第 4 次同类 provider round 绝不发生（TRUNCATION_LADDER_UNBOUNDED = 0）。
     expect(stopReasons).toEqual(["stalled"])
+    expect(provider.rounds).toBeLessThanOrEqual(3)
     const stalledEvents = events.filter(e => e.type === "status" && String(e.data).includes("STALLED"))
     expect(stalledEvents.length).toBeGreaterThanOrEqual(1)
     const diag = events.find(e => e.type === "error" && String(e.data).includes("运行停滞"))
     expect(diag).toBeDefined()
-    // 4 轮无进展 + 首轮基准 = 5 次 provider round 内必须终止
     const stalledRoundTrace = trace.events.find(e => e.type === "agent_loop_stalled")
     expect(stalledRoundTrace).toBeDefined()
-    // 每轮 progress_delta trace（GS-P6）必须存在
+    // 每轮 progress_delta trace（GS-P6）必须存在（3 轮截断空轮均评价）。
     const deltas = trace.events.filter(e => e.type === "progress_delta")
-    expect(deltas.length).toBeGreaterThanOrEqual(5)
+    expect(deltas.length).toBeGreaterThanOrEqual(3)
   })
 })
 

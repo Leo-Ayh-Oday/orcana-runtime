@@ -97,6 +97,13 @@ export interface ProviderFailureRecoveryInput {
   /** PR-GATE-06：Run 级 RetryLedger —— 同一 round 的轮续跑（truncation 类）
    *  最多一次，预算与 provider/capability/repair 层共享。 */
   retryLedger?: RetryLedger
+  /**
+   * IC04 §40: Run 级 RetryCoordinator —— tool protocol constrained recovery
+   * 的 authorization 唯一来源（不再直接 retryLedger.canRetry/record）。
+   */
+  retryCoordinator?: import("../../runtime/retry/coordinator").RetryCoordinator
+  /** IC04 §40/§43: 本轮已越过 side-effect boundary → 禁止重发（hard deny）。 */
+  sideEffectBoundaryCrossed?: boolean
 }
 
 export interface ProviderFailureRecoveryDecision {
@@ -141,9 +148,16 @@ export function decideProviderFailureRecovery(
     // TB2-1: run 级指纹（非 per-round）——整次运行最多恢复一次，
     // 第二次仍失败立即 provider_failure，不烧完整上下文和剩余轮次。
     const fingerprint = "tool_protocol:run"
-    const ledgerAllows = !input.retryLedger || input.retryLedger.canRetry("tool", fingerprint)
+    // IC04 §40/§43: authorization 唯一来源 RetryCoordinator ——
+    // side-effect boundary crossed → hard deny（禁止重发）。
+    const permit = input.retryCoordinator
+      ? input.retryCoordinator.authorizeRetry({ retryClass: "tool", fingerprint, sideEffectBoundaryCrossed: input.sideEffectBoundaryCrossed })
+      : input.retryLedger?.canRetry("tool", fingerprint)
+        ? { allowed: true }
+        : { allowed: false }
+    const ledgerAllows = input.retryCoordinator ? permit.allowed : (input.retryLedger?.canRetry("tool", fingerprint) ?? false)
     if (ledgerAllows && input.round + 1 < input.maxRounds) {
-      input.retryLedger?.record("tool", fingerprint)
+      if (!input.retryCoordinator) input.retryLedger?.record("tool", fingerprint)
       return {
         action: "continue",
         reduceThinking: true,
@@ -188,16 +202,50 @@ export function decideProviderFailureRecovery(
   // PR-GATE-06：轮续跑属于 truncation 类 —— 同一 round 经 ledger 严格限次
   // （truncation <= 1），不再只依赖 maxRounds 宽松边界。
   const roundFingerprint = `truncation:${input.round}`
-  const ledgerAllows = !input.retryLedger || input.retryLedger.canRetry("truncation", roundFingerprint)
+  // IC04 P1-8: coordinated runtime 的 legacy/custom retryable failure 走
+  // coordinator-owned typed compatibility recovery（recovery gate 续跑，
+  // 明确注释）—— 绝不得使用 RetryClass.truncation 做 generic transport
+  // continuation（RETRY_DECISION_OUTSIDE_COORDINATOR = 0、
+  // TRUE_TRUNCATION_GENERIC_RETRY = 0）：coordinated 下不 canRetry /
+  // 不 record truncation；续跑限次由 RetryCoordinator 的 global physical
+  // cap（每次续跑 = 新的 initial provider request 授权）+ maxRounds 共同
+  // 承担（有界）。仅 standalone（无 coordinator）保留 legacy ledger 语义。
+  // "coordinated" = 存在 RetryCoordinator（retry decision authority）。
+  const coordinated = input.retryCoordinator !== undefined
+  const ledgerAllows = coordinated
+    ? true
+    : (!input.retryLedger || input.retryLedger.canRetry("truncation", roundFingerprint))
   const canRetry = ledgerAllows && input.round + 1 < input.maxRounds
   const assistantContext: ProviderMessage[] = input.finalText.trim()
     ? [{ role: "assistant", content: compactAssistantContext(input.finalText) }]
     : []
 
+  // IC04 Correction #2 Blocker A: coordinated runtime 的 generic
+  // legacy/custom retryable failure 一律 fail-closed break provider_failure
+  // （三个 production Provider 已 structured，generic whole-round retry 无
+  // 生产路径）—— 绝不 continue、绝不 RetryLedger.record("truncation")、
+  // 绝不 RetryCoordinator.authorizeRetry("truncation")（true truncation 只
+  // 属于 LoopSupervisor）。taskTracker 存在与否都 break。standalone /
+  // no-coordinator legacy compatibility 保留旧逻辑。
+  if (coordinated) {
+    return {
+      action: "break",
+      status: "provider-stream-gate: fail-closed (coordinated runtime — no generic round continuation)",
+      messages: [],
+      emitError: !failure.yielded,
+      trace: {
+        gate: "provider_stream",
+        decision: "blocked",
+        reason: "coordinated_fail_closed",
+        error: failure.message,
+      },
+    }
+  }
+
   if (input.taskTracker) {
     const missing = missingTaskRequirements(input.taskTracker)
     if (canRetry) {
-      input.retryLedger?.record("truncation", roundFingerprint)
+      if (!coordinated) input.retryLedger?.record("truncation", roundFingerprint)
       return {
         action: "continue",
         status: "provider-stream-gate: retrying unfinished long task",
@@ -241,6 +289,8 @@ export function decideProviderFailureRecovery(
   }
 
   if (canRetry) {
+    // 仅 standalone / no-coordinator 可达（coordinated 已在上方 fail-closed
+    // break）—— legacy compatibility，不触达 coordinated production path。
     input.retryLedger?.record("truncation", roundFingerprint)
     return {
       action: "continue",

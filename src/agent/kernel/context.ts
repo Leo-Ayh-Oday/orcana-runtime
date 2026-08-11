@@ -46,6 +46,9 @@ import { setShellSandbox } from "../../tools/shell"
 import { setActiveMode } from "../mode-contract"
 import { ToolExecutionLedger } from "../tool-ledger"
 import { ProgressGovernor, resolveProgressConfig } from "./progress-governor"
+import { LoopSupervisor } from "./loop-supervisor"
+import { getRunRetryCoordinator } from "../../runtime/execution-context"
+import { withRetryCoordinator } from "../../provider/retry"
 import { StateMachine, AgentState } from "../state-machine"
 import { createEpochState, epochThresholdsForContext } from "../context-epoch"
 import type { LoopDecision, RunPhaseContext } from "./types"
@@ -145,6 +148,9 @@ export async function buildRunContext(
   lifecycle: AgentRunLifecycleState,
 ): Promise<BuildRunContextResult> {
   const { provider, model, tools, stagedContext, hooks } = options
+  // IC04 §31: 所有 run-scoped provider 调用（主 round / flash / judge /
+  // compaction 等）自动携带同一 RetryCoordinator（run-scoped provider wrapper）。
+  const coordinatedProvider = withRetryCoordinator(provider, getRunRetryCoordinator())
   const planStore = options.planStore ?? requireRuntimeExecutionContext().planStore
   const artifactStore = options.artifactStore
   const runId = options.runId
@@ -179,7 +185,9 @@ export async function buildRunContext(
       if (evictedUserTexts.length >= 3) {
         try {
           const distilled = await distillUserConstraints(
-            provider,
+            // P0-2: run-scoped Provider subcall 必须经 coordinatedProvider ——
+            // distillation 的 physical request 计入同一 RetryCoordinator。
+            coordinatedProvider,
             options.modelRouter?.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash",
             evictedUserTexts,
             options.abortSignal,
@@ -255,7 +263,7 @@ export async function buildRunContext(
   const flashTriagePolicy = options.flashTriagePolicy ?? resolveFlashTriagePolicy()
   const flashTriageEnabled = shouldUseFlashTriage(flashTriagePolicy, effectivePrompt, contextKernel.text)
   const triageModel = options.modelRouter?.selectForPurpose("flash_triage") ?? "deepseek-v4-flash"
-  const flashTriage = flashTriageEnabled ? new FlashTriage(provider, triageModel) : null
+  const flashTriage = flashTriageEnabled ? new FlashTriage(coordinatedProvider, triageModel) : null
   const triageResult = flashTriage ? await flashTriage.triage(effectivePrompt, contextKernel.text) : null
   let initialIntentPolicy: ReturnType<typeof classifyIntent>
   let initialTaskTracker: ReturnType<typeof createTaskTracker> = null
@@ -335,7 +343,7 @@ export async function buildRunContext(
   const cacheStableTools = process.env.ORCANA_CACHE_STABLE_TOOLS !== "0"
   const confidenceEvaluator = new ConfidenceEvaluator()
   const judgeModel = options.modelRouter?.selectForPurpose("completion_judge") ?? "deepseek-v4-flash"
-  const flashJudge = new FlashJudge(provider, judgeModel)
+  const flashJudge = new FlashJudge(coordinatedProvider, judgeModel)
   const testimonyLedger = new TestimonyLedger()
   const permissionGate = new PermissionGate()
   // Load user + project permission configs.
@@ -370,8 +378,10 @@ export async function buildRunContext(
   // GATE-05: GateOverflow 已删除（断环职责并入 ProgressGovernor）——
   // deferredGateMessages 保留给 revise-plan 等通用延迟消息。
   const deferredGateMessages: string[] = []
-  // GATE-03 v2: run-scoped liveness ledger — one governor per run（GS-P1~P6 配置）。
+  // GATE-03 v2: run-scoped liveness fact engine — one governor per run（GS-P1~P6 配置）。
   const progressGovernor = new ProgressGovernor(resolveProgressConfig())
+  // IC04: LoopSupervisor 拥有 ProgressGovernor —— liveness decision authority。
+  const loopSupervisor = new LoopSupervisor(progressGovernor)
   options.runTrace?.record("agent_loop_started", { maxRounds, toolCount: tools.length })
 
   // L1 ownership: Router State remains the legacy behavior driver.
@@ -390,7 +400,7 @@ export async function buildRunContext(
 
   const ctx: RunPhaseContext = {
     options,
-    provider,
+    provider: coordinatedProvider,
     model,
     tools,
     hooks,
@@ -439,6 +449,7 @@ export async function buildRunContext(
     deferredGateMessages,
     sm,
     progressGovernor,
+    loopSupervisor,
     contextMap: {
       runtimeContextMap: null,
       contextMapContext: "",

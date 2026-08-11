@@ -3,6 +3,7 @@ import { createPlanStore, type PlanStore } from "../agent/run/plan-store"
 import type { AgentRunToolRegistry } from "../agent/run/tool-registry"
 import type { TrustedExecutionAuthority } from "./linux/contracts"
 import { createRetryLedger, type RetryLedger } from "./retry-ledger"
+import { RetryCoordinator, type RetryCoordinator as RetryCoordinatorType } from "./retry/coordinator"
 import {
   workspaceIoAuthorityFromTrusted,
   type WorkspaceIoAuthority,
@@ -208,6 +209,37 @@ const RUN_RETRY_LEDGER = createRuntimeContextKey<RetryLedger>(
  * 所有层共享同一实例 —— 这是 PR-GATE-06 的核心语义；不缓存会在
  * legacy/无 ALS 路径每次调用都新建 ledger，预算形同虚设）。
  */
+export interface RunRetryCoordinatorBinding {
+  ledger: RetryLedger
+  coordinator: import("./retry/coordinator").RetryCoordinator
+}
+
+const RUN_RETRY_COORDINATOR = createRuntimeContextKey<RetryCoordinatorType | undefined>(
+  "run-retry-coordinator",
+  () => undefined,
+)
+
+/**
+ * IC04 §29/§30: 当前 Run 的 RetryCoordinator（retry decision authority）。
+ * 与 getRunRetryLedger 绑定同一账本实例；懒创建（direct agentLoop 未显式
+ * 注入时自建 numeric hard cap）。整个 run 只有一个 coordinator。
+ */
+export function getRunRetryCoordinator(): RetryCoordinatorType {
+  const context = getActiveRuntimeExecutionContext() ?? legacyCompatibilityContext
+  if (context.values.has(RUN_RETRY_COORDINATOR.id)) {
+    return context.values.get(RUN_RETRY_COORDINATOR.id) as RetryCoordinatorType
+  }
+  const ledger = getRunRetryLedger()
+  const coordinator = new RetryCoordinator({ ledger })
+  context.values.set(RUN_RETRY_COORDINATOR.id, coordinator)
+  return coordinator
+}
+
+/** 显式覆盖当前 Run 的 RetryCoordinator（harness / caller 注入共享实例）。 */
+export function setRunRetryCoordinator(coordinator: RetryCoordinatorType): void {
+  setRuntimeContextValue(RUN_RETRY_COORDINATOR, coordinator)
+}
+
 export function getRunRetryLedger(): RetryLedger {
   const context = getActiveRuntimeExecutionContext() ?? legacyCompatibilityContext
   if (context.values.has(RUN_RETRY_LEDGER.id)) {

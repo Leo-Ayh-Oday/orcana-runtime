@@ -172,7 +172,7 @@ describe("IC01 BoundedFileReader: stat / 普通文件 / abort / 二进制", () =
     let chunksSeen = 0
     const promise = reader.readFile(SPARSE, {
       signal: controller.signal,
-      onChunk: (_bytes, index) => {
+      onChunk: (_position, _bytes, index) => {
         chunksSeen = index
         if (index === 2) controller.abort()
       },
@@ -503,20 +503,21 @@ describe("IC01-R4 单遍快照 —— 同一批 chunk 消费（READ_OFFSET_DUPLI
     const content = "head-line\n" + "z".repeat(size - 10)
     writeFileSync(p, content, "utf-8")
     const reader = new BoundedFileReader({ chunkSize: 4096 })
-    const offsets: number[] = []
-    let total = 0
+    const reads: Array<{ position: number; bytesRead: number }> = []
     const snap = await reader.readAtomicSnapshot(p, { start: 5000, length: 300 }, {
-      onChunk: (bytesRead) => {
-        offsets.push(total)
-        total += bytesRead
+      onChunk: (position, bytesRead) => {
+        reads.push({ position, bytesRead })
       },
     })
-    // 单遍：chunk 数 == ceil(size/chunkSize)，偏移严格递增且连续，总字节 == size。
-    expect(offsets.length).toBe(Math.ceil(size / 4096))
-    expect(total).toBe(size)
-    for (let i = 0; i < offsets.length; i++) {
-      expect(offsets[i]).toBe(i * 4096)
+    // 单遍：chunk 数 == ceil(size/chunkSize)；读取区间 [position, position+bytesRead)
+    // 单调、连续、无重叠、总覆盖恰好一次（直接断言真实 read position）。
+    expect(reads.length).toBe(Math.ceil(size / 4096))
+    for (let i = 0; i < reads.length; i++) {
+      expect(reads[i]!.position).toBe(i * 4096)
     }
+    const covered = reads.reduce((n, r) => n + r.bytesRead, 0)
+    expect(covered).toBe(size)
+    expect(reads[0]!.position).toBe(0)
     // 选区内容与哈希来自同一遍字节流。
     expect(snap.buffer.toString("utf-8")).toBe(content.slice(5000, 5300))
     expect(snap.wholeFileSha256).toBe(fingerprintContent(content).sha256)
@@ -529,32 +530,36 @@ describe("IC01-R4 单遍快照 —— 同一批 chunk 消费（READ_OFFSET_DUPLI
     const content = "first line\nsecond line\n" + "m".repeat(size - 23)
     writeFileSync(p, content, "utf-8")
     const reader = new BoundedFileReader({ chunkSize: 4096 })
-    const offsets: number[] = []
-    let total = 0
+    const reads: Array<{ position: number; bytesRead: number }> = []
     const result = await reader.readLineWindow(p, 0, 2, {
       wholeFileHashBudgetBytes: 1024 * 1024,
-      onChunk: (bytesRead) => {
-        offsets.push(total)
-        total += bytesRead
+      onChunk: (position, bytesRead) => {
+        reads.push({ position, bytesRead })
       },
     })
-    // 扫描 + 哈希续扫 = 恰好 ceil(size/chunkSize) 个连续 chunk —— 无窗口重读。
-    expect(offsets.length).toBe(Math.ceil(content.length / 4096))
-    expect(total).toBe(content.length)
+    // 扫描 + 哈希续扫 = 恰好 ceil(size/chunkSize) 个连续 chunk —— 无窗口重读
+    // （直接断言真实 read position 单调连续、总覆盖恰好一次）。
+    expect(reads.length).toBe(Math.ceil(content.length / 4096))
+    for (let i = 0; i < reads.length; i++) {
+      expect(reads[i]!.position).toBe(i * 4096)
+    }
+    const covered = reads.reduce((n, r) => n + r.bytesRead, 0)
+    expect(covered).toBe(content.length)
     expect(result.text).toBe("first line\nsecond line")
     expect(result.wholeFileSha256).toBe(fingerprintContent(content).sha256)
     expect(result.wholeFileHashBudgeted).toBe(true)
 
     // 无 expectedHash：窗口在首个 chunk 内定位并捕获 —— 只有 1 次读取。
-    const offsets2: number[] = []
-    let total2 = 0
+    const reads2: Array<{ position: number; bytesRead: number }> = []
     const r2 = await reader.readLineWindow(p, 0, 2, {
-      onChunk: (bytesRead) => {
-        offsets2.push(total2)
-        total2 += bytesRead
+      onChunk: (position, bytesRead) => {
+        reads2.push({ position, bytesRead })
       },
     })
-    expect(offsets2.length).toBe(1)
+    expect(reads2.length).toBe(1)
+    expect(reads2[0]!.position).toBe(0)
+    // 窗口在首个 chunk 内定位完成 → 单次读取即结束（读取区间 = [0, chunkSize)）。
+    expect(reads2[0]!.bytesRead).toBe(4096)
     expect(r2.text).toBe("first line\nsecond line")
   })
 
@@ -566,7 +571,7 @@ describe("IC01-R4 单遍快照 —— 同一批 chunk 消费（READ_OFFSET_DUPLI
     let caught: unknown
     try {
       await reader.readAtomicSnapshot(p, { start: 0, length: 100 }, {
-        onChunk: async (_bytes, index) => {
+        onChunk: async (_position, _bytes, index) => {
           if (index === 2) {
             // 同 inode、同大小、内容不同的原地改写（mtime 前进到新 jiffy）。
             await rewriteUntilTick(p, "B".repeat(content.length))
@@ -589,7 +594,7 @@ describe("IC01-R4 单遍快照 —— 同一批 chunk 消费（READ_OFFSET_DUPLI
     try {
       await reader.readLineWindow(p, 0, 1, {
         wholeFileHashBudgetBytes: 1024 * 1024,
-        onChunk: async (_bytes, index) => {
+        onChunk: async (_position, _bytes, index) => {
           if (index === 2) {
             await rewriteUntilTick(p, "L0\n" + "B".repeat(50 * 1024))
           }
@@ -622,5 +627,149 @@ describe("IC01-R4 单遍快照 —— 同一批 chunk 消费（READ_OFFSET_DUPLI
     const full = await reader.readAtomicSnapshot(p, null)
     expect(full.hashBudgeted).toBe(true)
     expect(full.byteCount).toBe(size)
+  })
+})
+
+// ── IC01-R5: 跨 chunk 行窗口错行封闭（tail 绑定行号）+ exact scan budget ──
+
+describe("IC01-R5 跨 chunk 行窗口 —— tail 绑定行号，绝不包含 startLine 之前的字节", () => {
+  /** 表驱动：构造 prelude 行 + 长前一行（跨 chunk）+ TARGET 行，断言窗口
+   *  精确返回 TARGET（旧实现会把前一行前缀错误提升进目标窗口）。 */
+  const cases = [
+    { name: "前一行跨 3 chunk，目标行跨 2 chunk 有尾换行", chunkSize: 8, prevLen: 17, target: "TARGET-LINE-AB", tail: "\n", extra: "" },
+    { name: "同 chunk 双换行（前一行换行 + 目标行换行）", chunkSize: 16, prevLen: 9, target: "QQQ", tail: "\n", extra: "next\n" },
+    { name: "chunkSize=1 逐字节扫描", chunkSize: 1, prevLen: 5, target: "XY", tail: "\n", extra: "z\n" },
+    { name: "chunkSize=2", chunkSize: 2, prevLen: 7, target: "TARGET", tail: "\n", extra: "after\n" },
+    { name: "chunkSize=16 前一行恰整 chunk", chunkSize: 16, prevLen: 16, target: "T", tail: "\n", extra: "e\n" },
+    { name: "目标行无尾随换行（EOF）", chunkSize: 8, prevLen: 13, target: "LAST-NO-NEWLINE", tail: "", extra: "" },
+    { name: "前一行与目标行均为单字节", chunkSize: 2, prevLen: 1, target: "K", tail: "\n", extra: "m\n" },
+  ]
+
+  for (const c of cases) {
+    test(`chunkSize=${c.chunkSize} — ${c.name}：TARGET 精确返回，不含上一行`, async () => {
+      const p = join(ROOT, `r5-window-c${c.chunkSize}-${c.prevLen}.txt`)
+      // 前一行内容用可辨识字符（P），目标行用可辨识字符（T…）—— 断言绝不混入。
+      const prevLine = "P".repeat(c.prevLen)
+      const content = "prelude-line\n" + prevLine + "\n" + c.target + c.tail + c.extra
+      writeFileSync(p, content, "utf-8")
+      const reader = new BoundedFileReader({ chunkSize: c.chunkSize })
+      const startLine = 1 // 0-based：prelude 行后 → 前一行（P 行）
+      const result = await reader.readLineWindow(p, startLine + 1, 1, { scanToEof: true })
+      expect(result.text).toBe(c.target)
+      expect(result.text).not.toContain("P")
+      expect(result.text).not.toContain("prelude")
+      // 多行窗口：从 P 行开始 count=2 → P 行 + TARGET（含中间换行，无前导）。
+      const two = await reader.readLineWindow(p, startLine, 2, { scanToEof: true })
+      expect(two.text).toBe(prevLine + "\n" + c.target)
+      // startLine=0 的窗口（prelude 行）不受影响。
+      const first = await reader.readLineWindow(p, 0, 1, { scanToEof: true })
+      expect(first.text).toBe("prelude-line")
+    })
+  }
+
+  test("R5 审计复现：前一行跨 chunk，下一 chunk 同时含前一行换行 + 目标行换行 → 窗口精确 = 目标行", async () => {
+    const p = join(ROOT, "r5-audit-repro.txt")
+    // chunk 0 = 16 字节全 P（前一行前缀，无换行）；chunk 1 同时含前一行换行
+    // （offset 4）与目标行换行（offset 8）—— 旧实现把 16 字节 P 提升进窗口。
+    const content = "P".repeat(16) + "PPPP\n" + "QQQ\n" + "rest\n"
+    writeFileSync(p, content, "utf-8")
+    const reader = new BoundedFileReader({ chunkSize: 16 })
+    const result = await reader.readLineWindow(p, 1, 1, { scanToEof: true })
+    expect(result.text).toBe("QQQ")
+    expect(result.text).not.toContain("P")
+  })
+
+  test("窗口边界稳健性：startLine 深、count 大、无尾换行 EOF 组合", async () => {
+    const p = join(ROOT, "r5-deep-start.txt")
+    const lines = ["l0", "l1", "l2", "l3", "l4", "l5-no-newline"]
+    const content = lines.join("\n")
+    writeFileSync(p, content, "utf-8")
+    const reader = new BoundedFileReader({ chunkSize: 2 })
+    const result = await reader.readLineWindow(p, 4, 2, { scanToEof: true })
+    // startLine=4（l4）、count=2 → l4 + l5（无尾换行，EOF 行）。
+    expect(result.text).toBe("l4\nl5-no-newline")
+    expect(result.linesCount).toBe(2)
+    expect(result.totalLines).toBe(6)
+    expect(result.scannedToEof).toBe(true)
+    // offset-only（count=Infinity）：从 l3 到 EOF。
+    const inf = await reader.readLineWindow(p, 3, Number.POSITIVE_INFINITY, { scanToEof: true })
+    expect(inf.text).toBe("l3\nl4\nl5-no-newline")
+    expect(inf.truncated).toBe(false)
+  })
+})
+
+describe("IC01-R5 exact scan budget —— EOF 优先于预算，预算恰等于文件大小 = 完整成功", () => {
+  let p = ""
+  beforeAll(() => {
+    const dir = mkdtempSync(join(tmpdir(), "orcana-ic01-r5-budget-"))
+    p = join(dir, "r5-scan-budget.txt")
+    writeFileSync(p, "a\nb\n", "utf-8") // fileSize = 4
+  })
+
+  test("scanBudget === fileSize：count=Infinity → scannedToEof=true, truncated=false, 完整窗口", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(p, 0, Number.POSITIVE_INFINITY, { scanBudgetBytes: 4 })
+    expect(result.text).toBe("a\nb\n")
+    expect(result.scannedToEof).toBe(true)
+    expect(result.truncated).toBe(false)
+    expect(result.linesCount).toBe(2)
+    expect(result.totalLines).toBe(3) // 旧 split 语义：["a","b",""]
+  })
+
+  test("scanBudget === fileSize：有限 count=1 → 窗口完整成功", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(p, 0, 1, { scanBudgetBytes: 4 })
+    expect(result.text).toBe("a")
+    expect(result.scannedToEof).toBe(true)
+    expect(result.truncated).toBe(false)
+  })
+
+  test("scanBudget === fileSize：scanToEof=true → 完整成功", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(p, 0, 1, { scanBudgetBytes: 4, scanToEof: true })
+    expect(result.text).toBe("a")
+    expect(result.scannedToEof).toBe(true)
+    expect(result.truncated).toBe(false)
+    expect(result.totalLines).toBe(3) // 旧 split 语义（含尾空行）
+  })
+
+  test("scanBudget === fileSize：expectedHash 开启 → 完整哈希 + 完整窗口", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(p, 0, Number.POSITIVE_INFINITY, {
+      scanBudgetBytes: 4,
+      wholeFileHashBudgetBytes: 1024,
+    })
+    expect(result.text).toBe("a\nb\n")
+    expect(result.scannedToEof).toBe(true)
+    expect(result.truncated).toBe(false)
+    expect(result.wholeFileHashBudgeted).toBe(true)
+    expect(result.wholeFileSha256).toBe(fingerprintContent("a\nb\n").sha256)
+  })
+
+  test("scanBudget === fileSize - 1：诚实截断（scannedToEof=false, truncated=true）", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(p, 0, Number.POSITIVE_INFINITY, { scanBudgetBytes: 3 })
+    expect(result.text).toBe("a\nb") // 只扫到预算处
+    expect(result.scannedToEof).toBe(false)
+    expect(result.truncated).toBe(true)
+    expect(result.totalLines).toBeNull()
+  })
+
+  test("scanBudget === fileSize - 1 且窗口完整：仍诚实标记 truncated（扫描未完成）", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(p, 0, 1, { scanBudgetBytes: 3 })
+    expect(result.text).toBe("a")
+    expect(result.scannedToEof).toBe(false)
+    expect(result.truncated).toBe(true)
+  })
+
+  test("返回长度只由捕获范围/windowEnd/maxReturnBytes 决定（maxReturn 截断窗口）", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(p, 0, Number.POSITIVE_INFINITY, {
+      scanBudgetBytes: 4,
+      maxReturnBytes: 2,
+    })
+    expect(result.text).toBe("a\n")
+    expect(result.truncated).toBe(true)
   })
 })

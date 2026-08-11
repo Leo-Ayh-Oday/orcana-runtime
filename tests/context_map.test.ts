@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -248,5 +248,96 @@ describe("Context Map Pipeline", () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+// ── IC01-R5: 全部 ContextMap 导出入口 —— 无 authority 零探测、零 oracle ──
+
+describe("IC01-R5 全部导出入口 fail-closed —— 存在/不存在路径不可区分", () => {
+  const existRoot = createRepo()
+  const emptyRoot = mkdtempSync(join(tmpdir(), "orcana-ctx-r5-empty-"))
+  const archiveId = "ctx-000000000001"
+
+  beforeAll(() => {
+    // 存在 fixture：源文件 + 元数据 + secret + 归档。
+    mkdirSync(join(existRoot, "src"), { recursive: true })
+    writeFileSync(join(existRoot, "src", "index.ts"), "export const indexValue = 1\n", "utf-8")
+    writeFileSync(join(existRoot, "package.json"), '{"name":"fixture","main":"dist/index.js"}', "utf-8")
+    writeFileSync(join(existRoot, "README.md"), "fixture readme", "utf-8")
+    writeFileSync(join(existRoot, ".env"), "R5SECRET=1", "utf-8")
+    saveContextMap(existRoot, {
+      id: archiveId,
+      taskId: "t",
+      projectConstitution: { architectureNotes: [], codingRules: [], forbiddenActions: [], buildCommands: [], testCommands: [], knownPitfalls: [], importantFiles: [] },
+      repoStructure: { packageManager: "unknown", workspaces: [], sourceRoots: [], testRoots: [], configFiles: [], entrypoints: [], moduleHints: [] },
+      locateResult: { primaryFiles: [], secondaryFiles: [], relevantSymbols: [], definitions: [], references: [], suspectedTests: [], confidence: 0.2, unresolvedQuestions: [] },
+      sourceUnderstanding: { filesRead: [], dataFlowNotes: [], callFlow: [], invariants: [], assumptions: [], risks: [], likelyEditTargets: [] },
+      verificationHints: { commands: [], suspectedTests: [] },
+      confidence: 0.2,
+      blockers: [],
+    })
+  })
+
+  afterAll(() => {
+    rmSync(existRoot, { recursive: true, force: true })
+    rmSync(emptyRoot, { recursive: true, force: true })
+  })
+
+  /** 六个文件读取/元数据入口（无 authority 时必须确定性早退）。 */
+  const readEntries: Array<{ name: string; call: (root: string) => unknown }> = [
+    { name: "loadProjectConstitution", call: root => loadProjectConstitution(root, {}) },
+    { name: "scanRepoStructure", call: root => scanRepoStructure(root, {}) },
+    { name: "hybridLocate", call: root => hybridLocate(root, { userRequest: "indexValue export", keywords: ["indexvalue"] }, {}) },
+    { name: "buildSourceUnderstanding", call: root => buildSourceUnderstanding(root, ["src/index.ts", "missing.ts", "package.json"], {}) },
+    { name: "buildContextMap", call: root => buildContextMap(root, { taskId: "t", userRequest: "indexValue export" }, {}) },
+    { name: "loadContextMap", call: root => loadContextMap(root, archiveId, {}) },
+  ]
+
+  test("无 authority：存在 fixture 与空 fixture 的每个入口结果逐字一致（无路径存在性 oracle）", () => {
+    for (const entry of readEntries) {
+      const fromExists = JSON.stringify(entry.call(existRoot))
+      const fromEmpty = JSON.stringify(entry.call(emptyRoot))
+      expect(fromExists, entry.name).toBe(fromEmpty)
+    }
+  })
+
+  test("无 authority：probeCount=0 —— existsSync/statSync/readdirSync/readFileSync/realpathSync 零调用", async () => {
+    const fs = await import("node:fs")
+    const probes = [fs.existsSync, fs.statSync, fs.readdirSync, fs.readFileSync, fs.realpathSync]
+    const spies = probes.map(fn => spyOn(fs, fn.name as never) as never)
+    try {
+      for (const entry of readEntries) {
+        entry.call(existRoot)
+      }
+      for (const s of spies as Array<{ mock: { calls: unknown[] } }>) {
+        expect(s.mock.calls.length).toBe(0)
+      }
+    } finally {
+      for (const s of spies as Array<{ mockRestore: () => void }>) {
+        s.mockRestore()
+      }
+    }
+  })
+
+  test("有 authority：行为保持正常（元数据可见、文件可读、归档可加载）", () => {
+    const ws = wsFor(existRoot)
+    const constitution = loadProjectConstitution(existRoot, { workspace: ws })
+    expect(constitution.importantFiles).toContain("package.json")
+    const structure = scanRepoStructure(existRoot, { workspace: ws })
+    expect(structure.sourceRoots).toContain("src")
+    expect(structure.packageManager).not.toBe("unknown")
+    const located = hybridLocate(existRoot, { userRequest: "indexValue export", keywords: ["indexvalue"] }, { workspace: ws })
+    expect(located.primaryFiles).toContain("src/index.ts")
+    const understanding = buildSourceUnderstanding(existRoot, ["src/index.ts", "missing.ts"], { workspace: ws })
+    expect(understanding.filesRead).toContain("src/index.ts")
+    expect(understanding.filesRead).not.toContain("missing.ts")
+    const map = buildContextMap(existRoot, { taskId: "t", userRequest: "indexValue export" }, { workspace: ws })
+    expect(map.repoStructure.sourceRoots).toContain("src")
+    expect(map.locateResult.primaryFiles).toContain("src/index.ts")
+    expect(map.sourceUnderstanding.filesRead.length).toBeGreaterThan(0)
+    const archive = loadContextMap(existRoot, archiveId, { workspace: ws })
+    expect(archive?.id).toBe(archiveId)
+    const missing = loadContextMap(existRoot, "ctx-000000000002", { workspace: ws })
+    expect(missing).toBeNull()
   })
 })

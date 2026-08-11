@@ -6,7 +6,7 @@ import { testAuthorityFallback } from "../../../src/runtime/linux/broker"
 import { ResourceLedger } from "../../../src/runtime/linux/scheduler/resource-ledger"
 import { CgroupManager, type CgroupFs } from "../../../src/runtime/linux/cgroup/manager"
 import { LinuxExecutionError } from "../../../src/runtime/linux/errors"
-import type { ExecutionCellSpec } from "../../../src/runtime/linux/contracts"
+import type { ExecutionCellSpec, AgentExecutionDomain } from "../../../src/runtime/linux/contracts"
 import { join } from "node:path"
 
 function mockCgroupFs(): CgroupFs {
@@ -463,10 +463,12 @@ describe("IC02 acquisition transaction — fault injection", () => {
     expect((caught as Error).message).toMatch(/CGROUP_CONTROLLER_UNAVAILABLE/)
     const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
     const agent = join(run, "agent-a1")
-    // txn-created agent residue = 0；pre-existing run 不得被删。
+    // txn-created agent residue = 0。
     expect(fs.exists(agent)).toBe(false)
-    expect(fs.exists(run)).toBe(true)
-    await assertClean(broker, ledger, cgroup, { cgroupPaths: [agent] })
+    // 无 domain → run 层 broker-managed：本事务是最后（唯一）使用者 →
+    // last-user cleanup 回收 run（并行 Cell 存在时的保留语义由 P0-1C 验证）。
+    expect(fs.exists(run)).toBe(false)
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, agent] })
   })
 
   test("P0-1B: run pre-existing + agent 已建 + cell 部分创建失败 → agent/cell 清理、run 保留", async () => {
@@ -490,11 +492,76 @@ describe("IC02 acquisition transaction — fault injection", () => {
     const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
     const agent = join(run, "agent-a1")
     const cell = hierarchyPaths(cgroup.base, "r1", "a1", spec.identity.cellId).cell
-    // txn-created agent + 半建 cell 全清理；pre-existing run 保留。
+    // txn-created agent + 半建 cell 全清理；run 层 broker-managed → 最后
+    // 使用者（唯一 cell）回收（并行保留语义由 P0-1C 验证）。
     expect(fs.exists(agent)).toBe(false)
     expect(fs.exists(cell)).toBe(false)
+    expect(fs.exists(run)).toBe(false)
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, agent, cell] })
+  })
+
+  test("P0-1C: 共享 run parent 双 Cell —— creator 先退保留（并行存在），最后使用者回收（零残留）", async () => {
+    const fs = mockCgroupFs()
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    const ledger = makeLedger()
+    // 确定性顺序：A（creator）先到 after-create-cell 停住 → B 进入并停住 →
+    // 释放 A → A 结束（并行 B 存在 → run 保留）→ 释放 B → B 结束（最后
+    // 使用者 → run 全清）。双 latch，无 sleep。
+    let signalA!: () => void; let releaseA!: () => void
+    let signalB!: () => void; let releaseB!: () => void
+    const aReached = new Promise<void>(r => { signalA = r })
+    const aGate = new Promise<void>(r => { releaseA = r })
+    const bReached = new Promise<void>(r => { signalB = r })
+    const bGate = new Promise<void>(r => { releaseB = r })
+    let phase = 0
+    const hooks: BrokerTestHooks = {
+      waitAt: async p => {
+        if (p === "after-create-cell") {
+          if (phase === 0) { phase = 1; signalA(); await aGate }
+          else if (phase === 1) { phase = 2; signalB(); await bGate }
+        }
+      },
+    }
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, testHooks: hooks })
+    // 同 run（共享 run-r1 parent）、不同 agent（锁域不同，可并行）。
+    const specA = cellSpec({ identity: { cellId: "cell-A", runId: "r1", nodeRunId: "r1:n1", attempt: 1, agentId: "a1" } })
+    const specB = cellSpec({ identity: { cellId: "cell-B", runId: "r1", nodeRunId: "r1:n2", attempt: 1, agentId: "b1" } })
+    const pA = (async () => { for await (const _ of broker.execute(specA)) { /* drain */ } })()
+    await aReached // A 已建 run/agent/cell 并停住
+    const pB = (async () => { for await (const _ of broker.execute(specB)) { /* drain */ } })()
+    await bReached // B 已进入（run pre-existing）并停住
+    const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
+    const agentA = join(run, "agent-a1")
+    const agentB = join(run, "agent-b1")
+    releaseA() // A 结束（B 并行存在）
+    await pA
+    // creator 先退：共享 run parent 保留（B 活着）；A 自己的 agent 层回收。
     expect(fs.exists(run)).toBe(true)
-    await assertClean(broker, ledger, cgroup, { cgroupPaths: [agent, cell] })
+    expect(fs.exists(agentA)).toBe(false)
+    expect(ledger.outstanding().length).toBe(1) // 只剩 B
+    releaseB() // B 结束（最后使用者）
+    await pB
+    // last-user cleanup：run + agent-b1 全清，零残留。
+    expect(fs.exists(run)).toBe(false)
+    expect(fs.exists(agentB)).toBe(false)
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [run, agentA, agentB] })
+  })
+
+  test("P0-1D: AgentDomain parent（external）→ broker Cell 永不删 domain 层", async () => {
+    const fs = mockCgroupFs()
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    cgroup.createRun("r1")
+    cgroup.createAgent("r1", "dom") // domain 的 agent 层（external）
+    const domainAgentPath = hierarchyPaths(cgroup.base, "r1", "dom", "x").agent
+    const ledger = makeLedger()
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup })
+    const spec = cellSpec({ identity: { cellId: "cell-D", runId: "r1", nodeRunId: "r1:n", attempt: 1, agentId: "dom" } })
+    for await (const _ of broker.execute(spec, { domain: { agentId: "dom", cgroupPath: domainAgentPath } as unknown as AgentExecutionDomain })) { /* drain */ }
+    // cell 已清；domain 的 run/agent 层必须保留。
+    const cell = hierarchyPaths(cgroup.base, "r1", "dom", "cell-D").cell
+    expect(fs.exists(cell)).toBe(false)
+    expect(fs.exists(domainAgentPath)).toBe(true)
+    await assertClean(broker, ledger, cgroup)
   })
 
   test("F3: createRun 部分创建后抛错（ensure 已 mkdir → controller 授权失败）→ run hierarchy 清理", async () => {

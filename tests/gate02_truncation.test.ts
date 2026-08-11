@@ -283,6 +283,10 @@ describe("max_tokens 不进 generic retry（GS-03）", () => {
     }
     expect(result?.finishReason).toBe("malformed")
     expect(result?.toolCalls.length).toBe(0)
+    // IC03 (P0-1): consistency gate 改判 malformed 必须 fail closed ——
+    // failure 非空、non-retryable，绝不落入 kernel empty_round。
+    expect(result?.failure?.retryable).toBe(false)
+    expect(result?.failure?.kind).toBe("malformed")
   })
 })
 
@@ -394,5 +398,55 @@ describe("IC03 output budget contract", () => {
     expect(typeof budget.thinkingBudgetTokens).toBe("number")
     expect(typeof budget.actionReserveTokens).toBe("number")
     expect(typeof budget.totalRequestedTokens).toBe("number")
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IC03 Correction P1-1: no-thinking early-return 保留真实 ModelSpec cap
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("IC03 correction P1-1: noThinkingDecision 保留 ModelSpec cap", () => {
+  test("simple first round（roundNum=0）+ provider cap 2048 → thinking=undefined、total=2048", () => {
+    const state = createState() // roundNum = 0
+    const d = plan(state, {
+      prompt: "修复一个 bug",
+      intentMode: "long_task",
+      providerMaxOutputTokens: 2048,
+    })
+    expect(d.thinking).toBeUndefined()
+    expect(d.maxTokens).toBe(2048)
+    expect(d.outputBudget.providerMaxOutputTokens).toBe(2048)
+    expect(d.outputBudget.totalRequestedTokens).toBe(2048)
+    expect(d.outputBudget.thinkingBudgetTokens).toBe(0)
+    expect(d.outputBudget.actionReserveTokens).toBe(2048)
+    expect(d.outputBudget.totalRequestedTokens).toBeLessThanOrEqual(d.outputBudget.providerMaxOutputTokens)
+  })
+
+  test("no-tool-signal early-return（roundNum>0、priorTools 空）+ cap 已知 → cap 不丢失", () => {
+    const state = createState()
+    state.roundNum = 2
+    const d = plan(state, {
+      prompt: "修复一个 bug",
+      intentMode: "long_task",
+      providerMaxOutputTokens: 4096,
+    })
+    expect(d.thinking).toBeUndefined()
+    // 不依赖 MultiProvider clamp —— router 自己已把 cap 应用到计划。
+    expect(d.maxTokens).toBe(4096)
+    expect(d.outputBudget.providerMaxOutputTokens).toBe(4096)
+    expect(d.outputBudget.totalRequestedTokens).toBe(4096)
+    expect(d.outputBudget.thinkingBudgetTokens + d.outputBudget.actionReserveTokens).toBe(4096)
+  })
+
+  test("readonly simple path + cap 未知 → effective cap = desired envelope + 标记", () => {
+    const state = createState()
+    state.roundNum = 0
+    const d = plan(state, {
+      prompt: "修复一个 bug",
+      intentMode: "readonly",
+    })
+    expect(d.thinking).toBeUndefined()
+    expect(d.factors.includes("model-output-cap-unknown")).toBe(true)
+    expect(d.outputBudget.totalRequestedTokens).toBeLessThanOrEqual(d.outputBudget.providerMaxOutputTokens)
   })
 })

@@ -12,6 +12,7 @@ import type { RoundToolCall, ThinkingBlock } from "../run/types"
 import {
   failureFromProviderEvent,
   failureFromProviderException,
+  failureFromProviderFinish,
 } from "./failure-policy"
 import {
   createProviderRoundResult,
@@ -200,6 +201,12 @@ export async function* runProviderRound(
   // this round emitted; the provider enforces its own unsafeToRetry.
   const retryState: ProviderRoundRetryState = createProviderRoundRetryState()
   let finishSeen = false
+  // IC03 (P0-1): error 事件在结构化 finish 存在时只是可观测事件 ——
+  // retryability 由最终 finishReason 决定（FINISH_REASON_STRING_GUESSING_MAIN_PATH
+  // = 0）。字符串分类（failureFromProviderEvent）仅在 legacy/custom provider
+  // （无 structured finish）时作为 compatibility fallback 生效。
+  let lastProviderErrorMessage = ""
+  let lastProviderErrorObject: unknown
 
   try {
     for await (const event of streamProviderRoundEvents(input)) {
@@ -251,8 +258,9 @@ export async function* runProviderRound(
           result.stopReason = "truncated"
         }
       } else if (event.type === "error") {
-        const message = String(event.data ?? "")
-        result.failure = failureFromProviderEvent(message)
+        // IC03 (P0-1): 只保存可观测信息，不立即按字符串分类失败。
+        // 最终 failure 由结构化 finish 决定；无 finish 时走 legacy fallback。
+        lastProviderErrorMessage = String(event.data ?? "")
         yield event
       } else if (event.type === "truncated") {
         // GATE-02 (GS-03) + IC03 §22: max_tokens is TRUNCATED, not a failure —
@@ -265,16 +273,31 @@ export async function* runProviderRound(
     }
   } catch (error) {
     if (!parentSignal?.aborted) {
-      result.failure = failureFromProviderException(error)
-      yield { type: "error", data: result.failure.message }
+      lastProviderErrorMessage = error instanceof Error ? error.message : String(error)
+      lastProviderErrorObject = error
+      yield { type: "error", data: lastProviderErrorMessage }
     }
   }
 
-  // IC03: exactly-one structured finish —— 无 finish 事件时结构事件级 fallback。
-  if (!finishSeen) {
+  if (finishSeen) {
+    // IC03 (P0-1): structured path —— finishReason 是 failure authority。
+    // 先完成 finish consistency validation（不一致 → malformed），再按最终
+    // finishReason 生成 typed ProviderFailure。
+    enforceFinishConsistency(result)
+    // malformed（含 consistency gate 改判的）必须 fail closed ——
+    // 不允许 malformed + failure=undefined 落入 kernel empty_round。
+    result.failure = failureFromProviderFinish(result.finishReason, lastProviderErrorMessage || undefined)
+  } else {
+    // IC03 (P0-1): legacy compatibility —— 无 structured finish 的
+    // legacy/custom provider 才允许字符串分类与结构事件级 fallback。
+    if (lastProviderErrorObject !== undefined) {
+      result.failure = failureFromProviderException(lastProviderErrorObject)
+    } else if (lastProviderErrorMessage) {
+      result.failure = failureFromProviderEvent(lastProviderErrorMessage)
+    }
     legacyFinishFallback(result, parentSignal)
+    enforceFinishConsistency(result)
   }
-  enforceFinishConsistency(result)
 
   result.finalText = result.textChunks.join("")
   result.aborted = parentSignal?.aborted ?? false

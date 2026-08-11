@@ -236,9 +236,9 @@ export function decideThinkingPlan(
   const complexFirstRound = state.roundNum === 0 && score >= (profile?.intentMode === "readonly" ? 7 : 6)
 
   if (!complexFirstRound) {
-    if (state.roundNum === 0) return noThinkingDecision(state, score, factors, "简单首轮")
-    if (state.priorTools.length === 0) return noThinkingDecision(state, score, factors, "没有工具信号")
-    if (readonlyOnly && score < 7) return noThinkingDecision(state, score, factors, "简单只读路径")
+    if (state.roundNum === 0) return noThinkingDecision(state, score, factors, "简单首轮", profile)
+    if (state.priorTools.length === 0) return noThinkingDecision(state, score, factors, "没有工具信号", profile)
+    if (readonlyOnly && score < 7) return noThinkingDecision(state, score, factors, "简单只读路径", profile)
   }
 
   let thinking: ThinkingConfig
@@ -341,8 +341,15 @@ function noThinkingDecision(
   score: number,
   factors: string[],
   reason: string,
+  profile?: ThinkingProfile,
 ): ThinkingDecision {
-  const bounded = planOutputBudget(decideMaxTokens(undefined, state), undefined, state)
+  // IC03 (P1-1): no-thinking early-return 也必须把 profile（含真实
+  // providerMaxOutputTokens = ModelSpec cap）传给预算规划 —— cap 不得丢失。
+  const bounded = planOutputBudget(decideMaxTokens(undefined, state), undefined, state, profile)
+  if (profile?.providerMaxOutputTokens === undefined && !factors.includes("model-output-cap-unknown")) {
+    // IC03 §30: 上限未知时沿用 desired envelope 作为 effective cap + 标记。
+    factors.push("model-output-cap-unknown")
+  }
   return {
     thinking: undefined,
     maxTokens: bounded.maxTokens,

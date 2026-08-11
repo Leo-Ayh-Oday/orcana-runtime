@@ -135,6 +135,24 @@ export interface WorldDeltaManifest {
   readonly mutations: readonly WorldDeltaMutation[]
 }
 
+/** Canonical world-delta manifest（唯一 delta digest 格式真源；store 与
+ *  projection scanner 共用，禁止第二套 delta 编码）。 */
+export function worldDeltaManifest(
+  worldId: string,
+  branchId: string,
+  baseRevision: WorldRevision,
+  mutations: readonly WorldDeltaMutation[],
+): WorldDeltaManifest {
+  return {
+    schemaVersion: 1,
+    type: "world-delta",
+    worldId,
+    branchId,
+    baseRevision: baseRevision.toString(),
+    mutations,
+  }
+}
+
 export interface WorldCommitRequest {
   readonly worldId: string
   readonly branchId: string

@@ -49,6 +49,23 @@ class AlwaysToolProvider implements LLMProvider {
   }
 }
 
+/** IC03: partial text + truncated —— TRUNCATED_TEXT_AS_COMPLETION = 0。
+ *  第一轮吐出一段"像完成的话"然后截断（truncated_before_action）；
+ *  第二轮才给出真正最终答案。partial text 绝不能触发 Completion
+ *  Orchestrator 的 DONE。 */
+class PartialTextTruncatedProvider implements LLMProvider {
+  rounds = 0
+
+  async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    if (this.rounds++ === 0) {
+      yield { type: "text", data: "看起来任务已经完成了，一切都好。" }
+      yield { type: "truncated", data: { stopReason: "max_tokens", toolCalls: 0 } }
+      return
+    }
+    yield { type: "text", data: "REAL-FINAL-ANSWER" }
+  }
+}
+
 /** Yields nothing — hits the empty-round break path. */
 class EmptyProvider implements LLMProvider {
   async *streamChat(_options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
@@ -74,6 +91,40 @@ async function collect(iterable: AsyncIterable<StreamEvent>): Promise<StreamEven
   for await (const event of iterable) events.push(event)
   return events
 }
+
+describe("Agent kernel IC03 truncation gates", () => {
+  test("TRUNCATED_TEXT_AS_COMPLETION = 0: partial text + truncated 不得直接完成（下一轮继续）", async () => {
+    const trace = new MemoryTrace()
+    const stopReasons: string[] = []
+    const hooks = new HookSystem()
+    hooks.on(HookEvent.Stop, input => {
+      stopReasons.push(input.reason)
+      return {}
+    })
+    const provider = new PartialTextTruncatedProvider()
+    const events = await collect(agentLoop(
+      "Read only: inspect the kernel and summarize it. Do not edit or write files.",
+      {
+        provider,
+        model: "test",
+        tools: probeTool(),
+        hooks,
+        runTrace: trace as unknown as AgentRunTrace,
+        contextMapPolicy: "off",
+        maxRounds: 3,
+      },
+    ))
+
+    // 第二轮（complete）才终止 —— 第一轮的 partial text 没有触发完成。
+    expect(provider.rounds).toBeGreaterThanOrEqual(2)
+    expect(stopReasons).toEqual(["completed"])
+    // 真正的最终答案 exactly once；partial text 不作为完成答案（事件流中
+    // 只是普通文本）。
+    const realTexts = events.filter(e => e.type === "text" && e.data === "REAL-FINAL-ANSWER")
+    expect(realTexts).toHaveLength(1)
+    expect(trace.events.filter(e => e.type === "agent_loop_finished")).toHaveLength(1)
+  })
+})
 
 describe("Agent kernel L7 terminal switch", () => {
   test("emits the final text exactly once across buffered readonly rounds", async () => {

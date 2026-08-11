@@ -167,7 +167,7 @@ describe("max_tokens 不进 generic retry（GS-03）", () => {
     expect(isNonRetryableProviderStreamError("provider finish_reason=max_tokens: response hit the output token limit before completion")).toBe(true)
   })
 
-  test("truncated 事件经 round-runner 记入账本而非 failure（GS-03/GS-05）", async () => {
+  test("truncated 事件经 round-runner 记入账本而非 failure（GS-03/GS-05 + IC03 结构化）", async () => {
     const provider: LLMProvider = {
       async *streamChat(): AsyncGenerator<StreamEvent> {
         yield { type: "tool_call", data: { id: "call-1", name: "write_file", input: { path: "a.ts" } } }
@@ -191,9 +191,208 @@ describe("max_tokens 不进 generic retry（GS-03）", () => {
     }
 
     expect(events.some(e => e.type === "truncated")).toBe(true)
-    expect(result?.stopReason).toBe("truncated")
+    expect(result?.stopReason).toBe("truncated") // legacy compatibility
     expect(result?.failure).toBeUndefined()
     // 截断轮的 tool call 完整入账 —— 执行器照常执行，轮次不重试
     expect(result?.toolCalls.map(tc => tc.id)).toEqual(["call-1"])
+    // IC03: legacy truncated 事件 → 结构化 finish（结构事件级 fallback）
+    expect(result?.finishReason).toBe("truncated_after_action")
+    expect(result?.completedToolCallCount).toBe(1)
+    expect(result?.partialToolCall).toBe(false)
+  })
+
+  test("IC03: 结构化 finish 经 round-runner（truncated_before_action / partial）", async () => {
+    const cases: Array<{
+      events: StreamEvent[]
+      finishReason: ProviderRoundResult["finishReason"]
+      partial: boolean
+      toolCalls: number
+    }> = [
+      {
+        events: [
+          { type: "text", data: "partial text" },
+          { type: "finish", data: { finishReason: "truncated_before_action", rawStopReason: "max_tokens", completedToolCallCount: 0, partialToolCall: false } },
+        ],
+        finishReason: "truncated_before_action",
+        partial: false,
+        toolCalls: 0,
+      },
+      {
+        events: [
+          { type: "tool_call", data: { id: "call-1", name: "write_file", input: { path: "a.ts" } } },
+          { type: "finish", data: { finishReason: "truncated_after_action", rawStopReason: "max_tokens", completedToolCallCount: 1, partialToolCall: false } },
+        ],
+        finishReason: "truncated_after_action",
+        partial: false,
+        toolCalls: 1,
+      },
+      {
+        events: [
+          { type: "finish", data: { finishReason: "truncated_partial_tool", rawStopReason: "max_tokens", completedToolCallCount: 1, partialToolCall: true } },
+        ],
+        finishReason: "truncated_partial_tool",
+        partial: true,
+        toolCalls: 0,
+      },
+    ]
+    for (const c of cases) {
+      const provider: LLMProvider = {
+        async *streamChat(): AsyncGenerator<StreamEvent> {
+          for (const e of c.events) yield e
+        },
+      }
+      const iterator = runProviderRound({
+        provider,
+        request: { model: "test", purpose: "agent_main", system: "s", messages: [], maxTokens: 10 },
+        bufferText: true,
+      })
+      let result: ProviderRoundResult | undefined
+      while (true) {
+        const next = await iterator.next()
+        if (next.done) {
+          result = next.value
+          break
+        }
+      }
+      expect(result?.finishReason).toBe(c.finishReason)
+      expect(result?.partialToolCall).toBe(c.partial)
+      expect(result?.toolCalls.length).toBe(c.toolCalls)
+      expect(result?.failure).toBeUndefined()
+    }
+  })
+
+  test("IC03 consistency gate: finish 与 toolCalls 不一致 → malformed，不执行 Tool", async () => {
+    // truncated_after_action 声明 1 个但 0 个 tool_call —— fail-closed。
+    const provider: LLMProvider = {
+      async *streamChat(): AsyncGenerator<StreamEvent> {
+        yield { type: "finish", data: { finishReason: "truncated_after_action", rawStopReason: "max_tokens", completedToolCallCount: 1, partialToolCall: false } }
+      },
+    }
+    const iterator = runProviderRound({
+      provider,
+      request: { model: "test", purpose: "agent_main", system: "s", messages: [], maxTokens: 10 },
+      bufferText: true,
+    })
+    let result: ProviderRoundResult | undefined
+    while (true) {
+      const next = await iterator.next()
+      if (next.done) {
+        result = next.value
+        break
+      }
+    }
+    expect(result?.finishReason).toBe("malformed")
+    expect(result?.toolCalls.length).toBe(0)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IC03: ProviderOutputBudgetPlan —— 预算在 Provider 请求形成前知道真实上限
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("IC03 output budget contract", () => {
+  function planWith(profile: ThinkingProfile & { providerMaxOutputTokens?: number }) {
+    const d = plan(createState(), profile)
+    return { d, budget: d.outputBudget }
+  }
+
+  test("8K model：total ≤ 8192、execution action reserve ≥ 4096、thinking ≤ 4096、thinking+action=total", () => {
+    const { budget } = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "execution",
+      providerMaxOutputTokens: 8192,
+    })
+    expect(budget.totalRequestedTokens).toBeLessThanOrEqual(8192)
+    expect(budget.actionReserveTokens).toBeGreaterThanOrEqual(4096)
+    expect(budget.thinkingBudgetTokens).toBeLessThanOrEqual(4096)
+    expect(budget.thinkingBudgetTokens + budget.actionReserveTokens).toBe(budget.totalRequestedTokens)
+    expect(budget.totalRequestedTokens).toBeLessThanOrEqual(budget.providerMaxOutputTokens)
+  })
+
+  test("4K model：先牺牲 thinking（thinking=0、action=4096、total=4096）", () => {
+    const { budget } = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "execution",
+      providerMaxOutputTokens: 4096,
+    })
+    expect(budget.totalRequestedTokens).toBe(4096)
+    expect(budget.thinkingBudgetTokens).toBe(0)
+    expect(budget.actionReserveTokens).toBe(4096)
+  })
+
+  test("16K+ model：total ≤ cap、action ≥ stage minimum、thinking 不饿死 action", () => {
+    const { budget } = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "execution",
+      providerMaxOutputTokens: 32768,
+    })
+    expect(budget.totalRequestedTokens).toBeLessThanOrEqual(32768)
+    expect(budget.actionReserveTokens).toBeGreaterThanOrEqual(4096)
+    expect(budget.actionReserveTokens).toBeGreaterThan(0)
+    expect(budget.thinkingBudgetTokens + budget.actionReserveTokens).toBe(budget.totalRequestedTokens)
+  })
+
+  test("recovery stage：容量足够时 action reserve ≥ 4096", () => {
+    const { budget } = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "recovery",
+      providerMaxOutputTokens: 16384,
+    })
+    expect(budget.actionReserveTokens).toBeGreaterThanOrEqual(4096)
+    expect(budget.thinkingBudgetTokens + budget.actionReserveTokens).toBe(budget.totalRequestedTokens)
+  })
+
+  test("ACTION_FIRST：thinking ≤ 2048，释放空间进入 actionReserveTokens", () => {
+    const { budget } = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "execution",
+      actionFirst: true,
+      providerMaxOutputTokens: 16384,
+    })
+    expect(budget.thinkingBudgetTokens).toBeLessThanOrEqual(2048)
+    // 释放出的空间全部进入 action reserve（守恒）。
+    expect(budget.thinkingBudgetTokens + budget.actionReserveTokens).toBe(budget.totalRequestedTokens)
+    expect(budget.actionReserveTokens).toBeGreaterThanOrEqual(16384 - 2048)
+  })
+
+  test("protocolRecovery：thinking ≤ 1024 且 action reserve 不减少", () => {
+    const { budget } = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "execution",
+      protocolRecovery: true,
+      providerMaxOutputTokens: 16384,
+    })
+    expect(budget.thinkingBudgetTokens).toBeLessThanOrEqual(1024)
+    expect(budget.actionReserveTokens).toBeGreaterThanOrEqual(4096)
+  })
+
+  test("cap 未知（legacy/custom）：沿用 desired envelope 作为 effective cap + 标记", () => {
+    const d = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "execution",
+    })
+    expect(d.d.factors.includes("model-output-cap-unknown")).toBe(true)
+    expect(d.budget.totalRequestedTokens).toBeLessThanOrEqual(d.budget.providerMaxOutputTokens)
+  })
+
+  test("thinking_decision trace 可观测 outputBudget（providerMaxOutputTokens/thinking/action/total）", () => {
+    const { budget } = planWith({
+      prompt: ARCHITECTURE_PROMPT,
+      intentMode: "long_task",
+      stage: "execution",
+      providerMaxOutputTokens: 8192,
+    })
+    // ThinkingDecision.outputBudget 全字段可观测（trace spread）。
+    expect(typeof budget.providerMaxOutputTokens).toBe("number")
+    expect(typeof budget.thinkingBudgetTokens).toBe("number")
+    expect(typeof budget.actionReserveTokens).toBe("number")
+    expect(typeof budget.totalRequestedTokens).toBe("number")
   })
 })

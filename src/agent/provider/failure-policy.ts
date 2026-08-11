@@ -1,5 +1,5 @@
 import { classifyProviderError } from "../../provider/retry"
-import type { ProviderMessage } from "../../provider/types"
+import type { ProviderFinishReason, ProviderMessage } from "../../provider/types"
 import {
   formatGenericProviderStreamBlockedReport,
   formatGenericProviderStreamRecoveryPrompt,
@@ -48,6 +48,42 @@ export function failureFromProviderException(error: unknown): ProviderFailure {
     yielded: true,
     // TB2-1: 类型化失败（auth_failure / quota_failure 等）随 error 对象携带。
     kind: typeof record.kind === "string" ? record.kind : undefined,
+  }
+}
+
+/**
+ * IC03 §19: typed finish → ProviderFailure 纯映射。
+ *
+ *  - complete / tool_action / truncated_* → NOT ProviderFailure（undefined）
+ *  - transport_failure → retryable（与 IC03 前策略兼容）
+ *  - auth_failure / quota_failure / malformed → non-retryable
+ *  - cancelled → non-retryable（cancellation semantics）
+ *
+ * 这是三个 production Provider 主路径的失败归类入口；
+ * isNonRetryableProviderStreamError() / failureFromProviderEvent() 保留为
+ * legacy/custom provider compatibility backstop（主路径不再依赖字符串 regex）。
+ */
+export function failureFromProviderFinish(
+  finishReason: ProviderFinishReason,
+  message?: string,
+): ProviderFailure | undefined {
+  switch (finishReason) {
+    case "complete":
+    case "tool_action":
+    case "truncated_before_action":
+    case "truncated_after_action":
+    case "truncated_partial_tool":
+      return undefined
+    case "transport_failure":
+      return { message: message ?? "provider transport failure", retryable: true, yielded: true, kind: "transport" }
+    case "auth_failure":
+      return { message: message ?? "provider auth failure", retryable: false, yielded: true, kind: "auth_failure" }
+    case "quota_failure":
+      return { message: message ?? "provider quota failure", retryable: false, yielded: true, kind: "quota_failure" }
+    case "malformed":
+      return { message: message ?? "provider response malformed", retryable: false, yielded: true, kind: "malformed" }
+    case "cancelled":
+      return { message: message ?? "provider round cancelled", retryable: false, yielded: true, kind: "cancelled" }
   }
 }
 

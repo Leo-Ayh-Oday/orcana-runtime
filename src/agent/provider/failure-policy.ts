@@ -220,6 +220,28 @@ export function decideProviderFailureRecovery(
     ? [{ role: "assistant", content: compactAssistantContext(input.finalText) }]
     : []
 
+  // IC04 Correction #2 Blocker A: coordinated runtime 的 generic
+  // legacy/custom retryable failure 一律 fail-closed break provider_failure
+  // （三个 production Provider 已 structured，generic whole-round retry 无
+  // 生产路径）—— 绝不 continue、绝不 RetryLedger.record("truncation")、
+  // 绝不 RetryCoordinator.authorizeRetry("truncation")（true truncation 只
+  // 属于 LoopSupervisor）。taskTracker 存在与否都 break。standalone /
+  // no-coordinator legacy compatibility 保留旧逻辑。
+  if (coordinated) {
+    return {
+      action: "break",
+      status: "provider-stream-gate: fail-closed (coordinated runtime — no generic round continuation)",
+      messages: [],
+      emitError: !failure.yielded,
+      trace: {
+        gate: "provider_stream",
+        decision: "blocked",
+        reason: "coordinated_fail_closed",
+        error: failure.message,
+      },
+    }
+  }
+
   if (input.taskTracker) {
     const missing = missingTaskRequirements(input.taskTracker)
     if (canRetry) {
@@ -267,6 +289,8 @@ export function decideProviderFailureRecovery(
   }
 
   if (canRetry) {
+    // 仅 standalone / no-coordinator 可达（coordinated 已在上方 fail-closed
+    // break）—— legacy compatibility，不触达 coordinated production path。
     input.retryLedger?.record("truncation", roundFingerprint)
     return {
       action: "continue",

@@ -88,4 +88,15 @@ export interface AgentOptions {
   /** PR-GATE-06: Run 级统一重试预算（harness 传入其 scope 的 ledger；
    *  注入后 loop 内 provider/round 重试与该 ledger 共享，预算跨层统一）。 */
   retryLedger?: import("../runtime/retry-ledger").RetryLedger
+  /**
+   * IC04 §30: run-scoped RetryCoordinator（retry decision authority）。
+   * 注入后整个 run 复用 caller 实例（禁止 new 第二份）；未注入时
+   * agentLoop 自建（numeric physical cap，§24 derived default）。
+   */
+  retryCoordinator?: import("../runtime/retry/coordinator").RetryCoordinator
+  /**
+   * IC04 §24: 显式 physical provider request 上限（优先级 2，仅次于
+   * harness budget.maxModelCalls）。
+   */
+  maxPhysicalProviderRequests?: number
 }

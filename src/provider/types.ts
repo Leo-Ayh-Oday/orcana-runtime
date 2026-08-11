@@ -148,6 +148,14 @@ export interface ProviderCallOptions {
    * 禁止各层独立无限重试）；未注入时回退构造时 maxRetries（legacy）。
    */
   retryLedger?: import("../runtime/retry-ledger").RetryLedger
+  /**
+   * IC04: Run 级 RetryCoordinator（retry decision authority）。注入后
+   * provider 的每次 physical attempt（initial + retry）在请求发出前经
+   * coordinator 授权（class budget + global physical request budget +
+   * side-effect boundary）。未注入时回退 retryLedger / maxRetries（legacy
+   * compatibility，§35）。MultiProvider spread 透传本字段。
+   */
+  retryCoordinator?: import("../runtime/retry/coordinator").RetryCoordinator
 }
 
 export interface LLMProvider {

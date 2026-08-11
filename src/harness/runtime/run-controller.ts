@@ -24,6 +24,7 @@ import { RunLifecycleMachine } from "./lifecycle-machine"
 import { BudgetGuard } from "./budget-guard"
 import { createRunCancellationWithTimeout } from "./cancellation"
 import type { LegacyLoopAdapter } from "./legacy-loop-adapter"
+import { RetryCoordinator, deriveMaxPhysicalProviderRequests } from "../../runtime/retry/coordinator"
 
 export interface RunControllerInput {
   adapter: LegacyLoopAdapter
@@ -43,7 +44,21 @@ export async function* runControlledRun(
   const machine = new RunLifecycleMachine(run, event => pending.push(event))
   // H4: wall-time watchdog + harness-layer budget guard (model/tool/token).
   const timed = createRunCancellationWithTimeout(controller, run.budget.limits.maxWallTimeMs)
-  const guard = new BudgetGuard(run.budget, reason => controller.abort(reason))
+  // IC04 §27/§55: AgentHarness production path —— model_call 由
+  // RetryCoordinator source-counted（"source" 模式），usage 事件只做 token
+  // accounting；budget.maxModelCalls 是 strict physical cap（§25）。
+  const guard = new BudgetGuard(run.budget, reason => controller.abort(reason), { modelCallAuthority: "source" })
+  // IC04 §24/§29: 同一 scope coordinator 覆盖 cap + external consumer。
+  const explicitModelCalls = run.budget.limits.maxModelCalls
+  run.scope.retryCoordinator = new RetryCoordinator({
+    ledger: run.scope.retryLedger,
+    maxPhysicalProviderRequests: explicitModelCalls < Number.MAX_SAFE_INTEGER
+      ? explicitModelCalls
+      : deriveMaxPhysicalProviderRequests(runInput.maxRounds ?? 50),
+    externalBudgetConsumer: {
+      tryConsume: () => guard.tryConsumeModelCall(),
+    },
+  })
 
   if (resumeInput) {
     // H7 resume path: waiting → resuming → running (no initializing).

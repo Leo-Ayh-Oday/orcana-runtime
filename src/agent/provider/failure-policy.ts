@@ -97,6 +97,13 @@ export interface ProviderFailureRecoveryInput {
   /** PR-GATE-06：Run 级 RetryLedger —— 同一 round 的轮续跑（truncation 类）
    *  最多一次，预算与 provider/capability/repair 层共享。 */
   retryLedger?: RetryLedger
+  /**
+   * IC04 §40: Run 级 RetryCoordinator —— tool protocol constrained recovery
+   * 的 authorization 唯一来源（不再直接 retryLedger.canRetry/record）。
+   */
+  retryCoordinator?: import("../../runtime/retry/coordinator").RetryCoordinator
+  /** IC04 §40/§43: 本轮已越过 side-effect boundary → 禁止重发（hard deny）。 */
+  sideEffectBoundaryCrossed?: boolean
 }
 
 export interface ProviderFailureRecoveryDecision {
@@ -141,9 +148,16 @@ export function decideProviderFailureRecovery(
     // TB2-1: run 级指纹（非 per-round）——整次运行最多恢复一次，
     // 第二次仍失败立即 provider_failure，不烧完整上下文和剩余轮次。
     const fingerprint = "tool_protocol:run"
-    const ledgerAllows = !input.retryLedger || input.retryLedger.canRetry("tool", fingerprint)
+    // IC04 §40/§43: authorization 唯一来源 RetryCoordinator ——
+    // side-effect boundary crossed → hard deny（禁止重发）。
+    const permit = input.retryCoordinator
+      ? input.retryCoordinator.authorizeRetry({ retryClass: "tool", fingerprint, sideEffectBoundaryCrossed: input.sideEffectBoundaryCrossed })
+      : input.retryLedger?.canRetry("tool", fingerprint)
+        ? { allowed: true }
+        : { allowed: false }
+    const ledgerAllows = input.retryCoordinator ? permit.allowed : (input.retryLedger?.canRetry("tool", fingerprint) ?? false)
     if (ledgerAllows && input.round + 1 < input.maxRounds) {
-      input.retryLedger?.record("tool", fingerprint)
+      if (!input.retryCoordinator) input.retryLedger?.record("tool", fingerprint)
       return {
         action: "continue",
         reduceThinking: true,

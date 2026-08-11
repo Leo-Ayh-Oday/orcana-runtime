@@ -371,6 +371,34 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
     if (selector?.kind === "byte_range" && typeof selector.start === "number") {
       const length = selector.length ?? 0
       const wsRead = getWorkspaceIoAuthority()
+      if (expectedHash) {
+        // IC01-R3: expectedHash 原子快照 —— 选区与全文件 SHA-256 必须来自
+        // 同一个已验证 fd；读取结束后复核 identity/size/mtime（fail closed）。
+        const snap = await WORKSPACE_FILE_READER.readAtomicSnapshot(
+          p,
+          { start: selector.start, length },
+          { signal: context?.abortSignal, validateOpen: openValidatorFor(wsRead, p) },
+        )
+        if (!snap.hashBudgeted) return wholeFileHashUnbudgeted(path, snap.totalBytes)
+        if (snap.wholeFileSha256 !== expectedHash) return staleFileResult(path)
+        if (snap.binary) return binaryFileResult(path, { totalBytes: snap.totalBytes, sha256: snap.wholeFileSha256 })
+        const selected = snap.buffer.toString("utf-8").split("\n").join("\n")
+        const fingerprint = fingerprintContent(snap.buffer)
+        const fileState = recordRuntimeFileRead({
+          path: p,
+          range: { kind: "selector" as never },
+          content: selected,
+          fingerprint,
+          totalLines: undefined,
+        })
+        return Result.ok(selected, {
+          path,
+          selected: true,
+          selectorKind: "byte_range",
+          bytes: snap.byteCount,
+          fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+        })
+      }
       const range = await WORKSPACE_FILE_READER.readRange(p, selector.start, length, {
         signal: context?.abortSignal,
         validateOpen: openValidatorFor(wsRead, p),
@@ -378,11 +406,6 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
       if (range.binary) return binaryFileResult(path, range)
       const selected = range.buffer.toString("utf-8").split("\n").join("\n")
       const fingerprint = fingerprintContent(range.buffer)
-      // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 绝不比较 range 选区哈希。
-      if (expectedHash) {
-        const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
-        if (blocked) return blocked
-      }
       const fileState = recordRuntimeFileRead({
         path: p,
         range: { kind: "selector" as never },
@@ -402,6 +425,39 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
     // ── selector: symbol —— 有界全量（maxFileBytes 上限）+ AST 定位 ──
     if (selector?.kind === "symbol" && typeof selector.name === "string") {
       const wsRead = getWorkspaceIoAuthority()
+      if (expectedHash) {
+        // IC01-R3: 内容与全文件哈希来自同一已验证 fd（原子快照）。
+        const snap = await WORKSPACE_FILE_READER.readAtomicSnapshot(
+          p,
+          null,
+          { signal: context?.abortSignal, validateOpen: openValidatorFor(wsRead, p) },
+        )
+        if (!snap.hashBudgeted) return wholeFileHashUnbudgeted(path, snap.totalBytes)
+        if (snap.wholeFileSha256 !== expectedHash) return staleFileResult(path)
+        if (snap.binary) return binaryFileResult(path, { totalBytes: snap.totalBytes, sha256: snap.wholeFileSha256 })
+        const content = snap.buffer.toString("utf-8")
+        const fingerprint = fingerprintContent(snap.buffer)
+        const span = findSymbolSpan(content, selector.name)
+        if (!span) return Result.fail(`Symbol not found: ${selector.name} in ${path}`)
+        const lines = content.split("\n")
+        const total = lines.length
+        const selectorLines = lines.slice(span.start, span.end)
+        const fileState = recordRuntimeFileRead({
+          path: p,
+          range: { kind: "selector" as never },
+          content: selectorLines.join("\n"),
+          fingerprint,
+          totalLines: total,
+          truncated: snap.truncated,
+        })
+        return Result.ok(selectorLines.join("\n"), {
+          path,
+          selected: true,
+          selectorKind: "symbol",
+          totalLines: total,
+          fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+        })
+      }
       const full = await WORKSPACE_FILE_READER.readFile(p, {
         signal: context?.abortSignal,
         validateOpen: openValidatorFor(wsRead, p),
@@ -409,11 +465,6 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
       if (full.binary) return binaryFileResult(path, full)
       const content = full.buffer.toString("utf-8")
       const fingerprint = fingerprintContent(full.buffer)
-      // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 绝不比较选区哈希。
-      if (expectedHash) {
-        const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
-        if (blocked) return blocked
-      }
       const span = findSymbolSpan(content, selector.name)
       if (!span) return Result.fail(`Symbol not found: ${selector.name} in ${path}`)
       const lines = content.split("\n")
@@ -474,19 +525,22 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
         scanToEof: info.size <= readCapBytes(),
         // P1-6: open 后 fd canonical 校验（check/open race 读取侧闭环）。
         validateOpen: openValidatorFor(workspace, p),
+        // IC01-R3: expectedHash 原子快照 —— 窗口与全文件 SHA-256 来自同一
+        // 已验证 fd（同一句柄内续扫哈希 + 结束复核，绝不二次按路径 open）。
+        wholeFileHashBudgetBytes: expectedHash ? WORKSPACE_FILE_READER.operationBudgetBytes : 0,
       })
       if (window.binary) return binaryFileResult(path, { totalBytes: info.size, sha256: window.sha256 })
+      // IC01-R3: expectedHash 只能是全文件 SHA-256 —— 窗口哈希绝不冒充；
+      // 全文件哈希预算不足 → 结构化拒绝该组合。
+      if (expectedHash) {
+        if (!window.wholeFileHashBudgeted) return wholeFileHashUnbudgeted(path, info.size)
+        if (window.wholeFileSha256 !== expectedHash) return staleFileResult(path)
+      }
       // 全文件哈希已知时构造完整基线指纹（sha256 语义与旧全量读一致）；
       // 超限文件只指纹窗口内容。
       const fingerprint = window.wholeFileSha256
         ? { sha256: window.wholeFileSha256, mtimeMs: info.mtimeMs, size: info.size }
         : fingerprintContent(Buffer.from(window.text, "utf-8"))
-      // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 超限文件的窗口哈希
-      // 绝不冒充全文件哈希；预算内流式计算全文件哈希，超出则结构化拒绝。
-      if (expectedHash) {
-        const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
-        if (blocked) return blocked
-      }
       const header = selector?.kind === "lines"
         ? ""
         : window.totalLines === null
@@ -510,6 +564,57 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
 
     // ── 全量有界读取（无 range 参数）—— maxFileBytes 上限，超出即截断 ──
     const wsRead = getWorkspaceIoAuthority()
+    if (expectedHash) {
+      // IC01-R3: 内容与全文件哈希来自同一个已验证 fd（原子快照）。
+      const snap = await WORKSPACE_FILE_READER.readAtomicSnapshot(
+        p,
+        null,
+        { signal: context?.abortSignal, validateOpen: openValidatorFor(wsRead, p) },
+      )
+      if (!snap.hashBudgeted) return wholeFileHashUnbudgeted(path, snap.totalBytes)
+      if (snap.wholeFileSha256 !== expectedHash) return staleFileResult(path)
+      if (snap.binary) return binaryFileResult(path, { totalBytes: snap.totalBytes, sha256: snap.wholeFileSha256 })
+      const content = snap.buffer.toString("utf-8")
+      const fingerprint = fingerprintContent(snap.buffer)
+      const lines = content.split("\n")
+      const total = lines.length
+
+      // Sub-agent mode: large file → structural analysis instead of raw dump.
+      if (total > LARGE_FILE_LINES) {
+        const analysis = analyzeCodeStructure(content, path)
+        const fileState = recordRuntimeFileRead({
+          path: p,
+          range: { kind: "full" },
+          content: analysis,
+          fingerprint,
+          totalLines: total,
+          truncated: true,
+        })
+        return Result.ok(analysis, {
+          path,
+          analyzed: true,
+          totalLines: total,
+          exportedSymbols: (analysis.match(/^  L/gm) ?? []).length,
+          fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+        })
+      }
+
+      const header = `[${path}] lines 1-${total} of ${total}\n`
+      const fileState = recordRuntimeFileRead({
+        path: p,
+        range: { kind: "full" },
+        content,
+        fingerprint,
+        totalLines: total,
+        truncated: snap.truncated,
+      })
+      return Result.ok(header + content, {
+        path,
+        lines: total,
+        total,
+        fileState: fileState ? { path: fileState.path, status: fileState.status, source: fileState.source } : undefined,
+      })
+    }
     const full = await WORKSPACE_FILE_READER.readFile(p, {
       signal: context?.abortSignal,
       validateOpen: openValidatorFor(wsRead, p),
@@ -518,12 +623,6 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
     const content = full.buffer.toString("utf-8")
     const fingerprint = fingerprintContent(full.buffer)
     // RT-6: expectedHash freshness — a stale read is a conflict, not a silent dump.
-    // IC01-R2: expectedHash 只能是全文件 SHA-256 —— 截断 buffer 的部分哈希
-    // 绝不冒充全文件哈希；预算内流式计算全文件哈希，超出则结构化拒绝。
-    if (expectedHash) {
-      const blocked = await verifyWholeFileHash(p, expectedHash, context?.abortSignal, getWorkspaceIoAuthority())
-      if (blocked) return blocked
-    }
     const lines = content.split("\n")
     const total = lines.length
 
@@ -566,38 +665,19 @@ async function read_file(params: Record<string, unknown>, context?: ToolExecutio
     if (e instanceof FileReadError && e.code === "ABORTED") {
       return Result.fail(`Read aborted: ${path}`)
     }
+    if (e instanceof FileReadError && e.code === "SNAPSHOT_CHANGED") {
+      return Result.fail(`SNAPSHOT_CHANGED: ${path} changed while being read (size/identity/mtime re-verification failed); retry the read`)
+    }
     return Result.fail(e instanceof Error ? e.message : String(e))
   }
 }
 
-/** IC01-R2: expectedHash 只能是全文件 SHA-256。预算内流式计算全文件哈希；
- *  文件超出全文件哈希预算 → 结构化拒绝该组合（WHOLE_FILE_HASH_UNBUDGETED），
- *  绝不静默降级成窗口/range 哈希。返回 blocked 结果或 undefined（通过）。 */
-async function verifyWholeFileHash(
-  path: string,
-  expectedHash: string,
-  signal: AbortSignal | undefined,
-  workspace: WorkspaceIoAuthority | undefined,
-): Promise<ToolResult | undefined> {
-  let hash
-  try {
-    hash = await WORKSPACE_FILE_READER.hashWholeFile(path, {
-      signal,
-      validateOpen: openValidatorFor(workspace, path),
-    })
-  } catch (e) {
-    if (e instanceof FileReadError && e.code === "ABORTED") {
-      return Result.fail(`Read aborted: ${path}`)
-    }
-    return Result.fail(e instanceof Error ? e.message : String(e))
-  }
-  if (!hash.budgeted) {
-    return Result.fail(
-      `WHOLE_FILE_HASH_UNBUDGETED: expectedHash requires a whole-file SHA-256, but ${path} is ${hash.totalBytes} bytes (whole-file hash budget ${WORKSPACE_FILE_READER.operationBudgetBytes} bytes); window/range hashes are never substituted for the whole-file hash — read without expectedHash instead`,
-    )
-  }
-  if (hash.sha256 !== expectedHash) return staleFileResult(path)
-  return undefined
+/** IC01-R3: 全文件哈希预算不足 → 结构化拒绝该组合（WHOLE_FILE_HASH_UNBUDGETED），
+ *  绝不静默降级成窗口/range 哈希。 */
+function wholeFileHashUnbudgeted(path: string, totalBytes: number): ToolResult {
+  return Result.fail(
+    `WHOLE_FILE_HASH_UNBUDGETED: expectedHash requires a whole-file SHA-256, but ${path} is ${totalBytes} bytes (whole-file hash budget ${WORKSPACE_FILE_READER.operationBudgetBytes} bytes); window/range hashes are never substituted for the whole-file hash — read without expectedHash instead`,
+  )
 }
 
 function staleFileResult(path: string): ToolResult {

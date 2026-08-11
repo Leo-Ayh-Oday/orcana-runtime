@@ -122,8 +122,10 @@ export interface ContextMapReadOptions {
   session?: ContextMapReadSession
 }
 
-/** IC01-R2: ContextMap 读取会话 —— 整次操作共享累计字节预算与 AbortSignal；
- *  所有文件读取经过权威强制 + open 后 fd canonical 校验（fail closed）。 */
+/** IC01-R2/R3: ContextMap 读取会话 —— 整次操作共享累计字节预算与 AbortSignal；
+ *  所有文件读取经过权威强制 + open 后 fd canonical 校验（fail closed）。
+ *  IC01-R3: 无 WorkspaceIoAuthority（无 ALS、未显式注入）时 fail closed ——
+ *  任何读取都被拒绝（authorityMissing=true），绝不隐式跳过强制与 fd 校验。 */
 export class ContextMapReadSession {
   readonly workspace: WorkspaceIoAuthority | undefined
   readonly signal: AbortSignal | undefined
@@ -134,11 +136,14 @@ export class ContextMapReadSession {
   budgetExhausted = false
   /** 信号中止（后续读取返回空）。 */
   aborted = false
+  /** IC01-R3: 无权威（无 ALS / 未显式注入）→ true；全部读取被拒绝。 */
+  readonly authorityMissing: boolean
   private readonly reader: BoundedFileReader
 
   constructor(options: ContextMapReadOptions = {}) {
     this.budgetBytes = options.budgetBytes ?? DEFAULT_OPERATION_BUDGET_BYTES
     this.workspace = options.workspace ?? getWorkspaceIoAuthority()
+    this.authorityMissing = this.workspace === undefined
     this.signal = options.signal
     this.reader = new BoundedFileReader({ operationBudgetBytes: this.budgetBytes })
   }
@@ -148,7 +153,8 @@ export class ContextMapReadSession {
   }
 
   /** 有界 + 权威强制的同步文本读取。
-   *  - 权威拒绝（秘密 / 越界 / symlink 逃逸 / hardlink 秘密 alias）→ ""
+   *  - 无权威（authorityMissing）→ fail closed，返回 ""（绝不放行）
+   *  - 权威拒绝（秘密 / 越界 / symlink 逃逸 / hardlink 未授权）→ ""
    *  - open 后 fd canonical 校验失败（fail closed）→ ""
    *  - 预算耗尽 / 中止 → ""（并置位标记，调用方循环提前退出）
    *  - 只分配 min(size, capBytes, maxFileBytes, 剩余预算) 字节。 */
@@ -158,11 +164,10 @@ export class ContextMapReadSession {
       this.aborted = true
       return ""
     }
+    if (this.authorityMissing) return ""
     // 权威读取强制（秘密 / 越界 / symlink 逃逸）—— lexical + canonical 双查。
-    if (this.workspace) {
-      const violation = enforceWorkspaceRead(this.workspace, path, path, lexicalRoot)
-      if (violation) return ""
-    }
+    const violation = enforceWorkspaceRead(this.workspace!, path, path, lexicalRoot)
+    if (violation) return ""
     let info
     try {
       info = this.reader.statSync(path)
@@ -177,12 +182,10 @@ export class ContextMapReadSession {
     }
     try {
       const buffer = this.reader.readSync(path, limit, {
-        validateOpenSync: this.workspace
-          ? (fd: number): string | null => {
-              const violation = validateOpenFileCanonicalSync(this.workspace!, path, fd)
-              return violation?.reason ?? null
-            }
-          : undefined,
+        validateOpenSync: (fd: number): string | null => {
+          const violation = validateOpenFileCanonicalSync(this.workspace!, path, fd)
+          return violation?.reason ?? null
+        },
       })
       this.bytesRead += buffer.length
       if (this.bytesRead >= this.budgetBytes) this.budgetExhausted = true
@@ -196,18 +199,20 @@ export class ContextMapReadSession {
   }
 
   /** 权威目录放行检查：目录 canonical 目标必须在权威读取根内（symlink 目录
-   *  指向根外时不做内容枚举，防止目录列表泄漏）。无权威时恒放行。 */
+   *  指向根外时不做内容枚举，防止目录列表泄漏）。无权威时 fail closed。 */
   isReadableDir(dir: string): boolean {
-    if (!this.workspace) return true
+    if (this.authorityMissing) return false
     const real = deepestExistingRealpath(dir)
     if (real === undefined) return false
-    return isWithin(this.workspace.readRoot, real)
+    return isWithin(this.workspace!.readRoot, real)
   }
 
   /** 权威拒绝原因（诊断用）。 */
   violationFor(path: string, lexicalRoot: string): WorkspaceIoViolation | null {
-    if (!this.workspace) return null
-    return enforceWorkspaceRead(this.workspace, path, path, lexicalRoot)
+    if (this.authorityMissing) {
+      return { code: "SECRET_READ", reason: `SECRET_READ: ContextMap 无 WorkspaceIoAuthority，fail closed: ${path}` }
+    }
+    return enforceWorkspaceRead(this.workspace!, path, path, lexicalRoot)
   }
 }
 
@@ -415,13 +420,33 @@ export function hybridLocate(
   options: ContextMapReadOptions = {},
 ): LocateResult {
   const session = options.session ?? new ContextMapReadSession(options)
+  // IC01-R3: maxFiles 归一化 —— undefined 保持默认 12；非有限数（NaN/
+  // Infinity）或 <1（0/负数）统一归约为 0 → 安全空结果，且不进行任何
+  // 文件扫描/读取；有限正数 floor 并封顶 64（病态大值不得放大保留量）。
+  const rawMax = input.maxFiles
+  const maxK = rawMax === undefined
+    ? 12
+    : typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax >= 1
+      ? Math.min(Math.floor(rawMax), 64)
+      : 0
+  if (maxK <= 0) {
+    return {
+      primaryFiles: [],
+      secondaryFiles: [],
+      relevantSymbols: [],
+      definitions: [],
+      references: [],
+      suspectedTests: [],
+      confidence: 0.2,
+      unresolvedQuestions: ["No source files matched the request keywords."],
+    }
+  }
   const repo = scanRepoStructure(root, { session })
   const terms = unique([...tokenize(input.userRequest), ...(input.keywords ?? [])]).slice(0, 16)
   const files = listCandidateSourceFiles(root, [...repo.sourceRoots, ...repo.testRoots], session)
 
   // IC01-R2: bounded top-K —— 单趟迭代只保留得分最高的 K 个候选（连同其
   // 文本），未入选内容不长期保留在内存（配合共享累计预算，绝无 N × 16 MiB）。
-  const maxK = input.maxFiles ?? 12
   const scored: Array<{ file: string; text: string; score: number }> = []
   for (const file of files) {
     if (session.aborted || session.budgetExhausted) break

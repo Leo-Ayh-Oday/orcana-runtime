@@ -136,6 +136,9 @@ export async function* runRound(
   // All provider/tool temporaries for this iteration are owned here and become
   // unreachable on continue/break. Only explicit commits reach AgentRunState.
   const roundState = createRoundState(round)
+  // IC03 §29: 从当前模型 spec 获取真实输出上限（ModelSpec.maxOutputTokens），
+  // 预算规划在 Provider 请求形成前知道上限（router plan <= model cap）。
+  const providerMaxOutputTokens = ctx.modelRouter?.resolveModel(model)?.maxOutputTokens
   const thinkingDecision = decideThinkingPlan(ctx.state, execution.requestedMaxThinking ? "max" : options.thinkEffort, {
     prompt: ctx.effectivePrompt,
     intentMode: intentPolicy.mode,
@@ -152,6 +155,7 @@ export async function* runRound(
     // TB2-1: 工具协议受约束恢复——thinking 预算进一步压低（只重发一个调用）。
     protocolRecovery: execution.protocolRecoveryActive,
     autoMaxSignals: { consecutiveErrors: execution.consecutiveErrors, modifiedFiles: execution.modifiedFileCount },
+    providerMaxOutputTokens,
   })
   const thinking = thinkingDecision.thinking
   const maxTok = thinkingDecision.maxTokens
@@ -500,7 +504,12 @@ export async function* runRound(
     emittedText: providerRoundResult.textChunks.length > 0,
     emittedThinking: (providerRoundResult.thinkingBlocks?.length ?? 0) > 0,
     toolCalls: providerRoundResult.toolCalls.length,
-    // GATE-02：截断轮在 trace 中可见（观测性——截断频率是 OTS 类问题主信号）
+    // IC03：结构化 finish 全量入 trace（截断分类可观测）。
+    finishReason: providerRoundResult.finishReason,
+    rawStopReason: providerRoundResult.rawStopReason,
+    completedToolCallCount: providerRoundResult.completedToolCallCount,
+    partialToolCall: providerRoundResult.partialToolCall,
+    // GATE-02 legacy（deprecated compatibility only —— 非 production decision source）
     stopReason: providerRoundResult.stopReason,
   })
 
@@ -598,7 +607,15 @@ export async function* runRound(
     return { kind: "break", reason: "provider_failure" }
   }
 
-  if (completedToolCalls.length === 0 && finalText) {
+  // IC03 §24（TRUNCATED_TEXT_AS_COMPLETION = 0）：Completion Orchestrator
+  // 只在真正 finishReason === "complete" 时处理 final text —— 截断后的
+  // partial text（truncated_before_action / truncated_partial_tool）绝不
+  // 被当作完成答案。
+  if (
+    providerRoundResult.finishReason === "complete"
+    && completedToolCalls.length === 0
+    && finalText
+  ) {
     // ── Completion Orchestrator: unified final gate evaluation (PR-3.1) ──
     const orchestrator = new CompletionOrchestrator()
     const orchResult = await orchestrator.evaluate({
@@ -697,12 +714,18 @@ export async function* runRound(
     }
   }
   if (completedToolCalls.length === 0) {
-    if (providerRoundResult.stopReason === "truncated") {
+    // IC03 §25: truncated_before_action / truncated_partial_tool ——
+    // failure = none、tool execution = 0、completion = forbidden、
+    // next round = fresh continuation（无 generic retry）。
+    const truncatedEmpty = providerRoundResult.finishReason === "truncated_before_action"
+      || providerRoundResult.finishReason === "truncated_partial_tool"
+      || (providerRoundResult.finishReason === "truncated_after_action" && completedToolCalls.length === 0)
+    if (truncatedEmpty) {
       // GATE-02：纯截断轮（thinking/文本烧光 envelope 且无工具产出）不得
       // 静默终止——thinking 链保留入账，轮次以新 request 继续。连续空转由
       // GATE-03 ProgressGovernor 在轮次上限内终止为 STALLED。
       yield stream({ type: "status", data: "truncated-round: envelope exhausted before any tool call, continuing" })
-      yield trace("provider_round_truncated", { round, thinkingBlocks: roundState.thinkingBlocks.length })
+      yield trace("provider_round_truncated", { round, thinkingBlocks: roundState.thinkingBlocks.length, finishReason: providerRoundResult.finishReason })
     } else {
       yield stream({ type: "status", data: "empty-round: no tool calls or final text" })
       return { kind: "break", reason: "empty_round" }
@@ -863,7 +886,9 @@ export async function* runRound(
   // push back to planning. Provider-empty rounds (truncated with no tool
   // calls) never trigger revise-plan — they are handled by GATE-03
   // ProgressGovernor (action_first → replan_once → STALLED). ──
-  const providerEmptiedRound = providerRoundResult.stopReason === "truncated" && completedToolCalls.length === 0
+  const providerEmptiedRound = (providerRoundResult.finishReason === "truncated_before_action"
+    || providerRoundResult.finishReason === "truncated_partial_tool")
+    && completedToolCalls.length === 0
   if (
     planning.taskTracker &&
     planning.taskTracker.phase === "building" &&

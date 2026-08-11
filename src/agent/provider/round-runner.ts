@@ -1,6 +1,8 @@
 import type {
   LLMProvider,
   ProviderCallOptions,
+  ProviderFinishInfo,
+  ProviderFinishReason,
   ProviderTokenUsage,
   StreamEvent,
 } from "../../provider/types"
@@ -130,6 +132,60 @@ export async function* streamProviderRoundEvents(
 }
 
 /**
+ * IC03 §21: finish 一致性 fail-closed gate —— 结构化 finish 与已收集的
+ * tool calls 必须一致；不一致 → malformed，绝不执行 Tool。
+ */
+function enforceFinishConsistency(result: ProviderRoundResult): void {
+  let consistent = true
+  switch (result.finishReason) {
+    case "truncated_after_action":
+    case "tool_action":
+      consistent = !result.partialToolCall && result.toolCalls.length === result.completedToolCallCount
+      break
+    case "truncated_partial_tool":
+      consistent = result.partialToolCall && result.toolCalls.length === 0
+      break
+    default:
+      break
+  }
+  if (!consistent) {
+    // fail-closed：不执行任何 Tool。
+    result.finishReason = "malformed"
+    result.toolCalls = []
+    result.partialToolCall = true
+  }
+}
+
+/**
+ * IC03 §22: 结构事件级 fallback —— legacy/custom provider 不 emit finish 时，
+ * 仅基于事件结构归类（禁止从 error 字符串猜 max_tokens/length 主语义）。
+ */
+function legacyFinishFallback(result: ProviderRoundResult, parentSignal?: AbortSignal): void {
+  if (parentSignal?.aborted) {
+    result.finishReason = "cancelled"
+    return
+  }
+  if (result.failure) {
+    result.finishReason = "malformed"
+    return
+  }
+  if (result.stopReason === "truncated") {
+    // legacy truncated 事件：toolCalls 已 emit 的是完整 action。
+    result.finishReason = result.toolCalls.length > 0 ? "truncated_after_action" : "truncated_before_action"
+    result.completedToolCallCount = result.toolCalls.length
+    return
+  }
+  if (result.toolCalls.length > 0) {
+    result.finishReason = "tool_action"
+    result.completedToolCallCount = result.toolCalls.length
+    return
+  }
+  // done/text 正常结束 / 空轮。
+  result.finishReason = "complete"
+  result.completedToolCallCount = 0
+}
+
+/**
  * Execute and parse one main Agent Provider round. Outward events preserve the
  * historical streaming policy: status/tool/error always stream, text streams
  * immediately only when buffering is disabled, and usage/thinking stay local
@@ -143,6 +199,7 @@ export async function* runProviderRound(
   // RC-19 Phase 1: per-round retry state — the runner is the observer of what
   // this round emitted; the provider enforces its own unsafeToRetry.
   const retryState: ProviderRoundRetryState = createProviderRoundRetryState()
+  let finishSeen = false
 
   try {
     for await (const event of streamProviderRoundEvents(input)) {
@@ -176,14 +233,32 @@ export async function* runProviderRound(
         retryState.sideEffectBoundaryCrossed = true
         result.toolCalls.push(event.data as RoundToolCall)
         yield event
+      } else if (event.type === "finish" && event.data) {
+        // IC03: 结构化 finish —— 上层 control-flow 的唯一事实来源。
+        // finish 事件不向外透传（结果由 result 承载，避免破坏既有事件流契约）。
+        const info = event.data as ProviderFinishInfo
+        finishSeen = true
+        result.finishReason = info.finishReason
+        result.rawStopReason = info.rawStopReason
+        result.completedToolCallCount = info.completedToolCallCount
+        result.partialToolCall = info.partialToolCall
+        if (
+          info.finishReason === "truncated_before_action"
+          || info.finishReason === "truncated_after_action"
+          || info.finishReason === "truncated_partial_tool"
+        ) {
+          // GATE-02 legacy compatibility（deprecated —— kernel 不再消费）。
+          result.stopReason = "truncated"
+        }
       } else if (event.type === "error") {
         const message = String(event.data ?? "")
         result.failure = failureFromProviderEvent(message)
         yield event
       } else if (event.type === "truncated") {
-        // GATE-02 (GS-03): max_tokens is TRUNCATED, not a failure — tool
-        // calls from the truncated response were already emitted and must
+        // GATE-02 (GS-03) + IC03 §22: max_tokens is TRUNCATED, not a failure —
+        // tool calls from the truncated response were already emitted and must
         // execute; the round continues as a fresh round, never a blind retry.
+        // (legacy path: custom/scripted providers without structured finish)
         result.stopReason = "truncated"
         yield event
       }
@@ -194,6 +269,12 @@ export async function* runProviderRound(
       yield { type: "error", data: result.failure.message }
     }
   }
+
+  // IC03: exactly-one structured finish —— 无 finish 事件时结构事件级 fallback。
+  if (!finishSeen) {
+    legacyFinishFallback(result, parentSignal)
+  }
+  enforceFinishConsistency(result)
 
   result.finalText = result.textChunks.join("")
   result.aborted = parentSignal?.aborted ?? false

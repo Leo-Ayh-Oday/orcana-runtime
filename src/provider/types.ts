@@ -11,9 +11,48 @@ export interface ProviderMessage {
 }
 
 export interface StreamEvent {
-  type: "text" | "tool_call" | "tool_result" | "thinking_blocks" | "status" | "error" | "done" | "confirm" | "token_usage" | "plan_ready" | "task_progress" | "clarification_ready" | "user_question" | "truncated"
+  type: "text" | "tool_call" | "tool_result" | "thinking_blocks" | "status" | "error" | "done" | "confirm" | "token_usage" | "plan_ready" | "task_progress" | "clarification_ready" | "user_question" | "truncated" | "finish"
   /** For confirm: { tool: string, params: Record<string,unknown>, message: string } */
   data?: unknown
+}
+
+/** IC03: 结构化 Provider 结束原因 —— 上层 control-flow 的唯一事实来源。
+ *  Runtime 不得再从 error/status 字符串里猜 max_tokens/length/auth/quota。 */
+export type ProviderFinishReason =
+  | "complete"
+  | "tool_action"
+  | "truncated_before_action"
+  | "truncated_after_action"
+  | "truncated_partial_tool"
+  | "transport_failure"
+  | "auth_failure"
+  | "quota_failure"
+  | "cancelled"
+  | "malformed"
+
+/** IC03: retry 分类 kind → 结构化 finish（retry 耗尽 / 不可重试时使用）。
+ *  kind 来自 provider/retry.ts classifyProviderError（非字符串猜测主路径）。 */
+export function providerFinishReasonFromErrorKind(kind: string | undefined): ProviderFinishReason {
+  if (kind === "auth") return "auth_failure"
+  if (kind === "quota") return "quota_failure"
+  return "transport_failure"
+}
+
+/** IC03: 每个 production Provider round 结束时 exactly-once 的 finish 事件负载。 */
+export interface ProviderFinishInfo {
+  finishReason: ProviderFinishReason
+  rawStopReason?: string
+  completedToolCallCount: number
+  partialToolCall: boolean
+}
+
+/** IC03: Provider 输出预算计划 —— 在请求形成前规划（thinking + action 共享
+ *  同一输出 envelope）。Provider 只能执行已规划好的 request。 */
+export interface ProviderOutputBudgetPlan {
+  providerMaxOutputTokens: number
+  thinkingBudgetTokens: number
+  actionReserveTokens: number
+  totalRequestedTokens: number
 }
 
 /**

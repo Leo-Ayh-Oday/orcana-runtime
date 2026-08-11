@@ -4,7 +4,7 @@
  * decides when deeper model-internal reasoning is justified.
  */
 
-import type { ThinkingConfig } from "../provider/types"
+import type { ProviderOutputBudgetPlan, ThinkingConfig } from "../provider/types"
 import type { IntentMode } from "./intent"
 
 const READONLY_TOOLS = new Set([
@@ -45,6 +45,13 @@ export interface ThinkingProfile {
    * tool call with a minimal thinking budget (no replanning, no retries).
    */
   protocolRecovery?: boolean
+  /**
+   * IC03 §29: 真实 Provider 输出上限（ModelSpec.maxOutputTokens，由
+   * ctx.modelRouter.resolveModel(model) 提供）。预算规划在 Provider 请求
+   * 形成前知道上限 —— 不再等 MultiProvider 最后 clamp（router plan <= cap）。
+   * 未知（legacy/custom provider）时沿用 desired envelope 作为 effective cap。
+   */
+  providerMaxOutputTokens?: number
 }
 
 export type ThinkingStage = "planning" | "execution" | "recovery" | "verification"
@@ -72,6 +79,21 @@ const STAGE_ACTION_RESERVE: Record<ThinkingStage, number> = {
   verification: 0.4,
 }
 
+/**
+ * IC03 §31: stage action-reserve absolute minimum（有效 reserve =
+ * max(stage absolute minimum, stage ratio reserve)）。
+ *   planning     >= 2048
+ *   execution    >= 4096
+ *   recovery     >= 4096
+ *   verification >= 4096
+ */
+const STAGE_ACTION_MIN: Record<ThinkingStage, number> = {
+  planning: 2048,
+  execution: 4096,
+  recovery: 4096,
+  verification: 4096,
+}
+
 export interface AutoMaxSignals {
   consecutiveErrors: number
   modifiedFiles: number
@@ -84,6 +106,8 @@ export interface ThinkingDecision {
   reason: string
   factors: string[]
   visibleStatus: string
+  /** IC03: 可观测输出预算计划（thinking + action 共享 envelope）。 */
+  outputBudget: ProviderOutputBudgetPlan
 }
 
 export function createState(): RoundState {
@@ -197,14 +221,15 @@ export function decideThinkingPlan(
   const autoMax = profile?.autoMaxSignals
   const forceMax = profile?.intentMode !== "readonly" && (autoMax?.modifiedFiles ?? 0) >= 5
   if (forceMax && effortOverride !== "high") {
-    const bounded = applyResponseBudget({ type: "enabled", budget_tokens: 32768, effort: "max" }, state, profile)
+    const bounded = planOutputBudget(decideMaxTokens({ type: "enabled", budget_tokens: 32768, effort: "max" }, state), { type: "enabled", budget_tokens: 32768, effort: "max" }, state, profile)
     return {
       thinking: bounded.thinking,
       maxTokens: bounded.maxTokens,
       score: Math.max(score, 11),
       reason: `auto-max: ${autoMax!.modifiedFiles} files`,
       factors: [...factors, "auto-max"],
-      visibleStatus: `深度思考：最高 ${Math.round((bounded.thinking.budget_tokens ?? 0) / 1024)}K · auto-max · ${autoMax!.modifiedFiles} files`,
+      visibleStatus: `深度思考：最高 ${Math.round((bounded.thinking!.budget_tokens ?? 0) / 1024)}K · auto-max · ${autoMax!.modifiedFiles} files`,
+      outputBudget: bounded.outputBudget,
     }
   }
 
@@ -229,7 +254,11 @@ export function decideThinkingPlan(
     thinking = { type: "enabled", budget_tokens: 8192, effort: effortOverride ?? "high" }
   }
 
-  const bounded = applyResponseBudget(thinking, state, profile)
+  const bounded = planOutputBudget(decideMaxTokens(thinking, state), thinking, state, profile)
+  if (profile?.providerMaxOutputTokens === undefined && !factors.includes("model-output-cap-unknown")) {
+    // IC03 §30: 上限未知时沿用 desired envelope 作为 effective cap + 标记。
+    factors.push("model-output-cap-unknown")
+  }
 
   return {
     thinking: bounded.thinking,
@@ -237,36 +266,74 @@ export function decideThinkingPlan(
     score,
     reason,
     factors,
-    visibleStatus: formatThinkingStatus(bounded.thinking, score, reason, factors),
+    visibleStatus: formatThinkingStatus(bounded.thinking!, score, reason, factors),
+    outputBudget: bounded.outputBudget,
   }
 }
 
 /**
- * GATE-02: apply the ResponseBudget invariant to a thinking intent.
+ * IC03 §33: 统一 Provider 输出预算规划 —— thinking + action 共享输出 envelope。
  *
- * The provider output envelope (maxTokens) is fixed first, then the thinking
- * budget is capped so `reasoningCap + actionReserve <= maxTokens` always
- * holds. Without this, a 32K thinking intent paired with a 6K cap lets
- * thinking burn the entire envelope and starve tool emission (OTS-013).
+ * 1. totalRequestedTokens = min(desiredEnvelope, providerCap)
+ * 2. thinkingCap = min(floor(total * (1-ratio)), total - stageMin)
+ *    （ratio reserve 优先 + stageMin 兜底 —— 与 GATE-02 legacy 语义一致）
+ * 3. thinkingCap < 0 → thinking=0, action=total（先杀 thinking）
+ * 4. 否则 thinkingBudget = min(requestedThinking(+actionFirst/protocolRecovery cap),
+ *    thinkingCap)；actionReserve = total - thinkingBudget
+ *
+ * 核心 invariant（§34）：
+ *   totalRequestedTokens <= providerMaxOutputTokens
+ *   thinkingBudgetTokens + actionReserveTokens == totalRequestedTokens
+ *   capacity 足够时 actionReserveTokens >= stage minimum
  */
-function applyResponseBudget(
-  thinking: ThinkingConfig,
+function planOutputBudget(
+  desiredEnvelope: number,
+  thinkingIntent: ThinkingConfig | undefined,
   state: RoundState,
   profile?: ThinkingProfile,
-): { thinking: ThinkingConfig; maxTokens: number } {
-  const maxTokens = decideMaxTokens(thinking, state)
+): { thinking: ThinkingConfig | undefined; maxTokens: number; outputBudget: ProviderOutputBudgetPlan } {
+  const providerCap = profile?.providerMaxOutputTokens
+  const totalRequestedTokens = providerCap !== undefined
+    ? Math.min(desiredEnvelope, providerCap)
+    : desiredEnvelope
   const stage = profile?.stage ?? (state.hadError ? "recovery" : "execution")
-  const reserve = STAGE_ACTION_RESERVE[stage]
-  let reasoningCap = Math.floor(maxTokens * (1 - reserve))
-  // GATE-03: ACTION_FIRST 模式下思考预算压到 2K——本轮必须发出工具调用，
-  // 深度思考不是进展。
-  if (profile?.actionFirst) reasoningCap = Math.min(reasoningCap, 2048)
-  // TB2-1: 工具协议受约束恢复——只重发一个工具调用，思考预算进一步压低。
-  if (profile?.protocolRecovery) reasoningCap = Math.min(reasoningCap, 1024)
-  if (thinking.budget_tokens && thinking.budget_tokens > reasoningCap) {
-    return { thinking: { ...thinking, budget_tokens: reasoningCap }, maxTokens }
+  const stageMin = STAGE_ACTION_MIN[stage]
+  // ratio reserve 优先 + stage absolute minimum 兜底（§32）。
+  const maxThinkingAllowed = Math.min(
+    Math.floor(totalRequestedTokens * (1 - STAGE_ACTION_RESERVE[stage])),
+    totalRequestedTokens - stageMin,
+  )
+
+  let thinkingBudgetTokens: number
+  let actionReserveTokens: number
+  if (maxThinkingAllowed < 0) {
+    // 输出空间不足 → 先杀 thinking，绝不保留大 thinking + 小 action。
+    thinkingBudgetTokens = 0
+    actionReserveTokens = totalRequestedTokens
+  } else {
+    let requested = thinkingIntent?.budget_tokens ?? 0
+    // GATE-03: ACTION_FIRST —— 本轮必须发出工具调用，thinking <= 2048，
+    // 释放出的空间自动进入 actionReserveTokens。
+    if (profile?.actionFirst) requested = Math.min(requested, 2048)
+    // TB2-1: 工具协议受约束恢复——只重发一个工具调用，thinking <= 1024。
+    if (profile?.protocolRecovery) requested = Math.min(requested, 1024)
+    thinkingBudgetTokens = Math.min(requested, maxThinkingAllowed)
+    actionReserveTokens = totalRequestedTokens - thinkingBudgetTokens
   }
-  return { thinking, maxTokens }
+
+  const thinking = thinkingIntent
+    ? { ...thinkingIntent, budget_tokens: thinkingBudgetTokens }
+    : undefined
+  return {
+    thinking,
+    maxTokens: totalRequestedTokens,
+    outputBudget: {
+      providerMaxOutputTokens: providerCap ?? totalRequestedTokens,
+      thinkingBudgetTokens,
+      actionReserveTokens,
+      totalRequestedTokens,
+    },
+  }
 }
 
 function noThinkingDecision(
@@ -275,13 +342,15 @@ function noThinkingDecision(
   factors: string[],
   reason: string,
 ): ThinkingDecision {
+  const bounded = planOutputBudget(decideMaxTokens(undefined, state), undefined, state)
   return {
     thinking: undefined,
-    maxTokens: decideMaxTokens(undefined, state),
+    maxTokens: bounded.maxTokens,
     score,
     reason,
     factors,
     visibleStatus: "思考中",
+    outputBudget: bounded.outputBudget,
   }
 }
 

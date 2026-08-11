@@ -445,6 +445,9 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
 
   /** PR-7: podman 容器按 label/cidfile 停止（后端特异清理）。 */
   const podmanCleanup = (runId: string, cellId: string, cidfile: string | undefined): void => {
+    // shadow 模式不管理真实容器 —— 跳过 podman 兜底（避免 WSL 上
+    // podman ps 的 10s 级慢调用拖垮 cleanup 路径）。
+    if (mode === "shadow") return
     const podmanPath = caps.podman.path ?? "podman"
     // 1. cidfile：直接停止残留容器（--rm 未生效的异常路径）。
     if (cidfile) {
@@ -459,7 +462,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     }
     // 2. label 兜底：按 run/cell 标签清理。
     try {
-      const listed = spawnSync(podmanPath, ["ps", "-a", "-q", "--filter", `label=io.orcana.run=${runId}`, "--filter", `label=io.orcana.cell=${cellId}`], { encoding: "utf8", timeout: 10_000 })
+      const listed = spawnSync(podmanPath, ["ps", "-a", "-q", "--filter", `label=io.orcana.run=${runId}`, "--filter", `label=io.orcana.cell=${cellId}`], { encoding: "utf8", timeout: 15_000 })
       if (listed.status === 0 && listed.stdout.trim()) {
         spawnSync(podmanPath, ["rm", "-f", ...listed.stdout.trim().split(/\s+/)], { stdio: "ignore", timeout: 15_000 })
       }

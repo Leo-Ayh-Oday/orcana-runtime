@@ -1,10 +1,17 @@
 name: CI
 
+# Self-hosted runner trust boundary (PUBLIC repository):
+# - runs only on push to main and manual workflow_dispatch (owner-authorized)
+# - external fork PRs NEVER execute on the self-hosted runner:
+#   there is deliberately no `pull_request` trigger in this workflow
+# - minimal token scope: contents: read
+# - checkout persists no credentials on the persistent runner host
+
 on:
   push:
     branches:
       - main
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,12 +22,14 @@ concurrency:
 
 jobs:
   typecheck:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 10
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -47,12 +56,14 @@ jobs:
         run: bun run typecheck
 
   core:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 10
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -79,12 +90,14 @@ jobs:
         run: bun run test:core
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 30
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -111,12 +124,14 @@ jobs:
         run: bun run test
 
   eval-linux:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 15
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -143,12 +158,14 @@ jobs:
         run: bash scripts/ci/run-delegated-cgroup.sh bun run eval:linux --require=cgroup
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 15
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2

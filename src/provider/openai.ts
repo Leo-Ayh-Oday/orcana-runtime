@@ -11,7 +11,8 @@
  *  so loop.ts doesn't know the difference.
  */
 
-import type { StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage } from "./types"
+import type { ProviderFinishInfo, StreamEvent, LLMProvider, ProviderCallOptions, ProviderTokenUsage } from "./types"
+import { providerFinishReasonFromErrorKind } from "./types"
 import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, canRetryProviderAttempt, providerBackoffWait, recordProviderRetry } from "./retry"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
@@ -97,6 +98,7 @@ export class OpenAIProvider implements LLMProvider {
       // retried once the signal fires — including an abort landing in backoff.
       if (options.abortSignal?.aborted) {
         yield { type: "error", data: "provider request aborted" }
+        yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
         return
       }
       let unsafeToRetry = false
@@ -106,12 +108,14 @@ export class OpenAIProvider implements LLMProvider {
       } catch (e) {
         if (options.abortSignal?.aborted) {
           yield { type: "error", data: "provider request aborted" }
+          yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
         const info = classifyProviderError(e)
         const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry, options.retryLedger)
         if (!canRetry) {
           yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
+          yield { type: "finish", data: { finishReason: providerFinishReasonFromErrorKind(info.kind), rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
         recordProviderRetry(info, options.retryLedger)
@@ -120,6 +124,7 @@ export class OpenAIProvider implements LLMProvider {
         const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
         if (!waited) {
           yield { type: "error", data: "provider request aborted during retry backoff" }
+          yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
       }
@@ -287,6 +292,9 @@ export class OpenAIProvider implements LLMProvider {
     const textChunks: string[] = []
     // TB2-1: 流式 tool call 组装状态机（真增量/累积快照/重叠/交错/repeated id）。
     const toolAssembler = createToolCallAssembler()
+    // IC03 §15: 截断场景（length/max_tokens）下 repair/schema 失败的调用 =
+    // partial（Provider 未完成真实副作用声明）—— 整批 0 执行，非 malformed。
+    let unassembledTruncated = false
     const requestId = `openai-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`
     let finishReason: string | null = null
     let sawDoneSentinel = false
@@ -295,7 +303,10 @@ export class OpenAIProvider implements LLMProvider {
 
     const reader = response.body?.getReader()
     if (!reader) {
+      // IC03 (P0-3): 200 OK 但无 response body → fail-closed malformed。
+      // raw Provider stream 每轮必须 exactly-one structured finish。
       yield { type: "error", data: "No response body" }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
       return
     }
 
@@ -356,20 +367,24 @@ export class OpenAIProvider implements LLMProvider {
 
     if (malformedSseChunk) {
       yield { type: "error", data: "provider returned a malformed SSE data chunk; response may be incomplete" }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: finishReason ?? undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
       return
     }
     if (finishReason === "content_filter") {
       yield { type: "error", data: "provider finish_reason=content_filter: response was interrupted by the provider content filter" }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: finishReason, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
       return
     }
     // GATE-02: finish_reason=length (OpenAI native) and max_tokens (compat
     // relays) are TRUNCATED — handled after tool-call validation below.
     if (finishReason && !NORMAL_OPENAI_FINISH_REASONS.has(finishReason) && finishReason !== "length" && finishReason !== "max_tokens") {
       yield { type: "error", data: `provider finish_reason=${finishReason}: response ended before normal completion` }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: finishReason, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
       return
     }
     if (!finishReason && !sawDoneSentinel) {
       yield { type: "error", data: "provider stream ended unexpectedly without finish_reason or [DONE]" }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
       return
     }
 
@@ -400,7 +415,14 @@ export class OpenAIProvider implements LLMProvider {
             finishReason,
             parseFailureKind: "tool_protocol_invalid_json",
           })
+          if (finishReason === "length" || finishReason === "max_tokens") {
+            // IC03 §15: 截断后"勉强补括号"不是 Provider 已完成的真实副作用
+            // 声明 → truncated_partial_tool（0 执行）。
+            unassembledTruncated = true
+            continue
+          }
           yield { type: "error", data: `provider returned invalid tool call JSON for ${tc.name}\n${formatToolProtocolDiagnostic(diagnostic)}` }
+          yield { type: "finish", data: { finishReason: "malformed", rawStopReason: finishReason ?? undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
         input = repaired
@@ -416,37 +438,64 @@ export class OpenAIProvider implements LLMProvider {
           finishReason,
           parseFailureKind: "tool_protocol_invalid_json",
         })
+        if (finishReason === "length" || finishReason === "max_tokens") {
+          // IC03 §14: 截断 + 缺失 required → partial（0 执行）。
+          unassembledTruncated = true
+          continue
+        }
         yield { type: "error", data: `provider tool call ${tc.name} missing required fields (${schemaCheck.missing.join(",")})\n${formatToolProtocolDiagnostic(diagnostic)}` }
+        yield { type: "finish", data: { finishReason: "malformed", rawStopReason: finishReason ?? undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
         return
       }
       parsedToolCalls.push({ id: tc.id, name: tc.name, input, native })
     }
 
-    // GATE-02 (GS-03/GS-05): TRUNCATED is not an error — tool calls that
-    // parsed natively before the cut are complete side effects and execute.
+    // GATE-02 (GS-03/GS-05) + IC03 结构化：TRUNCATED 不是 error。
     // TB2-1: 被截断后"勉强补括号"（repair 过）的调用不是完整副作用——
-    // 写入/删除类工具绝不自动执行；批次中任一调用不完整 → 整批不执行。
-    if (finishReason === "length" || finishReason === "max_tokens") {
-      const completeCalls = parsedToolCalls.filter(call => call.native)
-      if (completeCalls.length !== parsedToolCalls.length) {
-        const broken = parsedToolCalls.find(call => !call.native)!
-        const diagnostic = buildToolProtocolDiagnostic({
-          requestId,
-          toolName: broken.name,
-          arguments: "",
-          fragmentCount: 0,
-          finishReason,
-          parseFailureKind: "tool_protocol_incomplete",
-        })
-        // 无 error 事件：这是 GATE-02 的正常截断流——kernel 以新 round 继续，
-        // 不烧 truncation 重试账本；但损坏的调用绝不执行。
-        yield { type: "truncated", data: { stopReason: finishReason, toolCalls: 0, incomplete: formatToolProtocolDiagnostic(diagnostic) } }
+    // 写入/删除类工具绝不自动执行；批次中任一调用不完整 → 整批不执行
+    // （PARTIAL_TOOL_CALL_EXECUTED = 0）。IC03: finishReason 结构化分类。
+    const truncated = finishReason === "length" || finishReason === "max_tokens"
+    if (truncated) {
+      if (unassembledTruncated || parsedToolCalls.length === 0 || parsedToolCalls.some(call => !call.native)) {
+        // IC03 (P1-2): completedToolCallCount 表示 Provider stream 中已完整
+        // closed/native 解析的 Tool Call 数量（observed fact），不是本批次
+        // 允许执行的数量。partial batch 被 poison 后执行集合 = 0，但
+        // observed completed count 不能撒谎（repair 才合法的调用不算）。
+        // 无完整 action / 存在需 repair 才能合法的调用：截断后补括号不是
+        // Provider 已完成的真实副作用声明 → truncated_partial_tool，0 tool。
+        if (parsedToolCalls.some(call => !call.native)) {
+          const broken = parsedToolCalls.find(call => !call.native)!
+          const diagnostic = buildToolProtocolDiagnostic({
+            requestId,
+            toolName: broken.name,
+            arguments: "",
+            fragmentCount: 0,
+            finishReason,
+            parseFailureKind: "tool_protocol_incomplete",
+          })
+          yield { type: "truncated", data: { stopReason: finishReason, toolCalls: 0, incomplete: formatToolProtocolDiagnostic(diagnostic) } }
+        } else {
+          yield { type: "truncated", data: { stopReason: finishReason, toolCalls: 0 } }
+        }
+        const nativeCompleteCount = parsedToolCalls.filter(call => call.native).length
+        yield { type: "finish", data: {
+          finishReason: (unassembledTruncated || parsedToolCalls.length > 0) ? "truncated_partial_tool" : "truncated_before_action",
+          rawStopReason: finishReason ?? undefined,
+          completedToolCallCount: nativeCompleteCount,
+          partialToolCall: unassembledTruncated || parsedToolCalls.length > 0,
+        } satisfies ProviderFinishInfo }
         return
       }
-      for (const toolCall of completeCalls) {
+      for (const toolCall of parsedToolCalls) {
         yield { type: "tool_call", data: { id: toolCall.id, name: toolCall.name, input: toolCall.input } }
       }
-      yield { type: "truncated", data: { stopReason: finishReason, toolCalls: completeCalls.length } }
+      yield { type: "truncated", data: { stopReason: finishReason, toolCalls: parsedToolCalls.length } }
+      yield { type: "finish", data: {
+        finishReason: "truncated_after_action",
+        rawStopReason: finishReason ?? undefined,
+        completedToolCallCount: parsedToolCalls.length,
+        partialToolCall: false,
+      } satisfies ProviderFinishInfo }
       return
     }
 
@@ -470,6 +519,14 @@ export class OpenAIProvider implements LLMProvider {
 
     const finalText = textChunks.join("")
     if (finalText && assembledCalls.length === 0) yield { type: "done", data: finalText }
+    // IC03: stop / tool_calls / function_call / [DONE]（无显式 finish_reason）
+    // → 结构化 finish。
+    yield { type: "finish", data: {
+      finishReason: parsedToolCalls.length > 0 ? "tool_action" : "complete",
+      rawStopReason: finishReason ?? undefined,
+      completedToolCallCount: parsedToolCalls.length,
+      partialToolCall: false,
+    } satisfies ProviderFinishInfo }
   }
 }
 

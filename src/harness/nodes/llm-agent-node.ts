@@ -12,6 +12,7 @@ import type { LegacyLoopAdapterDeps } from "../runtime/legacy-loop-adapter"
 import { buildLoopOptions, createLegacyLoopAdapter } from "../runtime/legacy-loop-adapter"
 import type { HarnessEvent } from "../contracts/events"
 import { BudgetGuard } from "../runtime/budget-guard"
+import { RetryCoordinator, deriveMaxPhysicalProviderRequests } from "../../runtime/retry/coordinator"
 import { mapDecisionToOutcome } from "../runtime/outcome-mapper"
 import type { LoopDecision } from "../../agent/kernel/types"
 import type { AgentRunInput, AgentRun } from "../contracts/run"
@@ -56,7 +57,24 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
       } as AgentRun
 
       const loopOptions = buildLoopOptions(run, runInput, nodeOptions.deps, context.cancellation.signal)
-      const guard = new BudgetGuard(context.budget, (reason) => context.cancellation.cancel(reason))
+      // IC04 §27/§56: node production path —— model_call 由 coordinator
+      // source-counted；usage 事件只做 token accounting。
+      const guard = new BudgetGuard(context.budget, (reason) => context.cancellation.cancel(reason), { modelCallAuthority: "source" })
+      // IC04 §24/§29: 同一 scope coordinator 覆盖 cap + external consumer
+      // （node 级 budget 的 strict physical model-call cap）。
+      const explicitModelCalls = context.budget.limits.maxModelCalls
+      context.runScope.retryCoordinator = new (await import("../../runtime/retry/coordinator")).RetryCoordinator({
+        ledger: context.runScope.retryLedger,
+        maxPhysicalProviderRequests: explicitModelCalls < Number.MAX_SAFE_INTEGER
+          ? explicitModelCalls
+          : deriveMaxPhysicalProviderRequests(input.maxRounds ?? 50),
+        externalBudgetConsumer: {
+          tryConsume: () => guard.tryConsumeModelCall(),
+        },
+      })
+      // §56: usage truth —— modelCalls = 本 node 执行期间实际产生的 physical
+      // provider request 数（coordinator delta）。
+      const physicalBefore = context.runScope.retryCoordinator.physicalProviderRequests
 
       let finalText = ""
       // M21: usage is counted, never dropped — modelCalls increments per
@@ -89,6 +107,10 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
         yield* translateEnvelope(envelope, context, usage, (text) => { finalText += text })
       }
 
+      // IC04 §56: usage truth —— modelCalls = 本 node 实际产生的 physical
+      // provider request 数（coordinator delta）。不再简单以
+      // "1 token_usage event = 1 model call"（retry 计数在事件流不可见）。
+      usage.modelCalls = (context.runScope.retryCoordinator?.physicalProviderRequests ?? 0) - physicalBefore
       // M21: wall clock spans the node execution (first event to loop end).
       usage.wallTimeMs = Date.now() - startedAt
       const cancelled = context.cancellation.cancelled
@@ -194,7 +216,9 @@ function* translateEnvelope(
     if (u.cacheSource === "provider") {
       // M21: each provider round is one model call (kernel token_usage
       // events are cumulative per round — totals take the last value).
-      usage.modelCalls++
+      // IC04 §56: modelCalls 由 coordinator source counting 记账（实时快照 =
+      // 当前 physical provider request 数；不再简单 "1 usage event = 1 call"）。
+      usage.modelCalls = context.runScope.retryCoordinator?.physicalProviderRequests ?? usage.modelCalls
       usage.inputTokens = u.inputTokens ?? usage.inputTokens
       usage.outputTokens = u.outputTokens ?? usage.outputTokens
       usage.cacheMissTokens = u.cacheMissInputTokens ?? usage.cacheMissTokens

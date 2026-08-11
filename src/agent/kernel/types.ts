@@ -149,8 +149,14 @@ export interface RunPhaseContext {
   toolLedger: ToolExecutionLedger
   deferredGateMessages: string[]
   sm: StateMachine
-  /** GATE-03: run-scoped liveness controller (STALLED after 4 no-progress rounds). */
+  /** GATE-03: run-scoped liveness fact engine (STALLED after 4 no-progress rounds). */
   progressGovernor: ProgressGovernor
+  /**
+   * IC04: LoopSupervisor —— Loop Liveness Authority。拥有 progressGovernor；
+   * production main path 的 liveness 决策（continue/stalled/next policy）
+   * 唯一经由此处（DIRECT_PROGRESS_GOVERNOR_DECISION_OUTSIDE_SUPERVISOR = 0）。
+   */
+  loopSupervisor: import("./loop-supervisor").LoopSupervisor
   /** Context Map (acquired in prepare, consumed by round/master-plan). */
   contextMap: {
     runtimeContextMap: RuntimeContextMap | null

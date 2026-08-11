@@ -127,4 +127,8 @@ export interface AgentRunScope {
   /** PR-GATE-06：Run 级统一重试预算（provider/capability/repair 层共享，
    *  禁止各层独立无限重试的乘法爆炸）。 */
   retryLedger: RetryLedger
+  /** IC04 §29: run-scoped RetryCoordinator（与 retryLedger 一一对应）。
+   *  可选 —— legacy scope mock 可不填；production assembleRunScope 恒创建，
+   *  legacy-loop-adapter 未填时 agentLoop 自建（§30）。 */
+  retryCoordinator?: import("../../runtime/retry/coordinator").RetryCoordinator
 }

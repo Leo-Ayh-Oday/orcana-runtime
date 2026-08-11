@@ -47,7 +47,8 @@ import { finalizeRun } from "./kernel/finalize"
 import { drainPhase } from "./kernel/effects"
 import type { LoopDecision } from "./kernel/types"
 import { setRuntimeContextBudgetMode } from "./runtime-context"
-import { bindRunRetryLedgerToContext, setExecutionIdentity } from "../runtime/execution-context"
+import { bindRunRetryLedgerToContext, getRunRetryLedger, getRunRetryCoordinator, setExecutionIdentity, setRunRetryCoordinator } from "../runtime/execution-context"
+import { RetryCoordinator, deriveMaxPhysicalProviderRequests } from "../runtime/retry/coordinator"
 import { resetRippleProgram, setCascadeFiles } from "../ripple/engine"
 import { clearActivePatchContext, clearTransactionRegistry } from "./patch-transaction"
 import { setShellSandbox } from "../tools/shell"
@@ -79,6 +80,8 @@ export async function* agentLoop(
   if (options.retryLedger) {
     bindRunRetryLedgerToContext(scope.runtimeContext, options.retryLedger)
   }
+  // IC04 §29/§30: coordinator 创建/绑定在 runAgentLoop 内完成（ALS 内，
+  // 与 harness 共享同一 ledger）。见 runAgentLoop 头部。
   const runOptions: AgentOptions = {
     ...options,
     tools: scope.toolRegistry.tools,
@@ -129,6 +132,20 @@ async function* runAgentLoop(
     return { kind: "return", reason: "aborted" }
   }
 
+  // IC04 §29/§30：整个 run 只有一个 RetryCoordinator（retry decision
+  // authority）。caller/harness 已注入 → 复用实例；否则自建（与
+  // getRunRetryLedger 同一账本，§24 derived physical cap）。
+  if (options.retryCoordinator) {
+    setRunRetryCoordinator(options.retryCoordinator)
+  } else {
+    const physicalCap = options.maxPhysicalProviderRequests
+      ?? deriveMaxPhysicalProviderRequests(options.maxRounds ?? 50)
+    setRunRetryCoordinator(new RetryCoordinator({
+      ledger: getRunRetryLedger(),
+      maxPhysicalProviderRequests: physicalCap,
+    }))
+  }
+
   let ctx: Awaited<ReturnType<typeof buildRunContext>>["ctx"] = null
   try {
     const built = await buildRunContext(prompt, options, lifecycle)
@@ -137,12 +154,18 @@ async function* runAgentLoop(
     if (decision.kind === "continue") {
       decision = yield* drainPhase(prepareRun(ctx!), ctx!)
     }
-    // The single main round loop.
+    // The single main round loop. IC04 §8: 是否允许开始下一次 main
+    // Provider round 只由 LoopSupervisor.beforeRound 判定（maxRounds 数据
+    // 仍保留在 Context，其他 Gate 可读，但 liveness 判定唯一归 supervisor）。
     if (decision.kind === "continue") {
-      for (let round = 0; round < ctx!.maxRounds; round++) {
+      let round = 0
+      while (ctx!.loopSupervisor.beforeRound(round, ctx!.maxRounds) === "START") {
         ctx!.lifecycle.finalRound = round
         const outcome = yield* drainPhase(runRound(round, ctx!), ctx!)
-        if (outcome.kind === "continue") continue
+        if (outcome.kind === "continue") {
+          round += 1
+          continue
+        }
         decision = outcome
         break
       }

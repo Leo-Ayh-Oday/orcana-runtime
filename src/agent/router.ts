@@ -52,6 +52,12 @@ export interface ThinkingProfile {
    * 未知（legacy/custom provider）时沿用 desired envelope 作为 effective cap。
    */
   providerMaxOutputTokens?: number
+  /**
+   * IC04 §17/§18: LoopSupervisor NextRoundPolicy 带来的 liveness thinking
+   * cap（LOWER_THINKING / ACTION_FIRST 均为 2048）。与 protocolRecovery
+   * 区分：tool protocol recovery ≠ loop liveness recovery，不得混用。
+   */
+  livenessThinkingCapTokens?: number
 }
 
 export type ThinkingStage = "planning" | "execution" | "recovery" | "verification"
@@ -317,6 +323,11 @@ function planOutputBudget(
     if (profile?.actionFirst) requested = Math.min(requested, 2048)
     // TB2-1: 工具协议受约束恢复——只重发一个工具调用，thinking <= 1024。
     if (profile?.protocolRecovery) requested = Math.min(requested, 1024)
+    // IC04 §17: LoopSupervisor liveness thinking cap（LOWER_THINKING /
+    // ACTION_FIRST 均 2048）——liveness recovery，与 tool protocol recovery 分离。
+    if (typeof profile?.livenessThinkingCapTokens === "number") {
+      requested = Math.min(requested, profile.livenessThinkingCapTokens)
+    }
     thinkingBudgetTokens = Math.min(requested, maxThinkingAllowed)
     actionReserveTokens = totalRequestedTokens - thinkingBudgetTokens
   }

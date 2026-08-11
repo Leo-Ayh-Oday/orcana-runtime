@@ -75,6 +75,11 @@ export interface CapabilityExecuteInput {
    *  工具重试预算由统一账本裁决（tool <= 1）；loop 模式不重试（工具失败由
    *  agent 轮次机制 + ProgressGovernor 治理，避免行为冻结回归）。 */
   retryLedger?: RetryLedger
+  /**
+   * IC04 §41: Run 级 RetryCoordinator —— capability retry 的 authorization
+   * 唯一来源（替代直接 retryLedger.canRetry/record）。
+   */
+  retryCoordinator?: import("../../runtime/retry/coordinator").RetryCoordinator
   /** RT-3: explicit run-scoped execution context (node mode wires it from
    *  the run scope; loop mode keeps the legacy loose parameters). */
   context?: ToolExecutionContext
@@ -218,7 +223,12 @@ export async function executeCapability(
       // 一次（tool <= 1，同工具指纹）—— 预算与 provider/repair 层共享，
       // 不存在 capability 独立重试预算。
       const toolFingerprint = `tool:${descriptor.id}`
-      const maxRetries = descriptor.retryable && input.retryLedger ? 1 : 0
+      // IC04 §41: write/external capability 绝不 blind automatic retry（即使
+      // descriptor.retryable=true —— 无 idempotency contract，fail closed）。
+      // 允许自动重试的默认范围：sideEffect = none | read。
+      const autoRetryAllowed = descriptor.retryable
+        && (descriptor.sideEffect === "none" || descriptor.sideEffect === "read")
+      const maxRetries = autoRetryAllowed && (input.retryLedger || input.retryCoordinator) ? 1 : 0
       let attempt = 0
       let response: Awaited<ReturnType<CapabilityHandler["execute"]>>
       do {
@@ -227,9 +237,16 @@ export async function executeCapability(
           abortSignal: input.abortSignal ?? input.context?.signal,
           metadata: { capabilityId: descriptor.id, ...(input.context ? { runContext: input.context } : {}) },
         })
-        if (response.ok || attempt >= maxRetries || !input.retryLedger) break
-        if (!input.retryLedger.canRetry("tool", toolFingerprint)) break
-        input.retryLedger.record("tool", toolFingerprint)
+        if (response.ok || attempt >= maxRetries || (!input.retryLedger && !input.retryCoordinator)) break
+        // IC04: retry authorization 唯一来源 RetryCoordinator（§41）；
+        // legacy retryLedger 保留为无 coordinator 时的 compatibility。
+        if (input.retryCoordinator) {
+          const permit = input.retryCoordinator.authorizeRetry({ retryClass: "tool", fingerprint: toolFingerprint })
+          if (!permit.allowed) break
+        } else {
+          if (!input.retryLedger!.canRetry("tool", toolFingerprint)) break
+          input.retryLedger!.record("tool", toolFingerprint)
+        }
         input.emit?.("tool.call.failed", { toolName: descriptor.id, toolCallId: input.toolCallId, error: response.error ?? "capability execution failed", retry: true })
         attempt++
       } while (true)

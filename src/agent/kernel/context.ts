@@ -185,7 +185,9 @@ export async function buildRunContext(
       if (evictedUserTexts.length >= 3) {
         try {
           const distilled = await distillUserConstraints(
-            provider,
+            // P0-2: run-scoped Provider subcall 必须经 coordinatedProvider ——
+            // distillation 的 physical request 计入同一 RetryCoordinator。
+            coordinatedProvider,
             options.modelRouter?.selectForPurpose("thinking_compaction") ?? "deepseek-v4-flash",
             evictedUserTexts,
             options.abortSignal,

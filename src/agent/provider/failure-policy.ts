@@ -202,7 +202,19 @@ export function decideProviderFailureRecovery(
   // PR-GATE-06：轮续跑属于 truncation 类 —— 同一 round 经 ledger 严格限次
   // （truncation <= 1），不再只依赖 maxRounds 宽松边界。
   const roundFingerprint = `truncation:${input.round}`
-  const ledgerAllows = !input.retryLedger || input.retryLedger.canRetry("truncation", roundFingerprint)
+  // IC04 P1-8: coordinated runtime 的 legacy/custom retryable failure 走
+  // coordinator-owned typed compatibility recovery（recovery gate 续跑，
+  // 明确注释）—— 绝不得使用 RetryClass.truncation 做 generic transport
+  // continuation（RETRY_DECISION_OUTSIDE_COORDINATOR = 0、
+  // TRUE_TRUNCATION_GENERIC_RETRY = 0）：coordinated 下不 canRetry /
+  // 不 record truncation；续跑限次由 RetryCoordinator 的 global physical
+  // cap（每次续跑 = 新的 initial provider request 授权）+ maxRounds 共同
+  // 承担（有界）。仅 standalone（无 coordinator）保留 legacy ledger 语义。
+  // "coordinated" = 存在 RetryCoordinator（retry decision authority）。
+  const coordinated = input.retryCoordinator !== undefined
+  const ledgerAllows = coordinated
+    ? true
+    : (!input.retryLedger || input.retryLedger.canRetry("truncation", roundFingerprint))
   const canRetry = ledgerAllows && input.round + 1 < input.maxRounds
   const assistantContext: ProviderMessage[] = input.finalText.trim()
     ? [{ role: "assistant", content: compactAssistantContext(input.finalText) }]
@@ -211,7 +223,7 @@ export function decideProviderFailureRecovery(
   if (input.taskTracker) {
     const missing = missingTaskRequirements(input.taskTracker)
     if (canRetry) {
-      input.retryLedger?.record("truncation", roundFingerprint)
+      if (!coordinated) input.retryLedger?.record("truncation", roundFingerprint)
       return {
         action: "continue",
         status: "provider-stream-gate: retrying unfinished long task",

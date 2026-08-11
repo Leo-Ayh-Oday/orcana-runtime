@@ -12,7 +12,7 @@ import type { LegacyLoopAdapterDeps } from "../runtime/legacy-loop-adapter"
 import { buildLoopOptions, createLegacyLoopAdapter } from "../runtime/legacy-loop-adapter"
 import type { HarnessEvent } from "../contracts/events"
 import { BudgetGuard } from "../runtime/budget-guard"
-import { RetryCoordinator, deriveMaxPhysicalProviderRequests } from "../../runtime/retry/coordinator"
+
 import { mapDecisionToOutcome } from "../runtime/outcome-mapper"
 import type { LoopDecision } from "../../agent/kernel/types"
 import type { AgentRunInput, AgentRun } from "../contracts/run"
@@ -60,21 +60,16 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
       // IC04 §27/§56: node production path —— model_call 由 coordinator
       // source-counted；usage 事件只做 token accounting。
       const guard = new BudgetGuard(context.budget, (reason) => context.cancellation.cancel(reason), { modelCallAuthority: "source" })
-      // IC04 §24/§29: 同一 scope coordinator 覆盖 cap + external consumer
-      // （node 级 budget 的 strict physical model-call cap）。
-      const explicitModelCalls = context.budget.limits.maxModelCalls
-      context.runScope.retryCoordinator = new (await import("../../runtime/retry/coordinator")).RetryCoordinator({
-        ledger: context.runScope.retryLedger,
-        maxPhysicalProviderRequests: explicitModelCalls < Number.MAX_SAFE_INTEGER
-          ? explicitModelCalls
-          : deriveMaxPhysicalProviderRequests(input.maxRounds ?? 50),
-        externalBudgetConsumer: {
-          tryConsume: () => guard.tryConsumeModelCall(),
-        },
+      // IC04 P0-4: 同一 run-scope 唯一 RetryCoordinator（identity 不变）——
+      // 只 configure node 级 external consumer；physical cap / ledger /
+      // decision history 全部 run 级连续累计（node1+node2 共用同一 cap）。
+      // production scope 恒有 coordinator（run-scope 创建时确定）。
+      context.runScope.retryCoordinator!.configureBudgetConsumer({
+        tryConsume: () => guard.tryConsumeModelCall(),
       })
       // §56: usage truth —— modelCalls = 本 node 执行期间实际产生的 physical
       // provider request 数（coordinator delta）。
-      const physicalBefore = context.runScope.retryCoordinator.physicalProviderRequests
+      const physicalBefore = context.runScope.retryCoordinator!.physicalProviderRequests
 
       let finalText = ""
       // M21: usage is counted, never dropped — modelCalls increments per

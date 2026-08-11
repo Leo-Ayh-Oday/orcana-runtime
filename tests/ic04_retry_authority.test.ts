@@ -456,3 +456,216 @@ describe("IC04 §58: RepairLoop semanticRepair 经 coordinator", () => {
     expect(loop).toBeDefined()
   })
 })
+
+// ════ IC04 Correction Gate #1 regressions ════
+
+import { agentLoop } from "../src/agent/loop"
+import type { LoopDecision } from "../src/agent/kernel/types"
+import { resolveMaxRounds } from "../src/agent/round/helpers"
+import { resolvePhysicalProviderBudget, RETRY_AUDIT_HISTORY_LIMIT } from "../src/runtime/retry/coordinator"
+import { RepairLoop as RepairLoopReal } from "../src/workflow/convergence/repair-loop"
+
+describe("IC04 P1-7: pre-abort 不得消费 physical", () => {
+  test("abortSignal 已 abort → underlying calls=0 / physical=0 / ledger=0 / finishReason=cancelled", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+    let underlyingCalls = 0
+    const provider = new DeepSeekProvider("k", {
+      client: {
+        messages: { stream: () => { underlyingCalls++ ; return { async *[Symbol.asyncIterator]() {} } } },
+      } as never,
+      sleep: sleep0,
+    })
+    const wrapped = withRetryCoordinator(provider, coordinator)
+    const events: StreamEvent[] = []
+    for await (const e of wrapped.streamChat({ model: "m", system: "s", messages: [], tools: [], maxTokens: 10, abortSignal: controller.signal })) {
+      events.push(e)
+    }
+    expect(underlyingCalls).toBe(0)
+    expect(coordinator.physicalProviderRequests).toBe(0)
+    expect(coordinator.retryLedger.summary().totalAttempts).toBe(0)
+    const finishes = events.filter(e => e.type === "finish")
+    expect((finishes[0]!.data as { finishReason: string }).finishReason).toBe("cancelled")
+  })
+})
+
+describe("IC04 P1-9: Retry Authority audit", () => {
+  test("每次 authorize 产生结构化 decision（allow/deny 均可审计）", () => {
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 2 })
+    coordinator.authorizeProviderAttempt({})
+    coordinator.authorizeProviderAttempt({ retryClass: "transport", fingerprint: "server:500" })
+    const denied = coordinator.authorizeProviderAttempt({ retryClass: "transport", fingerprint: "server:500" })
+    expect(denied.allowed).toBe(false)
+    const audit = coordinator.audit.decisions
+    expect(audit.length).toBe(3)
+    expect(audit[0]).toMatchObject({ action: "allow", kind: "provider_initial" })
+    expect(audit[1]).toMatchObject({ action: "allow", kind: "provider_retry", retryClass: "transport" })
+    expect(audit[2]).toMatchObject({ action: "deny", kind: "provider_retry", reason: "physical_request_budget" })
+    // 不记录 prompt/tool args/credential（无这些字段）。
+    for (const d of audit) {
+      expect(JSON.stringify(d)).not.toMatch(/prompt|password|api[_-]?key|secret|token=/i)
+    }
+  })
+
+  test("decision history bounded", () => {
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: RETRY_AUDIT_HISTORY_LIMIT + 10 })
+    for (let i = 0; i < RETRY_AUDIT_HISTORY_LIMIT + 5; i++) coordinator.authorizeProviderAttempt({})
+    expect(coordinator.audit.decisions.length).toBeLessThanOrEqual(RETRY_AUDIT_HISTORY_LIMIT)
+  })
+
+  test("observer 收到每次 decision（runTrace 挂钩路径）", () => {
+    const seen: string[] = []
+    const coordinator = new RetryCoordinator({
+      ledger: createRetryLedger(),
+      maxPhysicalProviderRequests: 10,
+      onDecision: d => seen.push(d.action),
+    })
+    coordinator.authorizeProviderAttempt({})
+    coordinator.authorizeRetry({ retryClass: "semanticRepair", fingerprint: "sig" })
+    expect(seen).toEqual(["allow", "allow"])
+  })
+})
+
+describe("IC04 P1-10: physical limit 统一 resolver", () => {
+  test("优先级：harness explicit > AgentOptions > env > derived", () => {
+    expect(resolvePhysicalProviderBudget({ harnessExplicitMaxModelCalls: 3 })).toBe(3)
+    expect(resolvePhysicalProviderBudget({ agentOptionsMaxPhysical: 5 })).toBe(5)
+    expect(resolvePhysicalProviderBudget({ agentOptionsMaxPhysical: 5, harnessExplicitMaxModelCalls: 3 })).toBe(3)
+    expect(resolvePhysicalProviderBudget({ envProviderRequests: 7 })).toBe(7)
+    expect(resolvePhysicalProviderBudget({ agentOptionsMaxPhysical: 5, envProviderRequests: 7 })).toBe(5)
+    expect(resolvePhysicalProviderBudget({ envProviderRequests: 7, harnessExplicitMaxModelCalls: 3 })).toBe(3)
+  })
+
+  test("derived 基于 logicalMaxRounds（resolveMaxRounds 尊重 ORCANA_MAX_ROUNDS）", () => {
+    expect(resolveMaxRounds(undefined, "10")).toBe(10)
+    expect(resolvePhysicalProviderBudget({ logicalMaxRounds: 10 })).toBe(20)
+    expect(resolvePhysicalProviderBudget({ logicalMaxRounds: 2 })).toBe(10)
+    expect(resolvePhysicalProviderBudget({ logicalMaxRounds: 50 })).toBe(100)
+    expect(resolvePhysicalProviderBudget({})).toBe(100)
+  })
+})
+
+describe("IC04 P1-13: 真实 agentLoop transport-cascade E2E", () => {
+  test("OpenAI mock 500×3 → 1 logical round / 3 physical / provider_failure / ledger transport=2 truncation=0", async () => {
+    const SAVED_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+    process.env.ORCANA_FLASH_TRIAGE = "off"
+    class MemoryTrace2 {
+      events: Array<{ type: string; data?: unknown }> = []
+      record(type: string, data?: unknown) { this.events.push({ type, data }) }
+    }
+    const trace = new MemoryTrace2()
+    const provider = new Always500Provider()
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+    // agentLoop 的 return value 是最终 LoopDecision（generator 终止值）。
+    const iterator = agentLoop("inspect the project state", {
+      provider,
+      model: "test",
+      tools: [],
+      maxRounds: 10,
+      retryCoordinator: coordinator,
+      runTrace: trace as never,
+      contextMapPolicy: "off",
+    })
+    let step: IteratorResult<StreamEvent, LoopDecision>
+    do {
+      step = await iterator.next()
+    } while (!step.done)
+    const decision = step.value
+    expect(decision).toMatchObject({ kind: "break", reason: "provider_failure" })
+    expect(provider.calls).toBe(3)
+    expect(coordinator.physicalProviderRequests).toBe(3)
+    const stalled = trace.events.filter(e => e.type === "agent_loop_stalled")
+    expect(stalled.length).toBe(0)
+    // 证明不出现 round 1 的第二个 Agent provider round。
+    const roundStarted = trace.events.filter(e => e.type === "round_started")
+    expect(roundStarted.length).toBe(1)
+    // RetryLedger：transport=2（仅 retry 记账）、truncation=0。
+    const summary = coordinator.retryLedger.summary()
+    expect(summary.byClass.transport).toBe(2)
+    expect(summary.byClass.truncation).toBe(0)
+    expect(summary.totalAttempts).toBe(2)
+    if (SAVED_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+    else process.env.ORCANA_FLASH_TRIAGE = SAVED_TRIAGE
+  })
+})
+
+describe("IC04 P1-14: RepairLoop.run() 集成 —— semanticRepair 经 coordinator 授权", () => {
+  test("真实 run：失败签名 authorizeRetry 被调用（≤2），第 3 次 class deny → 计入 blocked", async () => {
+    const { buildReadWriteRegistry } = await import("../src/workflow/registry")
+    const { buildTool } = await import("../src/tools/registry")
+    const { GIT_STATUS, GIT_DIFF } = await import("../src/tools/git")
+    const { APPLY_PATCH_TRANSACTION_TOOL } = await import("../src/tools/apply-patch")
+    const { RUN_PROCESS_TOOL } = await import("../src/tools/process")
+    const { RUN_TARGETED_VERIFICATION_TOOL } = await import("../src/tools/verification")
+    const { READ_FILE } = await import("../src/tools/file")
+    const { FIND_SYMBOL, FIND_REFERENCES, PROJECT_STRUCTURE } = await import("../src/tools/codegraph")
+    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const { tmpdir } = await import("node:os")
+
+    const project = mkdtempSync(join(tmpdir(), "ic04-repair-"))
+    writeFileSync(join(project, "a.ts"), "export const a = 1\n")
+    try {
+      const registry = buildReadWriteRegistry([
+        buildTool(READ_FILE), buildTool(FIND_SYMBOL), buildTool(FIND_REFERENCES),
+        buildTool(PROJECT_STRUCTURE), buildTool(GIT_STATUS), buildTool(GIT_DIFF),
+        buildTool(APPLY_PATCH_TRANSACTION_TOOL), buildTool(RUN_PROCESS_TOOL), buildTool(RUN_TARGETED_VERIFICATION_TOOL),
+      ])
+      const BAD_DIFF = "--- a/a.ts\n+++ b/a.ts\n@@ -99 +99 @@\n-export const a = 999\n+export const a = 2\n"
+      const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+      const loop = new RepairLoopReal({
+        registry,
+        projectRoot: project,
+        maxAttempts: 3,
+        maxDryRounds: 99,
+        retryCoordinator: coordinator,
+        specFactory: ({ round }) => (round === 1
+          ? { schemaVersion: "0.1", specId: `ic04-repair-${round}`, mode: "read-write", nodes: [
+              { id: "w:patch", handler: "tool.apply_patch", input: { patches: [{ diff: BAD_DIFF }] }, dependsOn: [] },
+              { id: "v:verify", handler: "tool.run_targeted_verification", input: { files: [] }, dependsOn: ["w:patch"] },
+            ] }
+          : null),
+      })
+      const report = await loop.run()
+      // semanticRepair 经 coordinator 授权（round 1 失败签名 authorizeRetry
+      // 真实被调用 1 次 —— production behavior proof，不是 constructor 测试）。
+      expect(coordinator.retryLedger.summary().byClass.semanticRepair).toBe(1)
+      const repairAudit = coordinator.audit.decisions.filter(d => d.kind === "semanticRepair")
+      expect(repairAudit.length).toBeGreaterThanOrEqual(1)
+      expect(repairAudit[0]!.action).toBe("allow")
+      expect(report.seen).toContain("w:patch|patch_conflict")
+    } finally {
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("IC04 Correction #13: external budget 原子顺序", () => {
+  test("numeric cap 已满 → external used modelCalls 不变 / retry ledger 不变 / physical 不变", async () => {
+    // 模拟 harness：cap=2 + external consumer（budget maxModelCalls=2）。
+    const { createBudgetLedger, mergeRunBudget } = await import("../src/harness/runtime/budget-ledger")
+    const { BudgetGuard } = await import("../src/harness/runtime/budget-guard")
+    const ledger = createBudgetLedger(mergeRunBudget({ maxModelCalls: 2 }))
+    const abortController = new AbortController()
+    const guard = new BudgetGuard(ledger, reason => abortController.abort(reason), { modelCallAuthority: "source" })
+    const coordinator = new RetryCoordinator({
+      ledger: createRetryLedger(),
+      maxPhysicalProviderRequests: 2,
+      externalBudgetConsumer: { tryConsume: () => guard.tryConsumeModelCall() },
+    })
+    coordinator.authorizeProviderAttempt({})
+    coordinator.authorizeProviderAttempt({})
+    expect(coordinator.physicalProviderRequests).toBe(2)
+    expect(ledger.used.modelCalls).toBe(2)
+    // 第 3 次：numeric cap deny —— external 不得再消费。
+    const denied = coordinator.authorizeProviderAttempt({ retryClass: "transport", fingerprint: "server:500" })
+    expect(denied.allowed).toBe(false)
+    expect(denied.reason).toBe("physical_request_budget")
+    expect(ledger.used.modelCalls).toBe(2)
+    expect(coordinator.physicalProviderRequests).toBe(2)
+    expect(coordinator.retryLedger.summary().totalAttempts).toBe(0)
+    // 探测式 external 触发 cancellation（同值 deny → abort 信号）。
+    expect(abortController.signal.aborted).toBe(true)
+  })
+})

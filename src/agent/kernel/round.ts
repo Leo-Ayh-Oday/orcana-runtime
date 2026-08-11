@@ -590,11 +590,20 @@ export async function* runRound(
     if (providerRoundResult.finishReason === "transport_failure") {
       yield stream({ type: "error", data: roundState.providerFailure.message })
       yield stream({ type: "status", data: "provider-failure: transport retries exhausted at provider authority — no round continuation" })
+      // P1-9: reason 取自真实 authority audit（最后一次 deny 的原因），
+      // 不硬编码 —— class_exhausted / physical_request_budget /
+      // side_effect_boundary 可区分。
+      const coordinator = getRunRetryCoordinator()
+      const audit = coordinator.audit.decisions
+      const lastDeny = audit.length > 0 ? audit[audit.length - 1] : null
+      const denyReason = lastDeny?.action === "deny"
+        ? (lastDeny.reason ?? "unknown")
+        : "coordinator_deny_unrecorded"
       yield trace("gate_decision", {
         gate: "provider_transport",
         decision: "blocked",
-        reason: "coordinator_transport_exhausted",
-        physicalProviderRequests: getRunRetryCoordinator().physicalProviderRequests,
+        reason: denyReason,
+        physicalProviderRequests: coordinator.physicalProviderRequests,
       })
       return { kind: "break", reason: "provider_failure" }
     }
@@ -628,6 +637,9 @@ export async function* runRound(
         finishReason: providerRoundResult.finishReason,
         executableToolCallCount: completedToolCalls.length,
         sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+        // P0-1: early-continue 同样必须 progress accounting（no-progress
+        // ladder 不可被 provider-recovery continue 绕过）。
+        progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
       })
     }
     return { kind: "break", reason: "provider_failure" }
@@ -717,6 +729,8 @@ export async function* runRound(
           finishReason: providerRoundResult.finishReason,
           executableToolCallCount: completedToolCalls.length,
           sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+          // P0-1: orchestrator continue 同样必须 progress accounting。
+          progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
         })
       case "break_blocked":
         return { kind: "break", reason: "orchestrator_blocked" }
@@ -736,6 +750,8 @@ export async function* runRound(
             finishReason: providerRoundResult.finishReason,
             executableToolCallCount: completedToolCalls.length,
             sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+            // P0-1: master-plan next-node continue 同样必须 progress accounting。
+            progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
           })
         }
         if (planStore.current) {
@@ -1158,7 +1174,9 @@ function superviseNextRound(
     finishReason: ProviderFinishReason
     executableToolCallCount: number
     sideEffectBoundaryCrossed: boolean
-    progressInput?: RoundProgressInput
+    // P0-1: 必选 —— 每 completed logical round EXACTLY ONCE progress
+    // evaluation（CONTINUE_PATH_WITHOUT_PROGRESS_ACCOUNTING = 0）。
+    progressInput: RoundProgressInput
   },
 ): AsyncGenerator<RunEffect, LoopDecision> {
   return superviseRoundGenerator(ctx, input)
@@ -1171,7 +1189,7 @@ async function* superviseRoundGenerator(
     finishReason: ProviderFinishReason
     executableToolCallCount: number
     sideEffectBoundaryCrossed: boolean
-    progressInput?: RoundProgressInput
+    progressInput: RoundProgressInput
   },
 ): AsyncGenerator<RunEffect, LoopDecision> {
   const decision = ctx.loopSupervisor.afterRound({
@@ -1235,17 +1253,19 @@ async function* superviseRoundGenerator(
       return { kind: "continue" }
     }
     case "stalled": {
+      // P1-12: 所有 stalled（progress / commitment / truncation）统一进入
+      // AgentState.STALLED + lifecycle.stopReason="stalled"，避免
+      // Lifecycle=STALLED 而 StateMachine 停在 SEARCH/CODE 的不一致。
+      ctx.sm.transition(AgentState.STALLED, decision.report)
+      ctx.lifecycle.stopReason = "stalled"
       if (decision.reason === "truncation") {
         // IC04 §13: 第 3 次连续 no-action truncation → STALLED(truncation)。
-        ctx.lifecycle.stopReason = "stalled"
         yield stream({ type: "status", data: `loop-supervisor: STALLED —— 连续 ${ctx.loopSupervisor.truncationStreak} 轮 no-action 截断，终止运行` })
         yield stream({ type: "error", data: decision.report })
         yield trace("agent_loop_stalled", { round: input.round, streak: ctx.loopSupervisor.consecutiveNoProgress, truncationStreak: ctx.loopSupervisor.truncationStreak, reason: "truncation" })
         return { kind: "break", reason: "progress_stalled" }
       }
       // GS-P2（streak）/ GS-P4（commitment）：STALLED 终止 + 完整诊断。
-      ctx.sm.transition(AgentState.STALLED, decision.report)
-      ctx.lifecycle.stopReason = "stalled"
       const why = decision.reason === "commitment" ? "GS-P4 承诺未履行" : "GS-P2 连续 4 轮无有效进展"
       yield stream({ type: "status", data: `progress-governor: STALLED —— ${why}，终止运行` })
       yield stream({ type: "error", data: decision.report })

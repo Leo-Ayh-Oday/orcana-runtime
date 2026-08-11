@@ -38,7 +38,7 @@ function supervisor() {
   return new LoopSupervisor(new ProgressGovernor())
 }
 
-/** 连续 n 轮 truncation（仅 finishReason 变化，无 progressInput）。 */
+/** 连续 n 轮 truncation（P0-1: 每轮必须带 progressInput —— 无进展输入）。 */
 function truncationRounds(s: LoopSupervisor, n: number, reason: ProviderFinishReason = "truncated_before_action"): LoopSupervisorDecision[] {
   const decisions: LoopSupervisorDecision[] = []
   for (let i = 0; i < n; i++) {
@@ -47,6 +47,7 @@ function truncationRounds(s: LoopSupervisor, n: number, reason: ProviderFinishRe
       finishReason: reason,
       executableToolCallCount: 0,
       sideEffectBoundaryCrossed: false,
+      progressInput: roundInput({ round: i }),
     }))
   }
   return decisions
@@ -127,7 +128,7 @@ describe("IC04 L4: truncation ladder", () => {
     truncationRounds(s, 3)
     // 第 4 次调用也会返回 stalled —— 但 loop 层在 #3 就 break；
     // 这里证明 streak 有界。
-    const d4 = s.afterRound({ round: 4, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false })
+    const d4 = s.afterRound({ round: 4, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 4 }) })
     expect(d4.action).toBe("stalled")
     if (d4.action === "stalled") expect(d4.reason).toBe("truncation")
   })
@@ -145,7 +146,7 @@ describe("IC04 L5: partial tool truncation 同三阶", () => {
 
   test("truncated_partial_tool + executable > 0 → 不进入 ladder（有真实副作用）", () => {
     const s = supervisor()
-    const d = s.afterRound({ round: 0, finishReason: "truncated_partial_tool", executableToolCallCount: 1, sideEffectBoundaryCrossed: true })
+    const d = s.afterRound({ round: 0, finishReason: "truncated_partial_tool", executableToolCallCount: 1, sideEffectBoundaryCrossed: true, progressInput: roundInput({ round: 0, committedToolCalls: [{ id: "t-r1", name: "read_file", input: { path: "a.ts" } }] }) })
     expect(d.action).toBe("proceed")
     expect(s.truncationStreak).toBe(0)
   })
@@ -154,9 +155,9 @@ describe("IC04 L5: partial tool truncation 同三阶", () => {
 describe("IC04 L6: truncated_after_action 不进入 truncation recovery", () => {
   test("Tool A complete + truncated_after_action → streak = 0", () => {
     const s = supervisor()
-    s.afterRound({ round: 0, finishReason: "truncated_after_action", executableToolCallCount: 1, sideEffectBoundaryCrossed: true })
+    s.afterRound({ round: 0, finishReason: "truncated_after_action", executableToolCallCount: 1, sideEffectBoundaryCrossed: true, progressInput: roundInput({ round: 0, committedToolCalls: [{ id: "t-1", name: "read_file", input: { path: "a.ts" } }] }) })
     expect(s.truncationStreak).toBe(0)
-    const d = s.afterRound({ round: 1, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false })
+    const d = s.afterRound({ round: 1, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 1 }) })
     // truncated_after_action 已 reset —— 下一次 truncation 重新从 #1 计。
     expect(d.action).toBe("lower_thinking")
     expect(s.truncationStreak).toBe(1)
@@ -179,7 +180,7 @@ describe("IC04 L7: progress 重置 truncation streak", () => {
     })
     expect(s.truncationStreak).toBe(0)
     // 下一次 truncation 重新视为 #1
-    const d = s.afterRound({ round: 11, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false })
+    const d = s.afterRound({ round: 11, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 11, fileCount: 1 }) })
     expect(d.action).toBe("lower_thinking")
     expect(s.truncationStreak).toBe(1)
   })
@@ -209,6 +210,7 @@ describe("IC04 precedence（§16）", () => {
     const d = s.afterRound({ round: 1, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 1 }) })
     // #2 truncation → ACTION_FIRST（truncation 优先）
     expect(d.action).toBe("action_first")
+    expect(d.nextRoundPolicy.recoveryMode).toBe("action_first")
   })
 
   test("truncation streak=3 优先于 governor stalled", () => {
@@ -217,5 +219,56 @@ describe("IC04 precedence（§16）", () => {
     const d = s.afterRound({ round: 2, finishReason: "truncated_before_action", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 2 }) })
     expect(d.action).toBe("stalled")
     if (d.action === "stalled") expect(d.reason).toBe("truncation")
+  })
+})
+
+describe("IC04 P0-1: early-continue 必须 progress accounting", () => {
+  test("连续 continue 轮（无 EffectiveProgress）→ streak 增长 → ACTION_FIRST/REPLAN/STALLED，不得静默绕过 ladder", () => {
+    const s = supervisor()
+    // 模拟 provider-recovery / orchestrator continue：每轮只带文本、无工具产出。
+    // P0-1 前这些路径不 evaluate —— streak 恒 0，ladder 永不触发。
+    s.afterRound({ round: 0, finishReason: "complete", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 0 }) })
+    const d1 = s.afterRound({ round: 1, finishReason: "complete", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 1, finalText: "思考中" }) })
+    expect(d1.action).toBe("proceed")
+    expect(s.consecutiveNoProgress).toBe(1)
+    const d2 = s.afterRound({ round: 2, finishReason: "complete", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 2 }) })
+    expect(d2.action).toBe("action_first")
+    const d3 = s.afterRound({ round: 3, finishReason: "complete", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 3 }) })
+    expect(d3.action).toBe("replan_once")
+    const d4 = s.afterRound({ round: 4, finishReason: "complete", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 4 }) })
+    expect(d4.action).toBe("stalled")
+  })
+
+  test("progressInput 缺失在类型层即拒绝（contract required）", () => {
+    // 编译期保证：LoopSupervisorObservation.progressInput 必选。
+    // 运行时 double-evaluation 仍 fail closed（§10，见 L8）。
+    const s = supervisor()
+    s.afterRound({ round: 0, finishReason: "complete", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 0 }) })
+    expect(() => s.afterRound({ round: 0, finishReason: "complete", executableToolCallCount: 0, sideEffectBoundaryCrossed: false, progressInput: roundInput({ round: 0 }) })).toThrow(/double progress evaluation/)
+  })
+})
+
+describe("IC04 P1-11: effective progress 优先 reset truncation streak", () => {
+  test("truncation streak=1 后：truncated_before_action + effective=true → streak=0，不进 #2 ACTION_FIRST", () => {
+    const s = supervisor()
+    truncationRounds(s, 1)
+    expect(s.truncationStreak).toBe(1)
+    // 本轮 finishReason 属于 no-action truncation class，但 progressInput
+    // 产出 effective（写类提交 + 文件集增长）—— reset 必须优先。
+    const tc = { id: "t-w1", name: "write_file", input: { path: "a.ts" } }
+    const d = s.afterRound({
+      round: 10,
+      finishReason: "truncated_before_action",
+      executableToolCallCount: 0,
+      sideEffectBoundaryCrossed: false,
+      progressInput: roundInput({
+        round: 10,
+        committedToolCalls: [tc],
+        toolResults: [{ type: "tool_result", tool_use_id: "t-w1", content: "ok" }],
+        fileCount: 1,
+      }),
+    })
+    expect(s.truncationStreak).toBe(0)
+    expect(d.action).toBe("proceed")
   })
 })

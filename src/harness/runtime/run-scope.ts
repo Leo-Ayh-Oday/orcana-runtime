@@ -64,6 +64,8 @@ export interface AssembleRunScopeInput {
   projectRoot: string
   controller: AbortController
   activeMode?: ModeName
+  /** IC04 P0-4: 唯一 RetryCoordinator 的 physical cap（Run 创建时确定）。 */
+  retryCoordinatorCap?: number
   /** G0-2: fail-loud observer for trace batch write failures. */
   onTraceWriteFailure?: (info: { runId: string; batchSize: number; error: unknown }) => void
 }
@@ -92,7 +94,7 @@ export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
     // external model-call consumer（§24/§26）。
     retryCoordinator: new RetryCoordinator({
       ledger: retryLedger,
-      maxPhysicalProviderRequests: deriveMaxPhysicalProviderRequests(50),
+      maxPhysicalProviderRequests: input.retryCoordinatorCap ?? deriveMaxPhysicalProviderRequests(50),
     }),
   }
 }

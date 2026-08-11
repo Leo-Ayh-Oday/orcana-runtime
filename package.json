@@ -1,7 +1,7 @@
 {
   "name": "orcana-runtime",
   "version": "0.8.26.2",
-  "description": "Orcana Runtime — model-agnostic Agent Runtime for reliable, governed, evidence-backed long-horizon execution.",
+  "description": "Orcana Runtime — model-agnostic agent runtime for evidence-gated recursive self-evolution.",
   "type": "module",
   "license": "MIT",
   "packageManager": "bun@1.3.14",

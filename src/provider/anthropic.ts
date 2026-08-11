@@ -10,7 +10,8 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk"
-import type { StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
+import type { ProviderFinishInfo, StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
+import { providerFinishReasonFromErrorKind } from "./types"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
 import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, providerBackoffWait, canRetryProviderAttempt, recordProviderRetry } from "./retry"
@@ -71,6 +72,7 @@ export class AnthropicProvider implements LLMProvider {
       // retried once the signal fires — including an abort landing in backoff.
       if (options.abortSignal?.aborted) {
         yield { type: "error", data: "provider request aborted" }
+        yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
         return
       }
       let unsafeToRetry = false
@@ -80,12 +82,14 @@ export class AnthropicProvider implements LLMProvider {
       } catch (e) {
         if (options.abortSignal?.aborted) {
           yield { type: "error", data: "provider request aborted" }
+          yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
         const info = classifyProviderError(e)
         const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry, options.retryLedger)
         if (!canRetry) {
           yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
+          yield { type: "finish", data: { finishReason: providerFinishReasonFromErrorKind(info.kind), rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
         recordProviderRetry(info, options.retryLedger)
@@ -94,6 +98,7 @@ export class AnthropicProvider implements LLMProvider {
         const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
         if (!waited) {
           yield { type: "error", data: "provider request aborted during retry backoff" }
+          yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
       }
@@ -226,39 +231,61 @@ export class AnthropicProvider implements LLMProvider {
 
     if (abortBinding.isAborted() && !stopReason) {
       yield { type: "status", data: "provider-stream: aborted by local budget guard" }
+      yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
       return
     }
     if (!stopReason) {
+      // IC03: malformed（结构缺失），不是 generic retryable error。
       yield { type: "error", data: "provider stream ended unexpectedly without stop_reason" }
-      return
-    }
-    if (toolCallError) {
-      yield { type: "error", data: toolCallError }
-      return
-    }
-    if (ct) {
-      yield { type: "error", data: "provider stream ended with an incomplete tool call" }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: undefined, completedToolCallCount: toolBlocks.length, partialToolCall: ct !== null } satisfies ProviderFinishInfo }
       return
     }
     yield { type: "status", data: `provider-stop: ${stopReason}` }
-    if (!NORMAL_STOP_REASONS.has(stopReason)) {
-      if (stopReason === "max_tokens") {
-        // GATE-02 (GS-03/GS-05): TRUNCATED is not an error. Tool blocks that
-        // closed before the cut are complete side effects — emit them so the
-        // round executes them instead of discarding (OTS-013 lost every tool
-        // block this way and retried the same doomed request forever). The
-        // kernel continues as a fresh round; no blind generic retry.
-        for (const tb of toolBlocks) {
-          yield { type: "tool_call", data: { id: tb.id, name: tb.name, input: tb.input } }
-        }
+    if (toolCallError) {
+      // IC03: 正常 stop 但 closed tool block 非法结构 → malformed。
+      yield { type: "error", data: toolCallError }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: stopReason, completedToolCallCount: toolBlocks.length, partialToolCall: false } satisfies ProviderFinishInfo }
+      return
+    }
+    if (stopReason === "max_tokens") {
+      // GATE-02 (GS-03/GS-05) + IC03 结构化：TRUNCATED 不是 error。
+      if (ct) {
+        // partial tool：本批次 0 tool_call（PARTIAL_TOOL_CALL_EXECUTED = 0）。
         if (cthink?.thinking) {
           thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
         }
         if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
-        yield { type: "truncated", data: { stopReason: "max_tokens", toolCalls: toolBlocks.length } }
+        yield { type: "truncated", data: { stopReason: "max_tokens", toolCalls: 0, incomplete: true } }
+        yield { type: "finish", data: { finishReason: "truncated_partial_tool", rawStopReason: "max_tokens", completedToolCallCount: toolBlocks.length, partialToolCall: true } satisfies ProviderFinishInfo }
         return
       }
+      for (const tb of toolBlocks) {
+        yield { type: "tool_call", data: { id: tb.id, name: tb.name, input: tb.input } }
+      }
+      if (cthink?.thinking) {
+        thinkingBlocks.push({ thinking: cthink.thinking, signature: cthink.signature ?? "" })
+      }
+      if (thinkingBlocks.length) yield { type: "thinking_blocks", data: thinkingBlocks }
+      const completeCount = toolBlocks.length
+      yield { type: "truncated", data: { stopReason: "max_tokens", toolCalls: completeCount } }
+      yield { type: "finish", data: {
+        finishReason: completeCount > 0 ? "truncated_after_action" : "truncated_before_action",
+        rawStopReason: "max_tokens",
+        completedToolCallCount: completeCount,
+        partialToolCall: false,
+      } satisfies ProviderFinishInfo }
+      return
+    }
+    if (!NORMAL_STOP_REASONS.has(stopReason)) {
+      // IC03: 未知 stop reason → malformed（结构化）。
       yield { type: "error", data: `provider stop_reason=${stopReason}: response ended before normal completion` }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: stopReason, completedToolCallCount: toolBlocks.length, partialToolCall: ct !== null } satisfies ProviderFinishInfo }
+      return
+    }
+    if (ct) {
+      // 正常 stop 但 tool 未 closed → 不可恢复非法结构（fail-closed）。
+      yield { type: "error", data: "provider stream ended with an incomplete tool call" }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: stopReason, completedToolCallCount: toolBlocks.length, partialToolCall: true } satisfies ProviderFinishInfo }
       return
     }
 
@@ -272,6 +299,13 @@ export class AnthropicProvider implements LLMProvider {
 
     const finalText = textChunks.join("")
     if (finalText && toolBlocks.length === 0) yield { type: "done", data: finalText }
+    // IC03: tool_use / end_turn / stop_sequence → 结构化 finish。
+    yield { type: "finish", data: {
+      finishReason: toolBlocks.length > 0 ? "tool_action" : "complete",
+      rawStopReason: stopReason,
+      completedToolCallCount: toolBlocks.length,
+      partialToolCall: false,
+    } satisfies ProviderFinishInfo }
   }
 }
 

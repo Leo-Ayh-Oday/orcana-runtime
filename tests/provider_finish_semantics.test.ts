@@ -13,6 +13,7 @@ import { AnthropicProvider } from "../src/provider/anthropic"
 import { OpenAIProvider } from "../src/provider/openai"
 import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../src/provider/types"
 import { failureFromProviderFinish } from "../src/agent/provider/failure-policy"
+import { providerFinishReasonFromErrorKind } from "../src/provider/types"
 import { runProviderRound } from "../src/agent/provider/round-runner"
 import type { ProviderRoundResult } from "../src/agent/provider/round-result"
 
@@ -366,5 +367,188 @@ describe("IC03 failure mapping", () => {
     expect(failureFromProviderFinish("quota_failure")?.retryable).toBe(false)
     expect(failureFromProviderFinish("malformed")?.retryable).toBe(false)
     expect(failureFromProviderFinish("cancelled")?.retryable).toBe(false)
+  })
+})
+
+// ── IC03 Correction（ChatGPT 复审 blockers）──
+
+/** P0-1: 真实 runProviderRound integration —— error + structured finish 双事件。
+ *  中性 message（无 auth/quota/401/403 关键词）不得触发 legacy regex 分类；
+ *  failure authority = structured finishReason。 */
+async function runStructuredErrorCase(events: StreamEvent[]): Promise<CollectOut> {
+  const provider: LLMProvider = {
+    async *streamChat(): AsyncGenerator<StreamEvent> {
+      for (const e of events) yield e
+    },
+  }
+  const outEvents: StreamEvent[] = []
+  const iterator = runProviderRound({
+    provider,
+    request: { model: "test", purpose: "agent_main", system: "s", messages: [], maxTokens: 10 },
+    bufferText: true,
+  })
+  let result: ProviderRoundResult | undefined
+  while (true) {
+    const next = await iterator.next()
+    if (next.done) {
+      result = next.value
+      break
+    }
+    outEvents.push(next.value)
+  }
+  return {
+    events: outEvents,
+    providerFinishes: [],
+    runnerFinishes: outEvents.filter(e => e.type === "finish").length,
+    toolCallCount: outEvents.filter(e => e.type === "tool_call").length,
+    result: result!,
+  }
+}
+
+describe("IC03 correction P0-1: structured finish 是 failure authority", () => {
+  const NEUTRAL_MESSAGE = "provider rejected request"
+
+  test("error + finish(auth_failure) → failure 来自 structured finish（非 message regex）", async () => {
+    const out = await runStructuredErrorCase([
+      { type: "error", data: NEUTRAL_MESSAGE },
+      { type: "finish", data: { finishReason: "auth_failure", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } },
+    ])
+    expect(out.result.finishReason).toBe("auth_failure")
+    expect(out.result.failure?.kind).toBe("auth_failure")
+    expect(out.result.failure?.retryable).toBe(false)
+    expect(out.result.failure?.message).toBe(NEUTRAL_MESSAGE)
+  })
+
+  test("error + finish(quota_failure) → quota_failure non-retryable", async () => {
+    const out = await runStructuredErrorCase([
+      { type: "error", data: NEUTRAL_MESSAGE },
+      { type: "finish", data: { finishReason: "quota_failure", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } },
+    ])
+    expect(out.result.finishReason).toBe("quota_failure")
+    expect(out.result.failure?.kind).toBe("quota_failure")
+    expect(out.result.failure?.retryable).toBe(false)
+  })
+
+  test("error + finish(malformed) → malformed non-retryable（fail closed）", async () => {
+    const out = await runStructuredErrorCase([
+      { type: "error", data: NEUTRAL_MESSAGE },
+      { type: "finish", data: { finishReason: "malformed", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } },
+    ])
+    expect(out.result.finishReason).toBe("malformed")
+    expect(out.result.failure?.kind).toBe("malformed")
+    expect(out.result.failure?.retryable).toBe(false)
+  })
+
+  test("error + finish(transport_failure) → retryable transport", async () => {
+    const out = await runStructuredErrorCase([
+      { type: "error", data: NEUTRAL_MESSAGE },
+      { type: "finish", data: { finishReason: "transport_failure", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } },
+    ])
+    expect(out.result.finishReason).toBe("transport_failure")
+    expect(out.result.failure?.retryable).toBe(true)
+    expect(out.result.failure?.kind).toBe("transport")
+  })
+
+  test("structured complete + error message → failure 仍为 undefined（truncated/complete 不是 failure）", async () => {
+    const out = await runStructuredErrorCase([
+      { type: "error", data: NEUTRAL_MESSAGE },
+      { type: "finish", data: { finishReason: "truncated_before_action", rawStopReason: "max_tokens", completedToolCallCount: 0, partialToolCall: false } },
+    ])
+    expect(out.result.finishReason).toBe("truncated_before_action")
+    expect(out.result.failure).toBeUndefined()
+  })
+})
+
+describe("IC03 correction P0-2: error kind → finish reason 保持 retryability", () => {
+  test("client / unknown → malformed（non-retryable），不变成 retryable transport", () => {
+    expect(providerFinishReasonFromErrorKind("client")).toBe("malformed")
+    expect(providerFinishReasonFromErrorKind("unknown")).toBe("malformed")
+    // 组合验证：typed mapping → failure 语义
+    expect(failureFromProviderFinish(providerFinishReasonFromErrorKind("client"))?.retryable).toBe(false)
+    expect(failureFromProviderFinish(providerFinishReasonFromErrorKind("unknown"))?.retryable).toBe(false)
+  })
+
+  test("auth / quota → non-retryable typed finish", () => {
+    expect(providerFinishReasonFromErrorKind("auth")).toBe("auth_failure")
+    expect(providerFinishReasonFromErrorKind("quota")).toBe("quota_failure")
+    expect(failureFromProviderFinish(providerFinishReasonFromErrorKind("auth"))?.retryable).toBe(false)
+    expect(failureFromProviderFinish(providerFinishReasonFromErrorKind("quota"))?.retryable).toBe(false)
+  })
+
+  test("network / rate_limit / capacity / server → transport（retryable）", () => {
+    for (const kind of ["network", "rate_limit", "capacity", "server"]) {
+      expect(providerFinishReasonFromErrorKind(kind)).toBe("transport_failure")
+      expect(failureFromProviderFinish(providerFinishReasonFromErrorKind(kind))?.retryable).toBe(true)
+    }
+  })
+
+  test("undefined kind → malformed（conservative non-retryable）", () => {
+    expect(providerFinishReasonFromErrorKind(undefined)).toBe("malformed")
+    expect(failureFromProviderFinish(providerFinishReasonFromErrorKind(undefined))?.retryable).toBe(false)
+  })
+})
+
+describe("IC03 correction P0-3: OpenAI 200 + body=null → exactly-one malformed finish", () => {
+  test("raw provider finish === 1 + malformed；runner failure non-retryable", async () => {
+    const provider = new OpenAIProvider("test-key", {
+      baseURL: "https://test.local/v1",
+      fetch: (async () => new Response(null, { status: 200 })) as unknown as typeof fetch,
+      sleep: async () => {},
+    })
+    // raw provider stream
+    const rawEvents: StreamEvent[] = []
+    for await (const e of provider.streamChat({
+      model: "test", purpose: "agent_main", system: "s", messages: [], tools: [], maxTokens: 10,
+    })) rawEvents.push(e)
+    const rawFinishes = rawEvents.filter(e => e.type === "finish")
+    expect(rawFinishes).toHaveLength(1)
+    expect((rawFinishes[0]!.data as { finishReason: string }).finishReason).toBe("malformed")
+
+    // runner 路径
+    const iterator = runProviderRound({
+      provider: new OpenAIProvider("test-key", {
+        baseURL: "https://test.local/v1",
+        fetch: (async () => new Response(null, { status: 200 })) as unknown as typeof fetch,
+        sleep: async () => {},
+      }),
+      request: { model: "test", purpose: "agent_main", system: "s", messages: [], tools: [], maxTokens: 10 },
+      bufferText: true,
+    })
+    let result: ProviderRoundResult | undefined
+    while (true) {
+      const next = await iterator.next()
+      if (next.done) {
+        result = next.value
+        break
+      }
+    }
+    expect(result?.finishReason).toBe("malformed")
+    expect(result?.failure?.retryable).toBe(false)
+    expect(result?.failure?.kind).toBe("malformed")
+  })
+})
+
+describe("IC03 correction P1-2: OpenAI complete A + partial B 的 completedToolCallCount", () => {
+  test("A native complete + B partial + length → completedToolCallCount=1、emitted=0、failure=undefined", async () => {
+    const chunks = [
+      openaiChunk({
+        tool_calls: [
+          { index: 0, id: "call-A", type: "function", function: { name: "write_file", arguments: '{"path":"a.ts"}' } },
+          { index: 1, id: "call-B", type: "function", function: { name: "write_file", arguments: '{"path":' } },
+        ],
+      }, null),
+      openaiChunk({}, "length"),
+      DONE,
+    ]
+    const out = await collectProvider(makeOpenAI, chunks)
+    // observed completed count 不撒谎（A 已完整 closed/native）。
+    expect(out.providerFinishes).toHaveLength(1)
+    expect(out.providerFinishes[0]!.finishReason).toBe("truncated_partial_tool")
+    expect(out.providerFinishes[0]!.partialToolCall).toBe(true)
+    expect(out.providerFinishes[0]!.completedToolCallCount).toBe(1)
+    // PARTIAL_TOOL_CALL_EXECUTED = 0 不变。
+    expect(out.toolCallCount).toBe(0)
+    expect(out.result.toolCalls.length).toBe(0)
+    expect(out.result.failure).toBeUndefined()
   })
 })

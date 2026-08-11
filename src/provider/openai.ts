@@ -303,7 +303,10 @@ export class OpenAIProvider implements LLMProvider {
 
     const reader = response.body?.getReader()
     if (!reader) {
+      // IC03 (P0-3): 200 OK 但无 response body → fail-closed malformed。
+      // raw Provider stream 每轮必须 exactly-one structured finish。
       yield { type: "error", data: "No response body" }
+      yield { type: "finish", data: { finishReason: "malformed", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
       return
     }
 
@@ -454,6 +457,10 @@ export class OpenAIProvider implements LLMProvider {
     const truncated = finishReason === "length" || finishReason === "max_tokens"
     if (truncated) {
       if (unassembledTruncated || parsedToolCalls.length === 0 || parsedToolCalls.some(call => !call.native)) {
+        // IC03 (P1-2): completedToolCallCount 表示 Provider stream 中已完整
+        // closed/native 解析的 Tool Call 数量（observed fact），不是本批次
+        // 允许执行的数量。partial batch 被 poison 后执行集合 = 0，但
+        // observed completed count 不能撒谎（repair 才合法的调用不算）。
         // 无完整 action / 存在需 repair 才能合法的调用：截断后补括号不是
         // Provider 已完成的真实副作用声明 → truncated_partial_tool，0 tool。
         if (parsedToolCalls.some(call => !call.native)) {
@@ -470,10 +477,11 @@ export class OpenAIProvider implements LLMProvider {
         } else {
           yield { type: "truncated", data: { stopReason: finishReason, toolCalls: 0 } }
         }
+        const nativeCompleteCount = parsedToolCalls.filter(call => call.native).length
         yield { type: "finish", data: {
           finishReason: (unassembledTruncated || parsedToolCalls.length > 0) ? "truncated_partial_tool" : "truncated_before_action",
           rawStopReason: finishReason ?? undefined,
-          completedToolCallCount: 0,
+          completedToolCallCount: nativeCompleteCount,
           partialToolCall: unassembledTruncated || parsedToolCalls.length > 0,
         } satisfies ProviderFinishInfo }
         return

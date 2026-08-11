@@ -31,11 +31,19 @@ export type ProviderFinishReason =
   | "malformed"
 
 /** IC03: retry 分类 kind → 结构化 finish（retry 耗尽 / 不可重试时使用）。
- *  kind 来自 provider/retry.ts classifyProviderError（非字符串猜测主路径）。 */
+ *  kind 来自 provider/retry.ts classifyProviderError（非字符串猜测主路径）。
+ *
+ *  retryability semantics 保持原样（P0-2）：
+ *    auth / quota              → non-retryable typed finish
+ *    network/rate_limit/
+ *    capacity/server           → transport_failure（retryable）
+ *    client / unknown          → malformed（non-retryable —— 复用既有
+ *      ProviderFinishReason，不新增第 11 个值） */
 export function providerFinishReasonFromErrorKind(kind: string | undefined): ProviderFinishReason {
   if (kind === "auth") return "auth_failure"
   if (kind === "quota") return "quota_failure"
-  return "transport_failure"
+  if (kind === "network" || kind === "rate_limit" || kind === "capacity" || kind === "server") return "transport_failure"
+  return "malformed"
 }
 
 /** IC03: 每个 production Provider round 结束时 exactly-once 的 finish 事件负载。 */

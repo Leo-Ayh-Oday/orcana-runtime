@@ -24,7 +24,7 @@ import { RunLifecycleMachine } from "./lifecycle-machine"
 import { BudgetGuard } from "./budget-guard"
 import { createRunCancellationWithTimeout } from "./cancellation"
 import type { LegacyLoopAdapter } from "./legacy-loop-adapter"
-import { RetryCoordinator, deriveMaxPhysicalProviderRequests } from "../../runtime/retry/coordinator"
+
 
 export interface RunControllerInput {
   adapter: LegacyLoopAdapter
@@ -48,16 +48,12 @@ export async function* runControlledRun(
   // RetryCoordinator source-counted（"source" 模式），usage 事件只做 token
   // accounting；budget.maxModelCalls 是 strict physical cap（§25）。
   const guard = new BudgetGuard(run.budget, reason => controller.abort(reason), { modelCallAuthority: "source" })
-  // IC04 §24/§29: 同一 scope coordinator 覆盖 cap + external consumer。
-  const explicitModelCalls = run.budget.limits.maxModelCalls
-  run.scope.retryCoordinator = new RetryCoordinator({
-    ledger: run.scope.retryLedger,
-    maxPhysicalProviderRequests: explicitModelCalls < Number.MAX_SAFE_INTEGER
-      ? explicitModelCalls
-      : deriveMaxPhysicalProviderRequests(runInput.maxRounds ?? 50),
-    externalBudgetConsumer: {
-      tryConsume: () => guard.tryConsumeModelCall(),
-    },
+  // IC04 P0-4: 唯一 RetryCoordinator 在 Run 创建时确定（run-registry）；
+  // 这里只 configure external budget consumer（BudgetGuard adapter），
+  // 不 replace、不 reset —— identity 在 fresh/pause/resume 间保持不变。
+  // production scope 恒有 coordinator（run-registry 创建时确定）。
+  run.scope.retryCoordinator!.configureBudgetConsumer({
+    tryConsume: () => guard.tryConsumeModelCall(),
   })
 
   if (resumeInput) {

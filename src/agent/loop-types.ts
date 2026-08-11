@@ -95,8 +95,9 @@ export interface AgentOptions {
    */
   retryCoordinator?: import("../runtime/retry/coordinator").RetryCoordinator
   /**
-   * IC04 §24: 显式 physical provider request 上限（优先级 2，仅次于
-   * harness budget.maxModelCalls）。
+   * IC04 P1-10: AgentOptions 级 physical provider request 硬上限
+   * （优先级低于 harness explicit budget.maxModelCalls，高于
+   * ORCANA_MAX_PROVIDER_REQUESTS 与 derived logical cap）。
    */
   maxPhysicalProviderRequests?: number
 }

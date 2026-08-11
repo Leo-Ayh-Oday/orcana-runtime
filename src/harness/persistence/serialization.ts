@@ -117,6 +117,9 @@ export function restoreAgentRun(input: RestoreAgentRunInput): AgentRun {
     projectRoot,
     controller,
     activeMode: serializable.modeState.mode as ModeName,
+    // IC04 P0-4/P1-15: 跨进程 restore 重建 coordinator 时恢复 authoritative
+    // physical model-call cap（不得回落 derived(50)）。
+    retryCoordinatorCap: serializable.budgetState?.limits.maxModelCalls,
   })
   // Restore plan with preserved node statuses (done work stays done).
   const plan = deserializePlanState(serializable.planState)

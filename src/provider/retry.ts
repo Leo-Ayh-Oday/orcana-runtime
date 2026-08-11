@@ -218,6 +218,22 @@ export function withRetryCoordinator(
      * authorize（§34）。deny → cancellation 语义结构化终止（§44）。
      */
     async *streamChat(options: import("./types").ProviderCallOptions) {
+      // P1-7: pre-abort 不得消费 physical —— signal 已 abort 时不 authorize、
+      // 不调用 underlying provider、不消耗 external budget、不 physical++；
+      // 返回标准 cancelled structured termination。
+      if (options.abortSignal?.aborted) {
+        yield { type: "error", data: "provider request aborted" }
+        yield {
+          type: "finish",
+          data: {
+            finishReason: "cancelled",
+            rawStopReason: undefined,
+            completedToolCallCount: 0,
+            partialToolCall: false,
+          } satisfies import("./types").ProviderFinishInfo,
+        }
+        return
+      }
       const permit = coordinator.authorizeProviderAttempt({})
       if (!permit.allowed) {
         yield { type: "error", data: "provider request not issued: physical provider request budget exhausted" }

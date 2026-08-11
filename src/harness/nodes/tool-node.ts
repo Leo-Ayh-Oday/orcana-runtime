@@ -68,8 +68,11 @@ export function createToolNode(options: ToolNodeOptions): HarnessNode<ToolNodeIn
             signal: context.cancellation.signal,
             approvalMode: "strict",
           }),
-          // PR-GATE-06：node 模式工具重试走 Run 级 RetryLedger（tool <= 1）。
+          // PR-GATE-06 + IC04 P0-5: node 模式工具重试授权唯一经
+          // RetryCoordinator（production scope 恒有）；retryLedger 保留为
+          // legacy compatibility（coordinator 优先，executor 内部 fallback）。
           retryLedger: context.runScope.retryLedger,
+          retryCoordinator: context.runScope.retryCoordinator,
           artifactTracker: options.artifactTracker
             ?? createToolArtifactTracker({
               store: context.artifacts,

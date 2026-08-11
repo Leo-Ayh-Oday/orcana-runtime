@@ -12,6 +12,8 @@ import type { ModeName } from "../../agent/mode-contract"
 import { RunNotFoundError } from "../contracts/errors"
 import type { AgentRun } from "../contracts/run"
 import { createBudgetLedger, mergeRunBudget } from "./budget-ledger"
+import { resolveMaxRounds } from "../../agent/round/helpers"
+import { deriveMaxPhysicalProviderRequests } from "../../runtime/retry/coordinator"
 import { assembleRunScope } from "./run-scope"
 import { stopServicesForRun } from "../../tools/service"
 
@@ -36,11 +38,19 @@ export class RunRegistry {
     const runId = randomUUID()
     const now = Date.now()
     const controller = new AbortController()
-    // H4: budget limits — maxRounds maps to maxModelCalls unless the caller
-    // set an explicit budget.
+    // H4 + IC04 P0-3: physical model-call budget 规则。
+    //   explicit budget.maxModelCalls → strict physical cap（保持）。
+    //   否则 ORCANA_MAX_PROVIDER_REQUESTS → 否则 derived(logicalMaxRounds)。
+    // logicalMaxRounds = resolveMaxRounds(maxRounds, ORCANA_MAX_ROUNDS)。
+    // 注意：physical cap 不再 = maxRounds（R=2 → physical=10）；logical
+    // round 上限仍由 maxRounds 决定（两者独立）。
     const budget = mergeRunBudget(input.input.budget)
-    if (input.input.maxRounds !== undefined && input.input.budget?.maxModelCalls === undefined) {
-      budget.maxModelCalls = input.input.maxRounds
+    if (input.input.budget?.maxModelCalls === undefined) {
+      const envPhysical = Number(process.env.ORCANA_MAX_PROVIDER_REQUESTS)
+      const logicalMaxRounds = resolveMaxRounds(input.input.maxRounds, process.env.ORCANA_MAX_ROUNDS)
+      budget.maxModelCalls = Number.isFinite(envPhysical) && envPhysical > 0
+        ? Math.floor(envPhysical)
+        : deriveMaxPhysicalProviderRequests(logicalMaxRounds)
     }
     const run: AgentRun = {
       runId,
@@ -56,6 +66,9 @@ export class RunRegistry {
         controller,
         activeMode: input.activeMode,
         onTraceWriteFailure: input.onTraceWriteFailure,
+        // P0-4: 唯一 RetryCoordinator 在 Run 创建时确定（ledger + physical
+        // cap = resolved budget.maxModelCalls）；run 生命周期内不 replace。
+        retryCoordinatorCap: budget.maxModelCalls,
       }),
       budget: createBudgetLedger(budget),
       createdAt: now,

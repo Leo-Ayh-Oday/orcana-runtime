@@ -46,8 +46,15 @@ export interface LoopSupervisorObservation {
   finishReason?: ProviderFinishReason
   executableToolCallCount: number
   sideEffectBoundaryCrossed: boolean
-  /** 存在时执行 ProgressGovernor.evaluate（每 round 最多一次）。 */
-  progressInput?: RoundProgressInput
+  /**
+   * 每 completed logical round 必须提供（P0-1：
+   * PROGRESS_EVALUATION_PER_COMPLETED_ROUND = 1）—— early-continue
+   * 路径（provider recovery / orchestrator continue / master-plan
+   * next-node）同样必须构造 buildProgressInput(...) 后经唯一 seam。
+   * LoopSupervisor 每轮 EXACTLY ONCE evaluate，double-evaluation
+   * fail closed（§10）。
+   */
+  progressInput: RoundProgressInput
 }
 
 export type LoopStallReason = "progress" | "commitment" | "truncation"
@@ -129,25 +136,25 @@ export class LoopSupervisor {
   afterRound(observation: LoopSupervisorObservation): LoopSupervisorDecision {
     // §10: PROGRESS_EVALUATION_PER_ROUND_MAX = 1 —— 同 round 重复评价
     // fail closed（显式拒绝，绝不静默让 streak +2）。
-    let governor: GovernorDecision | undefined
-    let delta: ProgressDelta | null = null
-    if (observation.progressInput) {
-      if (this.lastEvaluatedRound === observation.round) {
-        throw new Error(`LoopSupervisor: double progress evaluation for round ${observation.round}`)
-      }
-      this.lastEvaluatedRound = observation.round
-      governor = this.governor.evaluate(observation.progressInput)
-      delta = governor.delta
+    // P0-1: 每 completed logical round EXACTLY ONCE evaluate —— contract 必选。
+    if (this.lastEvaluatedRound === observation.round) {
+      throw new Error(`LoopSupervisor: double progress evaluation for round ${observation.round}`)
     }
+    this.lastEvaluatedRound = observation.round
+    const governor = this.governor.evaluate(observation.progressInput)
+    const delta = governor.delta
 
+    // P1-11: effective progress 优先 reset —— 即使 finishReason 同属
+    // no-action truncation class（truncation ladder 不吞没真实进展）。
     // §12-§14: truncation streak —— 唯一输入 ProviderFinishReason。
     const noActionTruncation = observation.finishReason === "truncated_before_action"
       || (observation.finishReason === "truncated_partial_tool" && observation.executableToolCallCount === 0)
-    if (noActionTruncation) {
+    if (delta?.effective) {
+      this.truncationStreakValue = 0
+    } else if (noActionTruncation) {
       this.truncationStreakValue += 1
-    } else if (observation.finishReason !== undefined || (delta?.effective ?? false)) {
-      // §14: 离开 no-action truncation class（含 truncated_after_action）或
-      // 有效进展 → reset。
+    } else if (observation.finishReason !== undefined) {
+      // §14: 离开 no-action truncation class（含 truncated_after_action）→ reset。
       this.truncationStreakValue = 0
     }
 

@@ -15,6 +15,7 @@
  */
 
 import type { StreamEvent } from "../provider/types"
+import { resolveMaxRounds } from "./round/helpers"
 import type { UsageStats, AgentOptions } from "./loop-types"
 import { createAgentRunScope, runWithAgentRunScope } from "./run/scope"
 import type { AgentRunLifecycleState } from "./run/types"
@@ -48,7 +49,7 @@ import { drainPhase } from "./kernel/effects"
 import type { LoopDecision } from "./kernel/types"
 import { setRuntimeContextBudgetMode } from "./runtime-context"
 import { bindRunRetryLedgerToContext, getRunRetryLedger, getRunRetryCoordinator, setExecutionIdentity, setRunRetryCoordinator } from "../runtime/execution-context"
-import { RetryCoordinator, deriveMaxPhysicalProviderRequests } from "../runtime/retry/coordinator"
+import { RetryCoordinator, resolvePhysicalProviderBudget } from "../runtime/retry/coordinator"
 import { resetRippleProgram, setCascadeFiles } from "../ripple/engine"
 import { clearActivePatchContext, clearTransactionRegistry } from "./patch-transaction"
 import { setShellSandbox } from "../tools/shell"
@@ -138,8 +139,16 @@ async function* runAgentLoop(
   if (options.retryCoordinator) {
     setRunRetryCoordinator(options.retryCoordinator)
   } else {
-    const physicalCap = options.maxPhysicalProviderRequests
-      ?? deriveMaxPhysicalProviderRequests(options.maxRounds ?? 50)
+    // P1-10: physical limit 统一 resolver —— AgentOptions.maxPhysical
+    // > ORCANA_MAX_PROVIDER_REQUESTS > derived(logicalMaxRounds)。
+    // logicalMaxRounds = resolveMaxRounds(maxRounds, ORCANA_MAX_ROUNDS)。
+    const envPhysical = Number(process.env.ORCANA_MAX_PROVIDER_REQUESTS)
+    const logicalMaxRounds = resolveMaxRounds(options.maxRounds, process.env.ORCANA_MAX_ROUNDS)
+    const physicalCap = resolvePhysicalProviderBudget({
+      agentOptionsMaxPhysical: options.maxPhysicalProviderRequests,
+      envProviderRequests: envPhysical,
+      logicalMaxRounds,
+    })
     setRunRetryCoordinator(new RetryCoordinator({
       ledger: getRunRetryLedger(),
       maxPhysicalProviderRequests: physicalCap,

@@ -53,6 +53,12 @@ export interface RetryPermit {
 /** §28: Harness 侧 BudgetLedger adapter 的最小 authority interface。 */
 export interface PhysicalRequestBudgetConsumer {
   tryConsume(): { allowed: boolean; reason?: string }
+  /**
+   * Correction #2 Blocker C: numeric physical cap 耗尽时的非消费通知
+   * （notification ≠ consumption —— 请求未发出，外部预算绝不增加）。
+   * harness 用于触发既有 cancellation（controller.abort / node cancel）。
+   */
+  onPhysicalBudgetExhausted?: () => void
 }
 
 export interface RetryCoordinatorOptions {
@@ -162,9 +168,17 @@ export class RetryCoordinator {
     this.externalConsumer = consumer
   }
 
-  /** P1-9: 附加 decision observer（runTrace 等；可多个）。 */
-  attachDecisionObserver(observer: RetryDecisionObserver): void {
+  /**
+   * P1-9: 附加 decision observer（runTrace 等；可多个）。
+   * Correction #2 Blocker B: 返回 detach 函数 —— run 级 observer 必须在
+   * run invocation 结束（finally）时移除，避免 pause/resume 叠加。
+   * 只移除 observer，不碰 physical count / RetryLedger / decision history。
+   */
+  attachDecisionObserver(observer: RetryDecisionObserver): () => void {
     this.observers.add(observer)
+    return () => {
+      this.observers.delete(observer)
+    }
   }
 
   private recordDecision(decision: RetryAuthorityDecision): void {
@@ -212,11 +226,10 @@ export class RetryCoordinator {
     // 4. global physical provider request budget（§22，Correction #13：
     //    numeric cap 先于 external reserve —— cap 满时外部预算绝不被消费）。
     if (this.physicalCount >= this.maxPhysical) {
-      // 探测式触发既有 cancellation（§44）：harness 下 external 上限与
-      // numeric cap 同值，此时 tryConsume 必 deny（reserve 抛错、不 commit
-      // —— fail-safe，external budget 零消费）；仅借其 abort 信号，返回值
-      // 被忽略。请求不发 ⇒ 外部预算不变（Correction #13 invariant）。
-      this.externalConsumer?.tryConsume()
+      // Correction #2 Blocker C: 非消费 notification（绝不 tryConsume ——
+      // tryConsume 是消费操作，请求未发出时外部预算不得增加）。harness
+      // 用 notification 触发既有 cancellation（§44 语义）。
+      this.externalConsumer?.onPhysicalBudgetExhausted?.()
       this.recordDecision({
         action: "deny", kind, retryClass: input.retryClass, fingerprint: input.fingerprint,
         reason: "physical_request_budget", sideEffectBoundaryCrossed: false,

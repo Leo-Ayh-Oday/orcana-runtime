@@ -54,6 +54,8 @@ export async function* runControlledRun(
   // production scope 恒有 coordinator（run-registry 创建时确定）。
   run.scope.retryCoordinator!.configureBudgetConsumer({
     tryConsume: () => guard.tryConsumeModelCall(),
+    // Correction #2 Blocker C: numeric cap 耗尽 → cancellation（非消费通知）。
+    onPhysicalBudgetExhausted: () => controller.abort("model_call_budget"),
   })
 
   if (resumeInput) {

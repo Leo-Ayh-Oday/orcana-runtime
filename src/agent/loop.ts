@@ -155,6 +155,18 @@ async function* runAgentLoop(
     }))
   }
 
+  // IC04 Correction #2 Blocker B: RetryAuthorityDecision 接入 production
+  // runTrace —— observer 必须在 buildRunContext 之前 attach（覆盖 constraint
+  // distillation / FlashTriage / main round / judge / compaction / retry），
+  // 并在 run invocation 结束（finally）时 detach（不叠加、不动 coordinator
+  // 内部状态）。
+  const coordinator = getRunRetryCoordinator()
+  const detachObserver = options.runTrace
+    ? coordinator.attachDecisionObserver(decision => {
+        options.runTrace!.record("retry_authority", decision)
+      })
+    : null
+
   let ctx: Awaited<ReturnType<typeof buildRunContext>>["ctx"] = null
   try {
     const built = await buildRunContext(prompt, options, lifecycle)
@@ -190,6 +202,8 @@ async function* runAgentLoop(
     lifecycle.stopReason = "error"
     throw error
   } finally {
+    // Correction #2 Blocker B: run invocation 结束即 detach observer。
+    detachObserver?.()
     try {
       // Unified lifecycle: resource cleanup before the Stop Hook.
       setRuntimeContextBudgetMode("normal")

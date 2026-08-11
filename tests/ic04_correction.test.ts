@@ -52,7 +52,9 @@ class ToolEachRoundProvider implements LLMProvider {
 }
 
 class OneRoundTextProvider implements LLMProvider {
+  rounds = 0
   async *streamChat(_o: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+    yield { type: "token_usage", data: { inputTokens: 10, outputTokens: 5, cacheSource: "provider", round: this.rounds++ } }
     yield { type: "text", data: "done" }
   }
 }
@@ -206,7 +208,6 @@ describe("IC04 P0-5: ToolNode production 传 RetryCoordinator", () => {
     gate.allow("baseline_probe")
     const node = createToolNode({ id: "tool-1", policyContext: { permissionGate: gate, input: {} } })
     const { result } = await runNodeToResult(node, context, { capabilityId: "baseline_probe", params: {} })
-    console.log("DBG-P05 result:", JSON.stringify(result))
     expect(result.output?.success).toBe(true)
     expect(calls).toBe(2)
     expect(toolRetryAllows).toBe(1)
@@ -386,5 +387,178 @@ describe("IC04 P1-10: env 级 physical budget（真实 env 路径）", () => {
     expect(registered.run.scope.retryCoordinator!.maxPhysicalProviderRequests).toBe(7)
     if (SAVED_REQUESTS === undefined) delete process.env.ORCANA_MAX_PROVIDER_REQUESTS
     else process.env.ORCANA_MAX_PROVIDER_REQUESTS = SAVED_REQUESTS
+  })
+})
+
+// ════ IC04 Correction Gate #2 regressions ════
+
+import { OpenAIProvider } from "../src/provider/openai"
+
+describe("Gate#2 Blocker A: coordinated generic retry fail-closed", () => {
+  const { decideProviderFailureRecovery } = require("../src/agent/provider/failure-policy") as typeof import("../src/agent/provider/failure-policy")
+  const base = (over: Record<string, unknown> = {}) => ({
+    failure: { message: "socket closed", retryable: true },
+    round: 0,
+    maxRounds: 3,
+    finalText: "",
+    taskTracker: null,
+    changedFiles: [],
+    ...over,
+  })
+
+  test("A: taskTracker=null + retryCoordinator → break，RetryLedger.truncation=0", () => {
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+    const decision = decideProviderFailureRecovery(base({ retryCoordinator: coordinator }) as never)
+    expect(decision.action).toBe("break")
+    expect(coordinator.retryLedger.summary().byClass.truncation).toBe(0)
+    expect(coordinator.retryLedger.summary().totalAttempts).toBe(0)
+  })
+
+  test("B: taskTracker exists + retryCoordinator → break，truncation=0", () => {
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+    const decision = decideProviderFailureRecovery(base({
+      taskTracker: { missingRequirements: () => [] } as never,
+      retryCoordinator: coordinator,
+    }) as never)
+    expect(decision.action).toBe("break")
+    expect(coordinator.retryLedger.summary().byClass.truncation).toBe(0)
+  })
+
+  test("standalone（无 coordinator 无 ledger）legacy 保留原续跑行为", () => {
+    const decision = decideProviderFailureRecovery(base({ taskTracker: { goal: "x", intent: "build", phase: "planning", requiredFiles: [], requiredVerificationKinds: [], verificationEvidence: {}, verification: [], steps: [] } as never }) as never)
+    expect(decision.action).toBe("continue")
+  })
+})
+
+describe("Gate#2 Blocker B: RetryAuthorityDecision 接入 runTrace", () => {
+  test("agentLoop runTrace 记录 initial allow + retry allow + retry deny（retry_authority ×3），observer 结束后 detach", async () => {
+    const SAVED_TRIAGE = process.env.ORCANA_FLASH_TRIAGE
+    process.env.ORCANA_FLASH_TRIAGE = "off"
+    const { agentLoop } = await import("../src/agent/loop")
+    class MemoryTrace {
+      events: Array<{ type: string; data?: unknown }> = []
+      record(type: string, data?: unknown) { this.events.push({ type, data }) }
+    }
+    // mock OpenAI：500 → 500 → 200（2 retry allow + 1 deny 需要 4 次调用；
+    // 这里 500×3 → 第 4 次 physical 之前 class deny —— 简化用 500×3）。
+    class FlakyOpenAI extends OpenAIProvider {
+      calls = 0
+      constructor() {
+        super("k", {
+          baseURL: "https://test.local/v1",
+          fetch: (async () => {
+            this.calls++
+            if (this.calls <= 3) return new Response("server error", { status: 500, headers: { "Content-Type": "application/json" } })
+            return new Response("data: [DONE]\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } })
+          }) as unknown as typeof fetch,
+          sleep: async () => {},
+        })
+      }
+    }
+    const trace = new MemoryTrace()
+    const provider = new FlakyOpenAI()
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+    const iterator = agentLoop("hello", {
+      provider,
+      model: "test",
+      tools: [],
+      maxRounds: 3,
+      retryCoordinator: coordinator,
+      runTrace: trace as never,
+      contextMapPolicy: "off",
+    })
+    let step: IteratorResult<StreamEvent, { kind: string }>
+    do { step = await iterator.next() } while (!step.done)
+    const audit = trace.events.filter(e => e.type === "retry_authority")
+    // initial allow + 2 retry allow + 1 retry deny = 4 条（transport limit 2）。
+    expect(audit.length).toBe(4)
+    const kinds = audit.map(a => (a.data as { action: string }).action)
+    expect(kinds).toEqual(["allow", "allow", "allow", "deny"])
+    expect((audit[0]!.data as { kind: string }).kind).toBe("provider_initial")
+    expect((audit[1]!.data as { retryClass: string }).retryClass).toBe("transport")
+    expect((audit[3]!.data as { reason: string }).reason).toBe("class_exhausted")
+    // 字段完整性 + 无敏感载荷。
+    for (const a of audit) {
+      const d = a.data as Record<string, unknown>
+      expect(d).toHaveProperty("action")
+      expect(d).toHaveProperty("kind")
+      expect(d).toHaveProperty("physicalProviderRequests")
+      expect(d).toHaveProperty("maxPhysicalProviderRequests")
+      expect(JSON.stringify(d)).not.toMatch(/prompt|api[_-]?key|secret|password/i)
+    }
+    // observer 已 detach：再执行一次 authorize 不产生新 trace。
+    const before = trace.events.length
+    coordinator.authorizeProviderAttempt({})
+    expect(trace.events.length).toBe(before)
+    if (SAVED_TRIAGE === undefined) delete process.env.ORCANA_FLASH_TRIAGE
+    else process.env.ORCANA_FLASH_TRIAGE = SAVED_TRIAGE
+  })
+})
+
+describe("Gate#2 Blocker C: numeric cap deny 不调用消费接口", () => {
+  test("numeric=2 external=5（不相等）→ request3 numeric deny：external used 不变=2、notification fired、不 tryConsume", async () => {
+    const { createBudgetLedger, mergeRunBudget } = await import("../src/harness/runtime/budget-ledger")
+    const { BudgetGuard } = await import("../src/harness/runtime/budget-guard")
+    const ledger = createBudgetLedger(mergeRunBudget({ maxModelCalls: 5 }))
+    const abortController = new AbortController()
+    const guard = new BudgetGuard(ledger, reason => abortController.abort(reason), { modelCallAuthority: "source" })
+    let notifications = 0
+    const coordinator = new RetryCoordinator({
+      ledger: createRetryLedger(),
+      maxPhysicalProviderRequests: 2,
+      externalBudgetConsumer: {
+        tryConsume: () => guard.tryConsumeModelCall(),
+        onPhysicalBudgetExhausted: () => { notifications++ },
+      },
+    })
+    coordinator.authorizeProviderAttempt({})
+    coordinator.authorizeProviderAttempt({})
+    expect(coordinator.physicalProviderRequests).toBe(2)
+    expect(ledger.used.modelCalls).toBe(2)
+    // request3：numeric cap deny —— external used 不得变 3。
+    const denied = coordinator.authorizeProviderAttempt({ retryClass: "transport", fingerprint: "server:500" })
+    expect(denied.allowed).toBe(false)
+    expect(denied.reason).toBe("physical_request_budget")
+    expect(ledger.used.modelCalls).toBe(2)
+    expect(coordinator.physicalProviderRequests).toBe(2)
+    expect(coordinator.retryLedger.summary().totalAttempts).toBe(0)
+    // 非消费 notification fired（不 abort —— notification 由 harness 绑定）。
+    expect(notifications).toBe(1)
+    expect(abortController.signal.aborted).toBe(false)
+  })
+})
+
+describe("Gate#2 Blocker D: node.usage 实时 modelCalls 用 node delta", () => {
+  test("node2（run 累计 3）实时 node.usage.modelCalls=1、final=1（非 run-global 3）", async () => {
+    const { createLlmAgentNode } = await import("../src/harness/nodes/llm-agent-node")
+    const { createNodeExecutionContext } = await import("../src/harness/nodes/context")
+    const { runNodeToResult } = await import("../src/harness/nodes/run")
+    const { createCapabilityRegistry } = await import("../src/harness/capabilities/registry")
+    const { registerToolCapabilities } = await import("../src/harness/capabilities/tool-adapter")
+    const { assembleRunScope } = await import("../src/harness/runtime/run-scope")
+    const { createBudgetLedger, mergeRunBudget } = await import("../src/harness/runtime/budget-ledger")
+    const projectRoot = mkdtempSync(join(tmpdir(), "ic04-g2d-"))
+    projectRoots.push(projectRoot)
+    const scope = assembleRunScope({ runId: "run-g2d", sessionId: "s-g2d", projectRoot, controller: new AbortController(), retryCoordinatorCap: 10 })
+    const run: AgentRun = {
+      runId: "run-g2d", sessionId: "s-g2d", status: "running",
+      input: { prompt: "x", maxRounds: 5 } as never,
+      scope, budget: createBudgetLedger(mergeRunBudget({ maxModelCalls: 10 })), createdAt: Date.now(), eventSequence: 0, schemaVersion: 1,
+    }
+    const capabilities = createCapabilityRegistry()
+    registerToolCapabilities(capabilities, probeTool())
+    const context = createNodeExecutionContext({ run, capabilities, context: { cwd: "/tmp", env: {} } as never })
+    const nodeA = createLlmAgentNode({ id: "a", deps: { provider: new ToolEachRoundProvider(), tools: probeTool() } })
+    await runNodeToResult(nodeA, context, { prompt: "inspect", maxRounds: 2 })
+    const runPhysicalAfterNode1 = scope.retryCoordinator!.physicalProviderRequests
+    expect(runPhysicalAfterNode1).toBe(2)
+    // node2：1 轮 text。
+    const nodeB = createLlmAgentNode({ id: "b", deps: { provider: new OneRoundTextProvider(), tools: probeTool() } })
+    const { events, result } = await runNodeToResult(nodeB, context, { prompt: "summarize", maxRounds: 1 })
+    const usageEvents = events.filter(e => e.type === "node.usage")
+    const lastStreaming = (usageEvents[usageEvents.length - 1] as { usage: { modelCalls: number } } | undefined)?.usage
+    expect(lastStreaming?.modelCalls).toBe(1)
+    expect(result.output?.usage.modelCalls).toBe(1)
+    expect(scope.retryCoordinator!.physicalProviderRequests).toBe(3)
   })
 })

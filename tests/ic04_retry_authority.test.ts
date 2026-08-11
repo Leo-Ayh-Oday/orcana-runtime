@@ -665,7 +665,5 @@ describe("IC04 Correction #13: external budget 原子顺序", () => {
     expect(ledger.used.modelCalls).toBe(2)
     expect(coordinator.physicalProviderRequests).toBe(2)
     expect(coordinator.retryLedger.summary().totalAttempts).toBe(0)
-    // 探测式 external 触发 cancellation（同值 deny → abort 信号）。
-    expect(abortController.signal.aborted).toBe(true)
   })
 })

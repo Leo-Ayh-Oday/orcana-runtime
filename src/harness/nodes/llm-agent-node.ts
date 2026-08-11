@@ -66,6 +66,8 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
       // production scope 恒有 coordinator（run-scope 创建时确定）。
       context.runScope.retryCoordinator!.configureBudgetConsumer({
         tryConsume: () => guard.tryConsumeModelCall(),
+        // Correction #2 Blocker C: numeric cap 耗尽 → node cancellation。
+        onPhysicalBudgetExhausted: () => context.cancellation.cancel("model_call_budget"),
       })
       // §56: usage truth —— modelCalls = 本 node 执行期间实际产生的 physical
       // provider request 数（coordinator delta）。
@@ -99,7 +101,7 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
           decision = { kind: "return", reason: "aborted" }
           break
         }
-        yield* translateEnvelope(envelope, context, usage, (text) => { finalText += text })
+        yield* translateEnvelope(envelope, context, usage, (text) => { finalText += text }, physicalBefore)
       }
 
       // IC04 §56: usage truth —— modelCalls = 本 node 实际产生的 physical
@@ -186,6 +188,8 @@ function* translateEnvelope(
   context: NodeExecutionContext,
   usage: NodeUsage,
   onText: (text: string) => void,
+  /** Correction #2 Blocker D: node 起点 physical count —— 实时 usage 用 delta。 */
+  physicalBefore: number,
 ): Generator<NodeEvent> {
   const payload = envelope.payload
   if ("text" in payload) {
@@ -211,9 +215,11 @@ function* translateEnvelope(
     if (u.cacheSource === "provider") {
       // M21: each provider round is one model call (kernel token_usage
       // events are cumulative per round — totals take the last value).
-      // IC04 §56: modelCalls 由 coordinator source counting 记账（实时快照 =
-      // 当前 physical provider request 数；不再简单 "1 usage event = 1 call"）。
-      usage.modelCalls = context.runScope.retryCoordinator?.physicalProviderRequests ?? usage.modelCalls
+      // IC04 §56 + Correction #2 Blocker D: modelCalls 由 coordinator source
+      // counting 记账，实时值 = current - physicalBefore（node delta，与
+      // final NodeUsage 同一语义 —— 不用 run-global absolute count）。
+      const current = context.runScope.retryCoordinator?.physicalProviderRequests ?? physicalBefore
+      usage.modelCalls = current - physicalBefore
       usage.inputTokens = u.inputTokens ?? usage.inputTokens
       usage.outputTokens = u.outputTokens ?? usage.outputTokens
       usage.cacheMissTokens = u.cacheMissInputTokens ?? usage.cacheMissTokens

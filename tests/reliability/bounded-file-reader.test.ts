@@ -773,3 +773,95 @@ describe("IC01-R5 exact scan budget —— EOF 优先于预算，预算恰等于
     expect(result.truncated).toBe(true)
   })
 })
+
+// ── IC01-R6: onChunk Promise 合约（readFile / readRange 必须 await）──
+
+describe("IC01-R6 onChunk Promise 合约 —— readFile/readRange await 语义", () => {
+  let bigP = ""
+  beforeAll(() => {
+    const dir = mkdtempSync(join(tmpdir(), "orcana-ic01-r6-onchunk-"))
+    bigP = join(dir, "big.txt")
+    writeFileSync(bigP, "line-0\n" + "m".repeat(5000) + "\nline-last\n", "utf-8") // > 5 个 1024 chunk
+  })
+
+  test("readFile：onChunk 返回延迟 Promise → 下一 chunk 在 resolve 前不开始", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const order: string[] = []
+    await reader.readFile(bigP, {
+      onChunk: async (_position, _bytes, index) => {
+        order.push(`start${index}`)
+        await new Promise(resolve => setTimeout(resolve, 3))
+        order.push(`end${index}`)
+      },
+    })
+    expect(order.length).toBeGreaterThanOrEqual(8) // 文件 > 8 KiB → ≥8 个 chunk
+    // 每个 start 必须紧跟在前一个 end 之后（串行 await，绝不并发重叠）。
+    for (let i = 1; i < order.length; i++) {
+      if (order[i]!.startsWith("start")) {
+        expect(order[i - 1]!.startsWith("end")).toBe(true)
+      }
+    }
+    expect(order[0]).toBe("start1")
+    expect(order[order.length - 1]!.startsWith("end")).toBe(true)
+  })
+
+  test("readFile：onChunk rejection 由 readFile 正常 reject（无 unhandled rejection）", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    let calls = 0
+    await expect(
+      reader.readFile(bigP, {
+        onChunk: async () => {
+          calls++
+          throw new Error("boom-readfile")
+        },
+      }),
+    ).rejects.toThrow("boom-readfile")
+    expect(calls).toBe(1) // 第一个 chunk 即拒绝
+  })
+
+  test("readRange：onChunk rejection 由 readRange 正常 reject", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    await expect(
+      reader.readRange(bigP, 0, 5000, {
+        onChunk: async () => {
+          throw new Error("boom-readrange")
+        },
+      }),
+    ).rejects.toThrow("boom-readrange")
+  })
+
+  test("readFile/readRange：await 后 position/bytesRead/chunkIndex 仍精确单调连续", async () => {
+    const reader = new BoundedFileReader({ chunkSize: 1024 })
+    const fileSize = (await stat(bigP)).size
+    const reads: Array<{ position: number; bytesRead: number; index: number }> = []
+    await reader.readFile(bigP, {
+      onChunk: async (position, bytesRead, index) => {
+        await new Promise(resolve => setTimeout(resolve, 1))
+        reads.push({ position, bytesRead, index })
+      },
+    })
+    expect(reads.length).toBe(Math.ceil(fileSize / 1024))
+    let covered = 0
+    for (let i = 0; i < reads.length; i++) {
+      expect(reads[i]!.position).toBe(i * 1024)
+      expect(reads[i]!.index).toBe(i + 1)
+      covered += reads[i]!.bytesRead
+    }
+    expect(covered).toBe(fileSize)
+
+    const rangeReads: Array<{ position: number; bytesRead: number }> = []
+    await reader.readRange(bigP, 1000, 3000, {
+      onChunk: async (position, bytesRead) => {
+        await new Promise(resolve => setTimeout(resolve, 1))
+        rangeReads.push({ position, bytesRead })
+      },
+    })
+    // range：从 offset 1000 起连续 3000 字节（3 个 1024 chunk）。
+    expect(rangeReads.length).toBe(3)
+    for (let i = 0; i < rangeReads.length; i++) {
+      expect(rangeReads[i]!.position).toBe(1000 + i * 1024)
+    }
+    const rangeCovered = rangeReads.reduce((n, r) => n + r.bytesRead, 0)
+    expect(rangeCovered).toBe(3000)
+  })
+})

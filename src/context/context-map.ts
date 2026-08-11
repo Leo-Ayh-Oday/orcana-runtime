@@ -439,17 +439,21 @@ export interface HybridLocateInput {
   maxFiles?: number
 }
 
-/** IC01-R5: 无 authority / maxK<=0 的确定性空定位结果（与「无匹配」完全一致，
- *  存在路径与不存在路径不可区分 —— 不得形成路径存在性 oracle）。 */
-const EMPTY_LOCATE_RESULT: LocateResult = {
-  primaryFiles: [],
-  secondaryFiles: [],
-  relevantSymbols: [],
-  definitions: [],
-  references: [],
-  suspectedTests: [],
-  confidence: 0.2,
-  unresolvedQuestions: ["No source files matched the request keywords."],
+/** IC01-R6: 确定性空定位结果 factory —— 每次调用创建全新对象及全部嵌套数组
+ *  （绝不允许返回模块级共享可变对象：调用方修改 primaryFiles 等会跨调用污染
+ *  后续 hybridLocate / buildContextMap 的结果）。maxFiles<=0 与 authorityMissing
+ *  两条路径都必须独立实例。 */
+function emptyLocateResult(): LocateResult {
+  return {
+    primaryFiles: [],
+    secondaryFiles: [],
+    relevantSymbols: [],
+    definitions: [],
+    references: [],
+    suspectedTests: [],
+    confidence: 0.2,
+    unresolvedQuestions: ["No source files matched the request keywords."],
+  }
 }
 
 export function hybridLocate(
@@ -470,7 +474,7 @@ export function hybridLocate(
   // IC01-R5: 无 authority 时在 scanRepoStructure（及其 existsSync/readdir）
   // 之前确定性早退 —— 返回与「无匹配」完全相同的结构，存在路径与不存在
   // 路径结果一致（不得形成路径存在性 oracle）。
-  if (session.authorityMissing || maxK <= 0) return EMPTY_LOCATE_RESULT
+  if (session.authorityMissing || maxK <= 0) return emptyLocateResult()
   const repo = scanRepoStructure(root, { session })
   const terms = unique([...tokenize(input.userRequest), ...(input.keywords ?? [])]).slice(0, 16)
   const files = listCandidateSourceFiles(root, [...repo.sourceRoots, ...repo.testRoots], session)

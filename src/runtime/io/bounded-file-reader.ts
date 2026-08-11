@@ -294,7 +294,9 @@ export class BoundedFileReader {
         const readPosition = position
         position += bytesRead
         chunkIndex++
-        options.onChunk?.(readPosition, bytesRead, chunkIndex)
+        // IC01-R6: await —— onChunk 可返回 Promise；下一 chunk 必须在 resolve
+        // 后开始；rejection 由调用方正常接收（不得 unhandled rejection）。
+        await options.onChunk?.(readPosition, bytesRead, chunkIndex)
       }
       const truncated = position < info.size
       return {
@@ -387,7 +389,8 @@ export class BoundedFileReader {
         position += bytesRead
         remaining -= bytesRead
         chunkIndex++
-        options.onChunk?.(readPosition, bytesRead, chunkIndex)
+        // IC01-R6: await —— 同 readFile（Promise 合约）。
+        await options.onChunk?.(readPosition, bytesRead, chunkIndex)
       }
       return {
         buffer: Buffer.concat(chunks),
@@ -702,15 +705,15 @@ export class BoundedFileReader {
       //    窗口起点确定前已扫描，必须来自同一批 chunk）；
       //  - 之后捕获 [windowStartByte, +maxReturn)（受 windowEndByte 约束）；
       //  - EOF 时若窗口起始行即无尾换行的最后一行，尾部就是窗口字节。
-      // IC01-R5: tail 绑定具体行号 —— tail 捕获的是「当前未终止行」的字节，
-      // tailLineNumber 记录其归属行。越过任何换行（含非目标行）时 tail 立即
-      // 作废并归属到新的当前未终止行；窗口提升只允许属于 startLine 的 tail：
-      // 前一行跨 chunk、下一 chunk 同时包含前一行与目标行换行时，绝不把
-      // 前一行字节提升进目标窗口（不得返回 startLine 之前的任何字节）。
+      // IC01-R5/R6: 行窗口 tail 不变量 —— tail 捕获「当前未终止行」的字节；
+      // 每个换行（含非目标行）结束当前未终止行时，其 tail 立即作废并归零。
+      // 因此任何时刻 tailSlices 只可能属于「当前未终止行」；窗口提升发生在
+      // startLine 行的换行被处理时，tail（若非空）必然属于 startLine 本身，
+      // 绝不包含 startLine 之前的字节（前一行跨 chunk、下一 chunk 同时含
+      // 前一行与目标行换行时，前一行 tail 已在处理其换行时作废）。
       const windowSlices: Buffer[] = []
       const tailSlices: Buffer[] = []
       let tailCaptured = 0
-      let tailLineNumber: number | null = null
       while (true) {
         signal?.throwIfAborted()
         // IC01-R5: 先 EOF、后 scanBudget —— scanBudget === fileSize 时读到
@@ -743,7 +746,7 @@ export class BoundedFileReader {
           const lineEndAbsolute = position + newline + 1
           if (windowStartByte === null && lineNumber === startLine) {
             windowStartByte = lineStartByte
-            // 只提升属于 startLine 的 tail；陈旧/错位 tail（更早行）丢弃。
+            // tail 只可能属于当前未终止行 = startLine（见不变量注释）。
             if (tailCaptured > 0) {
               windowSlices.push(...tailSlices)
             }
@@ -758,11 +761,9 @@ export class BoundedFileReader {
           lineNumber++
           lineStartByte = lineEndAbsolute
           cursor = newline + 1
-          // 该换行结束了「当前未终止行」→ 旧 tail（若仍挂着）立即作废，
-          // 并归属到新的当前未终止行（空 tail）。
+          // 该换行结束了「当前未终止行」→ 其 tail 立即作废（核心不变量）。
           tailSlices.length = 0
           tailCaptured = 0
-          tailLineNumber = lineNumber
         }
         // ── 窗口字节捕获（同一批 chunk；chunk 复用后视图失效 → 必须拷贝）──
         if (windowStartByte !== null) {
@@ -773,15 +774,13 @@ export class BoundedFileReader {
             windowSlices.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
           }
         } else if (tailCaptured < maxReturn) {
-          // 尾部捕获：当前未终止行（cap = lineStartByte + maxReturn）；归属
-          // 行号 = lineNumber（捕获在行遍历之后，已是当前未终止行）。
+          // 尾部捕获：当前未终止行（cap = lineStartByte + maxReturn）。
           const cap = lineStartByte + maxReturn
           const overlapStart = Math.max(chunkStart, lineStartByte)
           const overlapEnd = Math.min(absoluteEnd, cap)
           if (overlapStart < overlapEnd) {
             tailSlices.push(Buffer.from(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart)))
             tailCaptured += overlapEnd - overlapStart
-            tailLineNumber = lineNumber
           }
         }
         const readPosition = position

@@ -301,17 +301,80 @@ describe("IC01-R5 全部导出入口 fail-closed —— 存在/不存在路径�
     }
   })
 
-  test("无 authority：probeCount=0 —— existsSync/statSync/readdirSync/readFileSync/realpathSync 零调用", async () => {
+  test("无 authority：probeCount=0 —— 8 类 FS probe 全部零调用", async () => {
     const fs = await import("node:fs")
-    const probes = [fs.existsSync, fs.statSync, fs.readdirSync, fs.readFileSync, fs.realpathSync]
-    const spies = probes.map(fn => spyOn(fs, fn.name as never) as never)
+    const probeNames = ["existsSync", "statSync", "readdirSync", "realpathSync", "openSync", "fstatSync", "readSync", "readFileSync"]
+    const spies = probeNames.map(name => spyOn(fs, name as never) as never)
     try {
       for (const entry of readEntries) {
         entry.call(existRoot)
       }
-      for (const s of spies as Array<{ mock: { calls: unknown[] } }>) {
-        expect(s.mock.calls.length).toBe(0)
+      const counts = Object.fromEntries(
+        (spies as Array<{ mock: { calls: unknown[] } }>).map((s, i) => [probeNames[i], s.mock.calls.length]),
+      )
+      expect(counts).toEqual({
+        existsSync: 0,
+        statSync: 0,
+        readdirSync: 0,
+        realpathSync: 0,
+        openSync: 0,
+        fstatSync: 0,
+        readSync: 0,
+        readFileSync: 0,
+      })
+    } finally {
+      for (const s of spies as Array<{ mockRestore: () => void }>) {
+        s.mockRestore()
       }
+    }
+  })
+
+  test("红校准：有 authority 真实路径计数必须 >0（证明 spy 能观测实际 probe：readSync/openSync/fstatSync 等）", async () => {
+    const fs = await import("node:fs")
+    const probeNames = ["existsSync", "statSync", "readdirSync", "realpathSync", "openSync", "fstatSync", "readSync", "readFileSync"]
+    const spies = probeNames.map(name => spyOn(fs, name as never) as never)
+    try {
+      const ws = wsFor(existRoot)
+      const structure = scanRepoStructure(existRoot, { workspace: ws })
+      expect(structure.sourceRoots).toContain("src") // 真实元数据读取确实发生
+      const counts = Object.fromEntries(
+        (spies as Array<{ mock: { calls: unknown[] } }>).map((s, i) => [probeNames[i], s.mock.calls.length]),
+      )
+      // 实际使用的 probe 必须被观测到（readSync/openSync/fstatSync 等真实路径）。
+      expect(counts.existsSync).toBeGreaterThan(0)
+      expect(counts.readdirSync).toBeGreaterThan(0)
+      expect(counts.realpathSync).toBeGreaterThan(0)
+      expect(counts.openSync).toBeGreaterThan(0)
+      expect(counts.fstatSync).toBeGreaterThan(0)
+      expect(counts.readSync).toBeGreaterThan(0)
+    } finally {
+      for (const s of spies as Array<{ mockRestore: () => void }>) {
+        s.mockRestore()
+      }
+    }
+  })
+
+  test("红校准对照：restore 后重新 spy，同一六入口无 authority 全部 0（证明零读取是真实的，非 spy 失效）", async () => {
+    const fs = await import("node:fs")
+    const probeNames = ["existsSync", "statSync", "readdirSync", "realpathSync", "openSync", "fstatSync", "readSync", "readFileSync"]
+    const spies = probeNames.map(name => spyOn(fs, name as never) as never)
+    try {
+      for (const entry of readEntries) {
+        entry.call(existRoot)
+      }
+      const zeroCounts = Object.fromEntries(
+        (spies as Array<{ mock: { calls: unknown[] } }>).map((s, i) => [probeNames[i], s.mock.calls.length]),
+      )
+      expect(zeroCounts).toEqual({
+        existsSync: 0,
+        statSync: 0,
+        readdirSync: 0,
+        realpathSync: 0,
+        openSync: 0,
+        fstatSync: 0,
+        readSync: 0,
+        readFileSync: 0,
+      })
     } finally {
       for (const s of spies as Array<{ mockRestore: () => void }>) {
         s.mockRestore()
@@ -339,5 +402,79 @@ describe("IC01-R5 全部导出入口 fail-closed —— 存在/不存在路径�
     expect(archive?.id).toBe(archiveId)
     const missing = loadContextMap(existRoot, "ctx-000000000002", { workspace: ws })
     expect(missing).toBeNull()
+  })
+})
+
+// ── IC01-R6: EMPTY_LOCATE_RESULT 跨调用污染封闭（factory 独立实例）──
+
+describe("IC01-R6 确定性空结构 —— 每次调用独立实例，跨调用零污染", () => {
+  const root = createRepo()
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test("连续两次 hybridLocate（无 authority）：结果与全部嵌套数组均非同一引用", () => {
+    const a = hybridLocate(root, { userRequest: "anything" }, {})
+    const b = hybridLocate(root, { userRequest: "anything" }, {})
+    expect(a).not.toBe(b)
+    expect(a.primaryFiles).not.toBe(b.primaryFiles)
+    expect(a.secondaryFiles).not.toBe(b.secondaryFiles)
+    expect(a.relevantSymbols).not.toBe(b.relevantSymbols)
+    expect(a.definitions).not.toBe(b.definitions)
+    expect(a.references).not.toBe(b.references)
+    expect(a.suspectedTests).not.toBe(b.suspectedTests)
+    expect(a.unresolvedQuestions).not.toBe(b.unresolvedQuestions)
+  })
+
+  test("污染探针：修改第一次返回的数组（含大数组注入）→ 第二次调用与后续 buildContextMap 保持确定性空结构", () => {
+    const first = hybridLocate(root, { userRequest: "anything" }, {})
+    // 注入大数组污染（primaryFiles / suspectedTests / definitions / unresolvedQuestions）。
+    first.primaryFiles.push(...new Array(100_000).fill("POLLUTED-FILE"))
+    first.suspectedTests.push("POLLUTED-TEST")
+    first.definitions.push(...new Array(10_000).fill({ file: "POLLUTED", symbol: "X", line: 1, character: 1, kind: "definition" }))
+    first.unresolvedQuestions.length = 0
+    first.unresolvedQuestions.push("POLLUTED-QUESTION")
+    // 第二次调用不受污染。
+    const second = hybridLocate(root, { userRequest: "anything" }, {})
+    expect(second.primaryFiles).toEqual([])
+    expect(second.suspectedTests).toEqual([])
+    expect(second.definitions).toEqual([])
+    expect(second.unresolvedQuestions).toEqual(["No source files matched the request keywords."])
+    // 后续 buildContextMap 同样确定性空结构（不继承、无内存放大 —— 引用不同）。
+    const map = buildContextMap(root, { taskId: "t", userRequest: "anything" }, {})
+    expect(map.locateResult.primaryFiles).toEqual([])
+    expect(map.locateResult.primaryFiles).not.toBe(first.primaryFiles)
+    expect(map.locateResult.suspectedTests).toEqual([])
+    expect(map.locateResult.suspectedTests).not.toBe(first.suspectedTests)
+    expect(map.locateResult.definitions).toEqual([])
+    expect(map.sourceUnderstanding.filesRead).toEqual([])
+    // 无 authority 空结构在 authorityMissing 与 maxFiles<=0 两条路径均为独立实例。
+    const viaMaxK = hybridLocate(root, { userRequest: "anything", maxFiles: 0 }, {})
+    const viaAuthority = hybridLocate(root, { userRequest: "anything" }, {})
+    expect(viaMaxK).not.toBe(viaAuthority)
+    expect(viaMaxK.primaryFiles).not.toBe(viaAuthority.primaryFiles)
+    expect(viaMaxK.primaryFiles).toEqual([])
+  })
+
+  test("loadProjectConstitution / buildSourceUnderstanding 空结构同样独立实例", () => {
+    const c1 = loadProjectConstitution(root, {})
+    const c2 = loadProjectConstitution(root, {})
+    expect(c1).not.toBe(c2)
+    expect(c1.importantFiles).not.toBe(c2.importantFiles)
+    expect(c1.architectureNotes).not.toBe(c2.architectureNotes)
+    c1.importantFiles.push("POLLUTED")
+    const c3 = loadProjectConstitution(root, {})
+    expect(c3.importantFiles).toEqual([])
+
+    const u1 = buildSourceUnderstanding(root, ["src/index.ts"], {})
+    const u2 = buildSourceUnderstanding(root, ["src/index.ts"], {})
+    expect(u1).not.toBe(u2)
+    expect(u1.filesRead).not.toBe(u2.filesRead)
+    expect(u1.dataFlowNotes).not.toBe(u2.dataFlowNotes)
+    expect(u1.assumptions).not.toBe(u2.assumptions)
+    u1.filesRead.push("POLLUTED")
+    const u3 = buildSourceUnderstanding(root, ["src/index.ts"], {})
+    expect(u3.filesRead).toEqual([])
   })
 })

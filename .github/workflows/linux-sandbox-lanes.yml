@@ -3,13 +3,22 @@ name: Linux Sandbox Lanes
 # R6: 真实验收 —— 真实 Bubblewrap / 真实 Rootless Podman / 真实 cgroup。
 # 审计要求：关键场景不允许 Skip 后仍宣布 Freeze。这些 lane 在真实后端
 # 存在时自动把条件测试转为真执行；缺失时该 lane 自身失败（而不是测试
-# 静默跳过）—— 安装失败即红，杜绝"假 Freeze"。
+# 静默跳过）—— 能力校验不过即红，杜绝"假 Freeze"。
+#
+# Self-hosted trust boundary (PUBLIC repository):
+# - runs only on push to main and manual workflow_dispatch (owner-authorized)
+# - external fork PRs NEVER execute on the self-hosted runner (no pull_request
+#   trigger) — Linux sandbox tests are kernel/container-level and therefore the
+#   most sensitive lanes; they must never accept untrusted PR content.
+# - no `sudo` is used on the self-hosted host: capabilities are verified, not
+#   installed. Missing capability fails the lane (fail closed).
+# - minimal token scope: contents: read
 
 on:
   push:
     branches:
       - main
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,21 +29,22 @@ concurrency:
 
 jobs:
   lane-bubblewrap:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install Bubblewrap (real sandbox)
+      - name: Verify real Bubblewrap capability (fail closed)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq bubblewrap iproute2
+          command -v bwrap || { echo "::error::bubblewrap is not installed on the self-hosted host"; exit 78; }
           bwrap --version
           bwrap --unshare-all --bind / / sh -c 'echo real-bwrap-ok'
       - run: bun install --frozen-lockfile
@@ -44,23 +54,24 @@ jobs:
         run: bun run eval:linux --require=bubblewrap
 
   lane-podman:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install Rootless Podman
+      - name: Verify real rootless Podman capability (fail closed)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq podman uidmap
-          export STORAGE_DRIVER=vfs
+          command -v podman || { echo "::error::podman is not installed on the self-hosted host"; exit 78; }
           podman --version
+          podman info --format '{{.Host.Security.Rootless}}' | grep -q 'true' || { echo "::error::podman is not running rootless"; exit 78; }
           podman pull -q docker.io/library/alpine:latest
           DIGEST=$(podman image inspect --format '{{.Digest}}' docker.io/library/alpine:latest)
           echo "resolved digest: $DIGEST"
@@ -80,11 +91,13 @@ jobs:
           test -z "$(pgrep -x catatonit || true)"
 
   lane-cgroup:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orcana-ci]
     timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
@@ -95,6 +108,7 @@ jobs:
         run: |
           mount | grep cgroup2 || true
           ls -la /sys/fs/cgroup/ | head -20
+          cat /proc/self/cgroup
       - run: bun install --frozen-lockfile
       - name: Real delegated cgroup tests and resource eval
         run: bash scripts/ci/run-delegated-cgroup.sh bun run ci:cgroup

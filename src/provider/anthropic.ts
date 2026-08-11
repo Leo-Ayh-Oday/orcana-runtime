@@ -12,9 +12,10 @@
 import Anthropic from "@anthropic-ai/sdk"
 import type { ProviderFinishInfo, StreamEvent, LLMProvider, ProviderCallOptions } from "./types"
 import { providerFinishReasonFromErrorKind } from "./types"
+import { providerRetryFingerprint } from "../runtime/retry-ledger"
 import { repairToolCall } from "../tools/repair"
 import { extractProviderTokenUsage } from "./usage"
-import { classifyProviderError, formatProviderRetryStatus, providerRetryDelayMs, providerBackoffWait, canRetryProviderAttempt, recordProviderRetry } from "./retry"
+import { classifyProviderError, denyProviderRetryFinish, formatProviderRetryStatus, providerRetryDelayMs, providerBackoffWait, canRetryProviderAttempt, recordProviderRetry, type ProviderErrorInfo } from "./retry"
 import { bindProviderAbort, type ClosableAsyncIterable } from "./stream-lifecycle"
 
 interface AnthropicLikeClient {
@@ -67,7 +68,10 @@ export class AnthropicProvider implements LLMProvider {
     if (options.tools?.length) params.tools = options.tools as unknown as Anthropic.Tool[]
     if (options.thinking) params.thinking = options.thinking as Anthropic.ThinkingConfigParam
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+    let unsafeToRetry = false
+    let lastInfo: ProviderErrorInfo | undefined
+    let attempt = 0
+    while (true) {
       // RC-19 ABORT_RETRIED: an aborted request is never issued, and never
       // retried once the signal fires — including an abort landing in backoff.
       if (options.abortSignal?.aborted) {
@@ -75,7 +79,44 @@ export class AnthropicProvider implements LLMProvider {
         yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
         return
       }
-      let unsafeToRetry = false
+      if (attempt > 0 && lastInfo) {
+        // IC04 §34: retry —— 先 backoff（abort 中不得计数下一次 request，
+        // R5），backoff 后再经 RetryCoordinator 授权。
+        const delayMs = providerRetryDelayMs(lastInfo, attempt - 1)
+        yield { type: "status", data: formatProviderRetryStatus(lastInfo, delayMs, attempt - 1, this.maxRetries) }
+        const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
+        if (!waited) {
+          yield { type: "error", data: "provider request aborted during retry backoff" }
+          yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
+          return
+        }
+        const retryClass = lastInfo.kind === "rate_limit" ? "rateLimit" as const : "transport" as const
+        const fingerprint = providerRetryFingerprint(lastInfo.kind, lastInfo.status)
+        if (options.retryCoordinator) {
+          // IC04: coordinator 是 retry decision authority（class budget +
+          // physical budget + side-effect boundary，原子）。
+          const permit = options.retryCoordinator.authorizeProviderAttempt({
+            retryClass,
+            fingerprint,
+            sideEffectBoundaryCrossed: unsafeToRetry,
+          })
+          if (!permit.allowed) {
+            // §36/§37: coordinator 决定不再发起同 request —— 以最后一次
+            // 真实 provider 失败结构化终止（不继续整个 Agent round）。
+            yield* denyProviderRetryFinish(lastInfo)
+            return
+          }
+        } else {
+          // §35: standalone/legacy —— maxRetries + RetryLedger compatibility。
+          // canRetryProviderAttempt 的 attempt 语义 = 上次失败尝试序号
+          // （attempt 在本循环 = 已失败次数，故传 attempt - 1）。
+          if (!canRetryProviderAttempt(lastInfo, attempt - 1, this.maxRetries, unsafeToRetry, options.retryLedger)) {
+            yield* denyProviderRetryFinish(lastInfo)
+            return
+          }
+          recordProviderRetry(lastInfo, options.retryLedger)
+        }
+      }
       try {
         yield* this.streamOnce(params, value => { unsafeToRetry = value }, options)
         return
@@ -85,22 +126,18 @@ export class AnthropicProvider implements LLMProvider {
           yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
           return
         }
-        const info = classifyProviderError(e)
-        const canRetry = canRetryProviderAttempt(info, attempt, this.maxRetries, unsafeToRetry, options.retryLedger)
-        if (!canRetry) {
-          yield { type: "error", data: info.status ? `${info.kind} ${info.status}: ${info.message}` : `${info.kind}: ${info.message}` }
-          yield { type: "finish", data: { finishReason: providerFinishReasonFromErrorKind(info.kind), rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
+        lastInfo = classifyProviderError(e)
+        if (!lastInfo.retryable || unsafeToRetry) {
+          yield* denyProviderRetryFinish(lastInfo)
           return
         }
-        recordProviderRetry(info, options.retryLedger)
-        const delayMs = providerRetryDelayMs(info, attempt)
-        yield { type: "status", data: formatProviderRetryStatus(info, delayMs, attempt, this.maxRetries) }
-        const waited = await providerBackoffWait(delayMs, options.abortSignal, this.sleep)
-        if (!waited) {
-          yield { type: "error", data: "provider request aborted during retry backoff" }
-          yield { type: "finish", data: { finishReason: "cancelled", rawStopReason: undefined, completedToolCallCount: 0, partialToolCall: false } satisfies ProviderFinishInfo }
+        // legacy 上限（coordinator 模式下授权 deny 才是终止权威）。
+        // attempt = 已失败次数：允许至多 maxRetries 次 retry。
+        if (!options.retryCoordinator && attempt > this.maxRetries) {
+          yield* denyProviderRetryFinish(lastInfo)
           return
         }
+        attempt += 1
       }
     }
   }

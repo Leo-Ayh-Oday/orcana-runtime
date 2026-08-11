@@ -1,4 +1,5 @@
 import { providerRetryFingerprint, type RetryLedger } from "../runtime/retry-ledger"
+import { providerFinishReasonFromErrorKind, type ProviderFinishInfo, type StreamEvent } from "./types"
 
 export type ProviderErrorKind = "rate_limit" | "server" | "network" | "auth" | "client" | "capacity" | "quota" | "unknown"
 
@@ -168,4 +169,86 @@ function numberValue(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+// ── IC04 §34: coordinator deny 终止（结构化 finish + 最后一次真实失败）──
+
+/**
+ * Provider retry authority 决定不再发起同 request 时，以最后一次真实
+ * provider 失败终止（结构化 finish 事件）。legacy 路径（无 coordinator）
+ * 由 canRetryProviderAttempt/recordProviderRetry 维持原语义（§35）。
+ */
+export function* denyProviderRetryFinish(lastInfo: ProviderErrorInfo): Generator<StreamEvent> {
+  const message = lastInfo.status
+    ? `${lastInfo.kind} ${lastInfo.status}: ${lastInfo.message}`
+    : `${lastInfo.kind}: ${lastInfo.message}`
+  yield { type: "error", data: message }
+  yield {
+    type: "finish",
+    data: {
+      finishReason: providerFinishReasonFromErrorKind(lastInfo.kind),
+      rawStopReason: undefined,
+      completedToolCallCount: 0,
+      partialToolCall: false,
+    } satisfies ProviderFinishInfo,
+  }
+}
+
+// ── IC04 §31: run-scoped RetryCoordinator wrapper ──
+
+/**
+ * 包装 provider 使其所有 ProviderCallOptions 自动携带 run-scoped
+ * RetryCoordinator —— FlashTriage/FlashJudge/compaction/主 round 等只要
+ * 拿的是被包装的 provider 实例，都继承同一 retry authority（§31）。
+ * 未被包装的 standalone provider 走 legacy maxRetries（§35）。
+ */
+export function withRetryCoordinator(
+  provider: import("./types").LLMProvider,
+  coordinator: import("../runtime/retry/coordinator").RetryCoordinator | undefined,
+): import("./types").LLMProvider {
+  if (!coordinator) return provider
+  const original = provider.streamChat.bind(provider)
+  return {
+    ...provider,
+    /**
+     * IC04 §23: initial physical attempt 在 wrapper 层授权（每次 streamChat
+     * 调用 = 1 physical provider request）——与底层 provider 是否读取
+     * options.retryCoordinator 无关（custom/scripted provider 同样计数）。
+     * production provider 内部的 retry（同一 streamChat 内循环）仍由自身
+     * authorize（§34）。deny → cancellation 语义结构化终止（§44）。
+     */
+    async *streamChat(options: import("./types").ProviderCallOptions) {
+      // P1-7: pre-abort 不得消费 physical —— signal 已 abort 时不 authorize、
+      // 不调用 underlying provider、不消耗 external budget、不 physical++；
+      // 返回标准 cancelled structured termination。
+      if (options.abortSignal?.aborted) {
+        yield { type: "error", data: "provider request aborted" }
+        yield {
+          type: "finish",
+          data: {
+            finishReason: "cancelled",
+            rawStopReason: undefined,
+            completedToolCallCount: 0,
+            partialToolCall: false,
+          } satisfies import("./types").ProviderFinishInfo,
+        }
+        return
+      }
+      const permit = coordinator.authorizeProviderAttempt({})
+      if (!permit.allowed) {
+        yield { type: "error", data: "provider request not issued: physical provider request budget exhausted" }
+        yield {
+          type: "finish",
+          data: {
+            finishReason: "cancelled",
+            rawStopReason: undefined,
+            completedToolCallCount: 0,
+            partialToolCall: false,
+          } satisfies import("./types").ProviderFinishInfo,
+        }
+        return
+      }
+      yield* original({ ...options, retryCoordinator: coordinator })
+    },
+  }
 }

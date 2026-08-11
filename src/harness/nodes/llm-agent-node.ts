@@ -12,6 +12,7 @@ import type { LegacyLoopAdapterDeps } from "../runtime/legacy-loop-adapter"
 import { buildLoopOptions, createLegacyLoopAdapter } from "../runtime/legacy-loop-adapter"
 import type { HarnessEvent } from "../contracts/events"
 import { BudgetGuard } from "../runtime/budget-guard"
+
 import { mapDecisionToOutcome } from "../runtime/outcome-mapper"
 import type { LoopDecision } from "../../agent/kernel/types"
 import type { AgentRunInput, AgentRun } from "../contracts/run"
@@ -56,7 +57,21 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
       } as AgentRun
 
       const loopOptions = buildLoopOptions(run, runInput, nodeOptions.deps, context.cancellation.signal)
-      const guard = new BudgetGuard(context.budget, (reason) => context.cancellation.cancel(reason))
+      // IC04 §27/§56: node production path —— model_call 由 coordinator
+      // source-counted；usage 事件只做 token accounting。
+      const guard = new BudgetGuard(context.budget, (reason) => context.cancellation.cancel(reason), { modelCallAuthority: "source" })
+      // IC04 P0-4: 同一 run-scope 唯一 RetryCoordinator（identity 不变）——
+      // 只 configure node 级 external consumer；physical cap / ledger /
+      // decision history 全部 run 级连续累计（node1+node2 共用同一 cap）。
+      // production scope 恒有 coordinator（run-scope 创建时确定）。
+      context.runScope.retryCoordinator!.configureBudgetConsumer({
+        tryConsume: () => guard.tryConsumeModelCall(),
+        // Correction #2 Blocker C: numeric cap 耗尽 → node cancellation。
+        onPhysicalBudgetExhausted: () => context.cancellation.cancel("model_call_budget"),
+      })
+      // §56: usage truth —— modelCalls = 本 node 执行期间实际产生的 physical
+      // provider request 数（coordinator delta）。
+      const physicalBefore = context.runScope.retryCoordinator!.physicalProviderRequests
 
       let finalText = ""
       // M21: usage is counted, never dropped — modelCalls increments per
@@ -86,9 +101,13 @@ export function createLlmAgentNode(nodeOptions: LlmAgentNodeOptions): HarnessNod
           decision = { kind: "return", reason: "aborted" }
           break
         }
-        yield* translateEnvelope(envelope, context, usage, (text) => { finalText += text })
+        yield* translateEnvelope(envelope, context, usage, (text) => { finalText += text }, physicalBefore)
       }
 
+      // IC04 §56: usage truth —— modelCalls = 本 node 实际产生的 physical
+      // provider request 数（coordinator delta）。不再简单以
+      // "1 token_usage event = 1 model call"（retry 计数在事件流不可见）。
+      usage.modelCalls = (context.runScope.retryCoordinator?.physicalProviderRequests ?? 0) - physicalBefore
       // M21: wall clock spans the node execution (first event to loop end).
       usage.wallTimeMs = Date.now() - startedAt
       const cancelled = context.cancellation.cancelled
@@ -169,6 +188,8 @@ function* translateEnvelope(
   context: NodeExecutionContext,
   usage: NodeUsage,
   onText: (text: string) => void,
+  /** Correction #2 Blocker D: node 起点 physical count —— 实时 usage 用 delta。 */
+  physicalBefore: number,
 ): Generator<NodeEvent> {
   const payload = envelope.payload
   if ("text" in payload) {
@@ -194,7 +215,11 @@ function* translateEnvelope(
     if (u.cacheSource === "provider") {
       // M21: each provider round is one model call (kernel token_usage
       // events are cumulative per round — totals take the last value).
-      usage.modelCalls++
+      // IC04 §56 + Correction #2 Blocker D: modelCalls 由 coordinator source
+      // counting 记账，实时值 = current - physicalBefore（node delta，与
+      // final NodeUsage 同一语义 —— 不用 run-global absolute count）。
+      const current = context.runScope.retryCoordinator?.physicalProviderRequests ?? physicalBefore
+      usage.modelCalls = current - physicalBefore
       usage.inputTokens = u.inputTokens ?? usage.inputTokens
       usage.outputTokens = u.outputTokens ?? usage.outputTokens
       usage.cacheMissTokens = u.cacheMissInputTokens ?? usage.cacheMissTokens

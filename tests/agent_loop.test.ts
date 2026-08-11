@@ -2003,7 +2003,7 @@ test.skip("external completion gate emits evidence report for completed long tas
     })
   })
 
-  test("provider stream failure in long task recovers instead of ending silently", async () => {
+  test("provider stream failure in long task is fail-closed in coordinated runtime (IC04 Gate#2 Blocker A)", async () => {
     const provider = new LongTaskStreamErrorThenPlanProvider()
     const trace = new MemoryTrace()
     const events: StreamEvent[] = []
@@ -2022,13 +2022,14 @@ test.skip("external completion gate emits evidence report for completed long tas
       events.push(event)
     }
 
-    expect(provider.rounds).toBe(2)
-    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(true)
-    expect(JSON.stringify(provider.messages[1])).toContain("Provider Stream Recovery")
-    expect(trace.events.some(event => event.type === "gate_decision" && JSON.stringify(event.data).includes("provider_stream"))).toBe(true)
+    // coordinated runtime（agentLoop 自建 RetryCoordinator）：generic legacy
+    // retryable failure 一律 fail-closed —— 不 whole-round 续跑。
+    expect(provider.rounds).toBe(1)
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(false)
+    expect(trace.events.some(event => event.type === "gate_decision" && JSON.stringify(event.data).includes("coordinated_fail_closed"))).toBe(true)
   })
 
-  test("thrown provider stream failure in long task reaches recovery gate", async () => {
+  test("thrown provider stream failure in long task is fail-closed in coordinated runtime (IC04 Gate#2 Blocker A)", async () => {
     const provider = new LongTaskThrowStreamErrorThenPlanProvider()
     const trace = new MemoryTrace()
     const events: StreamEvent[] = []
@@ -2047,10 +2048,9 @@ test.skip("external completion gate emits evidence report for completed long tas
       events.push(event)
     }
 
-    expect(provider.rounds).toBe(2)
-    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(true)
-    expect(JSON.stringify(provider.messages[1])).toContain("Provider Stream Recovery")
-    expect(trace.events.some(event => event.type === "gate_decision" && JSON.stringify(event.data).includes("provider_stream"))).toBe(true)
+    expect(provider.rounds).toBe(1)
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(false)
+    expect(trace.events.some(event => event.type === "gate_decision" && JSON.stringify(event.data).includes("coordinated_fail_closed"))).toBe(true)
   })
 
   test("generic thrown provider stream failure retries instead of accepting partial completion", async () => {
@@ -2069,10 +2069,11 @@ test.skip("external completion gate emits evidence report for completed long tas
     }
 
     const text = events.filter(event => event.type === "text").map(event => String(event.data ?? "")).join("\n")
-    expect(provider.rounds).toBe(2)
-    expect(text).toContain("Recovered answer.")
-    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying interrupted round"))).toBe(true)
-    expect(JSON.stringify(provider.messages[1])).toContain("Provider Stream Recovery")
+    // coordinated runtime：generic retryable failure fail-closed —— 无
+    // whole-round 续跑（taskTracker=null 场景同样 break）。
+    expect(provider.rounds).toBe(1)
+    expect(text).not.toContain("Recovered answer.")
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(false)
   })
 
   test("non-retryable provider stream failure blocks instead of retrying", async () => {
@@ -2136,12 +2137,13 @@ test.skip("external completion gate emits evidence report for completed long tas
       }
 
       const text = events.filter(event => event.type === "text").map(event => String(event.data ?? "")).join("\n")
-      expect(provider.rounds).toBe(2)
+      // coordinated runtime：idle timeout → generic retryable → fail-closed
+      //（不再 whole-round 续跑）。
+      expect(provider.rounds).toBe(1)
       expect(provider.aborted).toBe(true)
-      expect(text).toContain("Recovered after idle timeout.")
+      expect(text).not.toContain("Recovered after idle timeout.")
       expect(events.some(event => event.type === "error" && String(event.data).includes("provider stream idle timeout"))).toBe(true)
-      expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying interrupted round"))).toBe(true)
-      expect(JSON.stringify(provider.messages[1])).toContain("Provider Stream Recovery")
+      expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: retrying"))).toBe(false)
     } finally {
       if (previous === undefined) delete process.env.ORCANA_PROVIDER_IDLE_TIMEOUT_MS
       else process.env.ORCANA_PROVIDER_IDLE_TIMEOUT_MS = previous
@@ -2180,10 +2182,11 @@ test.skip("external completion gate emits evidence report for completed long tas
     }
 
     const text = events.filter(event => event.type === "text").map(event => String(event.data ?? "")).join("\n")
+    // coordinated runtime：generic retryable failure fail-closed —— 即使
+    // 无剩余轮次也统一 break（不输出 legacy blocked report）。
     expect(provider.rounds).toBe(1)
-    expect(text).toContain("Task blocked by provider stream failure")
-    expect(text).toContain("Unexpected event order")
-    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: blocked"))).toBe(true)
+    expect(text).not.toContain("Task blocked by provider stream failure")
+    expect(events.some(event => event.type === "status" && String(event.data).includes("provider-stream-gate: blocked"))).toBe(false)
   })
 
   test("prepares DeepSeek native tool schemas and enforces the 128 tool limit", async () => {

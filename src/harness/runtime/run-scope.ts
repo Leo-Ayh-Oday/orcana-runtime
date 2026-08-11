@@ -18,6 +18,7 @@ import { createArtifactStore } from "../artifacts/artifact-store"
 import { createJsonlTraceWriter } from "../telemetry/trace-writer"
 import { createRunCancellation } from "./cancellation"
 import { createRetryLedger } from "../../runtime/retry-ledger"
+import { RetryCoordinator, deriveMaxPhysicalProviderRequests } from "../../runtime/retry/coordinator"
 
 export function defaultSandboxConfig(projectRoot: string): SandboxConfig {
   return {
@@ -63,12 +64,15 @@ export interface AssembleRunScopeInput {
   projectRoot: string
   controller: AbortController
   activeMode?: ModeName
+  /** IC04 P0-4: 唯一 RetryCoordinator 的 physical cap（Run 创建时确定）。 */
+  retryCoordinatorCap?: number
   /** G0-2: fail-loud observer for trace batch write failures. */
   onTraceWriteFailure?: (info: { runId: string; batchSize: number; error: unknown }) => void
 }
 
 export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
   const { runId, sessionId, projectRoot, controller, onTraceWriteFailure } = input
+  const retryLedger = createRetryLedger()
   return {
     runId,
     sessionId,
@@ -84,6 +88,13 @@ export function assembleRunScope(input: AssembleRunScopeInput): AgentRunScope {
     // H5: typed JSONL trace (H3 no-op replaced).
     trace: createRunTraceWriter(projectRoot, runId, sessionId, onTraceWriteFailure),
     // PR-GATE-06：Run 级统一重试预算（provider/capability/repair 共享）。
-    retryLedger: createRetryLedger(),
+    retryLedger,
+    // IC04 §29：Run 级 RetryCoordinator（retry decision authority）——
+    // 与 retryLedger 同一实例。run-controller / node 可覆盖 cap 与
+    // external model-call consumer（§24/§26）。
+    retryCoordinator: new RetryCoordinator({
+      ledger: retryLedger,
+      maxPhysicalProviderRequests: input.retryCoordinatorCap ?? deriveMaxPhysicalProviderRequests(50),
+    }),
   }
 }

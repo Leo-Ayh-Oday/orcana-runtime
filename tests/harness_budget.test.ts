@@ -143,14 +143,15 @@ describe("Harness H4 budget enforcement", () => {
     }
   })
 
-  test("maxRounds maps to maxModelCalls when no explicit budget is given", async () => {
-    // maxRounds=2 → maxModelCalls=2: two rounds consume exactly 2 model
-    // calls, then the run ends naturally on the round budget (no trip).
+  test("maxRounds derives physical model-call budget (IC04 P0-3)", async () => {
+    // IC04 P0-3: 无 explicit budget 时 physical cap = derived(logicalMaxRounds)
+    // = max(2*2, 2+8) = 10 —— 不再是 maxRounds。logical round 上限仍由
+    // maxRounds=2 决定（run 自然 paused，不 trip budget）。
     const result = await runForOutcome(
       { provider: new ToolEachRoundProvider(), tools: probeTool() },
       { prompt: "inspect the project", maxRounds: 2 },
     )
-    expect(result.budgetLimits.maxModelCalls).toBe(2)
+    expect(result.budgetLimits.maxModelCalls).toBe(10)
     expect(result.status).toBe("paused")
     expect(result.reason).toBeUndefined()
     // Explicit budget overrides the mapping.

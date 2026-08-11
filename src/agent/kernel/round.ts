@@ -13,7 +13,7 @@
  */
 
 import { createHash } from "node:crypto"
-import type { ProviderMessage, StreamEvent } from "../../provider/types"
+import type { ProviderFinishReason, ProviderMessage, StreamEvent } from "../../provider/types"
 import { isRuntimeBuiltToolDescriptor, type ToolDescriptor } from "../../tools/registry"
 import { isBuiltinVerificationProducer } from "../../tools/builtins"
 import { decideThinkingPlan, updateState } from "../router"
@@ -40,7 +40,7 @@ import { CompletionOrchestrator } from "../completion-orchestrator"
 import { AgentState } from "../state-machine"
 import { executeToolBatch } from "../tool-execution/batch-executor"
 import { setRuntimeContextBudgetMode } from "../runtime-context"
-import { getRunRetryLedger } from "../../runtime/execution-context"
+import { getRunRetryLedger, getRunRetryCoordinator } from "../../runtime/execution-context"
 import { currentTransactionEvidenceBinding } from "../patch-transaction"
 import { buildRoundProviderRequest, cacheStableProviderTools, estimateRoundTokens } from "../round/request-builder"
 import { createPreRoundChain } from "../gates/pre-round"
@@ -150,8 +150,10 @@ export async function* runRound(
       : execution.consecutiveErrors > 0
         ? "recovery"
         : "execution",
-    // GATE-03: 无进展 streak >= 2 → ACTION_FIRST（思考压到 2K，本轮必须动工具）。
-    actionFirst: ctx.progressGovernor.consecutiveNoProgress >= 2,
+    // IC04 §17: next-round thinking policy 只来自 LoopSupervisor
+    // NextRoundPolicy（不再读 governor internals）。
+    actionFirst: ctx.loopSupervisor.currentPolicy.recoveryMode === "action_first",
+    livenessThinkingCapTokens: ctx.loopSupervisor.currentPolicy.thinkingCapTokens,
     // TB2-1: 工具协议受约束恢复——thinking 预算进一步压低（只重发一个调用）。
     protocolRecovery: execution.protocolRecoveryActive,
     autoMaxSignals: { consecutiveErrors: execution.consecutiveErrors, modifiedFiles: execution.modifiedFileCount },
@@ -580,6 +582,31 @@ export async function* runRound(
   })
 
   if (roundState.providerFailure) {
+    // IC04 §36/§37: 生产 Provider 的 transport_failure 意味着 Provider 层
+    // retry authority（RetryCoordinator）已经决定不再发起同 request ——
+    // Agent failure-policy 不得再 continue 整个 round（TRANSPORT_ROUND_RETRY_CASCADE
+    // = 0）。transport_failure 只可能来自 structured finish（production
+    // provider）；legacy 无 finish 的 provider fallback 是 malformed，不走此分支。
+    if (providerRoundResult.finishReason === "transport_failure") {
+      yield stream({ type: "error", data: roundState.providerFailure.message })
+      yield stream({ type: "status", data: "provider-failure: transport retries exhausted at provider authority — no round continuation" })
+      // P1-9: reason 取自真实 authority audit（最后一次 deny 的原因），
+      // 不硬编码 —— class_exhausted / physical_request_budget /
+      // side_effect_boundary 可区分。
+      const coordinator = getRunRetryCoordinator()
+      const audit = coordinator.audit.decisions
+      const lastDeny = audit.length > 0 ? audit[audit.length - 1] : null
+      const denyReason = lastDeny?.action === "deny"
+        ? (lastDeny.reason ?? "unknown")
+        : "coordinator_deny_unrecorded"
+      yield trace("gate_decision", {
+        gate: "provider_transport",
+        decision: "blocked",
+        reason: denyReason,
+        physicalProviderRequests: coordinator.physicalProviderRequests,
+      })
+      return { kind: "break", reason: "provider_failure" }
+    }
     const recovery = decideProviderFailureRecovery({
       failure: roundState.providerFailure,
       round,
@@ -588,6 +615,9 @@ export async function* runRound(
       taskTracker: planning.taskTracker,
       changedFiles: [...execution.modifiedFiles],
       retryLedger: getRunRetryLedger(),
+      // IC04 §40: tool protocol constrained recovery 授权经 RetryCoordinator。
+      retryCoordinator: getRunRetryCoordinator(),
+      sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
     })
     for (const message of recovery.messages) rawMessages.push(message)
     if (recovery.emitError) {
@@ -602,7 +632,15 @@ export async function* runRound(
       if (recovery.reduceThinking) {
         yield patch({ execution: { protocolRecoveryActive: true } })
       }
-      return { kind: "continue" }
+      return yield* superviseNextRound(ctx, {
+        round,
+        finishReason: providerRoundResult.finishReason,
+        executableToolCallCount: completedToolCalls.length,
+        sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+        // P0-1: early-continue 同样必须 progress accounting（no-progress
+        // ladder 不可被 provider-recovery continue 绕过）。
+        progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
+      })
     }
     return { kind: "break", reason: "provider_failure" }
   }
@@ -686,7 +724,14 @@ export async function* runRound(
         }
         return { kind: "break", reason: "orchestrator_plan_ready" }
       case "continue":
-        return { kind: "continue" }
+        return yield* superviseNextRound(ctx, {
+          round,
+          finishReason: providerRoundResult.finishReason,
+          executableToolCallCount: completedToolCalls.length,
+          sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+          // P0-1: orchestrator continue 同样必须 progress accounting。
+          progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
+        })
       case "break_blocked":
         return { kind: "break", reason: "orchestrator_blocked" }
       case "done": {
@@ -700,7 +745,14 @@ export async function* runRound(
           }
           yield stream({ type: "status", data: `master-plan: ${planProgressOf(ctx)} → next node activated` })
           yield trace("gate_decision", { gate: "master_plan", decision: "next_node", progress: planProgressOf(ctx) })
-          return { kind: "continue" }
+          return yield* superviseNextRound(ctx, {
+            round,
+            finishReason: providerRoundResult.finishReason,
+            executableToolCallCount: completedToolCalls.length,
+            sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+            // P0-1: master-plan next-node continue 同样必须 progress accounting。
+            progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
+          })
         }
         if (planStore.current) {
           yield stream({ type: "status", data: "master-plan: all nodes complete" })
@@ -1010,13 +1062,27 @@ export async function* runRound(
   if (postToolPlanningPrompt) {
     // RC-13 E3: 合并进相邻 user 消息，避免连续 user。
     appendUserContext(rawMessages, postToolPlanningPrompt)
-    return { kind: "continue" }
+    return yield* superviseNextRound(ctx, {
+      round,
+      finishReason: providerRoundResult.finishReason,
+      executableToolCallCount: completedToolCalls.length,
+      sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+      progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
+    })
   }
 
   // L5: runtime self-edit gate — moved into the VerificationCoordinator.
   const selfEditResult = yield* wrapEvents(runRuntimeSelfEditGate(verificationCtx))
   if (selfEditResult.action === "break") return { kind: "break", reason: "self_edit" }
-  if (selfEditResult.action === "continue") return { kind: "continue" }
+  if (selfEditResult.action === "continue") {
+    return yield* superviseNextRound(ctx, {
+      round,
+      finishReason: providerRoundResult.finishReason,
+      executableToolCallCount: completedToolCalls.length,
+      sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+      progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
+    })
+  }
 
   if (roundState.serviceTestGuidanceNeeded) {
     rawMessages.push({ role: "user", content: formatServiceTestGuidance() })
@@ -1025,7 +1091,13 @@ export async function* runRound(
   }
 
   if (roundState.narrowEditEvidenceBlocked) {
-    return { kind: "continue" }
+    return yield* superviseNextRound(ctx, {
+      round,
+      finishReason: providerRoundResult.finishReason,
+      executableToolCallCount: completedToolCalls.length,
+      sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+      progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
+    })
   }
 
   const missingLongTask = missingTaskRequirements(planning.taskTracker)
@@ -1033,7 +1105,13 @@ export async function* runRound(
     rawMessages.push({ role: "user", content: formatTaskPlanningPrompt(planning.taskTracker, round + 1) })
     yield stream({ type: "status", data: "任务追踪: 等待计划文本，下一轮不允许调用工具" })
     yield trace("gate_decision", { gate: "semantic:task_tracker", decision: "plan_required", missing: missingLongTask })
-    return { kind: "continue" }
+    return yield* superviseNextRound(ctx, {
+      round,
+      finishReason: providerRoundResult.finishReason,
+      executableToolCallCount: completedToolCalls.length,
+      sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+      progressInput: buildProgressInput(round, completedToolCalls, ctx, roundState),
+    })
   }
   if (planning.taskTracker && missingLongTask.length > 0) {
     rawMessages.push({ role: "user", content: [
@@ -1066,54 +1144,138 @@ export async function* runRound(
   // L6: periodic memory reconcile (prune + FTS5 rebuild)
   yield* wrapEvents(runKnowledgeReconcile(maintenanceCtx))
 
-  // ── GATE-03 v2: ProgressGovernor —— 无进展断环（GS-P1~P6） ──
-  // v1 只认状态变化，误杀合法侦察；v2 按四维 Delta（execution/evidence/
-  // epistemic/control）判定 EffectiveProgress，窗口仍为 4 轮（GS-P2）。
+  // ── IC04: LoopSupervisor —— Loop Liveness Authority（§6-§18）──
+  // ProgressGovernor 作为 fact engine 由 LoopSupervisor 持有；production
+  // main path 不再直接解释 governor 决策（DIRECT_PROGRESS_GOVERNOR_DECISION_
+  // OUTSIDE_SUPERVISOR = 0）。所有 continue path 经统一 seam 监督。
   const progressInput = buildProgressInput(round, completedToolCalls, ctx, roundState)
-  const governorDecision = ctx.progressGovernor.evaluate(progressInput)
-  const pDelta = governorDecision.delta
-  // GS-P6：每轮 progress_delta trace（可审计 4 维 + 指纹 + 阶段 + 承诺）
-  yield trace("progress_delta", {
-    round,
-    phase: pDelta?.phase,
-    agentState: progressInput.agentState,
-    decision: governorDecision.action,
-    streak: ctx.progressGovernor.consecutiveNoProgress,
-    delta: pDelta ? { execution: pDelta.execution, evidence: pDelta.evidence, epistemic: pDelta.epistemic, control: pDelta.control, effective: pDelta.effective, reasons: pDelta.reasons } : null,
-    novelty: pDelta?.novelty,
-    fingerprints: pDelta?.fingerprints,
-    commitment: pDelta?.commitment ? { debtRemaining: ctx.progressGovernor.pendingCommitmentDebt, target: pDelta.commitment.target?.value ?? null, createdRound: pDelta.commitment.createdRound } : null,
-  })
-  if (governorDecision.action === "action_first") {
-    rawMessages.push(actionFirstPrompt())
-    yield stream({ type: "status", data: `progress-governor: 连续 2 轮无进展 → ACTION_FIRST（思考降级，必须发出工具调用）` })
-    yield trace("gate_decision", { gate: "progress_governor", decision: "action_first", streak: ctx.progressGovernor.consecutiveNoProgress })
-  } else if (governorDecision.action === "replan_once") {
-    rawMessages.push(replanOncePrompt())
-    yield stream({ type: "status", data: `progress-governor: 连续 3 轮无进展 → REPLAN_ONCE（不重复注入相同提示）` })
-    yield trace("gate_decision", { gate: "progress_governor", decision: "replan_once", streak: ctx.progressGovernor.consecutiveNoProgress })
-  } else if (governorDecision.action === "action_required") {
-    // GS-P4：承诺未偿付 → 明确要求发出对应工具调用（先于 streak 机制更早介入）
-    rawMessages.push(commitmentPrompt())
-    yield stream({ type: "status", data: `progress-governor: ACTION_REQUIRED —— 承诺「${governorDecision.commitment.text}」未偿付（债务 ${ctx.progressGovernor.pendingCommitmentDebt}）` })
-    yield trace("gate_decision", { gate: "progress_governor", decision: "action_required", commitment: governorDecision.commitment.fingerprint, streak: ctx.progressGovernor.consecutiveNoProgress })
-  } else if (governorDecision.action === "stalled") {
-    // GS-P2（streak）/ GS-P4（commitment）：STALLED 终止 + 完整诊断。
-    ctx.sm.transition(AgentState.STALLED, governorDecision.report)
-    ctx.lifecycle.stopReason = "stalled"
-    const why = governorDecision.reason === "commitment" ? "GS-P4 承诺未履行" : "GS-P2 连续 4 轮无有效进展"
-    yield stream({ type: "status", data: `progress-governor: STALLED —— ${why}，终止运行` })
-    yield stream({ type: "error", data: governorDecision.report })
-    yield trace("agent_loop_stalled", { round, streak: ctx.progressGovernor.consecutiveNoProgress, reason: governorDecision.reason })
-    return { kind: "break", reason: "progress_stalled" }
-  }
-
   if (round + 1 >= ctx.maxRounds) ctx.lifecycle.reachedRoundBudget = true
-  return { kind: "continue" }
+  return yield* superviseNextRound(ctx, {
+    round,
+    finishReason: providerRoundResult.finishReason,
+    executableToolCallCount: completedToolCalls.length,
+    sideEffectBoundaryCrossed: providerRoundResult.sideEffectBoundaryCrossed ?? false,
+    progressInput,
+  })
 }
 
-/** GATE-03 v2: 从本轮可达状态构造 RoundProgressInput（只读、纯函数）。 */
-function buildProgressInput(
+
+/**
+ * IC04 §9/§10: 唯一 continue seam —— 任何已经进入 Provider round 且准备
+ * 再进入下一 Agent round 的 continue 必须经过 LoopSupervisor 监督
+ * （CONTINUE_PATH_WITHOUT_SUPERVISION = 0），不得每个分支复制一份
+ * supervisor logic。每 logical round 最多一次 ProgressGovernor 评价
+ * （PROGRESS_EVALUATION_PER_ROUND_MAX = 1 —— progressInput 存在时才评价）。
+ */
+function superviseNextRound(
+  ctx: RunPhaseContext,
+  input: {
+    round: number
+    finishReason: ProviderFinishReason
+    executableToolCallCount: number
+    sideEffectBoundaryCrossed: boolean
+    // P0-1: 必选 —— 每 completed logical round EXACTLY ONCE progress
+    // evaluation（CONTINUE_PATH_WITHOUT_PROGRESS_ACCOUNTING = 0）。
+    progressInput: RoundProgressInput
+  },
+): AsyncGenerator<RunEffect, LoopDecision> {
+  return superviseRoundGenerator(ctx, input)
+}
+
+async function* superviseRoundGenerator(
+  ctx: RunPhaseContext,
+  input: {
+    round: number
+    finishReason: ProviderFinishReason
+    executableToolCallCount: number
+    sideEffectBoundaryCrossed: boolean
+    progressInput: RoundProgressInput
+  },
+): AsyncGenerator<RunEffect, LoopDecision> {
+  const decision = ctx.loopSupervisor.afterRound({
+    round: input.round,
+    finishReason: input.finishReason,
+    executableToolCallCount: input.executableToolCallCount,
+    sideEffectBoundaryCrossed: input.sideEffectBoundaryCrossed,
+    progressInput: input.progressInput,
+  })
+  const governorDecision = decision.governor
+  // GS-P6: progress_delta trace（保持既有可观测契约；仅在评价发生时）
+  const pDelta = governorDecision?.delta ?? null
+  if (pDelta && input.progressInput) {
+    yield trace("progress_delta", {
+      round: input.round,
+      phase: pDelta.phase,
+      agentState: input.progressInput.agentState,
+      decision: governorDecision?.action,
+      streak: ctx.loopSupervisor.consecutiveNoProgress,
+      delta: pDelta ? { execution: pDelta.execution, evidence: pDelta.evidence, epistemic: pDelta.epistemic, control: pDelta.control, effective: pDelta.effective, reasons: pDelta.reasons } : null,
+      novelty: pDelta?.novelty,
+      fingerprints: pDelta?.fingerprints,
+      commitment: pDelta?.commitment ? { debtRemaining: ctx.loopSupervisor.governor.pendingCommitmentDebt, target: pDelta.commitment.target?.value ?? null, createdRound: pDelta.commitment.createdRound } : null,
+    })
+  }
+  // IC04 §46: 每 completed logical round 至少一条 loop_supervisor_decision。
+  yield trace("loop_supervisor_decision", {
+    round: input.round,
+    finishReason: input.finishReason,
+    progressDeltaEffective: pDelta?.effective ?? undefined,
+    noProgressStreak: ctx.loopSupervisor.consecutiveNoProgress,
+    truncationStreak: ctx.loopSupervisor.truncationStreak,
+    decision: decision.action,
+    nextRoundPolicy: decision.nextRoundPolicy,
+    stallReason: decision.action === "stalled" ? decision.reason : undefined,
+    governorDecision: governorDecision?.action,
+  })
+  switch (decision.action) {
+    case "proceed":
+      return { kind: "continue" }
+    case "lower_thinking": {
+      yield stream({ type: "status", data: `loop-supervisor: LOWER_THINKING（第 ${ctx.loopSupervisor.truncationStreak} 次连续 no-action 截断 —— 思考 ≤ 2048，给 action 留空间）` })
+      return { kind: "continue" }
+    }
+    case "action_first": {
+      ctx.rawMessages.push(actionFirstPrompt())
+      yield stream({ type: "status", data: `loop-supervisor: ACTION_FIRST —— 必须发出实际工具调用（思考 ≤ 2048）` })
+      return { kind: "continue" }
+    }
+    case "replan_once": {
+      ctx.rawMessages.push(replanOncePrompt())
+      yield stream({ type: "status", data: "loop-supervisor: REPLAN_ONCE —— 重新规划最小下一步（仅此一次）" })
+      return { kind: "continue" }
+    }
+    case "action_required": {
+      const commitment = governorDecision && governorDecision.action === "action_required"
+        ? governorDecision.commitment
+        : undefined
+      ctx.rawMessages.push(commitmentPrompt())
+      yield stream({ type: "status", data: `loop-supervisor: ACTION_REQUIRED —— 承诺「${commitment?.text ?? "?"}」未偿付（债务 ${ctx.loopSupervisor.governor.pendingCommitmentDebt}）` })
+      return { kind: "continue" }
+    }
+    case "stalled": {
+      // P1-12: 所有 stalled（progress / commitment / truncation）统一进入
+      // AgentState.STALLED + lifecycle.stopReason="stalled"，避免
+      // Lifecycle=STALLED 而 StateMachine 停在 SEARCH/CODE 的不一致。
+      ctx.sm.transition(AgentState.STALLED, decision.report)
+      ctx.lifecycle.stopReason = "stalled"
+      if (decision.reason === "truncation") {
+        // IC04 §13: 第 3 次连续 no-action truncation → STALLED(truncation)。
+        yield stream({ type: "status", data: `loop-supervisor: STALLED —— 连续 ${ctx.loopSupervisor.truncationStreak} 轮 no-action 截断，终止运行` })
+        yield stream({ type: "error", data: decision.report })
+        yield trace("agent_loop_stalled", { round: input.round, streak: ctx.loopSupervisor.consecutiveNoProgress, truncationStreak: ctx.loopSupervisor.truncationStreak, reason: "truncation" })
+        return { kind: "break", reason: "progress_stalled" }
+      }
+      // GS-P2（streak）/ GS-P4（commitment）：STALLED 终止 + 完整诊断。
+      const why = decision.reason === "commitment" ? "GS-P4 承诺未履行" : "GS-P2 连续 4 轮无有效进展"
+      yield stream({ type: "status", data: `progress-governor: STALLED —— ${why}，终止运行` })
+      yield stream({ type: "error", data: decision.report })
+      yield trace("agent_loop_stalled", { round: input.round, streak: ctx.loopSupervisor.consecutiveNoProgress, reason: decision.reason })
+      return { kind: "break", reason: "progress_stalled" }
+    }
+  }
+}
+
+/** GATE-03 v2: 从本轮可达状态构造 RoundProgressInput（只读、纯函数）。 */function buildProgressInput(
   round: number,
   completedToolCalls: RoundToolCall[],
   ctx: RunPhaseContext,

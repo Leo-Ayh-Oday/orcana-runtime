@@ -43,6 +43,11 @@ export interface RepairLoopOptions {
   /** PR-GATE-06：Run 级 RetryLedger —— 同一失败签名（semanticRepair 类，
    *  <= 2）经统一账本限次，与 provider/capability 层共享预算。 */
   retryLedger?: RetryLedger
+  /**
+   * IC04 §42: Run 级 RetryCoordinator —— 同一 failure signature 是否允许
+   * 再进入 repair 的唯一 authorization 来源（替代直接 retryLedger 调用）。
+   */
+  retryCoordinator?: import("../../runtime/retry/coordinator").RetryCoordinator
 }
 
 export interface RepairAttempt {
@@ -72,6 +77,7 @@ export class RepairLoop {
   private readonly checkpointDir?: string
   private readonly projectRoot?: string
   private readonly retryLedger?: RetryLedger
+  private readonly retryCoordinator?: import("../../runtime/retry/coordinator").RetryCoordinator
 
   constructor(options: RepairLoopOptions) {
     this.registry = options.registry
@@ -82,6 +88,7 @@ export class RepairLoop {
     this.checkpointDir = options.checkpointDir
     this.projectRoot = options.projectRoot
     this.retryLedger = options.retryLedger
+    this.retryCoordinator = options.retryCoordinator
   }
 
   async run(): Promise<ConvergenceReport> {
@@ -119,10 +126,14 @@ export class RepairLoop {
         writeFailed++
         const sig = fingerprintFailure(result)
         nodeAttempts.set(result.nodeId, (nodeAttempts.get(result.nodeId) ?? 0) + 1)
-        // PR-GATE-06：同一失败签名经 Run 级 RetryLedger 限次（semanticRepair
-        // <= 2）—— 超限的签名不再驱动新的修复轮（不加入 seen），该 node
-        // 计入 blocked；换策略或停止由 specFactory/dry 检测接管。
-        if (this.retryLedger) {
+        // PR-GATE-06 + IC04 §42：同一失败签名经 RetryCoordinator 授权
+        // （semanticRepair <= 2）—— 超限的签名不再驱动新的修复轮（不加入
+        // seen），该 node 计入 blocked；换策略或停止由 specFactory/dry
+        // 检测接管。coordinator 优先；legacy retryLedger 保留兼容。
+        if (this.retryCoordinator) {
+          const permit = this.retryCoordinator.authorizeRetry({ retryClass: "semanticRepair", fingerprint: sig })
+          if (!permit.allowed) continue
+        } else if (this.retryLedger) {
           if (!this.retryLedger.canRetry("semanticRepair", sig)) continue
           this.retryLedger.record("semanticRepair", sig)
         }

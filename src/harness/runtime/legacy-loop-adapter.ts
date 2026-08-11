@@ -129,6 +129,9 @@ export function buildLoopOptions(
     // PR-GATE-06: run-scoped retry ledger — the loop's provider/round retries
     // share the same budget as harness-side capability retries.
     retryLedger: run.scope.retryLedger,
+    // IC04 §30: run-scoped RetryCoordinator（复用 caller 实例，禁止 new
+    // 第二份）；scope 未配置时 agentLoop 自建。
+    retryCoordinator: run.scope.retryCoordinator,
     hooks: deps.hooks,
     stagedContext: deps.stagedContext,
     thinkingStore: deps.thinkingStore,

@@ -100,6 +100,7 @@ export interface LinuxBrokerOptions {
  *  NODE_ENV=test 时由 testHooks.faultAt 抛错 / waitAt 等待（barrier）。 */
 export type BrokerFaultPoint =
   | "after-register-starting"
+  | "materialize-internal"
   | "after-materialize"
   | "before-lock"
   | "after-lock"
@@ -135,9 +136,14 @@ export interface BrokerAcquiredResources {
   cgroupRunPath?: string
   cgroupAgentPath?: string
   cgroupCellPath?: string
-  /** true = 本事务创建了 run/agent hierarchy（可整树清理）；
-   *  false = 复用 AgentDomain cgroup（不得删 Domain 资源）。 */
-  brokerCreatedHierarchy: boolean
+  /** 本事务创建了 run 层（pre-existing 判定后置真）—— 可整树清理。
+   *  复用 AgentDomain（domain.cgroupPath）或 run 已由并行 Cell 创建
+   *  → false（不得删其它 Cell/Domain 的资源）。 */
+  cgroupRunOwned: boolean
+  /** 本事务创建了 agent 层（agentPreExisting 判定后置真）—— run 可能
+   *  pre-existing（并行 Cell 创建），但 agent-a1 是本事务新建：createAgent
+   *  部分失败后必须单独清理 agent 层，同时保留 pre-existing run。 */
+  cgroupAgentOwned: boolean
   podmanCidfile?: string
   materialization?: ExecutionMaterialization
   controller: AbortController
@@ -303,73 +309,19 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   /** 运行期物化：seccomp 文件、secret 注入、缓存宿主路径。
    *  P0-1 修复：绝不写回 compiled spec —— 策略 Spec 在编译后冻结。
    *  PR-7：seccomp 按后端协议生成（bwrap=raw BPF；podman=OCI JSON）；
-   *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。 */
-  const materializeExecution = (spec: ExecutionCellSpec, backendId: string): ExecutionMaterialization => {
+   *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。
+   *  IC02（P0-2 复审）：自身 exception-safe —— materialization 创建后
+   *  立即定义 dispose，任一步骤（seccomp/secret/cache hostPath）抛错即
+   *  rollback 已产生的临时材料后 rethrow；调用方拿不到 materialization
+   *  也绝无临时残留。 */
+  const materializeExecution = async (spec: ExecutionCellSpec, backendId: string): Promise<ExecutionMaterialization> => {
     const materialization: ExecutionMaterialization = {
       // B7：统一清理动作登记表 —— dispose 执行时逐项回填 ok/detail。
       cleanupActions: [],
     }
     // C5：sealed secret 的清理回调（删文件 + 空 root 目录）；环境注入类无文件。
     let secretCleanup: (() => void) | undefined
-    if ((backendId === "bubblewrap" || backendId === "rootless-podman")
-      && (spec.profile === "inspect" || spec.profile === "untrusted")) {
-      try {
-        const target = spec.profile === "untrusted" ? "untrusted" : "inspect"
-        if (backendId === "bubblewrap") {
-          const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.bpf`)
-          writeSeccompBpfFile(compileSeccompProfile(target), filePath)
-          materialization.seccompFile = filePath
-        } else {
-          const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.json`)
-          writeOciSeccompFile(compileSeccompProfile(target), filePath)
-          materialization.seccompFile = filePath
-        }
-      } catch {
-        // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
-      }
-    }
-    if (spec.secrets.length > 0) {
-      const bound = bindSecrets({ bindings: spec.secrets, values: options.secretValues ?? {} })
-      if (!bound.ok) {
-        // C5：失败路径同样清理 —— 部分 binding 可能在校验失败前已写入文件。
-        bound.cleanup()
-        throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
-      }
-      materialization.secretEnv = bound.envInjections
-      // PR-7：sealed-file 交付 → 宿主文件真实挂载进沙盒/容器。
-      const secretFiles: Record<string, string> = {}
-      const secretRecords: SecretDeliveryRecord[] = []
-      for (const item of bound.bound) {
-        if (item.deliveryTarget) {
-          const target = item.binding.target ?? `/run/secrets/${item.binding.id}`
-          secretFiles[target] = item.deliveryTarget
-        }
-        // B7：交付生命周期记录（Receipt 审计；dispose 后落 revokedAt/verified）。
-        secretRecords.push({
-          leaseId: item.binding.id,
-          runId: spec.identity.runId,
-          cellId: spec.identity.cellId,
-          bindingId: item.binding.id,
-          deliveryTarget: item.deliveryTarget,
-          delivery: item.binding.delivery,
-          expiresAt: item.binding.expiresAt,
-          cleanupVerified: false,
-        })
-      }
-      materialization.secretFiles = secretFiles
-      materialization.secretRecords = secretRecords
-      // C5：文件不在此处清理 —— 统一由 dispose（execute 事务 finally）调用，
-      // 保证执行结束（含异常/取消路径）后 /tmp 无密钥残留。
-      secretCleanup = bound.cleanup
-    }
-    for (const cache of spec.cache) {
-      materialization.cacheHostPaths = {
-        ...materialization.cacheHostPaths,
-        [cache.target]: cacheManager.hostPath(cache),
-      }
-    }
-    // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（seccomp/sealed secret）统一清理。
-    // B7：逐项执行 + 结果回填 cleanupActions / secretRecords（Receipt 审计）。
+    // IC02：尽早建立 rollback —— 后续步骤抛错时 dispose 已可调用。
     materialization.dispose = () => {
       const actions = materialization.cleanupActions ?? []
       // temp：seccomp 宿主文件（best-effort，结果如实记录）。
@@ -412,7 +364,76 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         actions.push({ kind: "secrets", name: "secret-root", ok: false, detail: error instanceof Error ? error.message : String(error), at: Date.now() })
       }
     }
-    return materialization
+    // IC02：任一步骤抛错 → rollback 已产生材料 → rethrow。
+    const rollbackOnError = (error: unknown): never => {
+      try { materialization.dispose?.() } catch { /* best-effort */ }
+      throw error
+    }
+    try {
+      if ((backendId === "bubblewrap" || backendId === "rootless-podman")
+        && (spec.profile === "inspect" || spec.profile === "untrusted")) {
+        try {
+          const target = spec.profile === "untrusted" ? "untrusted" : "inspect"
+          if (backendId === "bubblewrap") {
+            const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.bpf`)
+            writeSeccompBpfFile(compileSeccompProfile(target), filePath)
+            materialization.seccompFile = filePath
+          } else {
+            const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.json`)
+            writeOciSeccompFile(compileSeccompProfile(target), filePath)
+            materialization.seccompFile = filePath
+          }
+        } catch {
+          // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
+        }
+      }
+      if (spec.secrets.length > 0) {
+        const bound = bindSecrets({ bindings: spec.secrets, values: options.secretValues ?? {} })
+        if (!bound.ok) {
+          // C5：失败路径同样清理 —— 部分 binding 可能在校验失败前已写入文件。
+          bound.cleanup()
+          throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
+        }
+        materialization.secretEnv = bound.envInjections
+        // PR-7：sealed-file 交付 → 宿主文件真实挂载进沙盒/容器。
+        const secretFiles: Record<string, string> = {}
+        const secretRecords: SecretDeliveryRecord[] = []
+        for (const item of bound.bound) {
+          if (item.deliveryTarget) {
+            const target = item.binding.target ?? `/run/secrets/${item.binding.id}`
+            secretFiles[target] = item.deliveryTarget
+          }
+          // B7：交付生命周期记录（Receipt 审计；dispose 后落 revokedAt/verified）。
+          secretRecords.push({
+            leaseId: item.binding.id,
+            runId: spec.identity.runId,
+            cellId: spec.identity.cellId,
+            bindingId: item.binding.id,
+            deliveryTarget: item.deliveryTarget,
+            delivery: item.binding.delivery,
+            expiresAt: item.binding.expiresAt,
+            cleanupVerified: false,
+          })
+        }
+        materialization.secretFiles = secretFiles
+        materialization.secretRecords = secretRecords
+        // C5：文件不在此处清理 —— 统一由 dispose（execute 事务 finally）调用，
+        // 保证执行结束（含异常/取消路径）后 /tmp 无密钥残留。
+        secretCleanup = bound.cleanup
+        // IC02：checkpoint —— sealed secret 材料已生成、cache 步骤之前。
+        // 此处抛错（faultAt）→ rollbackOnError 清理 secret 文件后 rethrow。
+        await checkpoint("materialize-internal")
+      }
+      for (const cache of spec.cache) {
+        materialization.cacheHostPaths = {
+          ...materialization.cacheHostPaths,
+          [cache.target]: cacheManager.hostPath(cache),
+        }
+      }
+      return materialization
+    } catch (error) {
+      return rollbackOnError(error)
+    }
   }
 
   /** PR-7: approved image policy —— 命中已批准列表才允许 podman 执行。 */
@@ -488,9 +509,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     // 3. cgroup cleanup：intended paths（调用前记录）为清理目标 ——
     //    createXxx 部分创建后抛错同样能移除。
     //    - cell：总是尝试（cell-<cellId> 专属本 cell，无共享风险）。
-    //    - run/agent：仅 brokerCreatedHierarchy（本事务创建）且 run 下
-    //      无其它 active cell（共享 hierarchy 不误删）；复用 AgentDomain
-    //      的（domain.cgroupPath）不触碰 Domain 资源。
+    //    - agent：仅 cgroupAgentOwned（本事务新建）且 agent 下无其它
+    //      active cell —— pre-existing run / txn-created agent 场景单独
+    //      清理 agent 层，保留其它 Cell 的 run 层。
+    //    - run：仅 cgroupRunOwned（本事务创建）且 run 下无其它 active
+    //      cell —— 复用 AgentDomain（domain.cgroupPath）不触碰 Domain。
     let cgroupRemoved = false
     if (cgroup && acquired.cgroupCellPath) {
       try {
@@ -499,7 +522,17 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         cgroupRemoved = false
       }
     }
-    if (cgroup && acquired.brokerCreatedHierarchy && acquired.cgroupRunPath) {
+    if (cgroup && acquired.cgroupAgentOwned && acquired.cgroupAgentPath) {
+      const otherCellInAgent = [...cellRuns.values()].some(r =>
+        r.acquired.cgroupAgentPath === acquired.cgroupAgentPath
+        && r.acquired.cellId !== acquired.cellId
+        && !!r.acquired.cgroupCellPath,
+      )
+      if (!otherCellInAgent) {
+        try { cgroup.removeRun(acquired.cgroupAgentPath) } catch { /* best-effort */ }
+      }
+    }
+    if (cgroup && acquired.cgroupRunOwned && acquired.cgroupRunPath) {
       const otherCellInRun = [...cellRuns.values()].some(r =>
         r.runId === acquired.runId
         && r.acquired.cellId !== acquired.cellId
@@ -728,7 +761,8 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         agentId,
         backendId: selection.backend,
         lockKeys: [],
-        brokerCreatedHierarchy: false,
+        cgroupRunOwned: false,
+        cgroupAgentOwned: false,
         podmanCidfile,
         controller: new AbortController(),
         cleanupStarted: false,
@@ -767,7 +801,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
         // C5：物化在事务内进行 —— cleanupAcquired 保证宿主文件（sealed
         // secret/seccomp）在成功、异常、取消任何路径后都被清理。
-        acquired.materialization = materializeExecution(compiled, selection.backend)
+        acquired.materialization = await materializeExecution(compiled, selection.backend)
         await checkpoint("after-materialize")
 
         // GATE（GS-12）：Isolation Lock 身份 = 真实 workspace（canonical
@@ -818,8 +852,9 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             // PR-5：Run/Agent 层不重复使用单个 Cell 的预算 —— 聚合预算只来自
             // AgentDomain（createAgentDomain 已按 budget 创建）；无 Domain 时
             // 上层不设限（资源约束由 Cell 层承担），避免"单 Cell 预算冒充聚合"。
-            // pre-existing 判定：同 run 并行 cell 的 run/agent 层属于第一个
-            // cell（非本事务创建，不得整树清理）。
+            // pre-existing 判定：同 run 并行 cell 的 run/agent 层属于其它 cell
+            // （非本事务创建）。run pre-existing + agent txn-created 是合法
+            // 组合 —— agent 层独立 ownership（P0-1 复审闭环）。
             const runPreExisting = cgroup.fs.exists(runPath)
             const agentPreExisting = cgroup.fs.exists(agentPath)
             await checkpoint("before-create-run")
@@ -828,20 +863,22 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             } catch (error) {
               // createRun 部分创建（ensure 已 mkdir 后 controller 授权抛错）：
               // run 调用前不存在 → 本事务负责清理该 hierarchy。
-              if (!runPreExisting) acquired.brokerCreatedHierarchy = true
+              if (!runPreExisting) acquired.cgroupRunOwned = true
               throw error
             }
-            if (!runPreExisting) acquired.brokerCreatedHierarchy = true
+            if (!runPreExisting) acquired.cgroupRunOwned = true
             await checkpoint("after-create-run")
             if (agentId) {
               try {
                 cgroup.createAgent(runId, agentId)
               } catch (error) {
                 // createAgent 部分创建（agent 目录已 mkdir 后授权抛错）：
-                // run 层仍属本事务 → 整树清理。
-                if (!runPreExisting) acquired.brokerCreatedHierarchy = true
+                // agent 调用前不存在 → 本事务负责清理 agent 层（run 可能
+                // pre-existing，不动）。
+                if (!agentPreExisting) acquired.cgroupAgentOwned = true
                 throw error
               }
+              if (!agentPreExisting) acquired.cgroupAgentOwned = true
             }
             await checkpoint("after-create-agent")
           }

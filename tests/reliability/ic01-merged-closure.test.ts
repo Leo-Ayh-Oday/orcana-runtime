@@ -16,6 +16,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import {
+  chmodSync,
   closeSync,
   existsSync,
   linkSync,
@@ -42,6 +43,7 @@ import {
   createWorkspaceIoAuthority,
   checkWorkspaceBaseDrift,
   checkSecretRead,
+  enforceWorkspaceRead,
   validateOpenFileCanonical,
   validateOpenFileCanonicalSync,
   type WorkspaceIoAuthority,
@@ -676,5 +678,209 @@ describe("IC01-R2 fixture 自检", () => {
 
   test("README symlink 外逃 fixture 存在", () => {
     expect(existsSync(join(OUTSIDE, "outside.txt"))).toBe(true)
+  })
+})
+
+// ── IC01-R3: hardlink 策略（无全树扫描，nlink>1 未授权 fail closed） ──
+
+describe("IC01-R3 hardlink 策略 —— 未授权多链接文件 fail closed（无全树扫描）", () => {
+  test("工作区外 id_ed25519 hardlink -> public.txt → 拒绝（外逃秘密无法用树扫描发现）", async () => {
+    const outsideKey = join(OUTSIDE, "id_ed25519")
+    writeFileSync(outsideKey, "OUTSIDE-PRIVATE-KEY-MATERIAL", "utf-8")
+    const alias = join(ROOT, "src", "key-alias.txt")
+    try {
+      linkSync(outsideKey, alias)
+    } catch {
+      rmSync(alias, { force: true })
+      linkSync(outsideKey, alias)
+    }
+    await withAuthority(authorityFor(ROOT), async () => {
+      const result = await read.execute({ path: "src/key-alias.txt" }, makeContext())
+      expect(result.success).toBe(false)
+      expect(result.metadata).toMatchObject({
+        blocked: true,
+        gate: "workspace_io",
+        workspaceIo: { code: "SECRET_READ" },
+      })
+    })
+  })
+
+  test("不可枚举目录内 .env hardlink -> public.txt → 拒绝（目录不可读也能 fail closed）", async () => {
+    const locked = join(ROOT, "locked-dir")
+    mkdirSync(locked, { recursive: true })
+    writeFileSync(join(locked, ".env"), "LOCKED-ENV-SECRET", "utf-8")
+    const alias = join(locked, "public.txt")
+    try {
+      linkSync(join(locked, ".env"), alias)
+    } catch {
+      rmSync(alias, { force: true })
+      linkSync(join(locked, ".env"), alias)
+    }
+    // 目录改为执行-only（可 stat/open 路径，但 readdir 失败 —— 旧扫描方案
+    // 无法枚举该目录，必然放行；新策略 nlink>1 未授权直接拒绝）。
+    chmodSync(locked, 0o111)
+    try {
+      await withAuthority(authorityFor(ROOT), async () => {
+        const result = await read.execute({ path: "locked-dir/public.txt" }, makeContext())
+        expect(result.success).toBe(false)
+        expect((result.metadata?.workspaceIo as { code?: string } | undefined)?.code).toBe("SECRET_READ")
+      })
+    } finally {
+      chmodSync(locked, 0o755)
+    }
+  })
+
+  test("多链接文件未获 grant 一律拒绝；grant 只放行被授权路径（不扩散到 hardlink 别名）", async () => {
+    const a = join(ROOT, "hl-a.txt")
+    const b = join(ROOT, "src", "hl-b.txt")
+    writeFileSync(a, "SHARED-BODY", "utf-8")
+    try {
+      linkSync(a, b)
+    } catch {
+      rmSync(b, { force: true })
+      linkSync(a, b)
+    }
+    const ws = authorityFor(ROOT, [resolve(ROOT, "hl-a.txt")])
+    await withAuthority(ws, async () => {
+      const granted = await read.execute({ path: "hl-a.txt" }, makeContext())
+      expect(granted.success).toBe(true)
+      expect(granted.content).toContain("SHARED-BODY")
+      const alias = await read.execute({ path: "src/hl-b.txt" }, makeContext())
+      expect(alias.success).toBe(false)
+      expect((alias.metadata?.workspaceIo as { code?: string } | undefined)?.code).toBe("SECRET_READ")
+    })
+  })
+
+  test("大量 hardlink 候选不会触发全树乘法扫描（O(1)/候选，无 readdir 遍历）", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-ic01-r3-hl-"))
+    try {
+      mkdirSync(join(root, "src"), { recursive: true })
+      const CANDIDATES = 400
+      const FILLERS = 10_000
+      // 候选：每个 hardlink 对（c{i}.ts / c{i}-alias.ts）。
+      for (let i = 0; i < CANDIDATES; i++) {
+        const orig = join(root, "src", `c${i}.ts`)
+        writeFileSync(orig, `candidate ${i}\n`, "utf-8")
+        linkSync(orig, join(root, "src", `c${i}-alias.ts`))
+      }
+      // 填充文件：旧"每次读取扫描全树"方案会反复 readdir 整个目录。
+      for (let i = 0; i < FILLERS; i++) {
+        writeFileSync(join(root, "src", `f${i}.ts`), "filler", "utf-8")
+      }
+      const ws = createWorkspaceIoAuthority(root)
+      const started = Date.now()
+      let rejected = 0
+      for (let i = 0; i < CANDIDATES; i++) {
+        const violation = enforceWorkspaceRead(ws, join(root, "src", `c${i}-alias.ts`), `c${i}-alias.ts`, root)
+        expect(violation?.code).toBe("SECRET_READ")
+        rejected++
+      }
+      const elapsed = Date.now() - started
+      expect(rejected).toBe(CANDIDATES)
+      // O(1)/候选：400 次策略检查必须在 2s 内完成（旧全树扫描方案为
+      // 400 × 全树 readdir ≈ 数秒至数十秒）。
+      expect(elapsed).toBeLessThan(2000)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("rename 竞态不能形成放行：读取前被换为多链接文件 → 拒绝（pre-open + post-open 双层）", async () => {
+    const p = join(ROOT, "src", "race-target.txt")
+    writeFileSync(p, "benign single-link", "utf-8")
+    const src = join(ROOT, "src", "race-secret.txt")
+    writeFileSync(src, "RACE-SECRET", "utf-8")
+    await withAuthority(authorityFor(ROOT), async () => {
+      // 读前把目标换成 secret 的 hardlink（nlink>1）→ 必须拒绝。
+      const alias = join(ROOT, "src", "race-alias.txt")
+      try {
+        linkSync(src, alias)
+      } catch {
+        rmSync(alias, { force: true })
+        linkSync(src, alias)
+      }
+      rmSync(p, { force: true })
+      renameSync(alias, p)
+      const result = await read.execute({ path: "src/race-target.txt" }, makeContext())
+      expect(result.success).toBe(false)
+      expect((result.metadata?.workspaceIo as { code?: string } | undefined)?.code).toBe("SECRET_READ")
+    })
+  })
+})
+
+// ── IC01-R3: ContextMap 无权威 fail closed + maxFiles 归一化 ──
+
+describe("IC01-R3 ContextMap authority fail-closed 与 top-K 输入归一化", () => {
+  test("无 ALS / 未注入 authority → 稳定拒绝：零读取、零内容泄漏（authorityMissing）", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-ic01-r3-noals-"))
+    try {
+      mkdirSync(join(root, "src"), { recursive: true })
+      writeFileSync(join(root, "package.json"), '{"name":"x"}', "utf-8")
+      writeFileSync(join(root, "src", "m.ts"), "SECRET-MARKER-CONTENT export const m = 1\n", "utf-8")
+      const session = new ContextMapReadSession({})
+      expect(session.authorityMissing).toBe(true)
+      const constitution = loadProjectConstitution(root, { session })
+      expect(constitution.importantFiles).toEqual([])
+      const located = hybridLocate(root, { userRequest: "SECRET-MARKER-CONTENT" }, { session })
+      expect(located.primaryFiles).toEqual([])
+      expect(session.bytesRead).toBe(0)
+      // 无显式会话的生产式调用同样 fail closed。
+      const map = buildContextMap(root, { taskId: "t", userRequest: "SECRET-MARKER-CONTENT" })
+      expect(map.locateResult.primaryFiles).toEqual([])
+      expect(map.projectConstitution.importantFiles).toEqual([])
+      const all = JSON.stringify(map)
+      expect(all).not.toContain("SECRET-MARKER-CONTENT")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("production 路径（显式 authority）恶意 symlink + secret 拒绝", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-ic01-r3-prod-"))
+    try {
+      mkdirSync(join(root, "src"), { recursive: true })
+      writeFileSync(join(root, "package.json"), '{"name":"x"}', "utf-8")
+      writeFileSync(join(root, ".env"), "PROD-ENV-SECRET", "utf-8")
+      writeFileSync(join(root, "src", "ok.ts"), "okmarker export const ok = 1\n", "utf-8")
+      symlinkSync(join(root, ".env"), join(root, "README.md"))
+      symlinkSync(join(OUTSIDE, "outside.txt"), join(root, "src", "evil.ts"))
+      // prepare.ts 生产路径的等价调用：显式注入权威。
+      const ws = createWorkspaceIoAuthority(root)
+      const map = buildContextMap(root, { taskId: "t", userRequest: "okmarker" }, { workspace: ws })
+      expect(map.projectConstitution.importantFiles).not.toContain("README.md")
+      expect(map.locateResult.primaryFiles).not.toContain("src/evil.ts")
+      const all = JSON.stringify(map)
+      expect(all).not.toContain("PROD-ENV-SECRET")
+      expect(all).not.toContain("OUTSIDE-SECRET-CONTENT")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test("maxFiles=0 / -1 / NaN / Infinity → 归一化为安全空结果，且零扫描零读取", () => {
+    const root = mkdtempSync(join(tmpdir(), "orcana-ic01-r3-maxk-"))
+    try {
+      mkdirSync(join(root, "src"), { recursive: true })
+      writeFileSync(join(root, "package.json"), '{"name":"x"}', "utf-8")
+      for (let i = 0; i < 5; i++) {
+        writeFileSync(join(root, "src", `k${i}.ts`), `maxkmarker file ${i}\n`, "utf-8")
+      }
+      const ws = createWorkspaceIoAuthority(root)
+      for (const bad of [0, -1, NaN, Number.POSITIVE_INFINITY]) {
+        const session = new ContextMapReadSession({ workspace: ws })
+        const located = hybridLocate(root, { userRequest: "maxkmarker", maxFiles: bad }, { session })
+        expect(located.primaryFiles).toEqual([])
+        expect(located.secondaryFiles).toEqual([])
+        expect(located.definitions).toEqual([])
+        expect(session.bytesRead).toBe(0)
+        expect(session.budgetExhausted).toBe(false)
+      }
+      // undefined 保持默认 12；正常正数照常工作。
+      const normal = hybridLocate(root, { userRequest: "maxkmarker", maxFiles: 2 }, { workspace: ws })
+      expect(normal.primaryFiles.length).toBeGreaterThan(0)
+      expect(normal.primaryFiles.length + normal.secondaryFiles.length).toBeLessThanOrEqual(2)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

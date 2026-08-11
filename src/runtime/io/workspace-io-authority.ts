@@ -26,9 +26,9 @@
  *  本模块只做权威根/秘密文件策略，不新建第二套路径算法。
  */
 
-import { fstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs"
+import { fstatSync, readlinkSync, realpathSync, statSync } from "node:fs"
 import { readlink } from "node:fs/promises"
-import { basename, join, resolve } from "node:path"
+import { basename, resolve } from "node:path"
 import type { TrustedExecutionAuthority } from "../linux/contracts"
 import { deepestExistingRealpath, isWithin } from "../../tools/path-authority"
 
@@ -141,13 +141,20 @@ export function enforceWorkspaceRead(
     ?? (realTarget !== undefined ? checkSecretRead(workspace, realTarget) : null)
   if (secret) return secret
 
-  // hardlink alias → 秘密 inode：benign basename 不能掩盖同一文件身份。
-  // 路径本身（或其 canonical target）已被 Runtime grant 精确放行时跳过 ——
-  // grant 绑定 canonical/文件身份；未授信的别名（public.txt）仍被拒绝。
-  const granted = workspace.secretGrants.has(resolvedPath)
-    || (realTarget !== undefined && workspace.secretGrants.has(realTarget))
-  const hardlink = granted ? null : checkHardlinkSecret(workspace, resolvedPath, lexicalRoot)
-  if (hardlink) return hardlink
+  // hardlink 策略：nlink>1 而未获 Runtime 精确路径授权 → fail closed
+  // （O(1)，无全树扫描；工作区外秘密 hardlink、不可枚举目录内的秘密文件
+  // 都无法通过扫描发现，因此默认拒绝）。grant 只放行被授权路径本身，
+  // 不扩散到同一 inode 的其他 hardlink 名称。
+  let st
+  try {
+    st = statSync(resolvedPath)
+  } catch {
+    st = undefined
+  }
+  if (st && st.isFile()) {
+    const hardlink = checkHardlinkPolicy(workspace, resolvedPath, realTarget, st.nlink)
+    if (hardlink) return hardlink
+  }
 
   // projectRoot 的 lexical 与 canonical 形式都视为"根内"（symlink alias
   // 场景下二者等价；漂移检查已保证物理根一致）。
@@ -263,11 +270,14 @@ function checkOpenFdCanonical(
         reason: `SYMLINK_READ_ESCAPE: open 目标在打开后被替换（dev/inode 不一致），fail closed: ${resolvedPath}`,
       }
     }
-    // hardlink 秘密 inode 复核：多链接文件必须证明不是秘密文件的别名
-    // （canonical 路径本身被 grant 时跳过 —— grant 绑定 canonical 身份）。
-    if (fdStat.nlink > 1 && !workspace.secretGrants.has(canonical)) {
-      const hardlink = checkHardlinkSecretInode(workspace, fdStat.dev, fdStat.ino, resolvedPath)
-      if (hardlink) return hardlink
+    // hardlink 策略（post-open）：多链接文件必须获得 Runtime 精确路径授权，
+    // 否则 fail closed —— canonical 或请求路径命中 grant 均视为已授权；
+    // 未授信的别名（public.txt）一律拒绝（grant 不扩散到其他 hardlink 名称）。
+    if (fdStat.nlink > 1 && !workspace.secretGrants.has(canonical) && !workspace.secretGrants.has(resolvedPath)) {
+      return {
+        code: "SECRET_READ",
+        reason: `SECRET_READ: open 目标为多链接文件（hardlink）且未获 Runtime 精确路径授权，fail closed: ${resolvedPath} -> ${canonical}`,
+      }
     }
   } catch (error) {
     return {
@@ -300,21 +310,6 @@ const SECRET_PATH_RULES: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
   { pattern: /(^|\/)secrets(\/|$)/, reason: "secrets directory" },
 ]
 
-/** 路径是否命中秘密 deny 规则（.env.example 精确放行；不含 grant 判定）。 */
-function matchesSecretRules(normalized: string): boolean {
-  const base = basename(normalized)
-  // .env.example 只能精确放行 —— .env.example.secret / .env.example.production
-  // 等后缀变体落入 /^\.env\..+/ 规则被拒绝。
-  if (base === ".env.example") return false
-  for (const { pattern } of SECRET_FILE_RULES) {
-    if (pattern.test(base)) return true
-  }
-  for (const { pattern } of SECRET_PATH_RULES) {
-    if (pattern.test(normalized)) return true
-  }
-  return false
-}
-
 /** 秘密文件判定：先查 Runtime grant（canonical 精确路径），再查 deny 规则；
  *  `.env.example` 系文件仅精确文件名放行（示例不是秘密，后缀变体拒绝）。 */
 export function checkSecretRead(
@@ -344,82 +339,30 @@ export function checkSecretRead(
   return null
 }
 
-// ── hardlink 秘密 alias 检测 ──
+// ── hardlink 策略 ──
 
-/** 目录遍历条目上限：超出即无法证明身份 → fail closed（安全方向）。 */
-const SECRET_INODE_SCAN_ENTRY_CAP = 200_000
-
-/** 多链接文件的 hardlink 秘密检查：扫描工作区内全部秘密规则命中文件的
- *  (dev, ino)，目标与其同 inode → SECRET_READ。
- *  扫描有界（条目上限）；超限无法证明 → fail closed。 */
-function checkHardlinkSecret(
+/** IC01-R3: hardlink 策略 —— 未获得 Runtime 精确路径授权的 nlink>1 文件
+ *  默认 fail closed（SECRET_READ）。不做全树扫描：
+ *    - 工作区外的秘密文件被 hardlink 进工作区（如 /home/u/.ssh/id_ed25519
+ *      -> public.txt）无法从工作区树内发现，扫描方案必然放行；
+ *    - 不可枚举目录（无读权限）内的 .env 无法被扫描到，扫描方案同样放行；
+ *    - 每次读取扫描整棵树是 O(候选数 × 工作区条目数) 的同步放大。
+ *  精确 grant（realpath canonicalize 后）只放行被授权路径本身，不扩散到
+ *  同一 inode 的其他 hardlink 名称。 */
+function checkHardlinkPolicy(
   workspace: WorkspaceIoAuthority,
   resolvedPath: string,
-  lexicalRoot?: string,
+  realTarget: string | undefined,
+  nlink: number,
 ): WorkspaceIoViolation | null {
-  let st
-  try {
-    st = statSync(resolvedPath)
-  } catch {
-    return null // 不存在/不可读：由后续 open 路径处理
+  if (nlink <= 1) return null
+  const granted = workspace.secretGrants.has(resolvedPath)
+    || (realTarget !== undefined && workspace.secretGrants.has(realTarget))
+  if (granted) return null
+  return {
+    code: "SECRET_READ",
+    reason: `SECRET_READ: 多链接文件（hardlink）未获 Runtime 精确路径授权，fail closed: ${resolvedPath}`,
   }
-  if (!st.isFile() || st.nlink <= 1) return null
-  return checkHardlinkSecretInode(workspace, st.dev, st.ino, resolvedPath)
-}
-
-function checkHardlinkSecretInode(
-  workspace: WorkspaceIoAuthority,
-  dev: number,
-  ino: number,
-  displayPath: string,
-): WorkspaceIoViolation | null {
-  const secretInodes = buildSecretInodeSet(workspace.readRoot)
-  if (secretInodes === null) {
-    return {
-      code: "SECRET_READ",
-      reason: `SECRET_READ: 无法验证 hardlink 文件身份（秘密 inode 扫描超出条目上限），fail closed: ${displayPath}`,
-    }
-  }
-  if (secretInodes.has(`${dev}:${ino}`)) {
-    return {
-      code: "SECRET_READ",
-      reason: `SECRET_READ: 文件与工作区内秘密文件为同一 inode（hardlink alias）: ${displayPath}`,
-    }
-  }
-  return null
-}
-
-/** 构建工作区内秘密规则命中文件的 (dev:ino) 集合。目录遍历有界：
- *  超过 SECRET_INODE_SCAN_ENTRY_CAP 个条目 → 返回 null（fail closed 信号）。
- *  只 stat 秘密规则命中的普通文件，不读取任何内容。 */
-function buildSecretInodeSet(root: string): Set<string> | null {
-  const inodes = new Set<string>()
-  let entries = 0
-  const stack = [root]
-  while (stack.length > 0) {
-    const dir = stack.pop()!
-    let list
-    try {
-      list = readdirSync(dir, { withFileTypes: true })
-    } catch {
-      continue
-    }
-    for (const entry of list) {
-      if (++entries > SECRET_INODE_SCAN_ENTRY_CAP) return null
-      const abs = join(dir, entry.name)
-      if (entry.isDirectory()) {
-        stack.push(abs)
-      } else if (entry.isFile() && matchesSecretRules(abs.replace(/\\/g, "/"))) {
-        try {
-          const st = statSync(abs)
-          if (st.isFile()) inodes.add(`${st.dev}:${st.ino}`)
-        } catch {
-          // 竞态删除：忽略
-        }
-      }
-    }
-  }
-  return inodes
 }
 
 /** realpath 归一化（存在则取物理根；不存在退回规范化绝对路径）。 */

@@ -27,11 +27,11 @@ export const DEFAULT_CHUNK_SIZE = 64 * 1024
  *  O_NOFOLLOW 时退回 0（fd canonical 校验仍 fail closed 兜底）。 */
 const NOFOLLOW = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0
 
-/** 结构化读取错误（非普通文件、预算中止、权威拒绝等）——与 transport 错误区分。 */
+/** 结构化读取错误（非普通文件、预算中止、权威拒绝、快照变更等）——与 transport 错误区分。 */
 export class FileReadError extends Error {
   constructor(
     message: string,
-    readonly code: "NOT_REGULAR_FILE" | "BUDGET_EXHAUSTED" | "ABORTED" | "AUTHORITY_REJECTED",
+    readonly code: "NOT_REGULAR_FILE" | "BUDGET_EXHAUSTED" | "ABORTED" | "AUTHORITY_REJECTED" | "SNAPSHOT_CHANGED",
   ) {
     super(message)
     this.name = "FileReadError"
@@ -97,6 +97,10 @@ export interface LineWindowOptions {
   scanToEof?: boolean
   /** open 后 fd canonical 校验（同 BoundedReadOptions.validateOpen）。 */
   validateOpen?: (fd: number) => string | null | Promise<string | null>
+  /** IC01-R3: expectedHash 专用 —— 传入全文件哈希预算（>0 启用）。窗口扫描后
+   *  从同一 fd 继续流式哈希到 EOF/预算，并对 identity/size/mtime 做结束复核
+   *  （增长/截断/替换 → SNAPSHOT_CHANGED fail closed）。绝不二次按路径 open。 */
+  wholeFileHashBudgetBytes?: number
 }
 
 export interface LineWindowResult {
@@ -107,8 +111,11 @@ export interface LineWindowResult {
   binary: boolean
   /** 已扫描字节的流式 sha256。 */
   sha256: string
-  /** 全文件流式哈希（scannedToEof 时可用）。 */
+  /** 全文件流式哈希（scannedToEof 或 wholeFileHashBudgetBytes 覆盖全文件时可用）。 */
   wholeFileSha256: string | null
+  /** IC01-R3: 全文件哈希预算是否覆盖整个文件（false → 调用方必须结构化
+   *  拒绝 expectedHash 组合，不得退化为窗口哈希）。 */
+  wholeFileHashBudgeted: boolean
   /** true = 扫描预算或返回预算耗尽，结果被截断。 */
   truncated: boolean
 }
@@ -391,6 +398,163 @@ export class BoundedFileReader {
   }
 
   /**
+   * IC01-R3: 原子快照读取（expectedHash 专用）—— 选区/内容读取与全文件
+   *  SHA-256 必须来自同一个已验证 fd（禁止先读、关闭、再按路径二次 open）。
+   *
+   *    - open 后 fstat（dev/ino/size/mtimeMs）作为权威状态；
+   *    - 内容读取受 maxFileBytes / budget / 文件余量约束（同 readRange）；
+   *    - 全文件哈希只受 operationBudgetBytes 约束（size > budget →
+   *      hashBudgeted=false，调用方必须结构化拒绝该组合）；
+   *    - 读取完成后再次 fstat 复核 identity/size/mtime —— 增长、截断、
+   *      替换（mtime 变化）→ SNAPSHOT_CHANGED（fail closed）。
+   *
+   *  range=null → 全量内容（≤ maxFileBytes）；range 给出字节区间。
+   */
+  async readAtomicSnapshot(
+    path: string,
+    range: { start: number; length: number } | null,
+    options: BoundedReadOptions = {},
+  ): Promise<{
+    buffer: Buffer
+    byteCount: number
+    wholeFileSha256: string
+    hashBudgeted: boolean
+    totalBytes: number
+    binary: boolean
+    truncated: boolean
+  }> {
+    const signal = options.signal
+    const budget = options.budgetBytes ?? this.operationBudgetBytes
+    const info = await this.stat(path)
+    if (!info.isRegular) {
+      throw new FileReadError(`not a regular file: ${path}`, "NOT_REGULAR_FILE")
+    }
+    try {
+      signal?.throwIfAborted()
+    } catch {
+      throw new FileReadError(`read aborted: ${path}`, "ABORTED")
+    }
+    const handle = await open(path, constants.O_RDONLY | NOFOLLOW)
+    try {
+      const fstat = await handle.stat()
+      if (!fstat.isFile()) {
+        throw new FileReadError(`not a regular file (after open): ${path}`, "NOT_REGULAR_FILE")
+      }
+      if (options.validateOpen) {
+        const violation = await options.validateOpen(handle.fd)
+        if (violation) throw new FileReadError(violation, "AUTHORITY_REJECTED")
+      }
+      // 打开后 fstat 是权威状态：dev/ino/size/mtimeMs。
+      const identity = { dev: fstat.dev, ino: fstat.ino, size: fstat.size, mtimeMs: fstat.mtimeMs }
+
+      // 全文件哈希预算不足 → 不做无意义读取，直接拒绝该组合。
+      if (identity.size > budget) {
+        return {
+          buffer: Buffer.alloc(0),
+          byteCount: 0,
+          wholeFileSha256: "",
+          hashBudgeted: false,
+          totalBytes: identity.size,
+          binary: false,
+          truncated: false,
+        }
+      }
+
+      // ── 选区/内容读取（同一 fd；绝不按路径二次 open）──
+      const chunks: Buffer[] = []
+      let byteCount = 0
+      let binary = false
+      let truncated = false
+      let probeRemaining = this.binaryProbeBytes
+      let contentWant = 0
+      let readFrom = 0
+      if (range) {
+        const start = Math.max(0, Math.floor(range.start))
+        const requested = Math.max(0, Math.floor(range.length))
+        if (start < identity.size && requested > 0) {
+          // 内容 + 全文件哈希合计受 operationBudget 约束。
+          contentWant = Math.min(requested, this.maxFileBytes, identity.size - start, Math.max(0, budget - identity.size))
+          truncated = contentWant < requested
+          readFrom = start
+        }
+      } else {
+        contentWant = Math.min(identity.size, this.maxFileBytes, Math.max(0, budget - identity.size))
+        truncated = contentWant < identity.size
+        readFrom = 0
+      }
+      let position = readFrom
+      let remaining = contentWant
+      while (remaining > 0) {
+        signal?.throwIfAborted()
+        const take = Math.min(this.chunkSize, remaining)
+        const buffer = Buffer.allocUnsafe(take)
+        const { bytesRead } = await handle.read(buffer, 0, take, position)
+        if (bytesRead <= 0) break
+        if (probeRemaining > 0 && !binary) {
+          const probeLen = Math.min(bytesRead, probeRemaining)
+          binary = buffer.subarray(0, probeLen).includes(0)
+          probeRemaining -= probeLen
+        }
+        const slice = buffer.subarray(0, bytesRead)
+        chunks.push(slice)
+        position += bytesRead
+        remaining -= bytesRead
+        byteCount += bytesRead
+      }
+      const buffer = Buffer.concat(chunks)
+
+      // ── 全文件 SHA-256（同一 fd）── 内容已覆盖全文件时直接哈希缓冲区，
+      // 否则从 fd 流式补齐（只受 operationBudget 约束，不保留内容）。
+      let wholeFileSha256: string
+      if (byteCount === identity.size && readFrom === 0) {
+        wholeFileSha256 = createHash("sha256").update(buffer).digest("hex")
+      } else {
+        const hash = createHash("sha256")
+        const chunk = Buffer.allocUnsafe(this.chunkSize)
+        let pos = 0
+        while (pos < identity.size) {
+          signal?.throwIfAborted()
+          const take = Math.min(chunk.length, identity.size - pos)
+          const { bytesRead } = await handle.read(chunk, 0, take, pos)
+          if (bytesRead <= 0) break
+          hash.update(chunk.subarray(0, bytesRead))
+          pos += bytesRead
+        }
+        if (pos < identity.size) {
+          // 文件在读取期间缩小：identity 已过期 → 结束复核必然失败。
+          throw new FileReadError(`file changed while being read: ${path}`, "SNAPSHOT_CHANGED")
+        }
+        wholeFileSha256 = hash.digest("hex")
+      }
+
+      // ── 结束复核：identity / size / mtime 必须与 open 时一致（fail closed）。
+      const end = await handle.stat()
+      if (
+        end.dev !== identity.dev ||
+        end.ino !== identity.ino ||
+        end.size !== identity.size ||
+        end.mtimeMs !== identity.mtimeMs
+      ) {
+        throw new FileReadError(`file changed while being read: ${path}`, "SNAPSHOT_CHANGED")
+      }
+      return {
+        buffer,
+        byteCount,
+        wholeFileSha256,
+        hashBudgeted: true,
+        totalBytes: identity.size,
+        binary,
+        truncated,
+      }
+    } catch (error) {
+      if (signal?.aborted) throw new FileReadError(`read aborted: ${path}`, "ABORTED")
+      throw error
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /**
    * IC01-R2: 流式全文件 SHA-256（expectedHash 专用）—— 不保留文件内容，
    * 边读边哈希；文件大小超过预算时返回 budgeted=false（调用方必须结构化
    * 拒绝该组合，绝不静默降级成窗口/range 哈希）。O_NOFOLLOW + fstat +
@@ -497,6 +661,8 @@ export class BoundedFileReader {
         const violation = await options.validateOpen(handle.fd)
         if (violation) throw new FileReadError(violation, "AUTHORITY_REJECTED")
       }
+      // IC01-R3: 打开后 fstat 是权威状态（结束复核基准）。
+      const identity = { dev: fstat.dev, ino: fstat.ino, size: fstat.size, mtimeMs: fstat.mtimeMs }
       // count=Infinity（offset>0 无 limit）：窗口结束条件永不满足 → 延伸到
       // EOF 或扫描预算耗尽；count 有限时窗口 = 第 startLine..startLine+count-1 行。
       const lastWindowLine = startLine + count - 1
@@ -549,7 +715,41 @@ export class BoundedFileReader {
       if (windowEndByte === null && atEof && windowStartByte !== null) {
         windowEndByte = position
       }
+      const scanPosition = position
+
+      // IC01-R3: 全文件 SHA-256（同一已验证 fd）—— 窗口扫描后从同一 fd 继续
+      // 流式哈希到 EOF/预算；结束后复核 identity/size/mtime（增长、截断、
+      // 替换 → SNAPSHOT_CHANGED fail closed）。绝不二次按路径 open。
+      const hashBudget = options.wholeFileHashBudgetBytes ?? 0
+      let wholeFileHashBudgeted = true
+      if (hashBudget > 0) {
+        if (identity.size > hashBudget) {
+          wholeFileHashBudgeted = false
+        } else {
+          while (position < identity.size) {
+            signal?.throwIfAborted()
+            const take = Math.min(chunk.length, identity.size - position)
+            const { bytesRead } = await handle.read(chunk, 0, take, position)
+            if (bytesRead <= 0) break
+            hash.update(chunk.subarray(0, bytesRead))
+            position += bytesRead
+          }
+          wholeFileHashBudgeted = position >= identity.size
+          const end = await handle.stat()
+          if (
+            end.dev !== identity.dev ||
+            end.ino !== identity.ino ||
+            end.size !== identity.size ||
+            end.mtimeMs !== identity.mtimeMs
+          ) {
+            throw new FileReadError(`file changed while being read: ${path}`, "SNAPSHOT_CHANGED")
+          }
+        }
+      }
       const wholeHash = hash.digest("hex")
+      const wholeFileSha256 = hashBudget > 0
+        ? (wholeFileHashBudgeted ? wholeHash : null)
+        : (scannedToEof ? wholeHash : null)
       if (windowStartByte === null) {
         return {
           text: "",
@@ -558,15 +758,16 @@ export class BoundedFileReader {
           scannedToEof,
           binary: seenBinary,
           sha256: wholeHash,
-          wholeFileSha256: scannedToEof ? wholeHash : null,
+          wholeFileSha256,
+          wholeFileHashBudgeted,
           truncated: scanBudgetExhausted,
         }
       }
       // IC01-R2: 返回窗口必须同时受 maxReturn 与扫描剩余预算约束 —— 扫描
       // 字节 + 返回字节合计不得超过 scanBudget（offset-only / 无换行大文件
       // 不得把分配放大到预算之外）。
-      const budgetRemaining = Math.max(0, scanBudget - position)
-      const windowEnd = windowEndByte ?? position
+      const budgetRemaining = Math.max(0, scanBudget - scanPosition)
+      const windowEnd = windowEndByte ?? scanPosition
       const end = Math.min(windowEnd, windowStartByte + maxReturn, windowStartByte + budgetRemaining)
       const windowTruncated = end < windowEnd || scanBudgetExhausted
       const rangeBuffer = Buffer.allocUnsafe(Math.max(0, end - windowStartByte))
@@ -590,7 +791,8 @@ export class BoundedFileReader {
         scannedToEof,
         binary: seenBinary,
         sha256: wholeHash,
-        wholeFileSha256: scannedToEof ? wholeHash : null,
+        wholeFileSha256,
+        wholeFileHashBudgeted,
         truncated: windowTruncated,
       }
     } catch (error) {

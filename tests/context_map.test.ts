@@ -18,6 +18,13 @@ import {
 } from "../src/context/context-map"
 import { ensureContextMemoryLayout } from "../src/memory/context-memory-os"
 import { buildPacketFromLine } from "../src/agent/task-packet"
+import { createWorkspaceIoAuthority } from "../src/runtime/io/workspace-io-authority"
+import type { WorkspaceIoAuthority } from "../src/runtime/io/workspace-io-authority"
+
+/** IC01-R3: 直接 API 必须显式传入 WorkspaceIoAuthority（无权威时 fail closed）。 */
+function wsFor(root: string): WorkspaceIoAuthority {
+  return createWorkspaceIoAuthority(root)
+}
 
 function createRepo(): string {
   const root = mkdtempSync(join(tmpdir(), "orcana-context-map-"))
@@ -72,7 +79,7 @@ describe("Context Map Pipeline", () => {
       ].join("\n") + "\n" + "x".repeat(512 * 1024) + "\ntail sentinel MUST NOT appear in rules\n"
       writeFileSync(join(root, "README.md"), giant, "utf-8")
 
-      const constitution = loadProjectConstitution(root)
+      const constitution = loadProjectConstitution(root, { workspace: wsFor(root) })
       // 正常返回（合理降级，不崩溃）。
       expect(constitution.importantFiles).toContain("README.md")
       // 头部内容（cap 之内）正常进入 notes。
@@ -92,7 +99,7 @@ describe("Context Map Pipeline", () => {
       const giant = "x".repeat(512 * 1024) + "\nlockfile tail sentinel MUST NOT appear\n"
       writeFileSync(join(root, "bun.lock"), giant, "utf-8")
 
-      const constitution = loadProjectConstitution(root)
+      const constitution = loadProjectConstitution(root, { workspace: wsFor(root) })
       expect(constitution.importantFiles).toContain("bun.lock")
       const all = constitution.architectureNotes.concat(constitution.codingRules, constitution.forbiddenActions).join("\n")
       expect(all).not.toContain("lockfile tail sentinel")
@@ -104,7 +111,7 @@ describe("Context Map Pipeline", () => {
   test("loads project constitution from docs, memory index, and package scripts", () => {
     const root = createRepo()
     try {
-      const constitution = loadProjectConstitution(root)
+      const constitution = loadProjectConstitution(root, { workspace: wsFor(root) })
 
       expect(constitution.importantFiles).toContain("ARCHITECTURE.md")
       expect(constitution.importantFiles).toContain("package.json")
@@ -120,7 +127,7 @@ describe("Context Map Pipeline", () => {
   test("scans repo structure and infers package manager, roots, entrypoints, and modules", () => {
     const root = createRepo()
     try {
-      const structure = scanRepoStructure(root)
+      const structure = scanRepoStructure(root, { workspace: wsFor(root) })
 
       expect(structure.packageManager).toBe("bun")
       expect(structure.sourceRoots).toContain("src")
@@ -138,7 +145,7 @@ describe("Context Map Pipeline", () => {
     try {
       const located = hybridLocate(root, {
         userRequest: "fix evaluateCompletionGate completion evidence",
-      })
+      }, { workspace: wsFor(root) })
 
       expect(located.primaryFiles).toContain("src/agent/completion-gate.ts")
       expect(located.suspectedTests).toContain("tests/completion-gate.test.ts")
@@ -157,7 +164,7 @@ describe("Context Map Pipeline", () => {
       const understanding = buildSourceUnderstanding(root, [
         "src/agent/completion-gate.ts",
         "tests/completion-gate.test.ts",
-      ])
+      ], { workspace: wsFor(root) })
 
       expect(understanding.filesRead).toEqual([
         "src/agent/completion-gate.ts",
@@ -177,10 +184,10 @@ describe("Context Map Pipeline", () => {
       const map = buildContextMap(root, {
         taskId: "task-context-map",
         userRequest: "fix evaluateCompletionGate completion evidence handling",
-      })
+      }, { workspace: wsFor(root) })
       const readiness = evaluateContextReadiness(map, "long")
       const stored = saveContextMap(root, map)
-      const loaded = loadContextMap(root, map.id)
+      const loaded = loadContextMap(root, map.id, { workspace: wsFor(root) })
 
       expect(map.id).toMatch(/^ctx-[a-f0-9]{12}$/)
       expect(readiness.blockers).toEqual([])
@@ -202,7 +209,7 @@ describe("Context Map Pipeline", () => {
       const map = buildContextMap(root, {
         taskId: "task-context-map",
         userRequest: "fix evaluateCompletionGate completion evidence handling",
-      })
+      }, { workspace: wsFor(root) })
       const packet = buildPacketFromLine({
         title: "Update src/agent/completion-gate.ts and run tests",
         goal: "fix completion evidence",
@@ -234,7 +241,7 @@ describe("Context Map Pipeline", () => {
         taskId: "task-unknown",
         userRequest: "change totally unmatched subsystem",
         keywords: ["zzzz-unmatched"],
-      })
+      }, { workspace: wsFor(root) })
       const readiness = evaluateContextReadiness(map, "high_risk")
 
       expect(readiness.blockers).toContain("High-risk task confidence below 0.75.")

@@ -14,7 +14,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs"
 import { open, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -302,5 +302,168 @@ describe("IC01 read_file 行窗口（工具级）—— 不分配整个文件", 
       expect(caught).toBeInstanceOf(FileReadError)
       expect((caught as FileReadError).code).toBe("AUTHORITY_REJECTED")
     }
+  })
+})
+
+describe("IC01-R3 readAtomicSnapshot —— 选区与全文件哈希来自同一已验证 fd", () => {
+  test("range 选区 + 全文件哈希：内容与哈希一致（同一次快照）", async () => {
+    const p = join(ROOT, "snap-1.txt")
+    writeFileSync(p, "alpha\nbeta\ngamma\n", "utf-8")
+    const reader = new BoundedFileReader()
+    const snap = await reader.readAtomicSnapshot(p, { start: 0, length: 5 })
+    expect(snap.buffer.toString("utf-8")).toBe("alpha")
+    expect(snap.byteCount).toBe(5)
+    expect(snap.wholeFileSha256).toBe(fingerprintContent("alpha\nbeta\ngamma\n").sha256)
+    expect(snap.hashBudgeted).toBe(true)
+    expect(snap.totalBytes).toBe(17)
+    expect(snap.truncated).toBe(false)
+  })
+
+  test("full 快照：内容覆盖全文件时直接从缓冲区哈希（同一 fd，无二次读取）", async () => {
+    const p = join(ROOT, "snap-2.txt")
+    writeFileSync(p, "whole content line\n", "utf-8")
+    const reader = new BoundedFileReader()
+    const snap = await reader.readAtomicSnapshot(p, null)
+    expect(snap.buffer.toString("utf-8")).toBe("whole content line\n")
+    expect(snap.wholeFileSha256).toBe(fingerprintContent("whole content line\n").sha256)
+  })
+
+  test("两次路径切换攻击：validateOpen 只调用一次；内容/哈希来自打开时的原文件（绝不二次按路径 open）", async () => {
+    const p = join(ROOT, "snap-swap.txt")
+    writeFileSync(p, "original-content-1\nsecond line\n", "utf-8")
+    const reader = new BoundedFileReader()
+    let validateCalls = 0
+    const snap = await reader.readAtomicSnapshot(p, { start: 0, length: 9 }, {
+      validateOpen: async () => {
+        validateCalls++
+        // 模拟 check→read 窗口内的路径切换：rename 原文件并在原路径放新文件。
+        renameSync(p, p + ".moved")
+        writeFileSync(p, "REPLACED-CONTENT-XXX", "utf-8")
+        return null
+      },
+    })
+    // 单次 open —— 若实现先读后关、再按路径二次 open 做哈希，这里会读
+    // 到 REPLACED 内容（哈希不一致）且 validateCalls=2。
+    expect(validateCalls).toBe(1)
+    expect(snap.buffer.toString("utf-8")).toBe("original-")
+    expect(snap.wholeFileSha256).toBe(fingerprintContent("original-content-1\nsecond line\n").sha256)
+  })
+
+  test("同 fd 哈希期间 append（size 增长）→ SNAPSHOT_CHANGED fail closed", async () => {
+    const p = join(ROOT, "snap-append.txt")
+    writeFileSync(p, "v1-content", "utf-8")
+    const reader = new BoundedFileReader()
+    let caught: unknown
+    try {
+      await reader.readAtomicSnapshot(p, null, {
+        validateOpen: async () => {
+          appendFileSync(p, "-appended")
+          return null
+        },
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
+  })
+
+  test("同 fd 哈希期间 truncate（同一 fd 截断）→ SNAPSHOT_CHANGED fail closed", async () => {
+    const p = join(ROOT, "snap-truncate.txt")
+    writeFileSync(p, "v1-content-nine", "utf-8")
+    const reader = new BoundedFileReader()
+    let caught: unknown
+    try {
+      await reader.readAtomicSnapshot(p, null, {
+        validateOpen: async (fd) => {
+          truncateSync(p, 4)
+          return null
+        },
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
+  })
+
+  test("同 fd 哈希期间 replace（路径被换）→ 读取来自已验证句柄：返回原版本内容与哈希（选区=哈希通过版本）", async () => {
+    const p = join(ROOT, "snap-replace.txt")
+    writeFileSync(p, "ORIGINAL-VERSION", "utf-8")
+    const reader = new BoundedFileReader()
+    const snap = await reader.readAtomicSnapshot(p, { start: 0, length: 8 }, {
+      validateOpen: async () => {
+        // 在 validateOpen 之后、读取之前替换路径（fd 保持原文件）。
+        // 返回内容必须是打开时已验证的原版本 —— 与哈希一致。
+        renameSync(p, p + ".old")
+        writeFileSync(p, "NEW-VERSION-AT-PATH", "utf-8")
+        return null
+      },
+    })
+    expect(snap.buffer.toString("utf-8")).toBe("ORIGINAL")
+    expect(snap.wholeFileSha256).toBe(fingerprintContent("ORIGINAL-VERSION").sha256)
+  })
+
+  test("全文件哈希预算不足（size > budget）→ hashBudgeted=false，且不做无意义读取", async () => {
+    const p = join(ROOT, "snap-unbudgeted.txt")
+    const fd = await open(p, "w")
+    try {
+      const head = Array.from({ length: 600 }, (_, i) => `hash head line ${i}`).join("\n") + "\n"
+      await fd.write(head, 0, "utf-8")
+      await fd.truncate(70 * 1024 * 1024)
+    } finally {
+      await fd.close()
+    }
+    const reader = new BoundedFileReader()
+    const snap = await reader.readAtomicSnapshot(p, { start: 0, length: 10 })
+    expect(snap.hashBudgeted).toBe(false)
+    expect(snap.wholeFileSha256).toBe("")
+    expect(snap.byteCount).toBe(0)
+  })
+
+  test("readLineWindow + wholeFileHashBudgetBytes：窗口与全文件哈希来自同一 fd", async () => {
+    const p = join(ROOT, "snap-win.txt")
+    writeFileSync(p, "a\nb\nc\n", "utf-8")
+    const reader = new BoundedFileReader()
+    let validateCalls = 0
+    const result = await reader.readLineWindow(p, 0, 1, {
+      wholeFileHashBudgetBytes: 1024 * 1024,
+      validateOpen: async () => {
+        validateCalls++
+        return null
+      },
+    })
+    expect(validateCalls).toBe(1)
+    expect(result.text).toBe("a")
+    expect(result.wholeFileSha256).toBe(fingerprintContent("a\nb\nc\n").sha256)
+    expect(result.wholeFileHashBudgeted).toBe(true)
+  })
+
+  test("readLineWindow 哈希期间 append → SNAPSHOT_CHANGED fail closed", async () => {
+    const p = join(ROOT, "snap-win-append.txt")
+    writeFileSync(p, "line one\nline two\n", "utf-8")
+    const reader = new BoundedFileReader()
+    let caught: unknown
+    try {
+      await reader.readLineWindow(p, 0, 1, {
+        wholeFileHashBudgetBytes: 1024 * 1024,
+        validateOpen: async () => {
+          appendFileSync(p, "extra line\n")
+          return null
+        },
+      })
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(FileReadError)
+    expect((caught as FileReadError).code).toBe("SNAPSHOT_CHANGED")
+  })
+
+  test("readLineWindow wholeFileHashBudgetBytes 不足 → wholeFileHashBudgeted=false（绝不退化为窗口哈希）", async () => {
+    const reader = new BoundedFileReader()
+    const result = await reader.readLineWindow(SPARSE, 0, 1, { wholeFileHashBudgetBytes: 1024 * 1024 })
+    expect(result.wholeFileHashBudgeted).toBe(false)
+    expect(result.wholeFileSha256).toBeNull()
+    expect(result.text.length).toBeGreaterThan(0)
   })
 })

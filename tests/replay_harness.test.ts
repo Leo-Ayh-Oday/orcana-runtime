@@ -61,6 +61,7 @@ import {
   scanRepoStructure,
   selectContextMapTaskLevel,
 } from "../src/context/context-map"
+import { createWorkspaceIoAuthority } from "../src/runtime/io/workspace-io-authority"
 
 // ── Case loading ──
 
@@ -488,8 +489,10 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     // ── context-map ──
+    // IC01-R3: 直接 API 必须显式传入 WorkspaceIoAuthority（无权威时 fail
+    // closed —— 不得存在隐式不安全模式）。
     case "loadProjectConstitution": {
-      const result = loadProjectConstitution(ctx.tempDir)
+      const result = loadProjectConstitution(ctx.tempDir, { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       return {
         success: true,
         importantFiles: result.importantFiles.length,
@@ -499,7 +502,7 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     case "scanRepoStructure": {
-      const result = scanRepoStructure(ctx.tempDir)
+      const result = scanRepoStructure(ctx.tempDir, { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       return {
         success: true,
         packageManager: result.packageManager,
@@ -510,7 +513,7 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     case "hybridLocate": {
-      const result = hybridLocate(ctx.tempDir, input.locate as Parameters<typeof hybridLocate>[1])
+      const result = hybridLocate(ctx.tempDir, input.locate as Parameters<typeof hybridLocate>[1], { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       return {
         success: true,
         primaryFileCount: result.primaryFiles.length,
@@ -521,7 +524,7 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     case "buildSourceUnderstanding": {
-      const result = buildSourceUnderstanding(ctx.tempDir, input.files as string[])
+      const result = buildSourceUnderstanding(ctx.tempDir, input.files as string[], { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       return {
         success: true,
         filesRead: result.filesRead.length,
@@ -531,7 +534,7 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     case "buildContextMap": {
-      const result = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      const result = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1], { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       return {
         success: true,
         id: result.id,
@@ -542,7 +545,7 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     case "evaluateContextReadiness": {
-      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1], { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       const readiness = evaluateContextReadiness(map, input.level as Parameters<typeof evaluateContextReadiness>[1])
       return {
         success: true,
@@ -552,9 +555,9 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     case "saveLoadContextMap": {
-      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1], { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       const saved = saveContextMap(ctx.tempDir, map)
-      const loaded = loadContextMap(ctx.tempDir, map.id)
+      const loaded = loadContextMap(ctx.tempDir, map.id, { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       return {
         success: true,
         saved: existsSync(saved),
@@ -568,7 +571,7 @@ function dispatchCase(c: ReplayCase, ctx: TestContext): any {
     }
 
     case "attachContextMapToTaskPacket": {
-      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1])
+      const map = buildContextMap(ctx.tempDir, input.context as Parameters<typeof buildContextMap>[1], { workspace: createWorkspaceIoAuthority(ctx.tempDir) })
       const packet = buildPacketFromLine(input.packet as Parameters<typeof buildPacketFromLine>[0])
       const attached = attachContextMapToTaskPacket(packet, map)
       return {

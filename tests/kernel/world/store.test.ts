@@ -197,7 +197,7 @@ describe("AK-1 WorldStore", () => {
            WHERE owner_type = 'world_commit' AND owner_id = ? AND digest = ?`,
           [committed.commitId, committed.deltaDigest],
         )
-        db.run("UPDATE cas_objects SET ref_count = 0 WHERE digest = ?", committed.deltaDigest)
+        db.run("UPDATE cas_objects SET ref_count = 0 WHERE digest = ?", [committed.deltaDigest])
       } finally {
         db.close()
       }

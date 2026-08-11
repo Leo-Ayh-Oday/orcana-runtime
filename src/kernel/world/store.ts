@@ -43,6 +43,7 @@ import {
   WORLD_OBJECT_TYPES,
   WorldConflictError,
   WorldCorruptionError,
+  worldDeltaManifest,
 } from "./contracts"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { withExclusiveFileLock } from "./file-lock"
@@ -355,22 +356,6 @@ function validateWorldMutation(mutation: WorldMutation, index: number): void {
 }
 
 const WORLD_DELTA_MEDIA_TYPE = "application/vnd.orcana.world-delta+json"
-
-function worldDeltaManifest(
-  worldId: string,
-  branchId: string,
-  baseRevision: bigint,
-  mutations: readonly WorldDeltaMutation[],
-): WorldDeltaManifest {
-  return {
-    schemaVersion: 1,
-    type: "world-delta",
-    worldId,
-    branchId,
-    baseRevision: baseRevision.toString(),
-    mutations,
-  }
-}
 
 function enableWalWithBusyRetry(db: Database, timeoutMs = 5_000): void {
   const deadline = Date.now() + timeoutMs

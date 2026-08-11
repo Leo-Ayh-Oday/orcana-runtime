@@ -91,6 +91,73 @@ export interface LinuxBrokerOptions {
   /** LR2-2（P2-D）：Sandbox Plan Cache —— 同 workspace 同策略请求跳过
    *  完整 Policy Compiler（命中注入新身份）。 */
   planCache?: import("./cache/plan-cache").PlanCache
+  /** IC02: 确定性 fault/barrier 注入（仅 NODE_ENV=test；production
+   *  传入即抛错，同 testCapabilities 模式）。 */
+  testHooks?: BrokerTestHooks
+}
+
+/** IC02: acquisition 事务内的确定性 fault checkpoint。
+ *  NODE_ENV=test 时由 testHooks.faultAt 抛错 / waitAt 等待（barrier）。 */
+export type BrokerFaultPoint =
+  | "after-register-starting"
+  | "materialize-internal"
+  | "after-materialize"
+  | "before-lock"
+  | "after-lock"
+  | "before-create-run"
+  | "after-create-run"
+  | "after-create-agent"
+  | "before-create-cell"
+  | "after-create-cell"
+  | "before-backend-run"
+
+export interface BrokerTestHooks {
+  /** 在 checkpoint 抛错（确定性故障注入）。返回 Error → 抛；undefined → 继续。 */
+  faultAt?: (point: BrokerFaultPoint) => Error | void
+  /** 在 checkpoint 等待（cancel-during-starting barrier；不得含随机 sleep）。 */
+  waitAt?: (point: BrokerFaultPoint) => Promise<void> | void
+}
+
+/** IC02: acquisition truth —— 资源所有权/清理的唯一真相。
+ *
+ *  每个资源一旦 acquire 成功，必须在下一个可能 throw 的操作之前写入本记录；
+ *  cleanupAcquired 只读本记录做释放。cellRuns registry 不是 cleanup 依赖。
+ */
+export interface BrokerAcquiredResources {
+  runId: string
+  cellId: string
+  agentId?: string
+  backendId: string
+  /** ledger.reserve 成功后写入（清理时 ledger.release，绝不从 registry 找）。 */
+  reservationId?: string
+  lockKeys: string[]
+  /** CrossProcessWorkspaceLease 释放回调（跨进程写互斥）。 */
+  leaseRelease?: () => void
+  cgroupRunPath?: string
+  cgroupAgentPath?: string
+  cgroupCellPath?: string
+  /** run 层属于 broker-managed hierarchy（无 AgentDomain 时整个 run/agent
+   *  层都由 Broker Cell 管理）。任一 Cell 成为最后使用者时都可清理 ——
+   *  last-user cleanup（creator 先退不残留：并行 Cell 存在时不删，
+   *  最后使用者回收）。AgentDomain parent（domain.cgroupPath）→ false，
+   *  Broker Cell 永不删。 */
+  cgroupRunBrokerManaged: boolean
+  /** agent 层属于 broker-managed hierarchy（语义同 run 层）。 */
+  cgroupAgentBrokerManaged: boolean
+  podmanCidfile?: string
+  materialization?: ExecutionMaterialization
+  controller: AbortController
+  spawnedPid?: number
+  cleanupStarted: boolean
+}
+
+type CellRunPhase = "starting" | "running" | "cleaning"
+
+interface CellRunRecord {
+  runId: string
+  agentId?: string
+  phase: CellRunPhase
+  acquired: BrokerAcquiredResources
 }
 
 /** PR-6：统一 ExecutionRuntimeContext —— Graph 调度 / ProcessExecutor /
@@ -183,10 +250,34 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   if (options.testCapabilities && process.env.NODE_ENV !== "test") {
     throw new Error("test capability injection requires NODE_ENV=test")
   }
+  if (options.testHooks && process.env.NODE_ENV !== "test") {
+    throw new Error("test hook injection requires NODE_ENV=test")
+  }
   const caps = options.testCapabilities ?? requireLinuxPlatform()
   const shadowRecords: ShadowExecutionRecord[] = []
   const cells = new Map<string, ExecutionCell>()
-  const cellRuns = new Map<string, { runId: string; agentId?: string; reservationId: string; lockKeys: string[]; cgroupCellPath: string; cgroupAgentPath: string; cgroupRunPath: string; controller?: AbortController; podmanCidfile?: string; leaseRelease?: () => void }>()
+  const cellRuns = new Map<string, CellRunRecord>()
+
+  /** IC02: deterministic fault/barrier checkpoint —— NODE_ENV=test 时才可能
+   *  生效（options.testHooks 构造时已校验）；production 语义不受影响。 */
+  const checkpoint = async (point: BrokerFaultPoint): Promise<void> => {
+    if (process.env.NODE_ENV !== "test") return
+    const hooks = options.testHooks
+    if (!hooks) return
+    const error = hooks.faultAt?.(point)
+    if (error) throw error
+    await hooks.waitAt?.(point)
+  }
+
+  /** IC02: run 当前 Cell ID 集合（run.json.cells 的真实 Cell identity，
+   *  绝不写 runId —— RUN_STATE_CELL_ID_CORRUPTION = 0）。 */
+  const runCellIds = (runId: string): string[] => {
+    const ids: string[] = []
+    for (const [cellId, record] of cellRuns) {
+      if (record.runId === runId) ids.push(cellId)
+    }
+    return ids
+  }
 
   const ledger = options.ledger ?? new ResourceLedger()
   const stateStore = options.stateStore ?? new RuntimeStateStore()
@@ -218,73 +309,19 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   /** 运行期物化：seccomp 文件、secret 注入、缓存宿主路径。
    *  P0-1 修复：绝不写回 compiled spec —— 策略 Spec 在编译后冻结。
    *  PR-7：seccomp 按后端协议生成（bwrap=raw BPF；podman=OCI JSON）；
-   *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。 */
-  const materializeExecution = (spec: ExecutionCellSpec, backendId: string): ExecutionMaterialization => {
+   *  sealed-file secrets 生成宿主文件并登记挂载目标；cidfile 登记供清理。
+   *  IC02（P0-2 复审）：自身 exception-safe —— materialization 创建后
+   *  立即定义 dispose，任一步骤（seccomp/secret/cache hostPath）抛错即
+   *  rollback 已产生的临时材料后 rethrow；调用方拿不到 materialization
+   *  也绝无临时残留。 */
+  const materializeExecution = async (spec: ExecutionCellSpec, backendId: string): Promise<ExecutionMaterialization> => {
     const materialization: ExecutionMaterialization = {
       // B7：统一清理动作登记表 —— dispose 执行时逐项回填 ok/detail。
       cleanupActions: [],
     }
     // C5：sealed secret 的清理回调（删文件 + 空 root 目录）；环境注入类无文件。
     let secretCleanup: (() => void) | undefined
-    if ((backendId === "bubblewrap" || backendId === "rootless-podman")
-      && (spec.profile === "inspect" || spec.profile === "untrusted")) {
-      try {
-        const target = spec.profile === "untrusted" ? "untrusted" : "inspect"
-        if (backendId === "bubblewrap") {
-          const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.bpf`)
-          writeSeccompBpfFile(compileSeccompProfile(target), filePath)
-          materialization.seccompFile = filePath
-        } else {
-          const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.json`)
-          writeOciSeccompFile(compileSeccompProfile(target), filePath)
-          materialization.seccompFile = filePath
-        }
-      } catch {
-        // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
-      }
-    }
-    if (spec.secrets.length > 0) {
-      const bound = bindSecrets({ bindings: spec.secrets, values: options.secretValues ?? {} })
-      if (!bound.ok) {
-        // C5：失败路径同样清理 —— 部分 binding 可能在校验失败前已写入文件。
-        bound.cleanup()
-        throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
-      }
-      materialization.secretEnv = bound.envInjections
-      // PR-7：sealed-file 交付 → 宿主文件真实挂载进沙盒/容器。
-      const secretFiles: Record<string, string> = {}
-      const secretRecords: SecretDeliveryRecord[] = []
-      for (const item of bound.bound) {
-        if (item.deliveryTarget) {
-          const target = item.binding.target ?? `/run/secrets/${item.binding.id}`
-          secretFiles[target] = item.deliveryTarget
-        }
-        // B7：交付生命周期记录（Receipt 审计；dispose 后落 revokedAt/verified）。
-        secretRecords.push({
-          leaseId: item.binding.id,
-          runId: spec.identity.runId,
-          cellId: spec.identity.cellId,
-          bindingId: item.binding.id,
-          deliveryTarget: item.deliveryTarget,
-          delivery: item.binding.delivery,
-          expiresAt: item.binding.expiresAt,
-          cleanupVerified: false,
-        })
-      }
-      materialization.secretFiles = secretFiles
-      materialization.secretRecords = secretRecords
-      // C5：文件不在此处清理 —— 统一由 dispose（execute 事务 finally）调用，
-      // 保证执行结束（含异常/取消路径）后 /tmp 无密钥残留。
-      secretCleanup = bound.cleanup
-    }
-    for (const cache of spec.cache) {
-      materialization.cacheHostPaths = {
-        ...materialization.cacheHostPaths,
-        [cache.target]: cacheManager.hostPath(cache),
-      }
-    }
-    // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（seccomp/sealed secret）统一清理。
-    // B7：逐项执行 + 结果回填 cleanupActions / secretRecords（Receipt 审计）。
+    // IC02：尽早建立 rollback —— 后续步骤抛错时 dispose 已可调用。
     materialization.dispose = () => {
       const actions = materialization.cleanupActions ?? []
       // temp：seccomp 宿主文件（best-effort，结果如实记录）。
@@ -327,7 +364,76 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         actions.push({ kind: "secrets", name: "secret-root", ok: false, detail: error instanceof Error ? error.message : String(error), at: Date.now() })
       }
     }
-    return materialization
+    // IC02：任一步骤抛错 → rollback 已产生材料 → rethrow。
+    const rollbackOnError = (error: unknown): never => {
+      try { materialization.dispose?.() } catch { /* best-effort */ }
+      throw error
+    }
+    try {
+      if ((backendId === "bubblewrap" || backendId === "rootless-podman")
+        && (spec.profile === "inspect" || spec.profile === "untrusted")) {
+        try {
+          const target = spec.profile === "untrusted" ? "untrusted" : "inspect"
+          if (backendId === "bubblewrap") {
+            const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.bpf`)
+            writeSeccompBpfFile(compileSeccompProfile(target), filePath)
+            materialization.seccompFile = filePath
+          } else {
+            const filePath = join(tmpdir(), `orcana-seccomp-${spec.identity.cellId}.json`)
+            writeOciSeccompFile(compileSeccompProfile(target), filePath)
+            materialization.seccompFile = filePath
+          }
+        } catch {
+          // seccomp 不可用（非 x86_64 等）→ 降级原因记录，不阻断。
+        }
+      }
+      if (spec.secrets.length > 0) {
+        const bound = bindSecrets({ bindings: spec.secrets, values: options.secretValues ?? {} })
+        if (!bound.ok) {
+          // C5：失败路径同样清理 —— 部分 binding 可能在校验失败前已写入文件。
+          bound.cleanup()
+          throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `secret binding failed: ${bound.errors.join("; ")}`)
+        }
+        materialization.secretEnv = bound.envInjections
+        // PR-7：sealed-file 交付 → 宿主文件真实挂载进沙盒/容器。
+        const secretFiles: Record<string, string> = {}
+        const secretRecords: SecretDeliveryRecord[] = []
+        for (const item of bound.bound) {
+          if (item.deliveryTarget) {
+            const target = item.binding.target ?? `/run/secrets/${item.binding.id}`
+            secretFiles[target] = item.deliveryTarget
+          }
+          // B7：交付生命周期记录（Receipt 审计；dispose 后落 revokedAt/verified）。
+          secretRecords.push({
+            leaseId: item.binding.id,
+            runId: spec.identity.runId,
+            cellId: spec.identity.cellId,
+            bindingId: item.binding.id,
+            deliveryTarget: item.deliveryTarget,
+            delivery: item.binding.delivery,
+            expiresAt: item.binding.expiresAt,
+            cleanupVerified: false,
+          })
+        }
+        materialization.secretFiles = secretFiles
+        materialization.secretRecords = secretRecords
+        // C5：文件不在此处清理 —— 统一由 dispose（execute 事务 finally）调用，
+        // 保证执行结束（含异常/取消路径）后 /tmp 无密钥残留。
+        secretCleanup = bound.cleanup
+        // IC02：checkpoint —— sealed secret 材料已生成、cache 步骤之前。
+        // 此处抛错（faultAt）→ rollbackOnError 清理 secret 文件后 rethrow。
+        await checkpoint("materialize-internal")
+      }
+      for (const cache of spec.cache) {
+        materialization.cacheHostPaths = {
+          ...materialization.cacheHostPaths,
+          [cache.target]: cacheManager.hostPath(cache),
+        }
+      }
+      return materialization
+    } catch (error) {
+      return rollbackOnError(error)
+    }
   }
 
   /** PR-7: approved image policy —— 命中已批准列表才允许 podman 执行。 */
@@ -364,6 +470,143 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
 
   function readFileSyncSafe(path: string): string {
     return readFileSync(path, "utf8")
+  }
+
+  /** IC02: 统一 cleanup routine —— 以 acquired 为唯一资源真相，幂等，
+   *  任一步 throw 不跳过后续释放，输出 cleanup outcome 供 Receipt 使用。
+   *
+   *  固定顺序（与 IC02 计划 §11 一致）：
+   *  abort/kill → backend → cgroup → locks/lease → reservation →
+   *  materialization.dispose → receipt 持久化（失败不阻断）→ registry。
+   */
+  const cleanupAcquired = (
+    acquired: BrokerAcquiredResources,
+    ctx: {
+      cellReceipt?: SandboxReceipt
+      attachFailure?: string
+      attachVerified: boolean
+      compiled: ExecutionCellSpec
+    },
+  ): { cgroupRemoved: boolean; receiptPersisted: boolean } => {
+    if (acquired.cleanupStarted) return { cgroupRemoved: false, receiptPersisted: false }
+    acquired.cleanupStarted = true
+    const record = cellRuns.get(acquired.cellId)
+    if (record) record.phase = "cleaning"
+
+    // 1. abort / kill —— AbortController 是主取消通道；cgroup.kill 是
+    //    树级兜底（仅进程已知时）。
+    acquired.controller.abort()
+    if (cgroup && acquired.cgroupCellPath && acquired.spawnedPid) {
+      try { cgroup.kill(acquired.cgroupCellPath) } catch { /* best-effort */ }
+    }
+
+    // 2. backend cleanup（podman cidfile + label 残留容器）。
+    if (acquired.podmanCidfile) {
+      podmanCleanup(acquired.runId, acquired.cellId, acquired.podmanCidfile)
+      try { rmSync(acquired.podmanCidfile, { force: true }) } catch { /* best-effort */ }
+    }
+
+    // 3. cgroup cleanup：intended paths（调用前记录）为清理目标 ——
+    //    createXxx 部分创建后抛错同样能移除。
+    //    - cell：总是尝试（cell-<cellId> 专属本 cell，无共享风险）。
+    //    - agent/run：仅 broker-managed hierarchy（无 AgentDomain）——
+    //      任一 Cell 作为最后使用者（registry 中无其它 Cell 使用该
+    //      parent）时回收；不要求是创建者（last-user ownership：
+    //      creator 先退时并行 Cell 仍在 → 不删；最后 Cell 回收共享
+    //      parent，零残留）。AgentDomain parent 永不删。
+    let cgroupRemoved = false
+    if (cgroup && acquired.cgroupCellPath) {
+      try {
+        cgroupRemoved = cgroup.removeCell(acquired.cgroupCellPath)
+      } catch {
+        cgroupRemoved = false
+      }
+    }
+    if (cgroup && acquired.cgroupAgentBrokerManaged && acquired.cgroupAgentPath) {
+      const otherCellInAgent = [...cellRuns.values()].some(r =>
+        r.acquired.cgroupAgentPath === acquired.cgroupAgentPath
+        && r.acquired.cellId !== acquired.cellId
+        && !!r.acquired.cgroupCellPath,
+      )
+      if (!otherCellInAgent) {
+        try { cgroup.removeRun(acquired.cgroupAgentPath) } catch { /* best-effort */ }
+      }
+    }
+    if (cgroup && acquired.cgroupRunBrokerManaged && acquired.cgroupRunPath) {
+      const otherCellInRun = [...cellRuns.values()].some(r =>
+        r.runId === acquired.runId
+        && r.acquired.cellId !== acquired.cellId
+        && !!r.acquired.cgroupCellPath,
+      )
+      if (!otherCellInRun) {
+        try { cgroup.removeRun(acquired.cgroupRunPath) } catch { /* best-effort */ }
+      }
+    }
+
+    // 4. locks / workspace lease —— 无条件释放（acquired 内真相）。
+    for (const key of acquired.lockKeys) {
+      try { locks.release(key, acquired.cellId) } catch { /* best-effort */ }
+    }
+    try { acquired.leaseRelease?.() } catch { /* best-effort */ }
+
+    // 5. reservation —— 从 acquired 释放，绝不从 registry 找。
+    if (acquired.reservationId) {
+      try { ledger.release(acquired.reservationId) } catch { /* best-effort */ }
+    }
+
+    // 6. materialization dispose（seccomp/sealed-secret/cache 宿主材料）——
+    //    先于 receipt 组装（cleanupActions/secretRecords 回填进 Receipt）。
+    try { acquired.materialization?.dispose?.() } catch { /* best-effort */ }
+
+    // 7. receipt 组装 + 持久化 —— 成功或失败都不阻止 registry removal
+    //    （IC02 §12：persistence failure 不重新造成 resource leak）。
+    let receiptPersisted = false
+    if (ctx.cellReceipt) {
+      // GATE（GS-11）：清理真值 —— 空 cgroup 删除成功 ≠ 原进程已清理。
+      // attach 已验证且空 cgroup 移除 → 0 残留；attach 未验证（进程
+      // 从未进入 Cell，或 WSL2 EACCES 等）→ processesRemaining=-1 /
+      // cleanupVerified=false，绝不谎报 0。
+      const cleanupVerified = ctx.attachVerified && cgroupRemoved
+      const processesRemaining = cleanupVerified
+        ? 0
+        : ctx.attachVerified
+          ? ctx.cellReceipt.cleanup.processesRemaining
+          : -1
+      // 最终 Receipt：合并真实清理结果 + attach 失败降级，重算自摘要后持久化。
+      // B7：统一清理动作结果 + secret 交付生命周期记录随 Receipt 审计。
+      const finalReceipt: SandboxReceipt = {
+        ...ctx.cellReceipt,
+        degradationReasons: ctx.attachFailure
+          ? [...ctx.cellReceipt.degradationReasons, ctx.attachFailure]
+          : ctx.cellReceipt.degradationReasons,
+        cleanup: {
+          ...ctx.cellReceipt.cleanup,
+          cgroupRemoved: cgroupRemoved || ctx.cellReceipt.cleanup.cgroupRemoved,
+          processesRemaining,
+          cleanupVerified,
+        },
+        cleanupActions: acquired.materialization?.cleanupActions,
+        secretRecords: acquired.materialization?.secretRecords,
+      }
+      const final: SandboxReceipt = {
+        ...finalReceipt,
+        receiptDigest: computeReceiptDigest(finalReceipt),
+      }
+      const cellRef = cells.get(acquired.cellId)
+      if (cellRef) cellRef.receipt = final
+      try {
+        stateStore.appendReceipt(acquired.runId, final)
+        receiptPersisted = true
+      } catch {
+        // 持久化失败不阻断释放（Receipt 仍在事件流中）；记录 degradation。
+      }
+    }
+
+    // 8. registry removal —— 最后阶段。
+    cellRuns.delete(acquired.cellId)
+    cells.delete(acquired.cellId)
+
+    return { cgroupRemoved, receiptPersisted }
   }
 
   // PR-7：进程启动时钟 tick（/proc/<pid>/stat 第 22 字段）——PID 复用安全
@@ -508,30 +751,59 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         ? `/tmp/orcana-${runId}-${cellId}.cid`
         : undefined
 
-      // ── 事务：资源预留 → 锁 → Domain → cgroup → 执行 → 清理 → 释放 ──
-      const requested = resourceRequestOf(compiled)
-      const reservation = ledger.reserve(requested, runId, cellId, agentId)
-      if (!reservation.ok) {
-        throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${reservation.reason}`, { available: reservation.available })
+      // ── IC02: acquisition transaction —— 唯一 acquisition truth ──
+      // 资源 acquire 成功 → 立即写入 acquired；cleanupAcquired 只读 acquired。
+      // 绝不等待 cellRuns.set 之后才有 cleanup 真相（pre-registration failure
+      // window 内抛错同样完整释放）。
+      const acquired: BrokerAcquiredResources = {
+        runId,
+        cellId,
+        agentId,
+        backendId: selection.backend,
+        lockKeys: [],
+        cgroupRunBrokerManaged: false,
+        cgroupAgentBrokerManaged: false,
+        podmanCidfile,
+        controller: new AbortController(),
+        cleanupStarted: false,
       }
-      const lockKeys: string[] = []
-      // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
+      // PR-3 + IC02：Cell 专属 AbortController 尽早创建并接线 —— cancel 在
+      // acquisition 阶段即可达（starting cancellation 的主通道）。
+      if (executeOptions?.abortSignal) {
+        if (executeOptions.abortSignal.aborted) {
+          acquired.controller.abort()
+        } else {
+          executeOptions.abortSignal.addEventListener("abort", () => acquired.controller.abort(), { once: true })
+        }
+      }
+
+      // PR-2：捕获后端 Receipt（真实执行证据），cleanup 中持久化并合并清理真值。
       let cellReceipt: SandboxReceipt | undefined
       // PR-5：attach 失败不再吞掉 —— 记入 Receipt degradation（fail-closed 审计）。
       let attachFailure: string | undefined
       // GATE（GS-11）：attach 后必须验证真实 membership —— 仅"attach 调用
       // 未抛错"不算验证成功（WSL2 EACCES 等场景 attach 可能静默空操作）。
       let attachVerified = false
-      // GATE（GS-13）：跨进程 lease 释放句柄 —— try 外声明（finally 必须
-      // 无条件可达，即使 cellRuns.set 之前抛错）。
-      let leaseRelease: (() => void) | undefined
-      // C5：try 前声明 —— 物化本身抛错时 finally 仍可安全访问（避免 TDZ）。
-      let materialization: ExecutionMaterialization | undefined
+
+      // ── starting visibility（acquisition 期间 cancelCell/cancelAgent 可达）──
+      // 从 registration 起即进入 try/finally —— after-register-starting 等
+      // checkpoint 抛错也由 cleanupAcquired 收尾（registry removal 统一）。
       try {
+        cellRuns.set(cellId, { runId, agentId, phase: "starting", acquired })
+        await checkpoint("after-register-starting")
+        const requested = resourceRequestOf(compiled)
+        const reservation = ledger.reserve(requested, runId, cellId, agentId)
+        if (!reservation.ok) {
+          throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${reservation.reason}`, { available: reservation.available })
+        }
+        acquired.reservationId = reservation.reservation.reservationId
+
         // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
-        // C5：物化在事务内进行 —— finally 保证宿主文件（sealed secret/
-        // seccomp）在成功、异常、取消任何路径后都被清理。
-        materialization = materializeExecution(compiled, selection.backend)
+        // C5：物化在事务内进行 —— cleanupAcquired 保证宿主文件（sealed
+        // secret/seccomp）在成功、异常、取消任何路径后都被清理。
+        acquired.materialization = await materializeExecution(compiled, selection.backend)
+        await checkpoint("after-materialize")
+
         // GATE（GS-12）：Isolation Lock 身份 = 真实 workspace（canonical
         // realpath + dev/ino）——同 agent 不同 worktree 必须允许并行；
         // agent 是 owner 不是 lock domain。无 hostRoot → 回退 agent/物理
@@ -543,51 +815,13 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           : (agentId
               ? IsolationDomainLock.worktreeKey(agentId)
               : IsolationDomainLock.mainWorkspaceKey())
+        await checkpoint("before-lock")
         if (!locks.acquire(lockTarget, "exclusive", cellId)) {
           throw new LinuxExecutionError("EXECUTION_SPEC_INVALID", `isolation lock held: ${lockTarget}`, { lockTarget })
         }
-        lockKeys.push(lockTarget)
+        acquired.lockKeys.push(lockTarget)
+        await checkpoint("after-lock")
 
-        // Agent Domain 投影（仅在使用方提供 domain 时校验；cgroup 父层已在
-        // AgentDomainManager 创建 —— 此处直接使用其 cgroupPath）。
-        const domain = executeOptions?.domain
-
-        // Cell cgroup（有委托时）。
-        let cgroupCellPath = ""
-        let cgroupAgentPath = ""
-        let cgroupRunPath = ""
-        if (cgroup) {
-          cgroupRunPath = hierarchyPaths(cgroup.base, runId, undefined, "x").run
-          cgroupAgentPath = domain?.cgroupPath ?? hierarchyPaths(cgroup.base, runId, agentId, "x").agent
-          if (!domain?.cgroupPath) {
-            // PR-5：Run/Agent 层不重复使用单个 Cell 的预算 —— 聚合预算只来自
-            // AgentDomain（createAgentDomain 已按 budget 创建）；无 Domain 时
-            // 上层不设限（资源约束由 Cell 层承担），避免"单 Cell 预算冒充聚合"。
-            cgroup.createRun(runId)
-            if (agentId) cgroup.createAgent(runId, agentId)
-          }
-          cgroupCellPath = cgroup.createCell(runId, agentId, cellId, {
-            memoryMaxBytes: compiled.resources.memoryMaxBytes,
-            memoryHighBytes: compiled.resources.memoryHighBytes,
-            pidsMax: compiled.resources.pidsMax,
-            cpuQuotaMicros: compiled.resources.cpuQuotaMicros,
-            cpuPeriodMicros: compiled.resources.cpuPeriodMicros,
-            oomGroup: true,
-          })
-        }
-
-        const cell: ExecutionCell = { cellId, runId, nodeRunId: compiled.identity.nodeRunId, agentId, spec: compiled, state: "running" }
-        cells.set(cellId, cell)
-        // PR-3：每个 Cell 持有自己的 AbortController —— cancelCell 能主动触发
-        // Supervisor 取消信号（不再依赖调用方持有外部 abortSignal）。
-        const controller = new AbortController()
-        if (executeOptions?.abortSignal) {
-          if (executeOptions.abortSignal.aborted) {
-            controller.abort()
-          } else {
-            executeOptions.abortSignal.addEventListener("abort", () => controller.abort(), { once: true })
-          }
-        }
         // GATE（GS-13）：跨进程 workspace 写互斥（进程内隔离锁之外的 OS 级
         // 互斥）。同一 workspace 跨进程并发 writer → 拒绝（fail-fast）。
         if (workspaceIdentity) {
@@ -595,29 +829,94 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           if (!lease.ok) {
             throw new LinuxExecutionError("WORKSPACE_LEASE_HELD", lease.reason ?? `workspace lease held: ${workspaceIdentity}`, { workspaceIdentity })
           }
-          leaseRelease = lease.release
+          acquired.leaseRelease = lease.release
         }
-        cellRuns.set(cellId, { runId, agentId, reservationId: reservation.reservation.reservationId, lockKeys, cgroupCellPath, cgroupAgentPath, cgroupRunPath, controller, podmanCidfile, leaseRelease })
-        stateStore.writeRun(runId, { status: "running", cells: [...cellRuns.values()].filter(r => r.runId === runId).map(r => r.runId), backend: selection.backend, ownerPid: process.pid, ownerProcStartTicks: readProcStartTicks() })
 
-        // PR-2：捕获后端 Receipt（真实执行证据），finally 中持久化并合并清理真值。
-        let spawnedPid = 0
+        // Agent Domain 投影（仅在使用方提供 domain 时校验；cgroup 父层已在
+        // AgentDomainManager 创建 —— 此处直接使用其 cgroupPath）。
+        const domain = executeOptions?.domain
+
+        // Cell cgroup（有委托时）。intended paths 在调用前记录并写入
+        // acquired —— createRun/createAgent/createCell 内部部分创建后
+        // 抛错（ensure 已 mkdir、controller 授权失败等）cleanup 仍有
+        // 完整路径（IC02 §10：部分创建可恢复；P0-1 复审闭环）。
+        if (cgroup) {
+          const runPath = hierarchyPaths(cgroup.base, runId, undefined, "x").run
+          const agentPath = domain?.cgroupPath ?? hierarchyPaths(cgroup.base, runId, agentId, "x").agent
+          const cellPath = hierarchyPaths(cgroup.base, runId, agentId, cellId).cell
+          acquired.cgroupRunPath = runPath
+          acquired.cgroupAgentPath = agentPath
+          // cell 路径专属本 cell —— 调用前记录，createCell 抛错也能清理。
+          acquired.cgroupCellPath = cellPath
+          if (!domain?.cgroupPath) {
+            // PR-5：Run/Agent 层不重复使用单个 Cell 的预算 —— 聚合预算只来自
+            // AgentDomain（createAgentDomain 已按 budget 创建）；无 Domain 时
+            // 上层不设限（资源约束由 Cell 层承担），避免"单 Cell 预算冒充聚合"。
+            // 无 domain → run/agent 层属于 broker-managed hierarchy：无论由本
+            // 事务还是并行 Cell 创建，任一最后使用者可清理（last-user
+            // ownership —— creator 先退不残留，最后 Cell 回收共享 parent）。
+            acquired.cgroupRunBrokerManaged = true
+            acquired.cgroupAgentBrokerManaged = true
+            // pre-existing 判定仅用于部分创建后的 ownership 记录（createRun/
+            // createAgent 内部抛错时 hierarchy 是否已存在由谁负责），
+            // 不决定 broker-managed 归属。
+            await checkpoint("before-create-run")
+            try {
+              cgroup.createRun(runId)
+            } catch (error) {
+              throw error
+            }
+            await checkpoint("after-create-run")
+            if (agentId) {
+              try {
+                cgroup.createAgent(runId, agentId)
+              } catch (error) {
+                throw error
+              }
+            }
+            await checkpoint("after-create-agent")
+          }
+          await checkpoint("before-create-cell")
+          try {
+            cgroup.createCell(runId, agentId, cellId, {
+              memoryMaxBytes: compiled.resources.memoryMaxBytes,
+              memoryHighBytes: compiled.resources.memoryHighBytes,
+              pidsMax: compiled.resources.pidsMax,
+              cpuQuotaMicros: compiled.resources.cpuQuotaMicros,
+              cpuPeriodMicros: compiled.resources.cpuPeriodMicros,
+              oomGroup: true,
+            })
+          } catch (error) {
+            // cell 部分创建（ensure(cell) 后属性写入抛错）：cgroupCellPath
+            // 已在调用前记录 → cleanup 尝试 removeCell。
+            throw error
+          }
+          await checkpoint("after-create-cell")
+        }
+
+        const cell: ExecutionCell = { cellId, runId, nodeRunId: compiled.identity.nodeRunId, agentId, spec: compiled, state: "running" }
+        cells.set(cellId, cell)
+        cellRuns.get(cellId)!.phase = "running"
+        stateStore.writeRun(runId, { status: "running", cells: runCellIds(runId), backend: selection.backend, ownerPid: process.pid, ownerProcStartTicks: readProcStartTicks() })
+
+        // PR-2：捕获后端 Receipt（真实执行证据），cleanup 中持久化并合并清理真值。
+        await checkpoint("before-backend-run")
         try {
           for await (const event of backend.run(compiled, {
             capabilities: caps,
-            abortSignal: controller.signal,
-            cgroupPath: cgroupCellPath,
-            materialization,
+            abortSignal: acquired.controller.signal,
+            cgroupPath: acquired.cgroupCellPath,
+            materialization: acquired.materialization,
             attachCell: pid => {
-              spawnedPid = pid
-              if (cgroup && cgroupCellPath) {
+              acquired.spawnedPid = pid
+              if (cgroup && acquired.cgroupCellPath) {
                 try {
-                  cgroup.attach(pid, cgroupCellPath)
+                  cgroup.attach(pid, acquired.cgroupCellPath)
                   // GATE（GS-11）：ATTACH_VERIFIED —— 读 /proc/<pid>/cgroup
                   // 确认真实 membership，不假设 attach 调用成功即生效。
-                  attachVerified = verifyCgroupMembership(pid, cgroupCellPath)
+                  attachVerified = verifyCgroupMembership(pid, acquired.cgroupCellPath)
                   if (!attachVerified) {
-                    attachFailure = `CGROUP_ATTACH_NOT_VERIFIED: pid ${pid} not found in ${cgroupCellPath}`
+                    attachFailure = `CGROUP_ATTACH_NOT_VERIFIED: pid ${pid} not found in ${acquired.cgroupCellPath}`
                   }
                 } catch (error) {
                   attachFailure = `CGROUP_ATTACH_FAILED: ${error instanceof Error ? error.message : String(error)}`
@@ -625,7 +924,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
                   // （fail-fast：资源限额不被绕过到执行结束）；非严格
                   // 保留 degradation 声明。GATE：验证失败同样处理。
                   if (isStrictProfile(compiled.profile)) {
-                    controller.abort()
+                    acquired.controller.abort()
                     // LR2-0F：严格 + attach 失败 → 不释放 launcher（目标
                     // 程序不 exec，避免在 cgroup 外开始执行）。
                     return false
@@ -644,19 +943,19 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               attachVerified = false
               return true // 无 attach 需求 → 立即释放（不阻塞执行）
             },
-            readCellMetrics: () => readCellMetrics(cgroupCellPath),
+            readCellMetrics: () => readCellMetrics(acquired.cgroupCellPath ?? ""),
             cleanupVerify: () => {
               // PR-2：进程残留必须真实测量 —— cgroup 委托时读 pids.current；
               // 否则进程组扫描（countProcessGroup）；无法测量时 -1（未验证）。
               let processesRemaining = -1
-              if (cgroup && cgroupCellPath) {
-                processesRemaining = cgroup.pidsCurrent(cgroupCellPath)
-              } else if (spawnedPid > 0) {
-                processesRemaining = countProcessGroup(spawnedPid)
+              if (cgroup && acquired.cgroupCellPath) {
+                processesRemaining = cgroup.pidsCurrent(acquired.cgroupCellPath)
+              } else if ((acquired.spawnedPid ?? 0) > 0) {
+                processesRemaining = countProcessGroup(acquired.spawnedPid!)
               }
               return {
                 processesRemaining,
-                cgroupRemoved: false, // 由 broker finally 实际移除后置真值
+                cgroupRemoved: false, // 由 broker cleanupAcquired 实际移除后置真值
                 mountsReleased: false,
                 worktreeRetained: compiled.lifecycle.retainOnFailure,
               }
@@ -670,74 +969,17 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           throw error
         }
         cell.state = "succeeded"
+      } catch (error) {
+        const cellRef = cells.get(cellId)
+        if (cellRef) cellRef.state = "failed"
+        throw error
       } finally {
-        // 清理与释放（异常路径同 finally 事务）。
-        // C5（SECRET_TEMP_RESIDUE）：宿主物化文件（sealed secret / seccomp）
-        // 执行结束即清理 —— /tmp 不残留密钥与策略文件。
-        materialization?.dispose?.()
-        // podman cidfile 同样属于 /tmp 临时资源 —— 执行后移除。
-        if (podmanCidfile) {
-          try { rmSync(podmanCidfile, { force: true }) } catch { /* best-effort */ }
-        }
-        // GATE：锁与 lease 无条件释放 —— cellRuns.set 之前抛错（物化/
-        // cgroup/lease 失败）时 record 不存在，若只在 record 内释放会
-        // 泄漏锁，后续所有 cell 撞同一 workspace 键。
-        for (const key of lockKeys) locks.release(key, cellId)
-        leaseRelease?.()
-        const record = cellRuns.get(cellId)
-        if (record) {
-          // Cell cgroup 真实移除（PR-2 先做 best-effort；PR-5 重建完整协议）。
-          let cgroupRemoved = false
-          if (cgroup && record.cgroupCellPath) {
-            try {
-              cgroupRemoved = cgroup.removeCell(record.cgroupCellPath)
-            } catch {
-              cgroupRemoved = false
-            }
-          }
-          if (cellReceipt) {
-            // GATE（GS-11）：清理真值 —— 空 cgroup 删除成功 ≠ 原进程已清理。
-            // attach 已验证且空 cgroup 移除 → 0 残留；attach 未验证（进程
-            // 从未进入 Cell，或 WSL2 EACCES 等）→ processesRemaining=-1 /
-            // cleanupVerified=false，绝不谎报 0。
-            const cleanupVerified = attachVerified && cgroupRemoved
-            const processesRemaining = cleanupVerified
-              ? 0
-              : attachVerified
-                ? cellReceipt.cleanup.processesRemaining
-                : -1
-            // 最终 Receipt：合并真实清理结果 + attach 失败降级，重算自摘要后持久化。
-            // B7：统一清理动作结果 + secret 交付生命周期记录随 Receipt 审计。
-            const finalReceipt: SandboxReceipt = {
-              ...cellReceipt,
-              degradationReasons: attachFailure
-                ? [...cellReceipt.degradationReasons, attachFailure]
-                : cellReceipt.degradationReasons,
-              cleanup: {
-                ...cellReceipt.cleanup,
-                cgroupRemoved: cgroupRemoved || cellReceipt.cleanup.cgroupRemoved,
-                processesRemaining,
-                cleanupVerified,
-              },
-              cleanupActions: materialization?.cleanupActions,
-              secretRecords: materialization?.secretRecords,
-            }
-            const final: SandboxReceipt = {
-              ...finalReceipt,
-              receiptDigest: computeReceiptDigest(finalReceipt),
-            }
-            const cellRef = cells.get(cellId)
-            if (cellRef) cellRef.receipt = final
-            try {
-              stateStore.appendReceipt(runId, final)
-            } catch {
-              // 持久化失败不阻断执行（Receipt 仍在事件流中）
-            }
-          }
-          ledger.release(record.reservationId)
-          cellRuns.delete(cellId)
-          cells.delete(cellId)
-        }
+        cleanupAcquired(acquired, {
+          cellReceipt,
+          attachFailure,
+          attachVerified,
+          compiled,
+        })
       }
     },
     createAgentDomain(input) {
@@ -746,22 +988,22 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     async cancelCell(cellId) {
       const record = cellRuns.get(cellId)
       if (!record) return
-      // PR-3：AbortController 主动触发 Supervisor 取消（进程组终止），
-      // cgroup.kill 为树级兜底 —— 双通道保证取消生效。
-      record.controller?.abort()
-      if (cgroup && record.cgroupCellPath) {
-        cgroup.kill(record.cgroupCellPath)
+      // IC02：starting 阶段的 cell 同样可取消 —— AbortController 是主取消
+      // 通道（无 cgroup 时也必须 abort）；cgroup.kill 为树级兜底增强。
+      record.acquired.controller.abort()
+      if (cgroup && record.acquired.cgroupCellPath) {
+        cgroup.kill(record.acquired.cgroupCellPath)
       }
       // PR-7：podman 后端特异清理 —— cidfile + label 停止残留容器。
-      if (record.podmanCidfile) {
-        podmanCleanup(record.runId, cellId, record.podmanCidfile)
+      if (record.acquired.podmanCidfile) {
+        podmanCleanup(record.runId, cellId, record.acquired.podmanCidfile)
       }
     },
     async cancelAgent(agentId) {
       domainManager.cancelAgent(agentId)
+      // IC02：CANCEL_WITHOUT_CGROUP_IGNORED = 0 —— 无 cgroup 环境同样 cancel。
       for (const [cellId, record] of cellRuns) {
-        if (record.agentId === agentId && cgroup && record.cgroupCellPath) {
-          cgroup.kill(record.cgroupCellPath)
+        if (record.agentId === agentId) {
           await this.cancelCell(cellId)
         }
       }

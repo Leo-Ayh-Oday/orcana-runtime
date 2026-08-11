@@ -369,7 +369,7 @@ async function assertClean(
 }
 
 describe("IC02 acquisition transaction — fault injection", () => {
-  test("F1: materialize 之后抛错 → reservation/lock/materialization 全释放（sealed secret 无残留）", async () => {
+  test("F1: materializeExecution 内部失败（sealed secret 材料已生成 → 后续步骤抛错）→ 内部 rollback + 资源全释放", async () => {
     const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
     const { tmpdir } = await import("node:os")
     const { existsSync } = await import("node:fs")
@@ -378,7 +378,7 @@ describe("IC02 acquisition transaction — fault injection", () => {
     const broker = createLinuxBroker({
       mode: "enabled",
       ledger,
-      testHooks: faultAtOnce("after-materialize"),
+      testHooks: faultAtOnce("materialize-internal", "IC02-MATERIALIZE-FAULT"),
       secretValues: { [binding.id]: "s3cr3t" },
     })
     let caught: unknown = null
@@ -386,11 +386,13 @@ describe("IC02 acquisition transaction — fault injection", () => {
       for await (const _ of broker.execute(cellSpec({ secrets: [binding] }))) { /* drain */ }
     } catch (e) { caught = e }
     expect(caught).toBeInstanceOf(Error)
-    expect((caught as Error).message).toMatch(/IC02-FAULT/)
-    await assertClean(broker, ledger, undefined)
-    // materialization 已 dispose：sealed secret root 不残留。
+    // 故障发生在 materializeExecution 内部（sealed secret 文件已生成之后）——
+    // materializeExecution 未成功 return，acquired.materialization 未赋值。
+    expect((caught as Error).message).toMatch(/IC02-MATERIALIZE-FAULT/)
+    // 但已生成的 sealed secret 材料必须被内部 rollback（dispose 早于步骤定义）。
     const secretRoot = join(tmpdir(), `orcana-secrets-${process.pid}`)
     expect(existsSync(secretRoot)).toBe(false)
+    await assertClean(broker, ledger, undefined)
   })
 
   test("P1-1 regression: after-register-starting 抛错 → starting record 也由 cleanupAcquired 收尾", async () => {
@@ -404,22 +406,30 @@ describe("IC02 acquisition transaction — fault injection", () => {
     await assertClean(broker, ledger, undefined)
   })
 
-  test("F2: lock acquisition 失败（deterministic barrier，无 sleep）→ reservation 必须释放", async () => {
+  test("F2: lock acquisition 失败（双向 blocking barrier，无 sleep）→ reservation 必须释放", async () => {
     const ledger = makeLedger()
-    let barrierReached!: () => void
-    const barrier = new Promise<void>(r => { barrierReached = r })
-    let reached = false
+    // 双 latch：第一条在 after-lock 处 signal reached 后保持阻塞，直到测试
+    // 释放 —— 不依赖 sleep 保持锁，完全 deterministic。
+    let signalReached!: () => void
+    let releaseFirst!: () => void
+    const reached = new Promise<void>(r => { signalReached = r })
+    const releaseGate = new Promise<void>(r => { releaseFirst = r })
     const hooks: BrokerTestHooks = {
-      waitAt: p => { if (p === "after-lock" && !reached) { reached = true; barrierReached() } },
+      waitAt: async p => {
+        if (p === "after-lock") {
+          signalReached()
+          await releaseGate // 第一条停在 checkpoint（锁保持），等待测试释放
+        }
+      },
     }
     const broker = createLinuxBroker({ mode: "enabled", ledger, testHooks: hooks })
     const lockSpec = cellSpec({
-      command: { executable: "/bin/sh", args: ["-c", "sleep 1"], cwd: "/tmp", stdin: "closed" },
+      command: { executable: "/bin/true", args: [], cwd: "/tmp", stdin: "closed" },
       filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt/same" },
     })
     const other = cellSpec({ filesystem: { readonlyMounts: [], writableMounts: [], tmpfsMounts: [], hiddenPaths: [], emptyHome: true, worktreeRoot: "/wt/same" } })
     const p1 = (async () => { for await (const _ of broker.execute(lockSpec)) { /* hold */ } })()
-    await barrier // 第一条已拿锁（after-lock checkpoint）——确定性同步点，无 sleep
+    await reached // 第一条已拿锁并阻塞在 after-lock —— 确定性同步点
     let caught: unknown = null
     try {
       for await (const _ of broker.execute(other)) { /* drain */ }
@@ -427,8 +437,64 @@ describe("IC02 acquisition transaction — fault injection", () => {
     expect(caught).toBeInstanceOf(LinuxExecutionError)
     // 锁冲突 cell：reservation 已获取但锁失败 → reservation 必须已释放。
     expect(ledger.outstanding().length).toBe(1) // 只保留第一个 cell 的
+    releaseFirst() // 释放第一条
     await p1
     expect(ledger.outstanding().length).toBe(0)
+  })
+
+  test("P0-1A: run pre-existing + agent 部分创建失败 → txn-created agent 清理、pre-existing run 保留", async () => {
+    const fs = mockCgroupFs()
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    // run 层已由并行 Cell 创建（pre-existing）。
+    cgroup.createRun("r1")
+    // agent 层授权失败（ensure(agent) 已 mkdir 后抛错）。
+    const origRead = fs.read.bind(fs)
+    fs.read = (p) => {
+      if (p.endsWith("cgroup.subtree_control") && p.includes("/agent-")) throw new Error("CGROUP_CONTROLLER_UNAVAILABLE")
+      return origRead(p)
+    }
+    const ledger = makeLedger()
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup })
+    let caught: unknown = null
+    try {
+      for await (const _ of broker.execute(cellSpec())) { /* drain */ }
+    } catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toMatch(/CGROUP_CONTROLLER_UNAVAILABLE/)
+    const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
+    const agent = join(run, "agent-a1")
+    // txn-created agent residue = 0；pre-existing run 不得被删。
+    expect(fs.exists(agent)).toBe(false)
+    expect(fs.exists(run)).toBe(true)
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [agent] })
+  })
+
+  test("P0-1B: run pre-existing + agent 已建 + cell 部分创建失败 → agent/cell 清理、run 保留", async () => {
+    const fs = mockCgroupFs()
+    const cgroup = new CgroupManager({ base: "/sys/fs/cgroup", fs })
+    cgroup.createRun("r1") // run pre-existing
+    const origWrite = fs.write.bind(fs)
+    fs.write = (p, c) => {
+      if (p.includes("/cell-")) throw new Error("EACCES")
+      return origWrite(p, c)
+    }
+    const ledger = makeLedger()
+    const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup })
+    const spec = cellSpec()
+    let caught: unknown = null
+    try {
+      for await (const _ of broker.execute(spec)) { /* drain */ }
+    } catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toMatch(/EACCES/)
+    const run = hierarchyPaths(cgroup.base, "r1", undefined, "x").run
+    const agent = join(run, "agent-a1")
+    const cell = hierarchyPaths(cgroup.base, "r1", "a1", spec.identity.cellId).cell
+    // txn-created agent + 半建 cell 全清理；pre-existing run 保留。
+    expect(fs.exists(agent)).toBe(false)
+    expect(fs.exists(cell)).toBe(false)
+    expect(fs.exists(run)).toBe(true)
+    await assertClean(broker, ledger, cgroup, { cgroupPaths: [agent, cell] })
   })
 
   test("F3: createRun 部分创建后抛错（ensure 已 mkdir → controller 授权失败）→ run hierarchy 清理", async () => {
@@ -614,6 +680,7 @@ describe("IC02 acquisition transaction — fault injection", () => {
     const { RuntimeStateStore } = await import("../../../src/runtime/linux/recovery/state-store")
     const { createHostAuditBackend } = await import("../../../src/runtime/linux/backends/host-audit")
     const { registerBackend } = await import("../../../src/runtime/linux/broker")
+    const { newSecretBinding } = await import("../../../src/runtime/linux/secrets")
     const { mkdtempSync, rmSync } = await import("node:fs")
     const { tmpdir } = await import("node:os")
     const storeRoot = mkdtempSync(tmpdir() + "/ic02-100run-")
@@ -631,10 +698,13 @@ describe("IC02 acquisition transaction — fault injection", () => {
     type Category = {
       name: string
       /** 轮内准备（fs/cgroup/ledger/hooks/stateStore）。 */
-      prepare: (fs: CgroupFs, cgroup: CgroupManager, round: number) => { hooks?: BrokerTestHooks; spec?: ExecutionCellSpec; preLock?: boolean; failPersist?: boolean }
+      prepare: (fs: CgroupFs, cgroup: CgroupManager, round: number) => { hooks?: BrokerTestHooks; spec?: ExecutionCellSpec; preLock?: boolean; failPersist?: boolean; secretValues?: Record<string, string> }
     }
     const categories: Category[] = [
-      { name: "materialize-throws", prepare: () => ({ hooks: faultAtOnce("after-materialize", `IC02-ROUND`) }) },
+      { name: "materialize-throws", prepare: () => {
+        const b = newSecretBinding({ purpose: "registry", delivery: "sealed-file", target: "/run/secrets/reg", expiresAt: Date.now() + 60_000 })
+        return { hooks: faultAtOnce("materialize-internal", `IC02-ROUND`), spec: cellSpec({ secrets: [b] }), secretValues: { [b.id]: "s3cr3t" } }
+      } },
       { name: "lock-acquisition-fails", prepare: () => ({ preLock: true }) },
       { name: "createRun-partial", prepare: (fs) => {
         const orig = fs.read.bind(fs)
@@ -676,7 +746,7 @@ describe("IC02 acquisition transaction — fault injection", () => {
       const prep = category.prepare(fs, cgroup, round)
       const store = new RuntimeStateStore({ root: storeRoot })
       if (prep.failPersist) store.appendReceipt = () => { throw new Error("PERSIST-BOOM") }
-      const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, stateStore: store, testHooks: prep.hooks })
+      const broker = createLinuxBroker({ mode: "enabled", ledger, cgroup, stateStore: store, testHooks: prep.hooks, ...(prep.secretValues ? { secretValues: prep.secretValues } : {}) })
       cancelTarget = broker
       if (prep.preLock) {
         // deterministic lock 竞争：先占 worktree 锁（broker 内 locks 实例）。

@@ -24,7 +24,7 @@
 | Local delegated cgroup | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；每次运行仍需 attach/cleanup Evidence |
 | GitHub-hosted Linux lanes | `CI_BLOCKED_EXTERNAL` | billing lock 导致 job 0 steps；既不是代码 PASS，也不是代码 FAIL |
 | Current source release gate | `FAIL` | `bun run typecheck` 当前存在 `paused` Stop-hook 类型漂移；修复和全门禁前不可发布 |
-| npm/GitHub release convergence | `FAIL` | npm/Release `0.8.16`，`origin/main` `0.8.26.1`，修复线 `0.8.26.2` |
+| npm/GitHub release convergence | `FAIL` | npm/Release `0.8.16`，`origin/main` `0.8.26.2`（未发布），修复线 `0.8.26.3` |
 
 ## 历史阶段记录
 

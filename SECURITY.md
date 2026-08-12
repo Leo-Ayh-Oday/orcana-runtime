@@ -6,11 +6,14 @@
 
 ## Version Channels
 
+This table is the authoritative version-truth for the repository; README and
+status documents reference it instead of restating independent claims.
+
 | Channel | Version | Security status |
 |---|---:|---|
 | npm / GitHub Latest Release | `0.8.16` | Current public baseline |
-| `origin/main` source | `0.8.26.1` | Unreleased source; not an installable public release |
-| Active repair line | `0.8.26.2` | Unreleased candidate; not release-ready until its gates and audit pass |
+| `origin/main` source | `0.8.26.2` | Unreleased source (RC-18 convergence baseline `fe913ed`); not an installable public release |
+| Active repair line | `0.8.26.3` | Unreleased candidate (production-closure line, R2-0 + PR-E1); not release-ready until its gates and audit pass |
 
 The project does not currently promise long-term support for older minor
 versions. Use the latest published package for ordinary installations and read

@@ -21,6 +21,7 @@
 
 import { resolve } from "node:path"
 import type { LinuxExecutionBroker } from "../../runtime/linux/broker"
+import { profileDefaults as profileDefaultsOf } from "../../runtime/linux/profiles"
 import type {
   ExecutionCellEvent,
   ExecutionProfile,
@@ -72,6 +73,15 @@ export class LinuxBrokerProjectionExecutor {
     if (authority.workspace.access !== "readwrite") {
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection workspace must be readwrite")
     }
+    // R01.4：Host Audit 不是安全边界 —— 调用方 profile 必须声明
+    // namespace/container 隔离（bubblewrap/podman），audit 显式 fail-closed。
+    const profileDefaults = profileDefaultsOf(this.options.profile)
+    if (profileDefaults.minimum === "audit" || profileDefaults.backend === "host-audit") {
+      throw new ProjectionError(
+        "HOST_AUDIT_ACCEPTED_AS_SECURITY_BOUNDARY",
+        `projection profile ${this.options.profile} requires host-audit; host audit is not a security boundary (namespace/container required)`,
+      )
+    }
 
     const writableMounts: RequestedMount[] = this.options.writableRoots.map(path => ({
       source: { type: "workspace-relative", path },
@@ -122,6 +132,17 @@ export class LinuxBrokerProjectionExecutor {
       cancelled: cancelledState || (receipt?.cancelled ?? false),
       violation: (receipt?.violations.length ?? 0) > 0,
       ...(receipt === undefined ? {} : { executionReceiptId: receipt.receiptDigest }),
+    }
+    // R01.4：receipt 必须证明 namespace/container 隔离（host-audit 后端
+    // 的 receipt 不能作为 AK-2 production/acceptance 执行证据 —— 只可作
+    // 显式 diagnostic fixture，且绝不能被 acceptance coordinator 接受）。
+    // bubblewrap/rootless-podman 的可用性由 broker 后端选择逻辑（真实
+    // capabilities 探测）保证 —— 其 backend id 本身即隔离证明。
+    if (receipt !== undefined && receipt.backend === "host-audit") {
+      throw new ProjectionError(
+        "HOST_AUDIT_ACCEPTED_AS_SECURITY_BOUNDARY",
+        `receipt backend is host-audit; host audit is not a security boundary — refusing acceptance`,
+      )
     }
     return { outcome, receipt }
   }

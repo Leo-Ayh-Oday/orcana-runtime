@@ -24,6 +24,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -101,6 +102,34 @@ function execFileSyncSafe(binary: string, args: readonly string[]): void {
   execFileSync(binary, [...args], { stdio: "ignore", timeout: 60_000 })
 }
 
+/** 证明 merged 是本次真实 FUSE 挂载（R06.2）：
+ *  1) statfs 类型必须是 FUSE_SUPER_MAGIC（fake binary 返回 0 但未挂载 → false）；
+ *  2) /proc/self/mountinfo 必须存在该挂载点且 fs type 为 fuse/fuse.overlayfs
+ *     （owned session identity：本进程挂载命名空间内的真实条目）。 */
+function isOwnedFuseMount(merged: string): boolean {
+  try {
+    if (statfsSync(merged).type !== 0x65735546) return false
+  } catch {
+    return false
+  }
+  try {
+    const mountinfo = readFileSync("/proc/self/mountinfo", "utf8")
+    for (const line of mountinfo.split("\n")) {
+      const fields = line.split(" ")
+      if (fields.length < 8 || fields[4] !== merged) continue
+      const separator = fields.indexOf("-")
+      if (separator < 0 || separator + 1 >= fields.length) continue
+      const fsType = fields[separator + 1]!
+      // fuse-overlayfs 挂载点显示为 fuse.fuse-overlayfs（也接受 fuse /
+      // fuse.overlayfs）；宿主 ext4/overlay/tmpfs 等一律不匹配。
+      if (fsType === "fuse" || fsType.startsWith("fuse.")) return true
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
 /**
  * 生产 backend —— fuse-overlayfs（无特权 mount 时真实可用；探测确认）。
  * overlayfs 由探测函数报告（有 CAP_SYS_ADMIN 时）但本实现统一走
@@ -109,6 +138,9 @@ function execFileSyncSafe(binary: string, args: readonly string[]): void {
 export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
   readonly id = "fuse-overlayfs"
   readonly kind = "fuse-overlayfs" as const
+
+  /** binary 路径（默认 "fuse-overlayfs" 查 PATH；测试注入 fake 绝对路径）。 */
+  constructor(private readonly binaryPath = "fuse-overlayfs") {}
 
   create(input: CreateProjectionInput): ProjectionInstance {
     const label = assertSafeLabel(input.label)
@@ -127,8 +159,16 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     let mounted = false
     try {
       // 数组参数 + 无 shell；路径已拒绝 `,`/`:` 注入。
-      execFileSyncSafe("fuse-overlayfs", ["-o", `lowerdir=${lower},upperdir=${upper},workdir=${work}`, merged])
+      execFileSyncSafe(this.binaryPath, ["-o", `lowerdir=${lower},upperdir=${upper},workdir=${work}`, merged])
       mounted = true
+      // R06.1/2：exit 0 不等于已挂载 —— statfs + mountinfo 证明本次
+      // 真实 FUSE mount；fake binary（返回 0 未挂载）→ BACKEND_UNAVAILABLE。
+      if (!isOwnedFuseMount(merged)) {
+        throw new ProjectionError(
+          "BACKEND_UNAVAILABLE",
+          `fuse-overlayfs exited 0 but ${merged} is not a real FUSE mount (statfs/mountinfo attestation failed)`,
+        )
+      }
       // mount ready 确认。
       try {
         statSync(merged)
@@ -170,13 +210,21 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       },
       cleanup: () => {
         if (!existsSync(merged) && !existsSync(upper) && !existsSync(work)) return true
-        let ok = true
-        // 幂等：仅当 merged 仍是 FUSE 挂载点才卸载（statfs type=FUSE_SUPER_MAGIC）。
-        if (this.isFuseMount(merged)) ok = this.unmount(merged) && ok
-        // 只删除本 projection 创建的 upper/work。
+        if (this.isFuseMount(merged)) {
+          const unmounted = this.unmount(merged)
+          if (!unmounted) {
+            // R03.2/3：确认真实卸载成功前禁止删除仍在使用的 upper/work/merged。
+            // unmount 失败 → 保留 residue（可诊断），返回 false（调用方必须
+            // 阻止 World commit 并报告 CLEANUP_FAILED）。
+            return false
+          }
+        }
+        // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work/merged
+        //（merged 卸载后是空挂载点目录，一并清理 —— 无 residue）。
         rmSync(upper, { recursive: true, force: true })
         rmSync(work, { recursive: true, force: true })
-        return ok
+        rmSync(merged, { recursive: true, force: true })
+        return true
       },
     }
   }

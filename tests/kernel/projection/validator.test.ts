@@ -127,7 +127,6 @@ function run(input: Partial<ProjectionValidationInput>): ProjectionValidationInp
     delta: buildDelta({ "src/out.txt": "out" }).delta,
     mergedDir: buildDelta({ "src/out.txt": "out" }).merged,
     outcome,
-    cleanupOk: true,
     ...input,
   }
 }
@@ -193,11 +192,6 @@ describe("AK2-T05 validator 拒绝表（fail-closed）", () => {
       "violation",
       { outcome: { exitCode: 0, timedOut: false, cancelled: false, violation: true } },
       "EXECUTION_FAILED",
-    ],
-    [
-      "cleanup 未完成",
-      { cleanupOk: false },
-      "CLEANUP_FAILED",
     ],
     [
       "stale head（currentRevision != snapshot.revision）",

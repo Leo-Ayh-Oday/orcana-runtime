@@ -1,7 +1,7 @@
 /** AK2-T03 — Native Projection Backend（生产 fuse-overlayfs + fixture + 注入）。 */
 
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -95,9 +95,9 @@ describe("AK2-T03 生产 fuse-overlayfs backend", () => {
     } finally {
       expect(instance.cleanup()).toBe(true)
     }
-    // 卸载后 merged 是空目录（不再是挂载点），upper 已删除。
-    expect(existsSync(join(root, "merged-p1"))).toBe(true)
-    expect(readdirCount(join(root, "merged-p1"))).toBe(0)
+    // 卸载后 merged/upper/work 全部删除（cleanup 无 residue）。
+    expect(existsSync(join(root, "merged-p1"))).toBe(false)
+    expect(readdirCount(join(root, "merged-p1"))).toBe(-1)
     expect(existsSync(join(root, "upper-p1"))).toBe(false)
     expect(existsSync(join(root, "work-p1"))).toBe(false)
     expect(instance.cleanup()).toBe(true)
@@ -137,6 +137,52 @@ describe("AK2-T03 生产 fuse-overlayfs backend", () => {
       },
     }
     expect(instance.cleanup()).toBe(false)
+  })
+
+  test("R06.1：fake fuse-overlayfs 返回 0 但未挂载 → BACKEND_UNAVAILABLE（statfs/mountinfo attestation）", () => {
+    const root = tmpRoot("fakefuse")
+    const lower = join(root, "lower")
+    mkdirSync(lower)
+    writeFileSync(join(lower, "f.txt"), "x")
+    // binaryPath 注入 fake 脚本：立即 exit 0 但不执行任何挂载。
+    const fakeBin = join(root, "fuse-overlayfs-fake")
+    writeFileSync(fakeBin, "#!/bin/sh\nexit 0\n")
+    chmodSync(fakeBin, 0o755)
+    const backend = new FuseOverlayfsProjectionBackend(fakeBin)
+    expect(() =>
+      backend.create({ lowerDir: lower, projectionRoot: root, label: "fake" }),
+    ).toThrow(/not a real FUSE mount|BACKEND_UNAVAILABLE|mount failed/)
+    // 无残留挂载点（create 失败清理）。
+    expect(existsSync(join(root, "merged-fake"))).toBe(false)
+  })
+
+  test("R06.1：fake fuse-overlayfs 返回非 0 → BACKEND_UNAVAILABLE", () => {
+    const root = tmpRoot("fakefuse2")
+    const lower = join(root, "lower")
+    mkdirSync(lower)
+    writeFileSync(join(lower, "f.txt"), "x")
+    const fakeBin = join(root, "fuse-overlayfs-fake2")
+    writeFileSync(fakeBin, "#!/bin/sh\nexit 3\n")
+    chmodSync(fakeBin, 0o755)
+    const backend = new FuseOverlayfsProjectionBackend(fakeBin)
+    expect(() =>
+      backend.create({ lowerDir: lower, projectionRoot: root, label: "fake2" }),
+    ).toThrow(ProjectionError)
+  })
+
+  test("R06.2：真实挂载后 cleanup 幂等（二次调用 true；卸载成功后不保留 residue）", () => {
+    const root = tmpRoot("idem")
+    const lower = join(root, "lower")
+    mkdirSync(lower)
+    writeFileSync(join(lower, "f.txt"), "x")
+    chmodSync(lower, 0o755)
+    const backend = new FuseOverlayfsProjectionBackend()
+    const instance = backend.create({ lowerDir: lower, projectionRoot: root, label: "i" })
+    expect(instance.cleanup()).toBe(true)
+    expect(instance.cleanup()).toBe(true)
+    expect(existsSync(join(root, "upper-i"))).toBe(false)
+    expect(existsSync(join(root, "work-i"))).toBe(false)
+    expect(existsSync(join(root, "merged-i"))).toBe(false)
   })
 })
 

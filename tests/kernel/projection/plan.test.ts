@@ -210,4 +210,60 @@ describe("AK2-T01 plan 冻结与归属", () => {
       throw new Error(`expected rejection ${code} for ${JSON.stringify(overrides)}`)
     }
   })
+
+  test("projectionId safe-token：路径逃逸/分隔符/dot/控制字符全部拒绝（R01.1）", () => {
+    const cases: Array<[string, string]> = [
+      ["../escape", "dotdot"],
+      ["a/b", "slash"],
+      ["a\\b", "backslash"],
+      ["a.b", "dot"],
+      [".", "single dot"],
+      ["..", "dotdot token"],
+      ["/abs", "absolute"],
+      ["a\0b", "NUL"],
+      ["a\nb", "LF"],
+      [" a", "leading space"],
+      ["a ", "trailing space"],
+      ["a:b", "colon"],
+      ["x".repeat(129), "oversize"],
+      ["proj-1/", "trailing slash"],
+    ]
+    for (const [projectionId, label] of cases) {
+      try {
+        validateWorldProjectionPlan(basePlan({ projectionId }))
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("INVALID_PROJECTION_ID")
+        continue
+      }
+      throw new Error(`expected INVALID_PROJECTION_ID for projectionId=${JSON.stringify(projectionId)} (${label})`)
+    }
+    // 合法 token 仍通过。
+    for (const ok of ["proj-1", "proj_2", "A1-b2", "abc"]) {
+      expect(validateWorldProjectionPlan(basePlan({ projectionId: ok })).projectionId).toBe(ok)
+    }
+  })
+
+  test("正交状态契约：REJECTED 可配 COMPLETED/FAILED/CANCELLED；非法组合不可表达（R06.6）", () => {
+    const { isValidProjectionStateVector } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
+    // 合法组合。
+    expect(isValidProjectionStateVector("UNPROJECTED", "PENDING")).toBe(true)
+    expect(isValidProjectionStateVector("PROJECTED", "PENDING")).toBe(true)
+    expect(isValidProjectionStateVector("DELTA_READY", "COMPLETED")).toBe(true)
+    expect(isValidProjectionStateVector("COMMIT_PENDING", "COMPLETED")).toBe(true)
+    expect(isValidProjectionStateVector("COMMITTED", "COMPLETED")).toBe(true)
+    expect(isValidProjectionStateVector("CONFLICTED", "COMPLETED")).toBe(true)
+    // R06.6：实现实际产生的 REJECTED 三态都可表达。
+    expect(isValidProjectionStateVector("REJECTED", "COMPLETED")).toBe(true)
+    expect(isValidProjectionStateVector("REJECTED", "FAILED")).toBe(true)
+    expect(isValidProjectionStateVector("REJECTED", "CANCELLED")).toBe(true)
+    // 非法组合全部拒绝。
+    expect(isValidProjectionStateVector("COMMITTED", "FAILED")).toBe(false)
+    expect(isValidProjectionStateVector("COMMITTED", "CANCELLED")).toBe(false)
+    expect(isValidProjectionStateVector("COMMITTED", "PENDING")).toBe(false)
+    expect(isValidProjectionStateVector("DELTA_READY", "PENDING")).toBe(false)
+    expect(isValidProjectionStateVector("COMMIT_PENDING", "FAILED")).toBe(false)
+    expect(isValidProjectionStateVector("CONFLICTED", "FAILED")).toBe(false)
+    expect(isValidProjectionStateVector("UNPROJECTED", "COMPLETED")).toBe(false)
+    expect(isValidProjectionStateVector("PROJECTED", "RUNNING")).toBe(false)
+  })
 })

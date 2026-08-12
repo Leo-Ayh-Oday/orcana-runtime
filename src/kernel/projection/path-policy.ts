@@ -141,6 +141,23 @@ export function buildProjectionScope(
   return Object.freeze({ writableRoots: writable, readonlyRoots: readonly, expectedOutputs: outputs })
 }
 
+/** projectionId 专用 safe-token 语法（fail-closed）：
+ *  - 仅 [A-Za-z0-9_-]（无 `/`、`\`、`.`、`..`、absolute、分隔符）；
+ *  - 无任何控制字符/空白（含空白包围）；
+ *  - 长度 ≤ 128（文件系统组件名限制，防超长）；
+ *  - 用于固定 root 下唯一子目录名（见 coordinator.start 的 strict
+ *    descendant 检查）。其他 ID（worldId/branchId/snapshotId/actor）
+ *    使用宽松 assertProjectionId。 */
+export function assertSafeProjectionId(value: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw new ProjectionError(
+      "INVALID_PROJECTION_ID",
+      `projectionId must match ^[A-Za-z0-9_-]{1,128}$ (no slash/backslash/dot/control/whitespace/oversize): ${JSON.stringify(value)}`,
+    )
+  }
+  return value
+}
+
 /** 合法非空 ID（projectionId/worldId/branchId/snapshotId/actor）。
  *  错误码按 label 精确映射（不统一归 INVALID_WORLD_ID）。 */
 export function assertProjectionId(value: string, label: ProjectionIdLabel): string {

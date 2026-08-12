@@ -47,54 +47,50 @@ export interface ProjectionStateVector {
 }
 
 /** 合法状态向量约束：
- *  - execution 达到 COMPLETED 只能使 world 进入 DELTA_READY/COMMIT_PENDING；
+ *  - execution 达到 COMPLETED 只能使 world 进入 DELTA_READY/COMMIT_PENDING/
+ *    COMMITTED/CONFLICTED/REJECTED；
+ *  - REJECTED 可配 COMPLETED/FAILED/CANCELLED（执行成功但世界拒绝、执行
+ *    失败、执行取消都合法）；
  *  - effect/evidence 在 AK-2 恒为 NONE/PENDING；
- *  - graph completion 不在此向量中（AK-2 无此权威）。 */
-export const PROJECTION_STATE_VECTORS: Readonly<Record<ProjectionWorldState, ProjectionStateVector>> =
+ *  - graph completion 不在此向量中（AK-2 无此权威）。
+ *
+ *  非法组合（不可表达）：world=COMMITTED 配 execution≠COMPLETED、
+ *  world=UNPROJECTED/PROJECTED 配 execution≠PENDING、world=DELTA_READY/
+ *  COMMIT_PENDING/CONFLICTED 配 execution≠COMPLETED。 */
+export const PROJECTION_STATE_VECTORS: Readonly<Record<ProjectionWorldState, readonly ProjectionStateVector[]>> =
   Object.freeze({
-    UNPROJECTED: Object.freeze({
-      execution: "PENDING",
-      world: "UNPROJECTED",
-      effect: "NONE",
-      evidence: "PENDING",
-    }),
-    PROJECTED: Object.freeze({
-      execution: "PENDING",
-      world: "PROJECTED",
-      effect: "NONE",
-      evidence: "PENDING",
-    }),
-    DELTA_READY: Object.freeze({
-      execution: "COMPLETED",
-      world: "DELTA_READY",
-      effect: "NONE",
-      evidence: "PENDING",
-    }),
-    COMMIT_PENDING: Object.freeze({
-      execution: "COMPLETED",
-      world: "COMMIT_PENDING",
-      effect: "NONE",
-      evidence: "PENDING",
-    }),
-    COMMITTED: Object.freeze({
-      execution: "COMPLETED",
-      world: "COMMITTED",
-      effect: "NONE",
-      evidence: "PENDING",
-    }),
-    CONFLICTED: Object.freeze({
-      execution: "COMPLETED",
-      world: "CONFLICTED",
-      effect: "NONE",
-      evidence: "PENDING",
-    }),
-    REJECTED: Object.freeze({
-      execution: "FAILED",
-      world: "REJECTED",
-      effect: "NONE",
-      evidence: "PENDING",
-    }),
+    UNPROJECTED: Object.freeze([
+      Object.freeze({ execution: "PENDING", world: "UNPROJECTED", effect: "NONE", evidence: "PENDING" }),
+    ]),
+    PROJECTED: Object.freeze([
+      Object.freeze({ execution: "PENDING", world: "PROJECTED", effect: "NONE", evidence: "PENDING" }),
+    ]),
+    DELTA_READY: Object.freeze([
+      Object.freeze({ execution: "COMPLETED", world: "DELTA_READY", effect: "NONE", evidence: "PENDING" }),
+    ]),
+    COMMIT_PENDING: Object.freeze([
+      Object.freeze({ execution: "COMPLETED", world: "COMMIT_PENDING", effect: "NONE", evidence: "PENDING" }),
+    ]),
+    COMMITTED: Object.freeze([
+      Object.freeze({ execution: "COMPLETED", world: "COMMITTED", effect: "NONE", evidence: "PENDING" }),
+    ]),
+    CONFLICTED: Object.freeze([
+      Object.freeze({ execution: "COMPLETED", world: "CONFLICTED", effect: "NONE", evidence: "PENDING" }),
+    ]),
+    REJECTED: Object.freeze([
+      Object.freeze({ execution: "COMPLETED", world: "REJECTED", effect: "NONE", evidence: "PENDING" }),
+      Object.freeze({ execution: "FAILED", world: "REJECTED", effect: "NONE", evidence: "PENDING" }),
+      Object.freeze({ execution: "CANCELLED", world: "REJECTED", effect: "NONE", evidence: "PENDING" }),
+    ]),
   })
+
+/** world 状态下 execution 是否合法（正交状态契约）。 */
+export function isValidProjectionStateVector(
+  world: ProjectionWorldState,
+  execution: ProjectionExecutionState,
+): boolean {
+  return PROJECTION_STATE_VECTORS[world].some(vector => vector.execution === execution)
+}
 
 /** WorldProjectionPlan —— 由调用方（Graph/调度）构造、本模块 runtime
  *  验证并冻结。所有路径均为 canonical POSIX relative path。 */
@@ -150,6 +146,29 @@ export interface WorldProjectionReceipt {
   readonly createdAt: number
 }
 
+/** Projection 资源配额 —— 确定性上限，超限 fail-closed（防深树/超大文件
+ *  OOM/stack overflow/CAS 膨胀）。测试可注入更小值。 */
+export interface ProjectionLimits {
+  /** traversal 最大深度（含根）。 */
+  readonly maxDepth: number
+  /** 单侧视图最大 entry 数（file+directory）。 */
+  readonly maxEntries: number
+  /** 单文件最大字节（物化重建与扫描读取共用）。 */
+  readonly maxFileBytes: number
+  /** 单视图全部文件总字节上限。 */
+  readonly maxTreeBytes: number
+  /** FileManifest 最大 chunk 数。 */
+  readonly maxFileChunks: number
+}
+
+export const DEFAULT_PROJECTION_LIMITS: ProjectionLimits = Object.freeze({
+  maxDepth: 64,
+  maxEntries: 100_000,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTreeBytes: 512 * 1024 * 1024,
+  maxFileChunks: 4096,
+})
+
 /** Projection 失败错误码。 */
 export type ProjectionErrorCode =
   | "INVALID_PROJECTION_ID"
@@ -179,6 +198,10 @@ export type ProjectionErrorCode =
   | "EXECUTION_FAILED"
   | "EXECUTION_CANCELLED"
   | "UNEXPECTED_WRITE"
+  | "OBJECT_ID_COLLISION"
+  | "HOST_AUDIT_ACCEPTED_AS_SECURITY_BOUNDARY"
+  | "PROJECTION_RESOURCE_LIMIT"
+  | "PROJECTION_ROOT_ESCAPE"
 
 export class ProjectionError extends Error {
   readonly kind = "ProjectionError" as const

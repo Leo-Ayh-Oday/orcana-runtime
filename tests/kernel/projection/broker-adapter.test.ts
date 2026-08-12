@@ -1,7 +1,7 @@
 /** AK2-T06 — Linux Broker Projection Executor Adapter（真实 broker 执行）。 */
 
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
@@ -40,9 +40,10 @@ function authorityFor(merged: string): TrustedExecutionAuthority {
 }
 
 function adapter(merged: string, overrides: Partial<ConstructorParameters<typeof LinuxBrokerProjectionExecutor>[0]> = {}) {
-  // testCapabilities fixture：跳过宿主真实能力探测（本机探测当前 >5s）；
-  // compileRequest/execute/receipt 仍走真实 broker + host-audit 执行。
-  const broker = createLinuxBroker({ mode: "enabled", testCapabilities: HOST_AUDIT_TEST_CAPABILITIES })
+  // 真实 broker（无 testCapabilities）：真实能力探测 + bubblewrap strict
+  // lane —— receipt.backend 必须是 bubblewrap/podman（R01.4：host-audit
+  // 不能作为安全边界；本机 bwrap unprivilegedUsable 已验证）。
+  const broker = createLinuxBroker({ mode: "enabled" })
   return new LinuxBrokerProjectionExecutor({
     broker,
     authority: authorityFor(merged),
@@ -57,7 +58,15 @@ describe("AK2-T06 adapter 边界", () => {
   test("authority workspace 与 merged 不匹配 → 拒绝（只接收 projection workspace）", async () => {
     const merged = tmpMerged("a")
     const other = tmpMerged("b")
-    const executor = adapter(other)
+    // 拒绝发生在 execute 入口（authority 校验），无需真实探测/执行 ——
+    // 用 fixture capabilities 避免宿主探测（CPU/时间）开销。
+    const executor = new LinuxBrokerProjectionExecutor({
+      broker: createLinuxBroker({ mode: "enabled", testCapabilities: HOST_AUDIT_TEST_CAPABILITIES }),
+      authority: authorityFor(other),
+      writableRoots: ["src"],
+      readonlyRoots: ["docs"],
+      profile: "build",
+    })
     await expect(
       executor.execute(merged, { executable: "/bin/true", args: [] }),
     ).rejects.toMatchObject({ code: "PROJECTION_NOT_PROJECTED" })
@@ -72,6 +81,7 @@ describe("AK2-T06 adapter 边界", () => {
       access: "readonly",
       ownerFiles: [],
     })
+    // 拒绝发生在 execute 入口（authority 校验）——fixture capabilities 足够。
     const broker = createLinuxBroker({ mode: "enabled", testCapabilities: HOST_AUDIT_TEST_CAPABILITIES })
     const executor = new LinuxBrokerProjectionExecutor({
       broker,
@@ -135,7 +145,7 @@ describe("AK2-T06 真实 broker 执行", () => {
 
   test("adapter 不放大权限：writable mounts 只来自 plan scope（编译后 spec 检查）", async () => {
     const merged = tmpMerged("scope")
-    const broker = createLinuxBroker({ mode: "enabled", testCapabilities: HOST_AUDIT_TEST_CAPABILITIES })
+    const broker = createLinuxBroker({ mode: "enabled" })
     const authority = authorityFor(merged)
     const executor = new LinuxBrokerProjectionExecutor({
       broker,
@@ -152,5 +162,54 @@ describe("AK2-T06 真实 broker 执行", () => {
     expect(receipt!.filesystemPolicyDigest.length).toBe(64)
     // 执行位置 = projection workspace（cwd 在 merged 内）。
     expect(authority.workspace.hostRoot).toBe(merged)
+    // R01.4：receipt 必须证明 namespace/container 隔离（非 host-audit）。
+    expect(receipt!.backend).not.toBe("host-audit")
+    expect(["bubblewrap", "rootless-podman"]).toContain(receipt!.backend)
+  })
+
+  test("R01.4：host-audit receipt 不能被 acceptance coordinator 接受 → HOST_AUDIT_ACCEPTED_AS_SECURITY_BOUNDARY", async () => {
+    const merged = tmpMerged("ha")
+    // 显式 diagnostic fixture：host-audit 后端执行成功（exit 0 + receipt），
+    // 但 adapter 必须拒绝 —— Host Audit 不是安全边界。
+    const broker = createLinuxBroker({ mode: "enabled", testCapabilities: HOST_AUDIT_TEST_CAPABILITIES })
+    const executor = new LinuxBrokerProjectionExecutor({
+      broker,
+      authority: authorityFor(merged),
+      writableRoots: ["src"],
+      readonlyRoots: ["docs"],
+      profile: "build",
+    })
+    await expect(
+      executor.execute(merged, { executable: "/bin/true", args: [] }),
+    ).rejects.toMatchObject({ code: "HOST_AUDIT_ACCEPTED_AS_SECURITY_BOUNDARY" })
+  })
+
+  test("R01.5：执行域无法寻址 ../base、projection root 兄弟与宿主绝对路径（bwrap 隔离视图）", async () => {
+    const merged = tmpMerged("iso")
+    // 宿主 marker：测试创建于宿主 /tmp（bwrap 的 /tmp 是空 tmpfs）与
+    // /home（不在 SYSTEM_READONLY_PATHS 布局内）—— cell 内必须不可见。
+    const marker = join(tmpdir(), `ak2-host-marker-${process.pid}`)
+    writeFileSync(marker, "host")
+    try {
+      const executor = adapter(merged)
+      const { outcome } = await executor.execute(merged, {
+        executable: "/bin/sh",
+        args: [
+          "-c",
+          "{ test -e ../base && echo PARENT_BASE_VISIBLE || echo parent_base_hidden; " +
+            "test -e ../merged-m && echo PARENT_MERGED_VISIBLE || echo parent_merged_hidden; " +
+            `test -e ${marker} && echo HOST_TMP_VISIBLE || echo host_tmp_hidden; ` +
+            "test -e /home/fuqiang/worktrees/orcana-agent-os && echo HOST_HOME_VISIBLE || echo host_home_hidden; } > src/out.txt",
+        ],
+      })
+      expect(outcome.exitCode).toBe(0)
+      const output = readFileSync(join(merged, "src/out.txt"), "utf8")
+      expect(output).toContain("parent_base_hidden")
+      expect(output).toContain("parent_merged_hidden")
+      expect(output).toContain("host_tmp_hidden")
+      expect(output).toContain("host_home_hidden")
+    } finally {
+      rmSync(marker, { force: true })
+    }
   })
 })

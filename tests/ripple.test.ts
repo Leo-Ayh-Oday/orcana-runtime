@@ -404,20 +404,87 @@ describe("Ripple Engine", () => {
 })
 
 describe("IC05 Correction P0-E: real ripple write authority (R1/R2/R3)", () => {
-  test("R1: heuristic caller-overflow only → write succeeds, report=warn, disk written", async () => {
-    const root = project({
-      "math.ts": `export function add(a: number, b: number): number { return a + b }\n`,
-      "callers.txt": Array.from({ length: 12 }, (_, i) => `import { add } from "./math" // caller ${i}\n`).join(""),
-    })
+  // IC05 Correction P0-L: 真实 heuristic caller-overflow —— 非导出函数 +
+  // 12 个真实 .ts caller 文件引用 → signature-change (warn) + caller-overflow
+  // (warn)，无 deterministic severity=block。write 必须允许、磁盘写入。
+  test("R1: real heuristic caller-overflow → write allowed, disk written", async () => {
+    const files: Record<string, string> = {
+      "target.ts": `function helper(a: number): number { return a + b0 }\n`,
+    }
+    for (let i = 1; i <= 12; i++) {
+      files[`caller${String(i).padStart(2, "0")}.ts`] = `import { helper } from "./target"\nconst r${i} = helper(${i})\n`
+    }
+    const root = project(files)
     const tool = buildTool(WRITE_FILE)
-    await recordFullBaselines(root, join(root, "math.ts"))
+    await recordFullBaselines(root, join(root, "target.ts"))
+
+    // 先断言 preview 报告：callers >= 11 + caller-overflow(warn) + 无
+    // deterministic severity=block。
+    const before = readFileSync(join(root, "target.ts"), "utf-8")
+    const after = before.replace("return a + b0", "return a + b0 + 1")
+    const report = previewEdit({ targetFile: join(root, "target.ts"), oldContent: before, newContent: after, projectRoot: root })
+    expect(report.callers.length).toBeGreaterThanOrEqual(11)
+    expect(report.findings.some(f => f.kind === "caller-overflow")).toBe(true)
+    expect(report.findings.find(f => f.kind === "caller-overflow")?.severity).toBe("warn")
+    expect(report.findings.some(f => f.severity === "block")).toBe(false)
+    expect(report.decision).toBe("warn")
+
     const result = await tool.execute({
-      path: join(root, "math.ts"),
-      content: `export function add(a: number, b: number): number { return a + b + 1 }\n`,
+      path: join(root, "target.ts"),
+      content: after,
     }, { projectRoot: root })
-    // heuristic（caller-overflow → warn）：write 允许、磁盘写入。
+    // warn → write 允许、磁盘写入。
     expect(result.success).toBe(true)
-    expect(readFileSync(join(root, "math.ts"), "utf-8")).toContain("a + b + 1")
+    expect(readFileSync(join(root, "target.ts"), "utf-8")).toContain("a + b0 + 1")
+  })
+
+  // §13: warn report → obligation 创建 → RippleExitGate DONE blocked →
+  // waive 后不再 block（heuristic → WRITE ALLOW → OBLIGATION → DONE BLOCK）。
+  test("R1b: heuristic warn → obligation created → DONE blocked → waived", async () => {
+    const files: Record<string, string> = {
+      "target.ts": `function helper(a: number): number { return a + b0 }\n`,
+    }
+    for (let i = 1; i <= 12; i++) {
+      files[`caller${String(i).padStart(2, "0")}.ts`] = `import { helper } from "./target"\nconst r${i} = helper(${i})\n`
+    }
+    const root = project(files)
+    const before = readFileSync(join(root, "target.ts"), "utf-8")
+    const after = before.replace("return a + b0", "return a + b0 + 1")
+    const report = previewEdit({ targetFile: join(root, "target.ts"), oldContent: before, newContent: after, projectRoot: root })
+    expect(report.decision).toBe("warn")
+
+    const { obligationsFromReport } = await import("../src/ripple/obligations")
+    const obligations = obligationsFromReport(report, new Set())
+    expect(obligations.length).toBeGreaterThan(0)
+
+    const { createCompletionChain } = await import("../src/agent/gates/sync-completion-chain")
+    const { GateTelemetry } = await import("../src/agent/gates/telemetry")
+    const tel = new GateTelemetry()
+    const cc = {
+      round: 0, finalText: "done", intentPolicy: { mode: "long_task", reason: "t" },
+      taskTracker: null, pendingRippleObligations: obligations,
+      taskHadWrite: true, taskToolErrors: 0, taskModifiedFiles: 1, lastTypecheck: undefined,
+      lastRippleReports: [report], lastVerificationResults: [], planApproved: false,
+      planningRejections: 0, maxRounds: 5, priorTools: [], priorFiles: new Set(),
+      confidenceEvaluator: { evaluate: () => ({ ok: true, confidence: 1 }), evaluateSync: () => ({ ok: true, confidence: 1 }) },
+      completionBlockMessage: null, shouldBreak: false, breakEvent: null, statusMessage: "",
+      injectMessages: [], traceEvent: null,
+    } as never
+    // open obligation → DONE blocked。
+    const blocked = createCompletionChain().evaluateSync(cc, tel)
+    expect(blocked.pass).toBe(false)
+
+    // waive 后不再 block。
+    const waived = obligations.map((o, i) => ({
+      caller: o.caller,
+      symbol: o.symbol,
+      reason: o.reason,
+      waiver: { reason: "manual review", timestamp: Date.now(), waiveId: `w-${i}` },
+    }))
+    const tel2 = new GateTelemetry()
+    const cc2 = { ...(cc as object), pendingRippleObligations: waived }
+    const ok = createCompletionChain().evaluateSync(cc2 as never, tel2)
+    expect(ok.pass).toBe(true)
   })
 
   test("R2: deterministic exported-symbol-removal → write blocked, disk unchanged", async () => {

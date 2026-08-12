@@ -77,6 +77,23 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some(pattern => pattern.test(text))
 }
 
+/**
+ * IC05 P4: 集中式 runtime intent 裁决 —— deterministic 用户 no-write 意图
+ * 优先级高于 Flash Triage 的 execution recommendation。
+ *
+ * classifyIntent(prompt) == readonly（explicit no-write / discussion）→
+ * readonly wins；否则用 triage/execution 分类结果。
+ * （FLASH_TRIAGE_CAN_OVERRIDE_NO_WRITE=0）
+ */
+export function resolveRuntimeIntent(
+  prompt: string,
+  triageIntent?: IntentPolicy,
+): IntentPolicy {
+  const deterministic = classifyIntent(prompt)
+  if (deterministic.mode === "readonly") return deterministic
+  return triageIntent ?? deterministic
+}
+
 export function classifyIntent(prompt: string): IntentPolicy {
   const text = prompt.trim()
   if (!text) return { mode: "readonly", reason: "empty prompt" }

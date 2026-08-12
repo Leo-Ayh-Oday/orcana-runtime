@@ -778,12 +778,16 @@ export function previewEdit(input: RipplePreviewInput): RippleReport {
 
   const MAX_AFFECTED_CALLERS = 10
   if (callers.length > MAX_AFFECTED_CALLERS) {
+    // IC05 P5: caller-overflow 是 heuristic threshold（非已证明的 contract
+    // violation）—— demote 到 warn（advisory / obligation 层，RippleExitGate
+    // 的 obligation 系统负责在 DONE 前要求验证调用方）。HEURISTIC_RIPPLE_
+    // WRITE_BLOCK=0。
     findings.push({
       file: targetFile,
-      severity: "block",
+      severity: "warn",
       kind: "caller-overflow",
-      reason: `Ripple blocked: ${callers.length} callers > limit ${MAX_AFFECTED_CALLERS}.`,
-      suggestedFix: "Reduce scope or manually verify all callers before proceeding.",
+      reason: `Ripple advisory: ${callers.length} callers > limit ${MAX_AFFECTED_CALLERS}. Verify affected callers before completing.`,
+      suggestedFix: "Verify each affected caller handles the changed symbols correctly (obligation).",
     })
   } else if (changedNames.length > 2 && callers.length > 3) {
     findings.push({

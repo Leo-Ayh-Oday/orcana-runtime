@@ -105,6 +105,8 @@ export interface CompletionContext {
    * TaskTracker/Quality gate 读取它，不得自行重新推导同一事实。
    */
   missingTaskRequirements?: string[]
+  /** IC05 P6: ContextDebt obligation snapshot（open → DONE 禁止）。 */
+  contextDebts?: import("../../context/context-debt").ContextDebt[]
 
   // ── Outputs (set by gates) ──
   /** Non-null when a gate blocks completion; loop.ts injects this as a user message. */

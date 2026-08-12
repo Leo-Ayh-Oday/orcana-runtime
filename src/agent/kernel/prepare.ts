@@ -12,6 +12,7 @@ import { shouldRunResearch } from "../research-router"
 import { buildResearchEvidenceContext, buildResearchInsufficientEvidenceMessage } from "../research-answer"
 import { collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMapTaskLevel } from "../../context/context-map"
+import { createContextDebts, openContextDebtCount } from "../../context/context-debt"
 import { getWorkspaceIoAuthority } from "../../runtime/execution-context"
 import { markPlanAccepted } from "../task-tracker"
 import { planProgress } from "../master-plan"
@@ -147,25 +148,41 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
     }, { workspace: getWorkspaceIoAuthority() })
     const readiness = evaluateContextReadiness(runtimeContextMap, contextMapLevel)
     const blockers = readiness.blockers
-    const blocked = contextMapLevel === "high_risk" && blockers.length > 0
+    // IC05 P2: readiness blockers 降级为 ContextDebt（obligation）—— 写工具
+    // 保持可用，DONE 前需偿还。contextReadinessBlocked 恒 false（legacy
+    // field 保留兼容，不再拥有 hard authority）。
+    const debts = createContextDebts({
+      hasLocateResult: readiness.hasLocateResult,
+      hasSourceUnderstanding: readiness.hasSourceUnderstanding,
+      hasProjectConstitution: readiness.hasProjectConstitution,
+      hasVerificationPlan: readiness.hasVerificationPlan,
+      confidence: readiness.confidence,
+      highRisk: contextMapLevel === "high_risk",
+      // TaskTracker requiredVerificationKinds 是 Runtime-owned verification
+      // plan evidence。
+      hasRuntimeVerificationPlan: Boolean(ctx.planning.taskTracker?.requiredVerificationKinds?.length),
+    })
     ctx.contextMap.runtimeContextMap = runtimeContextMap
     ctx.contextMap.contextMapContext = [
       "## Context Map",
       `level: ${contextMapLevel}`,
       formatContextMapSummary(runtimeContextMap),
       `readiness: ${blockers.length ? blockers.join(" | ") : "ready"}`,
-      blocked ? "ContextReadiness blocked write tools until more context is acquired." : "",
+      blockers.length ? `ContextDebt open: ${debts.filter(d => d.status === "open").map(d => d.kind).join(", ")} (advisory — writes allowed)` : "",
     ].filter(Boolean).join("\n")
     ctx.contextMap.contextReadinessBlockers = blockers
-    ctx.contextMap.contextReadinessBlocked = blocked
+    ctx.contextMap.contextReadinessBlocked = false
+    ctx.contextMap.contextDebts = debts
     ctx.contextMap.planContextAttachment = {
       contextMapId: runtimeContextMap.id,
       requiredContextEvidence: contextEvidenceForMap(runtimeContextMap),
     }
-    yield stream({ type: "status", data: `context-map: ${runtimeContextMap.id} ${contextMapLevel} ${blockers.length ? "blocked" : "ready"}` })
+    yield stream({ type: "status", data: `context-map: ${runtimeContextMap.id} ${contextMapLevel} ${debts.length ? "advisory" : "ready"} (${openContextDebtCount(debts)} debts)` })
     yield trace("gate_decision", {
       gate: "context_readiness",
-      decision: blocked ? "block_writes" : "pass",
+      authority: "advisory",
+      decision: debts.length ? "debt_created" : "pass",
+      openDebtCount: openContextDebtCount(debts),
       level: contextMapLevel,
       blockers,
       contextMapId: runtimeContextMap.id,

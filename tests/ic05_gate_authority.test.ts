@@ -582,7 +582,7 @@ describe("IC05 Correction P0-G: structured flash planSteps 保真进 MasterPlan 
           return
         }
         if (options.purpose === "clarification") {
-          yield { type: "text", data: "[clarification-gate]\n" + JSON.stringify({ questions: [{ id: "scope", title: "交付范围", options: [{ key: "A", label: "全部", recommended: true }] }] }) }
+          yield { type: "text", data: "[clarification-gate]\n" + JSON.stringify({ questions: [{ id: "scope", title: "交付范围", options: [{ key: "A", label: "全部", recommended: true }, { key: "B", label: "核心部分" }] }] }) }
           return
         }
         yield { type: "text", data: "proceeding" }
@@ -715,6 +715,25 @@ describe("IC05 Correction P0: constitution probe ABSENT vs READ FAILURE (C1-C3)"
     }
   })
 
+  test("C4 README.md 存在但为空（可读）→ probe=found，不是 read_failed，无 impossible debt", async () => {
+    const root = constitutionRepo({ "README.md": "" })
+    try {
+      const probeResult = await probe(root)
+      expect(probeResult.constitutionProbe).not.toBe("read_failed")
+      expect(probeResult.constitutionProbe).toBe("found")
+      const { createContextDebts } = await import("../src/context/context-debt")
+      const debts = createContextDebts({
+        hasLocateResult: true, hasSourceUnderstanding: true, hasProjectConstitution: true,
+        hasVerificationPlan: true, confidence: 0.9, highRisk: false,
+        constitutionProbeFoundNone: false,
+      })
+      expect(debts.some(d => d.kind === "project_constitution")).toBe(false)
+    } finally {
+      const { rmSync } = await import("node:fs")
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test("C3 AGENTS.md 存在但读取被拒（symlink 逃逸）→ probe=read_failed → debt 保持 OPEN，绝不 unavailable", async () => {
     const root = constitutionRepo({ "AGENTS.md": "SYMLINK-ESCAPE" })
     try {
@@ -733,6 +752,95 @@ describe("IC05 Correction P0: constitution probe ABSENT vs READ FAILURE (C1-C3)"
       expect(constitutionDebt?.status).toBe("open")
     } finally {
       const { rmSync } = await import("node:fs")
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("IC05 Correction M: no-deliverables flash → 无假 package.json / 无 hard arbitrary steps (§3)", () => {
+  test("planSteps 无 deliverables → requiredFiles=[]，verification-only tracker，typecheck 后 complete", async () => {
+    const { buildRunContext } = await import("../src/agent/kernel/context")
+    const { prepareRun } = await import("../src/agent/kernel/prepare")
+    const { drainPhase } = await import("../src/agent/kernel/effects")
+    const { setRunRetryCoordinator } = await import("../src/runtime/execution-context")
+    const { createAgentRunScope, runWithAgentRunScope } = await import("../src/agent/run/scope")
+    const { WorkspaceAuthorityRegistry } = await import("../src/runtime/linux/workspace/workspace-authority")
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const { tmpdir } = await import("node:os")
+    const root = mkdtempSync(join(tmpdir(), "ic05-corr-m-"))
+    mkdirSync(join(root, "src"), { recursive: true })
+    writeFileSync(join(root, "src", "index.ts"), "export const x = 1")
+    // 场景 B：repo 已有 package.json —— 也不得要求修改它。
+    writeFileSync(join(root, "package.json"), '{"name":"existing"}')
+    const { buildTools, Result } = await import("../src/tools/registry")
+    const tools = buildTools({
+      name: "write_file", description: "w", isReadonly: false, isConcurrencySafe: false,
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      async execute(input: Record<string, unknown>) {
+        await import("node:fs").then(fs => fs.promises.writeFile(join(root, String(input.path)), "x"))
+        return Result.ok("ok")
+      },
+    })
+    const provider: LLMProvider = {
+      async *streamChat(options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        if (options.purpose === "flash_triage") {
+          yield { type: "text", data: JSON.stringify({
+            mode: "full_complex", needsWeb: false, researchQueries: [], relevantSkillNames: [],
+            planSteps: [
+              { id: "architecture", title: "Refactor runtime architecture", deliverables: [], verification: "typecheck" },
+            ],
+            requiredVerification: ["typecheck"], reasoning: "complex", riskLevel: "medium",
+          }) }
+          return
+        }
+        if (options.purpose === "clarification") {
+          yield { type: "text", data: "[clarification-gate]\n" + JSON.stringify({ questions: [{ id: "scope", title: "交付范围", options: [{ key: "A", label: "全部", recommended: true }, { key: "B", label: "核心部分" }] }] }) }
+          return
+        }
+        yield { type: "text", data: "proceeding" }
+      },
+    }
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+    setRunRetryCoordinator(coordinator)
+    const registry = new WorkspaceAuthorityRegistry()
+    const workspace = registry.registerMainWorkspace({ projectId: "m", hostRoot: root, access: "readwrite" })
+    const scope = createAgentRunScope({
+      tools: tools as never,
+      id: "agent-run:m",
+      authority: { identity: { runId: "m", nodeRunId: "m:n1", attempt: 1 }, workspace },
+    })
+    try {
+      await runWithAgentRunScope(scope, async () => {
+        const { ctx, earlyStop } = await buildRunContext("implement the feature in the existing TypeScript project with a complete end-to-end flow, verify everything with the typecheck command and ensure no existing functionality regresses", {
+          provider, model: "test", tools: tools as never,
+          maxRounds: 3, contextMapPolicy: "off", flashTriagePolicy: "always", projectRoot: root,
+        }, { startedAt: Date.now(), finalRound: 0, stopReason: "aborted", stopHookDispatched: false, reachedRoundBudget: false })
+        expect(earlyStop).toBeNull()
+        for await (const _e of drainPhase(prepareRun(ctx!), ctx!)) { /* drain */ }
+
+        const tracker = ctx!.planning.taskTracker
+        expect(tracker).toBeTruthy()
+        // requiredFiles=[] —— 无 package.json 发明义务。
+        expect(tracker!.requiredFiles).toEqual([])
+        // 无 arbitrary hard steps（plan/implement/api-layer 等）——
+        // verification-only 最小确定性 tracker。
+        const ids = tracker!.steps.map(s => s.id)
+        expect(ids).toEqual(["verification"])
+        expect(tracker!.requiredVerificationKinds).toContain("typecheck")
+
+        // trusted typecheck PASS → tracker 可 complete。
+        const { updateTaskTrackerAfterTools, taskTrackerComplete } = await import("../src/agent/task-tracker")
+        updateTaskTrackerAfterTools({
+          tracker, changedFiles: [], toolNames: [],
+          verificationResults: [{ kind: "typecheck", passed: true, command: "bun run typecheck", issues: 0, durationMs: 10, summary: "ok" }],
+          skipLegacyStepIds: true,
+        })
+        expect(tracker!.steps.find(s => s.id === "verification")?.status).toBe("done")
+        expect(taskTrackerComplete(tracker!)).toBe(true)
+      })
+    } finally {
+      setRunRetryCoordinator(undefined as never)
       rmSync(root, { recursive: true, force: true })
     }
   })

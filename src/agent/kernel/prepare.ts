@@ -237,6 +237,24 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
       contextBudget: { ...DEFAULT_BUDGET },
     })) {
       yield stream({ type: "status", data: `master-plan: structured flash planSteps (${scope.length} deliverables, ${tracker.requiredVerificationKinds.length} verification)` })
+    } else if (scope.length === 0) {
+      // IC05 Correction M: 无 concrete deliverable —— Flash plan titles 是
+      // advisory artifact，不得进入 completion-hard step list。最小确定性
+      // tracker：只保留 Runtime 可客观偿还的 verification obligation
+      // （steps=[{id:"verification"}] + requiredVerificationKinds），由
+      // updateTaskTrackerAfterTools() 的 verification 路径偿还。
+      const verificationKinds = tracker.requiredVerificationKinds
+      ctx.planning.taskTracker = {
+        goal: tracker.goal,
+        intent: tracker.intent,
+        phase: "building",
+        requiredFiles: [],
+        requiredVerificationKinds: verificationKinds,
+        steps: [{ id: "verification", title: "运行验证命令", status: "running" }],
+        verificationEvidence: {},
+        verification: verificationKinds.map(k => k === "typecheck" ? "运行类型检查" : k === "test" ? "运行测试" : k === "build" ? "运行构建" : "运行验证"),
+      }
+      yield stream({ type: "status", data: `task-tracker: verification-only (${verificationKinds.length} kinds, no concrete deliverables)` })
     }
   }
 

@@ -22,7 +22,12 @@ describe("RC-05 B4 ripple gate independent of cache", () => {
   test("cacheStableTools=true does not disable ripple block", () => {
     const gate = new RippleToolFilterGate()
     const ctx = rippleCtx({
-      rippleReports: [{ decision: "block", targetFile: "a.ts" }],
+      // IC05: block 按 deterministic finding class 判定（heuristic 不 block）。
+      rippleReports: [{
+        decision: "block",
+        targetFile: "a.ts",
+        findings: [{ kind: "exported-symbol-removal", severity: "block" }],
+      }],
     })
     const result = gate.evaluate(ctx as never)
     expect(result.pass).toBe(true)

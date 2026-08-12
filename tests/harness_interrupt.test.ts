@@ -42,7 +42,7 @@ class PlanProvider implements LLMProvider {
       yield {
         type: "text",
         data: JSON.stringify({
-          mode: "full_complex",
+          mode: "plan_before_code",
           needsWeb: false,
           researchQueries: [],
           relevantSkillNames: [],

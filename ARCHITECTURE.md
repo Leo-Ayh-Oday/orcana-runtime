@@ -399,7 +399,7 @@ Every 3 rounds, the thinking store finds semantically similar past records using
 
 Detects when the agent edits its own source files (any file under `src/agent/`, `src/tools/`, `src/ui/`, etc.). Response:
 1. Run root project typecheck
-2. If passes → tell user to restart DeepSeek Code
+2. If passes → tell user to restart Orcana
 3. If fails → inject gate message: "You changed runtime source… must verify then restart"
 4. If both fail at maxRounds → break
 

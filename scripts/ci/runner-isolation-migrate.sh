@@ -38,6 +38,9 @@ echo "==> [2/6] enable lingering for user manager (cgroup delegation)"
 loginctl enable-linger "${DST_USER}" 2>/dev/null || true
 
 echo "==> [3/6] migrate runner directory"
+# Purge per-user /tmp residue owned by the old account (e.g. execd log dirs
+# created under /tmp/orcana-execd) — the new user cannot mkdir inside them.
+rm -rf /tmp/orcana-execd 2>/dev/null || true
 if [ -d "${DST_DIR}" ]; then
   echo "    ${DST_DIR} already exists, skipping copy"
 else

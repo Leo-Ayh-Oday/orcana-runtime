@@ -88,7 +88,9 @@ jobs:
           ids="$(timeout 45s podman ps -a -q --filter label=io.orcana.run || true)"
           if [ -n "$ids" ]; then timeout 60s podman rm -f $ids; fi
           timeout 60s podman system migrate
-          test -z "$(pgrep -x catatonit || true)"
+          # Scope to the runner's own uid: on shared/self-hosted hosts other
+          # users' podman sessions may legitimately hold catatonit processes.
+          test -z "$(pgrep -u "$(id -u)" -x catatonit || true)"
 
   lane-cgroup:
     runs-on: [self-hosted, Linux, X64, orcana-ci]

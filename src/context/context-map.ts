@@ -41,7 +41,13 @@ export interface ProjectConstitution {
   testCommands: string[]
   knownPitfalls: string[]
   importantFiles: string[]
+  /** IC05 Correction P0: bounded constitution probe 客观结局 —— 区分
+   *  客观不存在（absent）与存在但读取失败（read_failed）/ probe 未完成
+   *  （incomplete）。绝不把"存在但读不到"当"不存在"。 */
+  constitutionProbe: ConstitutionProbeOutcome
 }
+
+export type ConstitutionProbeOutcome = "found" | "absent" | "read_failed" | "incomplete"
 
 export interface RepoStructureMap {
   packageManager: "bun" | "pnpm" | "npm" | "yarn" | "unknown"
@@ -159,26 +165,35 @@ export class ContextMapReadSession {
    *  - 预算耗尽 / 中止 → ""（并置位标记，调用方循环提前退出）
    *  - 只分配 min(size, capBytes, maxFileBytes, 剩余预算) 字节。 */
   readText(path: string, capBytes: number, lexicalRoot: string): string {
-    if (this.aborted || this.budgetExhausted) return ""
+    return this.readTextWithOutcome(path, capBytes, lexicalRoot).text
+  }
+
+  /** IC05 Correction N: 带客观结局的读取 —— 区分"读取成功（可能 0 字节）"
+   *  与"读取失败（authority deny / canonical / stat / open-read）"。空文件
+   *  读取成功 ok=true，绝不是 read_failed（EMPTY_READABLE_CONSTITUTION_
+   *  FALSE_FAILURE=0）。abort/budget → ok=false + 既有标记（incomplete）。 */
+  readTextWithOutcome(path: string, capBytes: number, lexicalRoot: string): { ok: boolean; text: string } {
+    if (this.aborted || this.budgetExhausted) return { ok: false, text: "" }
     if (this.signal?.aborted) {
       this.aborted = true
-      return ""
+      return { ok: false, text: "" }
     }
-    if (this.authorityMissing) return ""
+    if (this.authorityMissing) return { ok: false, text: "" }
     // 权威读取强制（秘密 / 越界 / symlink 逃逸）—— lexical + canonical 双查。
     const violation = enforceWorkspaceRead(this.workspace!, path, path, lexicalRoot)
-    if (violation) return ""
+    if (violation) return { ok: false, text: "" }
     let info
     try {
       info = this.reader.statSync(path)
     } catch {
-      return ""
+      return { ok: false, text: "" }
     }
-    if (!info.isRegular) return ""
+    if (!info.isRegular) return { ok: false, text: "" }
     const limit = Math.min(info.size, capBytes, this.reader.maxFileBytes, this.budgetRemaining)
     if (limit <= 0) {
       if (info.size > 0) this.budgetExhausted = true
-      return ""
+      // 0 字节文件：读取成功（空内容）—— 不是失败。
+      return { ok: info.size === 0, text: "" }
     }
     try {
       const buffer = this.reader.readSync(path, limit, {
@@ -189,12 +204,12 @@ export class ContextMapReadSession {
       })
       this.bytesRead += buffer.length
       if (this.bytesRead >= this.budgetBytes) this.budgetExhausted = true
-      return buffer.toString("utf-8")
+      return { ok: true, text: buffer.toString("utf-8") }
     } catch (error) {
       if (error instanceof FileReadError && error.code === "ABORTED") {
         this.aborted = true
       }
-      return ""
+      return { ok: false, text: "" }
     }
   }
 
@@ -244,6 +259,7 @@ export function loadProjectConstitution(
     testCommands: [] as string[],
     knownPitfalls: [] as string[],
     importantFiles: [] as string[],
+    constitutionProbe: "incomplete" as const,
   }
   // IC01-R4: 无 authority 时零元数据泄漏 —— 在任何 existsSync / stat / read 之前
   // 直接返回确定性空结构（不得泄漏文件存在性/文件名）。
@@ -256,6 +272,7 @@ export function loadProjectConstitution(
   const pitfalls: string[] = []
   const importantFiles: string[] = []
 
+  let hadReadFailure = false
   for (const file of CONSTITUTION_FILES) {
     if (session.aborted || session.budgetExhausted) break
     const abs = resolveInside(root, file)
@@ -263,10 +280,17 @@ export function loadProjectConstitution(
     // IC01-R2: 读取经过权威强制（README/src symlink 指向根外或 secret →
     // 拒绝，不进入 importantFiles）；有界读取 —— 大型 README/规则文件/
     // lockfile 绝不整体读入（共享累计预算内）。
-    const text = session.readText(abs, 20_000, root)
-    if (!text) continue
+    const outcome = session.readTextWithOutcome(abs, 20_000, root)
+    if (!outcome.ok) {
+      // IC05 Correction P0: 文件客观存在（existsSync 已确认）但读取被拒/
+      // 失败（authority deny / canonical violation / stat-read failure）——
+      // 这是 read_failed，不是 absent。空文件读取成功（ok=true, text=""）
+      // 不是失败（Correction N）。
+      hadReadFailure = true
+      continue
+    }
     importantFiles.push(file)
-    classifyConstitutionText(file, text, { notes, rules, forbidden, buildCommands, testCommands, pitfalls })
+    classifyConstitutionText(file, outcome.text, { notes, rules, forbidden, buildCommands, testCommands, pitfalls })
   }
 
   if (!session.aborted && !session.budgetExhausted) {
@@ -280,6 +304,16 @@ export function loadProjectConstitution(
     }
   }
 
+  const probeOutcome: ConstitutionProbeOutcome =
+    importantFiles.length > 0 || notes.length > 0 || rules.length > 0 || forbidden.length > 0 ||
+    buildCommands.length > 0 || testCommands.length > 0 || pitfalls.length > 0
+      ? "found"
+      : hadReadFailure
+        ? "read_failed"
+        : session.aborted || session.budgetExhausted
+          ? "incomplete"
+          : "absent"
+
   return {
     architectureNotes: unique(notes),
     codingRules: unique(rules),
@@ -288,6 +322,7 @@ export function loadProjectConstitution(
     testCommands: unique(testCommands),
     knownPitfalls: unique(pitfalls),
     importantFiles: unique(importantFiles),
+    constitutionProbe: probeOutcome,
   }
 }
 

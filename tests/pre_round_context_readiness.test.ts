@@ -42,16 +42,18 @@ function baseContext(tools: ToolDescriptor[], blocked: boolean): PreRoundContext
 }
 
 describe("ContextReadinessToolFilterGate", () => {
-  test("filters write tools while marking the block active", () => {
+  // IC05 P2: ContextReadiness 是 advisory —— 不再 filter write tools
+  //（CONTEXT_READINESS_WRITE_FILTER=0）。blockers 降级为 ContextDebt。
+  test("leaves write tools exposed while readiness is incomplete (IC05 advisory)", () => {
     const read = mockTool("read_file", true)
     const write = mockTool("edit_file", false)
     const ctx = baseContext([read, write], true)
 
     new ContextReadinessToolFilterGate().evaluate(ctx)
 
-    expect(ctx.contextReadinessBlockActive).toBe(true)
-    expect(ctx.tools.map(tool => tool.defn.name)).toEqual(["read_file"])
-    expect(ctx.activeTools.map(tool => tool.defn.name)).toEqual(["read_file"])
+    expect(ctx.contextReadinessBlockActive).toBe(false)
+    expect(ctx.tools.map(tool => tool.defn.name)).toEqual(["read_file", "edit_file"])
+    expect(ctx.activeTools.map(tool => tool.defn.name)).toEqual(["read_file", "edit_file"])
   })
 
   test("leaves tools untouched when readiness is satisfied", () => {

@@ -114,16 +114,16 @@ describe("evaluateToolPolicy — Gate 1: Rate Limit", () => {
 })
 
 describe("evaluateToolPolicy - Context Readiness", () => {
-  test("blocks write tools when context readiness is incomplete", () => {
+  // IC05 P3: ContextReadiness 是 advisory —— contextReadinessBlocked（legacy
+  // field）不再产生写拒绝（CONTEXT_READINESS_TOOL_POLICY_DENY=0）。
+  test("allows write tools when context readiness is incomplete (IC05 advisory)", () => {
     const result = evaluateToolPolicy(baseInput({
-      toolCall: { id: "c1", name: "shell", input: {} },
-      tool: WRITE_TOOL,
+      toolCall: { id: "c1", name: "write_file", input: {} },
+      tool: WRITE_TOOL_LOW_RISK,
       contextReadinessBlocked: true,
       contextReadinessBlockers: ["High-risk task confidence below 0.75."],
     }))
-    expect(result.allowed).toBe(false)
-    expect(blocked(result).reason).toBe("context_readiness")
-    expect(blocked(result).blockMessage).toContain("High-risk task confidence below 0.75.")
+    expect(result.allowed).toBe(true)
   })
 
   test("allows readonly tools when context readiness is incomplete", () => {
@@ -225,14 +225,14 @@ describe("evaluateToolPolicy — Gate 4: Ripple Block", () => {
 })
 
 describe("evaluateToolPolicy — Gate 5: Planning Phase", () => {
-  test("blocks writes when taskTracker is in planning phase", () => {
+  // IC05 P3: planning phase 不再拥有写拒绝权（PLANNING_PHASE_WRITE_DENY=0）。
+  test("allows writes during planning phase (IC05 advisory)", () => {
     const result = evaluateToolPolicy(baseInput({
-      toolCall: { id: "c1", name: "shell", input: {} },
-      tool: WRITE_TOOL,
+      toolCall: { id: "c1", name: "write_file", input: {} },
+      tool: WRITE_TOOL_LOW_RISK,
       taskTracker: { phase: "planning", requiredFiles: [] } as unknown as ToolPolicyInput["taskTracker"],
     }))
-    expect(result.allowed).toBe(false)
-    expect(blocked(result).reason).toBe("planning_phase")
+    expect(result.allowed).toBe(true)
   })
 
   test("allows reads during planning phase", () => {

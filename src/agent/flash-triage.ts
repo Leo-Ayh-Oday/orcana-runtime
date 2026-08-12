@@ -346,8 +346,16 @@ export function buildTrackerFromTriage(
   return {
     goal: prompt.trim().slice(0, 120) || "长任务",
     intent: triageToTaskIntent(triage.mode),
-    phase: triage.mode === "full_complex" ? "planning" : "building",
-    requiredFiles: requiredFiles.length ? requiredFiles : ["package.json"],
+    // IC05 P4 + Correction P0-C: plan_before_code / full_complex 都是模型
+    // heuristic 分类 —— 一律进入 building（执行阶段）。planSteps 作为
+    // planning artifact / MasterPlan 输入（P0-G），不构成 execution lock。
+    // 真正"只给方案不要执行"由 resolveRuntimeIntent() → readonly 保护。
+    phase: "building",
+    // IC05 Correction M: Flash heuristic 无 structured deliverables 时
+    // Runtime 不得发明 package.json obligation —— requiredFiles 只含真实
+    // structured deliverables，允许空数组
+    // （FLASH_NO_DELIVERABLE_FALSE_FILE_OBLIGATION=0）。
+    requiredFiles: requiredFiles,
     requiredVerificationKinds: verificationKinds,
     steps,
   }

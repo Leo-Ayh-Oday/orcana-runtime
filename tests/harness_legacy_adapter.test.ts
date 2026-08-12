@@ -176,7 +176,7 @@ describe("LegacyLoopAdapter execute event bridge", () => {
           yield {
             type: "text",
             data: JSON.stringify({
-              mode: "full_complex",
+              mode: "plan_before_code",
               needsWeb: false,
               researchQueries: [],
               relevantSkillNames: [],
@@ -211,17 +211,15 @@ describe("LegacyLoopAdapter execute event bridge", () => {
       sessionId: "sess-plan",
     })
     const session = await harness.createSession()
-    // No autoApprovePlan: the orchestrator must pause for approval → plan_ready.
+    // IC05 Correction P0-B: Flash heuristic 不再触发 plan_ready —— 普通
+    // 执行任务直接继续（无 mandatory approval pause）。
     const events = await collect(harness.run(session.sessionId, {
       prompt: "Build a complete small service with package setup, API, and typecheck verification.",
       metadata: {},
     }))
 
     const planReadys = events.filter(e => "planReady" in e.payload)
-    expect(planReadys).toHaveLength(1)
-    if (planReadys[0] && "planReady" in planReadys[0].payload) {
-      expect(planReadys[0].payload.planReady.plan).toBeTruthy()
-    }
+    expect(planReadys).toHaveLength(0)
   })
 
   test("bridges clarification_ready into the clarification payload", async () => {

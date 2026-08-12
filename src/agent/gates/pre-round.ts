@@ -41,32 +41,27 @@ export class ReadonlyPlanGate implements Gate<PreRoundContext> {
   evaluate(ctx: PreRoundContext): GateResult {
     if (ctx.cacheStableTools) return { pass: true }
 
-    if (ctx.intentReadonly || ctx.taskPlanning) {
+    // IC05 P0-A: 只有真正 Hard Authority（用户显式 readonly / no-write
+    // intent）能过滤 write 工具。taskPlanning 是 heuristic 状态，不是
+    // execution authorization —— 不得因此滤除写工具或清空 activeTools
+    //（ORDINARY_PLANNING_WRITE_FILTER=0，EXPLICIT_READONLY_WRITE_FILTER=1）。
+    if (ctx.intentReadonly) {
       ctx.tools = ctx.tools.filter(t => t.defn.isReadonly)
     }
-    // Plan-only round: no tools at all
-    if (ctx.taskPlanning && ctx.round > 0) {
-      ctx.activeTools = []
-    } else {
-      ctx.activeTools = ctx.tools
-    }
+    ctx.activeTools = ctx.tools
     return { pass: true }
   }
 }
 
-// ── Gate: Context readiness ──
+// ── Gate: Context readiness（IC05 P2: advisory —— 不再 filter write tools）──
 
 export class ContextReadinessToolFilterGate implements Gate<PreRoundContext> {
   readonly name = "policy:context_readiness_filter"
 
   evaluate(ctx: PreRoundContext): GateResult {
-    if (ctx.contextReadinessBlocked) {
-      ctx.tools = ctx.tools.filter(t => t.defn.isReadonly)
-      ctx.activeTools = ctx.tools
-      ctx.contextReadinessBlockActive = true
-    } else {
-      ctx.contextReadinessBlockActive = false
-    }
+    // IC05: ContextReadiness 是 advisory gate。write tools 保持暴露，
+    // readiness blockers 以 ContextDebt（obligation）形式在 DONE 前偿还。
+    ctx.contextReadinessBlockActive = false
     return { pass: true }
   }
 }
@@ -91,9 +86,39 @@ export class RippleToolFilterGate implements Gate<PreRoundContext> {
   }
 }
 
-function strongestRippleDecision(reports: RippleReport[], pending: RippleObligation[]): "allow" | "warn" | "block" | undefined {
+/** IC05 P5: deterministic contract-violation kinds（真实 API surface diff）。 */
+export const DETERMINISTIC_RIPPLE_KINDS = new Set<string>([
+  "exported-symbol-removal",
+  "deprecated-replacement",
+  "async-return-change",
+  "exported-type-change",
+  "signature-change",
+])
+
+/** IC05 P5: heuristic kinds —— 永远不单独获得 write hard-block 权。 */
+export const HEURISTIC_RIPPLE_KINDS = new Set<string>([
+  "caller-overflow",
+  "depth-warning",
+  "memory-contract",
+])
+
+/** 报告是否存在 deterministic contract violation（→ hard block）。
+ *  IC05 Correction P0-I: 只有 kind ∈ DETERMINISTIC 且 severity === "block"
+ *  才算 hard —— deterministic kind + warn 不是 hard（保持 advisory）。 */
+export function hasDeterministicBlockingRipple(report: RippleReport): boolean {
+  return report.findings.some(
+    f => DETERMINISTIC_RIPPLE_KINDS.has(f.kind) && f.severity === "block",
+  )
+}
+
+export function strongestRippleDecision(reports: RippleReport[], pending: RippleObligation[]): "allow" | "warn" | "block" | undefined {
+  // IC05 Correction P0-I priority：
+  //   1. deterministic hard（severity=block）—— 最高优先级，绝不被
+  //      pending obligation（warn 级）吞掉
+  //   2. pending obligation / warning（advisory / obligation 层）
+  //   3. 其他 advisory
+  if (reports.some(report => hasDeterministicBlockingRipple(report))) return "block"
   if (getBlockingObligations(pending).length > 0) return "warn"
-  if (reports.some(report => report.decision === "block")) return "block"
   if (reports.some(report => report.decision === "warn")) return "warn"
   if (reports.length > 0) return "allow"
   return undefined

@@ -13,7 +13,7 @@
  * - expectedOutputs 必须在 writable scope 内且不在 readonly scope 内。
  */
 
-import { ProjectionError } from "./contracts"
+import { ProjectionError, type ProjectionErrorCode } from "./contracts"
 
 /** canonicalize 一个相对路径；任何非法形式抛 ProjectionError(INVALID_PATH/
  *  NON_CANONICAL_PATH)。 */
@@ -25,6 +25,9 @@ export function canonicalizeProjectionPath(raw: string): string {
   if (raw.includes("\0")) throw new ProjectionError("INVALID_PATH", "projection path must not contain NUL")
   if (raw.includes("\\")) {
     throw new ProjectionError("INVALID_PATH", "projection path must not contain backslash")
+  }
+  if (/[\r\n]/.test(raw)) {
+    throw new ProjectionError("INVALID_PATH", "projection path must not contain CR/LF")
   }
   if (raw.startsWith("/")) {
     throw new ProjectionError("INVALID_PATH", `projection path must be relative: ${raw}`)
@@ -138,31 +141,37 @@ export function buildProjectionScope(
   return Object.freeze({ writableRoots: writable, readonlyRoots: readonly, expectedOutputs: outputs })
 }
 
-/** 合法非空 ID（projectionId/worldId/branchId/snapshotId/actor）。 */
-export function assertProjectionId(value: string, label: string): string {
+/** 合法非空 ID（projectionId/worldId/branchId/snapshotId/actor）。
+ *  错误码按 label 精确映射（不统一归 INVALID_WORLD_ID）。 */
+export function assertProjectionId(value: string, label: ProjectionIdLabel): string {
+  const code: ProjectionErrorCode =
+    label === "projectionId"
+      ? "INVALID_PROJECTION_ID"
+      : label === "worldId"
+        ? "INVALID_WORLD_ID"
+        : label === "branchId"
+          ? "INVALID_BRANCH_ID"
+          : label === "snapshotId"
+            ? "INVALID_SNAPSHOT_ID"
+            : "INVALID_ACTOR"
   if (typeof value !== "string" || value.length === 0) {
-    throw new ProjectionError(
-      label === "projectionId" ? "INVALID_PROJECTION_ID" : "INVALID_WORLD_ID",
-      `${label} must be a non-empty string`,
-    )
+    throw new ProjectionError(code, `${label} must be a non-empty string`)
   }
   if (value !== value.trim()) {
-    throw new ProjectionError(
-      label === "projectionId" ? "INVALID_PROJECTION_ID" : "INVALID_WORLD_ID",
-      `${label} must not have leading/trailing whitespace`,
-    )
+    throw new ProjectionError(code, `${label} must not have leading/trailing whitespace`)
   }
   if (/[\0\r\n]/.test(value)) {
-    throw new ProjectionError(
-      label === "projectionId" ? "INVALID_PROJECTION_ID" : "INVALID_WORLD_ID",
-      `${label} must not contain NUL/CR/LF`,
-    )
+    throw new ProjectionError(code, `${label} must not contain NUL/CR/LF`)
   }
   if (value.length > 512) {
-    throw new ProjectionError(
-      label === "projectionId" ? "INVALID_PROJECTION_ID" : "INVALID_WORLD_ID",
-      `${label} exceeds 512 chars`,
-    )
+    throw new ProjectionError(code, `${label} exceeds 512 chars`)
   }
   return value
 }
+
+export type ProjectionIdLabel =
+  | "projectionId"
+  | "worldId"
+  | "branchId"
+  | "snapshotId"
+  | "actor"

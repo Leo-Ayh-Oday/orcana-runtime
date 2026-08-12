@@ -7,7 +7,8 @@
  * - 只物化 regular file 与 directory（拒绝 symlink/hardlink/device/FIFO/
  *   socket 语义的 entry；kind=workspace 无 path 时跳过，带 path 拒绝）；
  * - 拒绝 duplicate path、file/directory collision 与 path escape；
- * - 物化完成后 lower base 全部只读（file 0444 / directory 0555）；
+ * - 物化后 lower base：file 0444 物理只读；directory 0755（fuse-overlayfs
+ *   对 0555 目录 copy-up 会 EACCES，目录只读由 overlay 层语义保证）；
  * - 不把 WorldDB/CAS authority 路径暴露给执行环境（只写独立 baseDir）。
  */
 
@@ -186,7 +187,9 @@ export class SnapshotMaterializer {
           throw new ProjectionError("MATERIALIZATION_FAILED", `file entry ${entry.id} has no contentRef`)
         }
       } else if (entry.kind === "directory") {
-        // 允许无 contentRef；有则必须存在（防御）。
+        // 目录允许无 contentRef；有 contentRef 时的存在性由 CAS integrity
+        // 保证（snapshot 存储时 assertManifestReferences 已闭合引用），
+        // 物化不重复验证（也不读取目录内容）。
       } else {
         throw new ProjectionError(
           "MATERIALIZATION_FAILED",

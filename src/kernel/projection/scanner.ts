@@ -20,8 +20,8 @@
  *   world-delta manifest 编码（单一 delta 格式真源）。
  */
 
-import { lstatSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { join, resolve, sep } from "node:path"
+import { lstatSync, readdirSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import {
   canonicalDigest,
   canonicalJson,
@@ -182,20 +182,14 @@ function digestTree(
 }
 
 export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDeltaResult {
-  const baseDir = resolve(input.baseDir)
-  const mergedDir = resolve(input.mergedDir)
-  if (!mergedDir.startsWith(baseDir.replace(/\/[^/]+$/, "") + sep) && false) {
-    // 无约束：base 与 merged 是兄弟目录（coordinator 布局），不强制包含关系。
-  }
-
   const baseNodes = new Map<string, ScannedNode>()
-  walk(baseDir, "", baseNodes)
+  walk(input.baseDir, "", baseNodes)
   const mergedNodes = new Map<string, ScannedNode>()
-  walk(mergedDir, "", mergedNodes)
+  walk(input.mergedDir, "", mergedNodes)
 
   // digest 计算（文件内容 + 目录子项 canonical；全部进 CAS）。
-  const baseDigested = digestTree(baseDir, baseNodes, input.cas)
-  const mergedDigested = digestTree(mergedDir, mergedNodes, input.cas)
+  const baseDigested = digestTree(input.baseDir, baseNodes, input.cas)
+  const mergedDigested = digestTree(input.mergedDir, mergedNodes, input.cas)
 
   const baseFiles = new Map<string, ScannedNode>()
   const baseDirs = new Set<string>()

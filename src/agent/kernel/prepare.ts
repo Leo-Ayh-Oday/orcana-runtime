@@ -18,6 +18,7 @@ import { getWorkspaceIoAuthority } from "../../runtime/execution-context"
 import { markPlanAccepted } from "../task-tracker"
 import { planProgress } from "../master-plan"
 import { activateMasterPlan } from "./master-plan"
+import { DEFAULT_BUDGET, DEFAULT_RIPPLE, isFilePath } from "../task-packet"
 import { patch, stream, trace } from "./effects"
 import type { LoopDecision, RunEffect, RunPhaseContext } from "./types"
 
@@ -151,7 +152,10 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
       userRequest: ctx.effectivePrompt,
       keywords: explicitFilesForContext,
     }, { workspace: getWorkspaceIoAuthority(), session: probeSession })
-    const constitutionProbeCompleted = !probeSession.authorityMissing && !probeSession.aborted && !probeSession.budgetExhausted
+    // IC05 Correction P0: constitution probe 客观结局由 loadProjectConstitution
+    // 判定 —— absent（bounded probe 完成且候选全部客观不存在）才 unavailable；
+    // read_failed / incomplete（存在但被拒/未完成）保持 open。
+    const constitutionProbeStatus = runtimeContextMap.projectConstitution.constitutionProbe
     const readiness = evaluateContextReadiness(runtimeContextMap, contextMapLevel)
     const blockers = readiness.blockers
     // IC05 P2: readiness blockers 降级为 ContextDebt（obligation）—— 写工具
@@ -167,10 +171,10 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
       // TaskTracker requiredVerificationKinds 是 Runtime-owned verification
       // plan evidence。
       hasRuntimeVerificationPlan: Boolean(ctx.planning.taskTracker?.requiredVerificationKinds?.length),
-      // P0-D: 只有 bounded probe 客观完成且未找到 constitution 文件才
-      // 判定 absent → unavailable（probe 中断/无权威 → 保持 open，绝不
-      // 把"没读到"当成"客观不存在"）。
-      constitutionProbeFoundNone: !readiness.hasProjectConstitution && constitutionProbeCompleted,
+      // P0-D: 只有 probe 客观判定 absent 才 unavailable —— read_failed /
+      // incomplete（存在但读取被拒 / probe 中断 / 无权威）保持 open，绝不
+      // 把"存在但读不到"当"客观不存在"。
+      constitutionProbeFoundNone: !readiness.hasProjectConstitution && constitutionProbeStatus === "absent",
     })
     ctx.contextMap.runtimeContextMap = runtimeContextMap
     ctx.contextMap.contextMapContext = [
@@ -200,9 +204,10 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
   }
 
   // IC05 Correction P0-G: Flash triage 的 structured planSteps 是既有
-  // planning artifact —— 激活 MasterPlan 使步骤客观 progression（master-plan
-  // 节点 tracker 用 scope-N / verify-kind ID，经 skipLegacyStepIds 映射），
-  // 避免任意 planStep ID（api-layer / wire-runtime 等）永久 pending。
+  // planning artifact —— 通过 forcePassPacket 直接进入 MasterPlan
+  // （createMasterPlanFromPacket / createTaskTrackerFromPacket 保真：scope-N
+  // ↔ deliverables 文件、verify-kind ↔ requiredVerification），杜绝
+  // title round-trip 丢 evidence（deliverables / verification 不丢失）。
   // 判定：tracker steps 含非 master-plan 格式 ID（非 scope-N/verify-）且
   // 尚未激活 master plan。
   if (
@@ -212,9 +217,26 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
     !ctx.options.resumeFromCheckpoint &&
     ctx.planning.taskTracker.steps.some(step => !/^(scope-|verify-)/.test(step.id))
   ) {
-    const planText = ctx.planning.taskTracker.steps.map(step => `- ${step.title}`).join("\n")
-    if (activateMasterPlan(ctx, planText, ctx.planning.taskTracker.goal)) {
-      yield stream({ type: "status", data: `master-plan: ${planProgress(ctx.planStore.current!)} nodes (flash planSteps)` })
+    const tracker = ctx.planning.taskTracker
+    // 只有 concrete 文件路径 deliverables 进 scope —— 抽象标题（非文件）
+    // 不作为 completion-hard file obligation（§4：禁止 impossible scope-N）。
+    const scope = tracker.requiredFiles.filter(file => isFilePath(file))
+    if (scope.length > 0 && activateMasterPlan(ctx, "", tracker.goal, {
+      taskId: "flash-triage",
+      nodeId: "1",
+      title: tracker.goal,
+      goal: tracker.goal,
+      scope,
+      doneCriteria: scope.map(file => `已写入 ${file}`),
+      verification: tracker.requiredVerificationKinds.map(kind => ({
+        kind,
+        description: `运行 ${kind} 验证`,
+        command: undefined as string | undefined,
+      })),
+      ripplePolicy: { ...DEFAULT_RIPPLE },
+      contextBudget: { ...DEFAULT_BUDGET },
+    })) {
+      yield stream({ type: "status", data: `master-plan: structured flash planSteps (${scope.length} deliverables, ${tracker.requiredVerificationKinds.length} verification)` })
     }
   }
 

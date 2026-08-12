@@ -41,7 +41,13 @@ export interface ProjectConstitution {
   testCommands: string[]
   knownPitfalls: string[]
   importantFiles: string[]
+  /** IC05 Correction P0: bounded constitution probe 客观结局 —— 区分
+   *  客观不存在（absent）与存在但读取失败（read_failed）/ probe 未完成
+   *  （incomplete）。绝不把"存在但读不到"当"不存在"。 */
+  constitutionProbe: ConstitutionProbeOutcome
 }
+
+export type ConstitutionProbeOutcome = "found" | "absent" | "read_failed" | "incomplete"
 
 export interface RepoStructureMap {
   packageManager: "bun" | "pnpm" | "npm" | "yarn" | "unknown"
@@ -244,6 +250,7 @@ export function loadProjectConstitution(
     testCommands: [] as string[],
     knownPitfalls: [] as string[],
     importantFiles: [] as string[],
+    constitutionProbe: "incomplete" as const,
   }
   // IC01-R4: 无 authority 时零元数据泄漏 —— 在任何 existsSync / stat / read 之前
   // 直接返回确定性空结构（不得泄漏文件存在性/文件名）。
@@ -256,6 +263,7 @@ export function loadProjectConstitution(
   const pitfalls: string[] = []
   const importantFiles: string[] = []
 
+  let hadReadFailure = false
   for (const file of CONSTITUTION_FILES) {
     if (session.aborted || session.budgetExhausted) break
     const abs = resolveInside(root, file)
@@ -264,7 +272,13 @@ export function loadProjectConstitution(
     // 拒绝，不进入 importantFiles）；有界读取 —— 大型 README/规则文件/
     // lockfile 绝不整体读入（共享累计预算内）。
     const text = session.readText(abs, 20_000, root)
-    if (!text) continue
+    if (!text) {
+      // IC05 Correction P0: 文件客观存在（existsSync 已确认）但读取被拒/
+      // 失败（authority deny / canonical violation / stat-read failure）——
+      // 这是 read_failed，不是 absent。
+      hadReadFailure = true
+      continue
+    }
     importantFiles.push(file)
     classifyConstitutionText(file, text, { notes, rules, forbidden, buildCommands, testCommands, pitfalls })
   }
@@ -280,6 +294,16 @@ export function loadProjectConstitution(
     }
   }
 
+  const probeOutcome: ConstitutionProbeOutcome =
+    importantFiles.length > 0 || notes.length > 0 || rules.length > 0 || forbidden.length > 0 ||
+    buildCommands.length > 0 || testCommands.length > 0 || pitfalls.length > 0
+      ? "found"
+      : hadReadFailure
+        ? "read_failed"
+        : session.aborted || session.budgetExhausted
+          ? "incomplete"
+          : "absent"
+
   return {
     architectureNotes: unique(notes),
     codingRules: unique(rules),
@@ -288,6 +312,7 @@ export function loadProjectConstitution(
     testCommands: unique(testCommands),
     knownPitfalls: unique(pitfalls),
     importantFiles: unique(importantFiles),
+    constitutionProbe: probeOutcome,
   }
 }
 

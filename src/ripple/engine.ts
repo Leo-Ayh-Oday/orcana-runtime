@@ -402,9 +402,9 @@ export function tightenRippleDecision(report: RippleReport, mode: RuntimeContext
   // 真正能 block 的只有 deterministic severity=block finding 或
   // RuntimeContextBudgetMode==="block"（上文）。heuristic 影响保留为
   // warn（→ obligation，DONE 前偿还）。HEURISTIC_RIPPLE_WRITE_BLOCK=0。
-  if (report.decision === "block") return "block"
-  if (report.findings.some(f => f.severity === "block")) return "block"
-  return "warn"
+  // §14: identity-preserving —— allow → allow，warn → warn。
+  if (report.decision === "block" || report.findings.some(f => f.severity === "block")) return "block"
+  return report.decision
 }
 
 export function cascadeAwareDecision(report: RippleReport, modifiedFiles: Set<string>, mode: RuntimeContextBudgetMode): RippleDecision {

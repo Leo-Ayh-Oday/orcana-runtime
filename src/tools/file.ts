@@ -723,7 +723,7 @@ async function write_file(params: Record<string, unknown>, context?: ToolExecuti
     // Ripple pre-check
     const ripple = previewEdit({ targetFile: p, oldContent, newContent: content, mode: "write_file" })
     const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
-    if (effectiveDecision !== "allow") {
+    if (effectiveDecision === "block") {
       return Result.blocked(`${formatRippleBlock(ripple)}`)
     }
 
@@ -796,7 +796,7 @@ async function edit_file(params: Record<string, unknown>, context?: ToolExecutio
     // Ripple pre-check
     const ripple = previewEdit({ targetFile: p, oldContent: content, newContent, mode: "edit_file" })
     const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
-    if (effectiveDecision !== "allow") {
+    if (effectiveDecision === "block") {
       return Result.blocked(formatRippleBlock(ripple))
     }
 
@@ -882,7 +882,7 @@ async function multi_edit(params: Record<string, unknown>, context?: ToolExecuti
 
     for (const report of reports) {
       const effectiveDecision = cascadeAwareDecision(report, modifiedFiles, getRuntimeContextBudgetMode())
-      if (effectiveDecision !== "allow") {
+      if (effectiveDecision === "block") {
         return Result.blocked(formatRippleBlock(report))
       }
     }
@@ -1055,7 +1055,7 @@ async function edit_symbol(params: Record<string, unknown>, context?: ToolExecut
 
     const ripple = previewEdit({ targetFile: p, oldContent: content, newContent: replacement, mode: "edit_file" })
     const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
-    if (effectiveDecision !== "allow") {
+    if (effectiveDecision === "block") {
       return Result.blocked(formatRippleBlock(ripple))
     }
 
@@ -1240,7 +1240,7 @@ async function edit_fim(params: Record<string, unknown>, context?: ToolExecution
 
     const ripple = previewEdit({ targetFile: p, oldContent, newContent: result.fullNewFile, mode: "edit_fim" })
     const effectiveDecision = tightenRippleDecision(ripple, getRuntimeContextBudgetMode())
-    if (effectiveDecision !== "allow") {
+    if (effectiveDecision === "block") {
       return Result.blocked(`${formatRippleBlock(ripple)}\n\nFIM preview:\n${result.newText.slice(0, 500)}`)
     }
     const relPath = toolRelativePath(context, p)

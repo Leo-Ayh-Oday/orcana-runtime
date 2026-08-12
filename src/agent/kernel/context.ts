@@ -274,7 +274,12 @@ export async function buildRunContext(
     // no-write 意图优先（resolveRuntimeIntent）。
     const triageIntent: ReturnType<typeof classifyIntent> = { mode: triageModeToIntent(triageResult.mode), reason: `Flash triage: ${triageResult.reasoning}` }
     initialIntentPolicy = resolveRuntimeIntent(effectivePrompt, triageIntent)
-    const trackerDef = buildTrackerFromTriage(triageResult, effectivePrompt)
+    // IC05 Correction P0-F: readonly 最终意图不得继承 Flash execution
+    // tracker（required files / verification obligations）—— 用户说"不要
+    // 执行"就不能有 execution tracker（READONLY_EXECUTION_TRACKER=0）。
+    const trackerDef = initialIntentPolicy.mode === "readonly"
+      ? null
+      : buildTrackerFromTriage(triageResult, effectivePrompt)
     if (trackerDef) {
       initialTaskTracker = { ...trackerDef, verificationEvidence: {}, verification: trackerDef.requiredVerificationKinds.map(k => k === "typecheck" ? "运行类型检查" : k === "test" ? "运行测试" : k === "build" ? "运行构建" : "运行验证") }
     }

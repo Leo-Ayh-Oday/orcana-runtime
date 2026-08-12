@@ -872,6 +872,18 @@ export async function* runRound(
     if (acquisitionEvidence.length > 0) {
       resolveContextDebts(ctx.contextMap.contextDebts, acquisitionEvidence)
     }
+    // IC05 Correction P1-H: 真实可信 verification 结果（parsed
+    // VerificationResult，非任意 shell 文本）→ verification_plan debt
+    // 客观结算（Runtime-owned evidence）。
+    if (verificationResultsThisRound.some(r => r.passed)) {
+      const planDebt = ctx.contextMap.contextDebts.find(d => d.kind === "verification_plan" && d.status === "open")
+      if (planDebt) {
+        planDebt.status = "resolved"
+        planDebt.evidence.push(
+          `trusted verification: ${verificationResultsThisRound.filter(r => r.passed).map(r => `${r.kind} (${r.command})`).join(", ")}`,
+        )
+      }
+    }
   }
 
   // TB2-1: 受约束恢复结束——本轮成功执行了工具调用，复位 thinking 降级。

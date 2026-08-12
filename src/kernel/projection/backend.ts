@@ -107,10 +107,16 @@ function execFileSyncSafe(binary: string, args: readonly string[]): void {
  *  2) /proc/self/mountinfo 必须存在该挂载点且 fs type 为 fuse/fuse.overlayfs
  *     （owned session identity：本进程挂载命名空间内的真实条目）。 */
 function isOwnedFuseMount(merged: string): boolean {
+  return ownedFuseMountId(merged) !== undefined
+}
+
+/** 返回 mountinfo 中该挂载点的 mount id（无 → undefined）。
+ *  mountinfo 行：<mount-id> <parent> <major:minor> <root> <mount-point> ... */
+function ownedFuseMountId(merged: string): string | undefined {
   try {
-    if (statfsSync(merged).type !== 0x65735546) return false
+    if (statfsSync(merged).type !== 0x65735546) return undefined
   } catch {
-    return false
+    return undefined
   }
   try {
     const mountinfo = readFileSync("/proc/self/mountinfo", "utf8")
@@ -122,12 +128,17 @@ function isOwnedFuseMount(merged: string): boolean {
       const fsType = fields[separator + 1]!
       // fuse-overlayfs 挂载点显示为 fuse.fuse-overlayfs（也接受 fuse /
       // fuse.overlayfs）；宿主 ext4/overlay/tmpfs 等一律不匹配。
-      if (fsType === "fuse" || fsType.startsWith("fuse.")) return true
+      if (fsType === "fuse" || fsType.startsWith("fuse.")) {
+        // 同时验证 mount source 是本进程的 fuse-overlayfs（不是其它 FUSE）。
+        const source = fields.slice(separator + 2).join(" ").split(" ")[0]
+        if (source !== "fuse-overlayfs") return undefined
+        return fields[0]
+      }
     }
   } catch {
-    return false
+    return undefined
   }
-  return false
+  return undefined
 }
 
 /**
@@ -154,19 +165,37 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     const merged = assertSafeMountPath(join(projectionRoot, `merged-${label}`), projectionRoot)
     mkdirSync(upper, { mode: 0o700 })
     mkdirSync(work, { mode: 0o700 })
-    mkdirSync(merged, { mode: 0o700 })
+    // 已存在（可能含外部/错误挂载）→ 不覆盖，交给 P2-3 beforeMounted 检查。
+    if (!existsSync(merged)) mkdirSync(merged, { mode: 0o700 })
 
     let mounted = false
     try {
+      // P2-3：invocation 之前不允许存在对应 owned mount —— 挂载前快照
+      // merged 的 mountinfo 状态（已有 FUSE 挂载 → 拒绝：不是本次创建）。
+      const beforeMounted = isOwnedFuseMount(merged)
+      if (beforeMounted) {
+        throw new ProjectionError(
+          "BACKEND_UNAVAILABLE",
+          `merged ${merged} already has a FUSE mount before this invocation (wrong/foreign mount refused)`,
+        )
+      }
+      const beforeMountId = ownedFuseMountId(merged)
       // 数组参数 + 无 shell；路径已拒绝 `,`/`:` 注入。
       execFileSyncSafe(this.binaryPath, ["-o", `lowerdir=${lower},upperdir=${upper},workdir=${work}`, merged])
       mounted = true
-      // R06.1/2：exit 0 不等于已挂载 —— statfs + mountinfo 证明本次
-      // 真实 FUSE mount；fake binary（返回 0 未挂载）→ BACKEND_UNAVAILABLE。
-      if (!isOwnedFuseMount(merged)) {
+      // R06.1/2 + P2-3：exit 0 不等于已挂载 —— statfs + mountinfo 证明本次
+      // 真实 FUSE mount；且挂载 identity 必须是 invocation 后新出现的
+      //（fake binary 创建“真的但错误的 FUSE mount”在 before 快照即拒绝；
+      //  返回 0 未挂载 → mountinfo 无新条目 → 拒绝）。
+      const afterMountId = ownedFuseMountId(merged)
+      if (
+        afterMountId === undefined ||
+        afterMountId === beforeMountId ||
+        !isOwnedFuseMount(merged)
+      ) {
         throw new ProjectionError(
           "BACKEND_UNAVAILABLE",
-          `fuse-overlayfs exited 0 but ${merged} is not a real FUSE mount (statfs/mountinfo attestation failed)`,
+          `fuse-overlayfs exited 0 but ${merged} is not a real FUSE mount created by this invocation (statfs/mountinfo attestation failed)`,
         )
       }
       // mount ready 确认。
@@ -186,11 +215,16 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 文件保持只读（写永远落在 upper，lower 不可被 merged 写穿透）。
       this.chmodMergedWritable(merged)
     } catch (error) {
-      // 挂载失败 → 清理已建目录后抛出。
+      // 挂载失败 → 清理已建目录后抛出（挂载点删除 best-effort —— EBUSY
+      // 残留交给 cleanup/residue 语义，不掩盖原始 attestation 错误）。
       if (mounted) this.unmount(merged)
-      rmSync(upper, { recursive: true, force: true })
-      rmSync(work, { recursive: true, force: true })
-      rmSync(merged, { recursive: true, force: true })
+      try {
+        rmSync(upper, { recursive: true, force: true })
+        rmSync(work, { recursive: true, force: true })
+        rmSync(merged, { recursive: true, force: true })
+      } catch {
+        // best-effort
+      }
       throw error instanceof ProjectionError
         ? error
         : new ProjectionError(

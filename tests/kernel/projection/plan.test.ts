@@ -243,16 +243,90 @@ describe("AK2-T01 plan 冻结与归属", () => {
     }
   })
 
+  test("P2-4：ProjectionLimits 运行时验证（NaN/Infinity/0/负/unsafe/跨字段）", () => {
+    const { validateProjectionLimits } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
+    const base = { maxDepth: 64, maxEntries: 100, maxFileBytes: 1024, maxTreeBytes: 4096, maxFileChunks: 8 }
+    // 合法。
+    expect(validateProjectionLimits({ ...base })).toBeDefined()
+    const bad: Array<[Partial<typeof base>, string]> = [
+      [{ maxDepth: NaN }, "NaN"],
+      [{ maxDepth: Infinity }, "Infinity"],
+      [{ maxDepth: -Infinity }, "-Infinity"],
+      [{ maxDepth: -1 }, "negative"],
+      [{ maxDepth: 0 }, "zero"],
+      [{ maxEntries: 1.5 }, "non-integer"],
+      [{ maxFileBytes: Number.MAX_SAFE_INTEGER + 1 }, "unsafe integer"],
+      [{ maxTreeBytes: 512 }, "maxTreeBytes < maxFileBytes"],
+    ]
+    for (const [overrides, label] of bad) {
+      try {
+        validateProjectionLimits({ ...base, ...overrides })
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("PROJECTION_RESOURCE_LIMIT")
+        continue
+      }
+      throw new Error(`expected PROJECTION_RESOURCE_LIMIT for ${label}`)
+    }
+  })
+
+  test("P2-5：reachable transition model —— 合法序列可达、非法转移拒绝", () => {
+    const { applyProjectionStateTransition, isValidProjectionStateVector } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
+    // 完整 reachable 序列：start → execute → scan → commit。
+    let world: import("../../../src/kernel/projection/contracts").ProjectionWorldState = "UNPROJECTED"
+    let exec: import("../../../src/kernel/projection/contracts").ProjectionExecutionState = "PENDING"
+    const step = (t: Parameters<typeof applyProjectionStateTransition>[2]): void => {
+      const next = applyProjectionStateTransition(world, exec, t)
+      world = next.world
+      exec = next.execution
+    }
+    step({ kind: "start" })
+    expect(world as string).toBe("PROJECTED")
+    step({ kind: "execute-start" })
+    expect(exec as string).toBe("STARTING")
+    step({ kind: "execute-running" })
+    expect(exec as string).toBe("RUNNING")
+    step({ kind: "execute-completed" })
+    expect(exec as string).toBe("COMPLETED")
+    step({ kind: "scan-completed" })
+    expect(world as string).toBe("DELTA_READY")
+    step({ kind: "commit-pending" })
+    expect(world as string).toBe("COMMIT_PENDING")
+    step({ kind: "committed" })
+    expect(world as string).toBe("COMMITTED")
+    // 非法转移：已 COMMITTED 再 scan → 拒绝。
+    expect(() => applyProjectionStateTransition(world, exec, { kind: "scan-completed" })).toThrow(ProjectionError)
+    // 失败序列：execute-failed 保留 world=PROJECTED；rejected 保留 FAILED。
+    world = "PROJECTED"; exec = "RUNNING"
+    step({ kind: "execute-failed" })
+    expect(exec as string).toBe("FAILED")
+    step({ kind: "rejected" })
+    expect(world as string).toBe("REJECTED")
+    expect(exec as string).toBe("FAILED")
+    expect(isValidProjectionStateVector("REJECTED", "FAILED")).toBe(true)
+    // cancelled 序列。
+    world = "PROJECTED"; exec = "RUNNING"
+    step({ kind: "execute-cancelled" })
+    step({ kind: "rejected" })
+    expect(isValidProjectionStateVector("REJECTED", "CANCELLED")).toBe(true)
+    // 非法起点：UNPROJECTED+RUNNING 不允许任何转移。
+    expect(() => applyProjectionStateTransition("UNPROJECTED", "RUNNING", { kind: "start" })).toThrow(ProjectionError)
+  })
+
   test("正交状态契约：REJECTED 可配 COMPLETED/FAILED/CANCELLED；非法组合不可表达（R06.6）", () => {
     const { isValidProjectionStateVector } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
-    // 合法组合。
+    // 合法组合（P2-5 reachable model）。
     expect(isValidProjectionStateVector("UNPROJECTED", "PENDING")).toBe(true)
     expect(isValidProjectionStateVector("PROJECTED", "PENDING")).toBe(true)
+    expect(isValidProjectionStateVector("PROJECTED", "STARTING")).toBe(true)
+    expect(isValidProjectionStateVector("PROJECTED", "RUNNING")).toBe(true)
+    expect(isValidProjectionStateVector("PROJECTED", "COMPLETED")).toBe(true)
+    expect(isValidProjectionStateVector("PROJECTED", "FAILED")).toBe(true)
+    expect(isValidProjectionStateVector("PROJECTED", "CANCELLED")).toBe(true)
     expect(isValidProjectionStateVector("DELTA_READY", "COMPLETED")).toBe(true)
     expect(isValidProjectionStateVector("COMMIT_PENDING", "COMPLETED")).toBe(true)
     expect(isValidProjectionStateVector("COMMITTED", "COMPLETED")).toBe(true)
     expect(isValidProjectionStateVector("CONFLICTED", "COMPLETED")).toBe(true)
-    // R06.6：实现实际产生的 REJECTED 三态都可表达。
+    // REJECTED 三态都可表达。
     expect(isValidProjectionStateVector("REJECTED", "COMPLETED")).toBe(true)
     expect(isValidProjectionStateVector("REJECTED", "FAILED")).toBe(true)
     expect(isValidProjectionStateVector("REJECTED", "CANCELLED")).toBe(true)
@@ -261,9 +335,11 @@ describe("AK2-T01 plan 冻结与归属", () => {
     expect(isValidProjectionStateVector("COMMITTED", "CANCELLED")).toBe(false)
     expect(isValidProjectionStateVector("COMMITTED", "PENDING")).toBe(false)
     expect(isValidProjectionStateVector("DELTA_READY", "PENDING")).toBe(false)
+    expect(isValidProjectionStateVector("DELTA_READY", "RUNNING")).toBe(false)
     expect(isValidProjectionStateVector("COMMIT_PENDING", "FAILED")).toBe(false)
     expect(isValidProjectionStateVector("CONFLICTED", "FAILED")).toBe(false)
+    expect(isValidProjectionStateVector("CONFLICTED", "PENDING")).toBe(false)
     expect(isValidProjectionStateVector("UNPROJECTED", "COMPLETED")).toBe(false)
-    expect(isValidProjectionStateVector("PROJECTED", "RUNNING")).toBe(false)
+    expect(isValidProjectionStateVector("UNPROJECTED", "RUNNING")).toBe(false)
   })
 })

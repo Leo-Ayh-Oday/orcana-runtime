@@ -27,7 +27,7 @@ import {
 } from "node:fs"
 import { join, resolve, sep } from "node:path"
 import type { CasDigest, WorldSnapshot } from "../world/contracts"
-import { ProjectionError, DEFAULT_PROJECTION_LIMITS } from "./contracts"
+import { ProjectionError, DEFAULT_PROJECTION_LIMITS, validateProjectionLimits } from "./contracts"
 import { canonicalizeProjectionPath } from "./path-policy"
 import { parseCanonicalJson } from "../world/canonical"
 
@@ -133,7 +133,10 @@ export class SnapshotMaterializer {
   constructor(
     private readonly source: ProjectionMaterializerSource,
     private readonly limits: import("./contracts").ProjectionLimits = DEFAULT_PROJECTION_LIMITS,
-  ) {}
+  ) {
+    // P2-4：运行时验证（NaN/Infinity/0/负/unsafe integer/跨字段关系）。
+    validateProjectionLimits(this.limits)
+  }
 
   /**
    * 物化 snapshot 到 baseDir（必须已存在且为空）。返回只读 lower base。
@@ -290,9 +293,12 @@ export class SnapshotMaterializer {
     })
   }
 
-  /** 从 WorldStore 严格校验 canonical snapshot 身份字段（R06.5）：
+  /** 从 WorldStore 严格校验 canonical snapshot 身份字段（P1-4）：
    *  worldId/branchId/revision 非空；全部 section digest 存在且为
-   *  manifest 记录；filesystemDigest 对应 section manifest 可读。 */
+   *  manifest 记录；**解析 world manifest（manifestDigest 内容寻址）
+   *  并逐一比对 worldId/branchId/revision 与全部 section digest** ——
+   *  snapshot row 与 world manifest 必须完全一致（forge 的 source
+   *  返回对象无法同时伪造内容寻址的 manifest）。 */
   private assertCanonicalSnapshot(snapshot: WorldSnapshot): void {
     const fail = (detail: string): never => {
       throw new ProjectionError("SNAPSHOT_MISMATCH", `canonical snapshot ${snapshot.snapshotId} failed identity check: ${detail}`)
@@ -317,20 +323,64 @@ export class SnapshotMaterializer {
       }
       if (record.isManifest !== true) fail(`${label}Digest ${digest} is not a manifest`)
     }
-    // manifestDigest 存在（world manifest 引用闭合由 CAS integrity 保证）。
     if (typeof snapshot.manifestDigest !== "string" || !snapshot.manifestDigest.startsWith("sha256:")) {
       fail("manifestDigest missing")
     }
+    // 解析 world manifest（内容寻址 —— 无法伪造与 digest 一致的 bytes）。
+    let manifest: Record<string, unknown> | undefined
+    try {
+      const bytes = this.readCasObjectSafe(snapshot.manifestDigest as CasDigest, "world manifest")
+      const parsed = parseCanonicalJson<unknown>(bytes.toString("utf8"))
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        fail(`manifestDigest ${snapshot.manifestDigest} is not an object`)
+        return
+      }
+      manifest = parsed as Record<string, unknown>
+    } catch (error) {
+      if (error instanceof ProjectionError) throw error
+      fail(`cannot read world manifest ${snapshot.manifestDigest}`)
+    }
+    if (manifest === undefined) {
+      fail(`world manifest ${snapshot.manifestDigest} unreadable`)
+      return
+    }
+    if (manifest.type !== "world" || manifest.schemaVersion !== 1) {
+      fail(`manifestDigest ${snapshot.manifestDigest} is not a world manifest`)
+    }
+    if (manifest.worldId !== snapshot.worldId) fail("world manifest worldId mismatch")
+    if (manifest.branchId !== snapshot.branchId) fail("world manifest branchId mismatch")
+    if (String(manifest.revision) !== String(snapshot.revision)) fail("world manifest revision mismatch")
+    const manifestDigests: Array<[string, unknown]> = [
+      ["filesystem", manifest.filesystemDigest],
+      ["memory", manifest.memoryDigest],
+      ["taskState", manifest.taskStateDigest],
+      ["capabilityState", manifest.capabilityStateDigest],
+      ["serviceState", manifest.serviceStateDigest],
+      ["artifactState", manifest.artifactStateDigest],
+    ]
+    for (const [label, manifestDigest] of manifestDigests) {
+      const expected = digests.find(([name]) => name === label)![1]
+      if (manifestDigest !== expected) {
+        fail(`world manifest ${label}Digest ${String(manifestDigest)} != snapshot ${String(expected)}`)
+      }
+    }
   }
 
-  /** 重建文件原始 bytes（R04）：识别 raw CAS content 与 AK-1 FileManifest。
-   *  FileManifest：完整解析 schema、校验 chunk digest/offset/size/顺序/
-   *  总长度，按序重建；缺失/重复/重叠/越界/digest 错误全部 fail-closed。
-   *  有界：manifest.size 与总字节受 maxFileBytes/maxFileChunks 限制。 */
+  /** 重建文件原始 bytes（R04/P2-2）：识别 raw CAS content 与 AK-1
+   *  FileManifest。**分配前限制**：先查 CAS record.size（字节上限）——
+   *  任何超过 maxFileBytes 的对象在读取/UTF-8 转换/JSON parse/chunks
+   *  数组分配之前拒绝（malicious huge manifest fail-closed）。 */
   private rebuildFileBytes(contentRef: CasDigest, path: string): Buffer {
     const record = this.source.getCasRecord(contentRef)
     if (!record) {
       throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: CAS object ${contentRef} is not registered`)
+    }
+    // P2-2：CAS-record byte ceiling 在任何大读取/分配之前生效。
+    if (record.size > this.limits.maxFileBytes) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `file ${path}: CAS object ${contentRef} size ${record.size} exceeds maxFileBytes ${this.limits.maxFileBytes} (refused before read/allocation)`,
+      )
     }
     const recordIsManifest = record.isManifest
     if (recordIsManifest) {

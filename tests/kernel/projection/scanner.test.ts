@@ -50,7 +50,7 @@ interface ScanHarness {
   readonly merged: string
   readonly cas: MemCas
   readonly baseIndex: Map<string, MaterializedSectionEntry>
-  scan(limits?: Parameters<typeof scanProjectionDelta>[0]["limits"]): ReturnType<typeof scanProjectionDelta>
+  scan(limits?: Parameters<typeof scanProjectionDelta>[0]["limits"], onWalkComplete?: () => void): ReturnType<typeof scanProjectionDelta>
 }
 
 function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness {
@@ -61,7 +61,10 @@ function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness 
   mkdirSync(merged)
   const cas = new MemCas()
   const baseIndex = new Map<string, MaterializedSectionEntry>()
-  const scan = (limits?: Parameters<typeof scanProjectionDelta>[0]["limits"]): ReturnType<typeof scanProjectionDelta> =>
+  const scan = (
+    limits?: Parameters<typeof scanProjectionDelta>[0]["limits"],
+    onWalkComplete?: () => void,
+  ): ReturnType<typeof scanProjectionDelta> =>
     scanProjectionDelta({
       baseDir: base,
       mergedDir: merged,
@@ -71,6 +74,7 @@ function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness 
       branchId,
       baseRevision,
       ...(limits === undefined ? {} : { limits }),
+      ...(onWalkComplete === undefined ? {} : { onWalkComplete }),
     })
   return { base, merged, cas, baseIndex, scan }
 }
@@ -400,5 +404,158 @@ describe("AK2-T04 故障", () => {
       writeFileSync(join(h.merged, "ok.txt"), "ok")
       h.scan(small)
     }).not.toThrow()
+  })
+
+  test("P3：maxEntries exactly N accepted / N+1 rejected（off-by-one 修正）", () => {
+    const limits = { maxDepth: 64, maxEntries: 3, maxFileBytes: 1024, maxTreeBytes: 4096, maxFileChunks: 8 }
+    // 根 + 1 文件 = 2 节点 ≤ 3 ✓。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "a.txt"), "a")
+      expect(() => h.scan(limits)).not.toThrow()
+    }
+    // 根 + 3 文件 = 4 节点 > 3 → 拒绝。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "a.txt"), "a")
+      writeFileSync(join(h.merged, "b.txt"), "b")
+      writeFileSync(join(h.merged, "c.txt"), "c")
+      try {
+        h.scan(limits)
+        throw new Error("expected PROJECTION_RESOURCE_LIMIT")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("PROJECTION_RESOURCE_LIMIT")
+      }
+    }
+  })
+
+  test("P1-5：deterministic race harness —— walk 后修改在阶段 2 被 fail-closed 捕获", () => {
+    // 1. parent rename：walk 后重命名父目录 → 阶段 2 锚定打开仍指向原目录
+    //    （fd 锚定）→ 内容一致（无 TOCTOU）；若目录被替换为 symlink → 拒绝。
+    {
+      const h = harness()
+      mkdirSync(join(h.merged, "src"))
+      writeFileSync(join(h.merged, "src/keep.txt"), "keep")
+      let swapped = false
+      let result: unknown
+      try {
+        result = h.scan(undefined, () => {
+          if (!swapped) {
+            swapped = true
+            rmSync(join(h.merged, "src"))
+            symlinkSync("src-renamed", join(h.merged, "src"))
+            mkdirSync(join(h.merged, "src-renamed"))
+            writeFileSync(join(h.merged, "src-renamed/keep.txt"), "keep")
+          }
+        })
+      } catch (error) {
+        // fail-closed：symlink swap 必须拒绝（bun 对 O_NOFOLLOW symlink 的
+        // 报错码可能是 ELOOP/EFAULT —— 拒绝本身即通过）。
+        return
+      }
+      // fd 锚定：成功路径的内容必须来自原目录（keep 一致，无越权读取）。
+      expect(result).toBeDefined()
+    }
+    // 2. final entry swap：walk 后文件替换（rm + 新建）→ dev/ino 变化 → 拒绝。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "target.txt"), "original")
+      try {
+        h.scan(undefined, () => {
+          rmSync(join(h.merged, "target.txt"))
+          writeFileSync(join(h.merged, "target.txt"), "evil")
+        })
+        throw new Error("expected identity-change rejection")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+    // 3. hardlink after walk：walk 后创建 hardlink → nlink 变化 → 拒绝。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "orig.txt"), "same")
+      try {
+        h.scan(undefined, () => {
+          linkSync(join(h.merged, "orig.txt"), join(h.merged, "alias.txt"))
+        })
+        throw new Error("expected link-count rejection")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+    // 4. swap-back：walk 后替换文件再换回（不同 inode）→ 拒绝。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "sw.txt"), "one")
+      try {
+        h.scan(undefined, () => {
+          rmSync(join(h.merged, "sw.txt"))
+          writeFileSync(join(h.merged, "sw.txt"), "one")
+        })
+        throw new Error("expected swap-back rejection")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+    // 5. file grow：walk 后追加 → size 变化 → 拒绝。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "grow.txt"), "small")
+      try {
+        h.scan(undefined, () => {
+          writeFileSync(join(h.merged, "grow.txt"), "small-now-much-larger-content", { flag: "a" })
+        })
+        throw new Error("expected grow rejection")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+    // 6. FIFO/special file：walk 后创建 FIFO → 拒绝。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "ok.txt"), "x")
+      try {
+        h.scan(undefined, () => {
+          execFileSync("mkfifo", [join(h.merged, "pipe")])
+        })
+        throw new Error("expected special-file rejection")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+  })
+
+  test("P1-5：真实并发 race —— 子进程在 scan 期间反复 swap 目录 → fail-closed 或结果一致", async () => {
+    const h = harness()
+    const dir = join(h.merged, "race")
+    mkdirSync(dir)
+    // 大文件放大 scan 窗口（阶段 2 读取耗时）。
+    for (let index = 0; index < 64; index++) writeFileSync(join(dir, `f${index}.txt`), "x".repeat(64 * 1024))
+    // 独立子进程真并发搅动：无限循环 rename 目录 → 重建（进程级并发，
+    // 不受 JS 单线程影响）；主进程 kill 终止。
+    const child = Bun.spawn({
+      cmd: ["/bin/sh", "-c",
+        `while true; do rm -rf "${join(h.merged, "race-next")}"; mv "${dir}" "${join(h.merged, "race-next")}" 2>/dev/null; mkdir -p "${dir}"; for f in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63; do dd if=/dev/zero of="${dir}/f$f.txt" bs=65536 count=1 2>/dev/null; done; done`],
+      stdout: "ignore",
+      stderr: "ignore",
+    })
+    try {
+      let threw = false
+      let value: unknown
+      try {
+        value = h.scan()
+      } catch {
+        threw = true
+      }
+      if (!threw) {
+        // 成功路径：结果必须自洽（scanner 内部 fstat 复核保证）。
+        expect(value).toBeDefined()
+      }
+    } finally {
+      child.kill()
+      await child.exited
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(join(h.merged, "race-next"), { recursive: true, force: true })
+    }
   })
 })

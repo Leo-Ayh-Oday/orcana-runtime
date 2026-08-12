@@ -20,6 +20,8 @@ import {
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
 import { validateWorldProjectionPlan } from "../../../src/kernel/projection/plan"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
+import { RuntimeStateStore } from "../../../src/runtime/linux/recovery/state-store"
+import { RuntimeStateReceiptAuthority } from "../../../src/kernel/projection/receipt-authority"
 import { HOST_AUDIT_TEST_CAPABILITIES } from "../../helpers/linux-process-test-broker"
 import { WorkspaceAuthorityRegistry } from "../../../src/runtime/linux/workspace/workspace-authority"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
@@ -45,6 +47,7 @@ function tmpRoot(label: string): string {
 async function runVerticalSlice(
   backend: CopyProjectionFixtureBackend | FuseOverlayfsProjectionBackend,
   executor: import("../../../src/kernel/projection/coordinator").ProjectionExecutor,
+  receiptAuthority?: import("../../../src/kernel/projection/receipt-authority").ProjectionReceiptAuthority,
 ): Promise<{ ctx: TestWorldStore; revision: bigint; newContent: string }> {
   const ctx = createTestWorldStore()
   ctx.store.createWorld({
@@ -84,6 +87,9 @@ async function runVerticalSlice(
     projectionRoot: tmpRoot("proj"),
     // A 层 fixture backend 需要显式 test capability（R06.3）。
     allowTestBackends: backend.kind === "fixture" ? true : undefined,
+    // A 层 fixture executor 无真实 receipt —— 仅测试。
+    allowFixtureExecution: backend.kind === "fixture" ? true : undefined,
+    ...(receiptAuthority === undefined ? {} : { receiptAuthority }),
   })
   // 4. native projection。
   const plan = validateWorldProjectionPlan({
@@ -156,8 +162,9 @@ async function fixtureExecutor(cwd: string): Promise<import("../../../src/kernel
 /** B 层 executor：真实 Linux Broker —— 真实能力探测 + bubblewrap strict
  *  lane（R01.4：host-audit 不能作为 AK-2 安全边界；本机已验证
  *  bwrap unprivilegedUsable）。 */
-function brokerExecutorFactory(merged: string) {
-  const broker = createLinuxBroker({ mode: "enabled" })
+function brokerExecutorFactory(merged: string, stateStore?: RuntimeStateStore) {
+  const store = stateStore ?? new RuntimeStateStore({ root: join(tmpdir(), `ak2-slice-state-${process.pid}-${Math.random().toString(36).slice(2, 8)}`) })
+  const broker = createLinuxBroker({ mode: "enabled", stateStore: store })
   const registry = new WorkspaceAuthorityRegistry()
   const workspace = registry.registerAgentWorktree({
     projectId: "ak2-slice",
@@ -171,6 +178,7 @@ function brokerExecutorFactory(merged: string) {
     writableRoots: ["src"],
     readonlyRoots: ["docs"],
     profile: "build",
+    receiptAuthority: new RuntimeStateReceiptAuthority(store),
   })
   return executor
 }
@@ -199,9 +207,12 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
         console.log("ENV_BLOCKED: fuse-overlayfs unavailable; B-lane skipped (not a pass)")
         return
       }
-      const result = await runVerticalSlice(new FuseOverlayfsProjectionBackend(), async cwd => {
+      const stateStore = new RuntimeStateStore({ root: join(tmpdir(), `ak2-slice-bstate-${process.pid}-${Math.random().toString(36).slice(2, 8)}`) })
+      const result = await runVerticalSlice(
+        new FuseOverlayfsProjectionBackend(),
+        async cwd => {
         // 真实 broker：在 fused merged 视图上执行 /bin/sh 修改文件。
-        const executor = brokerExecutorFactory(cwd)
+        const executor = brokerExecutorFactory(cwd, stateStore)
         // R01.5：执行域（bwrap 隔离视图）无法寻址 ../base（projection root
         // 兄弟）与宿主路径 —— 只看到 /workspace（merged）映射；宿主 /tmp
         // 是空 tmpfs（marker 不可见）；/home 不在只读布局内（不可达）。
@@ -225,7 +236,9 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
           args: ["-c", "echo 'export const answer = 42' > src/main.ts"],
         })
         return outcome
-      })
+        },
+        new RuntimeStateReceiptAuthority(stateStore),
+      )
       expect(result.revision).toBe(2n)
       // merged 视图真实 overlay：lower 内容可见、upper 写入生效。
       expect(result.newContent).toBe("export const answer = 42\n")
@@ -235,7 +248,7 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
   )
 
   test(
-    "B 层故障：真实 overlay cleanup 失败阻止 commit（卸载残留 → CLEANUP_FAILED）",
+    "B 层成功链（final receipt 校验）：真实 overlay + 真实 broker + World commit —— CLEANUP_FAILED 语义由 fixture 故障矩阵覆盖（真实卸载失败无副作用注入）",
     async () => {
       if (!realBackendAvailable) return
       const ctx = createTestWorldStore()
@@ -256,11 +269,14 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
         readCasObject: d => ctx.store.cas.get(d),
       })
       const root = tmpRoot("bfail")
+      const stateStore = new RuntimeStateStore({ root: join(tmpdir(), `ak2-slice-bfail-state-${process.pid}-${Math.random().toString(36).slice(2, 8)}`) })
       const coord = new ProjectionCoordinator({
         store: ctx.store,
         materializer,
         backend: new FuseOverlayfsProjectionBackend(),
         projectionRoot: root,
+        // 真实 broker 执行 → final receipt 持久化到 stateStore → commit 前校验。
+        receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
       })
       const plan = validateWorldProjectionPlan({
         projectionId: "proj-bfail", worldId: "world-vf", branchId: "b", snapshotId: snapshot.snapshotId,
@@ -272,16 +288,15 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
         session,
         { executable: "noop", args: [] },
         async cwd => {
-          const executor = brokerExecutorFactory(cwd)
+          const executor = brokerExecutorFactory(cwd, stateStore)
           const { outcome } = await executor.execute(cwd, { executable: "/bin/sh", args: ["-c", "echo y >> src/a.ts"] })
           return outcome
         },
       )
       coord.scan(session)
-      // 制造 cleanup 失败：merged 挂载点被外部占用（模拟卸载失败）。
-      // —— 真实 fuse 卸载失败难以无副作用注入；此处验证 commit 前 cleanup
-      //    语义：正常路径 cleanup 成功才 commit（B 层成功链已证明）。
-      //    确定性 CLEANUP_FAILED 已由 coordinator 故障矩阵（fixture）覆盖。
+      // 注意：本测试验证真实 overlay 成功链（final receipt 校验 + commit）。
+      // 真实 unmount 失败无法无副作用注入 —— CLEANUP_FAILED/residue 语义
+      // 由 coordinator 故障矩阵（fixture stub，确定性）与 R03 测试覆盖。
       const receipt = coord.commit(session)
       expect(receipt.newRevision).toBe(2n)
       ctx.cleanup()

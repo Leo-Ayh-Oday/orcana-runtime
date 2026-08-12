@@ -27,16 +27,17 @@
  *   world-delta manifest 编码（单一 delta 格式真源）。
  */
 
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-} from "node:fs"
+import { closeSync, fstatSync, openSync } from "node:fs"
 import { join } from "node:path"
+import {
+  assertDirIdentityUnchanged,
+  openAtNoFollow,
+  openDirAnchored,
+  openRootAnchored,
+  readDirAnchored,
+  readFileAnchored,
+  type DirIdentity,
+} from "./anchored-fs"
 import {
   canonicalDigest,
   canonicalJson,
@@ -48,7 +49,7 @@ import type {
   WorldMutation,
 } from "../world/contracts"
 import { worldDeltaManifest } from "../world/contracts"
-import { ProjectionError, DEFAULT_PROJECTION_LIMITS, type ProjectionLimits } from "./contracts"
+import { ProjectionError, DEFAULT_PROJECTION_LIMITS, validateProjectionLimits, type ProjectionLimits } from "./contracts"
 import type { MaterializedSectionEntry } from "./materializer"
 
 /** CAS 最小只读/写入边界（scanner 只消费 put/has）。 */
@@ -68,6 +69,9 @@ export interface ProjectionScanInput {
   readonly baseRevision: bigint
   /** 资源配额（默认 DEFAULT_PROJECTION_LIMITS；测试可注入更小值）。 */
   readonly limits?: ProjectionLimits
+  /** 测试注入：阶段 1（walk）完成后调用 —— deterministic race harness
+   *  （P1-5）。生产不传。 */
+  readonly onWalkComplete?: () => void
 }
 
 export type ProjectionDeltaEntry =
@@ -201,45 +205,29 @@ function isValidUtf8Bytes(bytes: Buffer): boolean {
 
 /** 无跟随递归扫描；非法类型/名称/配额立即拒绝。
  *  limits 注入（默认 DEFAULT_PROJECTION_LIMITS）。 */
-function walk(
-  path: string,
-  relative: string,
-  out: Map<string, ScannedNode>,
+/** 阶段 1：dirfd 锚定的无跟随遍历（P1-5）—— open(O_NOFOLLOW) 逐层，
+ *  目录以已打开 fd 相对进入（父 rename/swap 不影响锚定）；记录每个节点
+ *  的 dev/ino/size/nlink 与目录身份（阶段 2 复核用）。不读文件内容。
+ *  P3：entry 计数 exactly N —— 进入节点前检查（当前节点会是第 N+1 个）。 */
+function walkAnchored(
+  rootPath: string,
   limits: ProjectionLimits,
-): void {
-  if (out.size > limits.maxEntries) {
-    throw new ProjectionError(
-      "PROJECTION_RESOURCE_LIMIT",
-      `entry count exceeds maxEntries (${out.size} > ${limits.maxEntries})`,
-    )
-  }
-  let stat
-  try {
-    stat = lstatSync(path)
-  } catch (error) {
-    throw new ProjectionError(
-      "DELTA_SCAN_FAILED",
-      `cannot lstat ${relative}`,
-      error instanceof Error ? error.message : String(error),
-    )
-  }
-  if (stat.isSymbolicLink()) {
-    throw new ProjectionError("DELTA_SCAN_FAILED", `symlink found in projection view: ${relative}`)
-  }
-  if (stat.isFile()) {
-    if (stat.nlink > 1) {
-      throw new ProjectionError("DELTA_SCAN_FAILED", `hardlink (nlink=${stat.nlink}) found in projection view: ${relative}`)
-    }
-    if (stat.size > limits.maxFileBytes) {
+): { nodes: Map<string, ScannedNode>; dirs: Map<string, DirIdentity> } {
+  const nodes = new Map<string, ScannedNode>()
+  const dirs = new Map<string, DirIdentity>()
+  const root = openRootAnchored(rootPath)
+  /** P3：每个节点 set 前检查（exactly N accepted / N+1 rejected）。 */
+  const reserveEntry = (relative: string): void => {
+    if (nodes.size >= limits.maxEntries) {
       throw new ProjectionError(
         "PROJECTION_RESOURCE_LIMIT",
-        `file ${relative} exceeds maxFileBytes (${stat.size} > ${limits.maxFileBytes})`,
+        `entry count exceeds maxEntries (${limits.maxEntries})`,
       )
     }
-    out.set(relative, { kind: "file", size: stat.size, dev: stat.dev, ino: stat.ino, nlink: stat.nlink })
-    return
+    void relative
   }
-  if (stat.isDirectory()) {
+  const visit = (dirFd: number, dirIdentity: DirIdentity, relative: string): void => {
+    reserveEntry(relative)
     const depth = relative.length === 0 ? 0 : relative.split("/").length
     if (depth >= limits.maxDepth) {
       throw new ProjectionError(
@@ -247,10 +235,9 @@ function walk(
         `tree depth exceeds maxDepth at ${relative}`,
       )
     }
-    out.set(relative, { kind: "directory", size: 0, dev: stat.dev, ino: stat.ino, nlink: stat.nlink })
-    // readdir 原始字节模式：UTF-8 有效性在字节层验证（locale 无关 ——
-    // 字符串模式会把非法字节替换为 U+FFFD，检测不可靠）。
-    const children = readdirSync(path, { encoding: "buffer" }) as Buffer[]
+    nodes.set(relative, { kind: "directory", size: 0, dev: dirIdentity.dev, ino: dirIdentity.ino, nlink: 0 })
+    dirs.set(relative, dirIdentity)
+    const children = readDirAnchored(dirFd)
     const names = children.map(raw => {
       const bytes = Buffer.from(raw)
       if (!isValidUtf8Bytes(bytes)) {
@@ -259,92 +246,165 @@ function walk(
       return bytes.toString("utf8")
     })
     for (const child of names.sort()) {
-      assertSafeEntryName(child, relative.length === 0 ? child : `${relative}/${child}`)
-      walk(join(path, child), relative.length === 0 ? child : `${relative}/${child}`, out, limits)
+      const childRel = relative.length === 0 ? child : `${relative}/${child}`
+      assertSafeEntryName(child, childRel)
+      // 无跟随打开（symlink → ELOOP；special file → fstat 拒绝）。
+      let childFd: number
+      try {
+        childFd = openAtNoFollow(dirFd, child)
+      } catch (error) {
+        throw new ProjectionError(
+          "DELTA_SCAN_FAILED",
+          `cannot open ${childRel} (no-follow)`,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+      let stat
+      try {
+        stat = fstatSync(childFd)
+      } catch (error) {
+        closeSync(childFd)
+        throw new ProjectionError(
+          "DELTA_SCAN_FAILED",
+          `cannot fstat ${childRel}`,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+      if (stat.isFile()) {
+        if (stat.nlink > 1) {
+          closeSync(childFd)
+          throw new ProjectionError("DELTA_SCAN_FAILED", `hardlink (nlink=${stat.nlink}) found in projection view: ${childRel}`)
+        }
+        if (stat.size > limits.maxFileBytes) {
+          closeSync(childFd)
+          throw new ProjectionError(
+            "PROJECTION_RESOURCE_LIMIT",
+            `file ${childRel} exceeds maxFileBytes (${stat.size} > ${limits.maxFileBytes})`,
+          )
+        }
+        reserveEntry(childRel)
+        closeSync(childFd)
+        nodes.set(childRel, { kind: "file", size: stat.size, dev: stat.dev, ino: stat.ino, nlink: stat.nlink })
+        continue
+      }
+      if (stat.isDirectory()) {
+        visit(childFd, { dev: stat.dev, ino: stat.ino }, childRel)
+        closeSync(childFd)
+        continue
+      }
+      closeSync(childFd)
+      throw new ProjectionError(
+        "DELTA_SCAN_FAILED",
+        `non-regular non-directory (device/FIFO/socket) found in projection view: ${childRel}`,
+      )
     }
-    return
   }
-  throw new ProjectionError(
-    "DELTA_SCAN_FAILED",
-    `non-regular non-directory (device/FIFO/socket) found in projection view: ${relative}`,
-  )
+  try {
+    visit(root.fd, root.identity, "")
+  } finally {
+    closeSync(root.fd)
+  }
+  return { nodes, dirs }
 }
 
-/** 计算文件内容 digest；目录 digest 由子项 canonical 计算。
- *  文件读取使用 anchored no-follow traversal：open(O_NOFOLLOW) + 读取
- *  前后 fstat 验证 dev/ino/type 与 walk 记录一致（TOCTOU fail-closed）；
- *  总字节受 maxTreeBytes 配额限制。 */
-function digestTree(
-  base: string,
+/** 阶段 2：重新锚定读取（P1-5）—— 对每个文件从根逐层 openDirAnchored，
+ *  每层目录身份与阶段 1 记录复核（目录替换 → fail-closed）；文件
+ *  O_NOFOLLOW + fstat 前后验证 dev/ino/type/size/nlink（swap / swap-back /
+ *  grow → fail-closed）；总字节受 maxTreeBytes 配额。 */
+function digestAnchored(
+  rootPath: string,
   nodes: Map<string, ScannedNode>,
+  dirs: Map<string, DirIdentity>,
   cas: ProjectionDeltaCas,
   limits: ProjectionLimits,
 ): Map<string, ScannedNode> {
   const resolved = new Map<string, ScannedNode>()
-  // 文件先算（子项 digest 供目录计算）。
-  const files = [...nodes.entries()].filter(([, node]) => node.kind === "file").sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  let treeBytes = 0
-  for (const [relative, node] of files) {
-    const full = join(base, ...relative.split("/"))
-    const fd = openSync(full, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
-    try {
-      // 读取前复核：与 walk 记录的 dev/ino/type 一致（文件 swap / 目录替换）。
-      const before = fstatSync(fd)
-      if (!before.isFile()) {
-        throw new ProjectionError("DELTA_SCAN_FAILED", `entry type changed during scan: ${relative}`)
-      }
-      if (before.dev !== node.dev || before.ino !== node.ino) {
-        throw new ProjectionError("DELTA_SCAN_FAILED", `entry identity changed during scan: ${relative}`)
-      }
-      const bytes = readFileSync(fd)
-      // 读取后复核：身份再次验证（swap-back 防护）。
-      const after = fstatSync(fd)
-      if (!after.isFile() || after.dev !== node.dev || after.ino !== node.ino) {
-        throw new ProjectionError("DELTA_SCAN_FAILED", `entry identity changed during read: ${relative}`)
-      }
-      if (bytes.byteLength !== node.size) {
-        throw new ProjectionError("DELTA_SCAN_FAILED", `file size changed during scan: ${relative}`)
-      }
-      treeBytes += bytes.byteLength
-      if (treeBytes > limits.maxTreeBytes) {
-        throw new ProjectionError(
-          "PROJECTION_RESOURCE_LIMIT",
-          `scanned tree exceeds maxTreeBytes (${treeBytes} > ${limits.maxTreeBytes})`,
-        )
-      }
-      resolved.set(relative, { kind: "file", digest: fileDigest(cas, bytes), size: node.size, dev: node.dev, ino: node.ino, nlink: node.nlink })
-    } finally {
-      closeSync(fd)
-    }
-  }
-  // 目录按深度倒序（子目录 digest 就绪）。
-  const dirs = [...nodes.entries()]
-    .filter(([, node]) => node.kind === "directory")
-    .sort(([a], [b]) => (a.split("/").length - b.split("/").length) * 1000 + (a < b ? -1 : a > b ? 1 : 0))
-  for (const [relative, node] of dirs) {
-    const children = new Map<string, ScannedNode>()
-    const prefix = relative.length === 0 ? "" : `${relative}/`
-    for (const [childRelative, childNode] of resolved) {
-      if (prefix.length === 0 || childRelative.startsWith(prefix)) {
-        const name = childRelative.slice(prefix.length)
-        if (!name.includes("/")) children.set(name, childNode)
+  const root = openRootAnchored(rootPath)
+  const openedDirs: number[] = []
+  try {
+    let treeBytes = 0
+    const files = [...nodes.entries()]
+      .filter(([, node]) => node.kind === "file")
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    for (const [relative, node] of files) {
+      const segments = relative.split("/")
+      let dirFd = root.fd
+      openedDirs.length = 0
+      try {
+        // 逐层锚定到父目录（每层验证身份）。
+        for (let index = 0; index < segments.length - 1; index++) {
+          const { fd, identity } = openDirAnchored(dirFd, segments[index]!)
+          const expected = dirs.get(segments.slice(0, index + 1).join("/"))
+          if (expected === undefined || expected.dev !== identity.dev || expected.ino !== identity.ino) {
+            closeSync(fd)
+            throw new ProjectionError(
+              "DELTA_SCAN_FAILED",
+              `directory identity changed during scan: ${segments.slice(0, index + 1).join("/")}`,
+            )
+          }
+          openedDirs.push(fd)
+          dirFd = fd
+        }
+        const name = segments[segments.length - 1]!
+        const bytes = readFileAnchored(dirFd, name, { dev: node.dev, ino: node.ino, size: node.size, nlink: node.nlink }, relative)
+        treeBytes += bytes.byteLength
+        if (treeBytes > limits.maxTreeBytes) {
+          throw new ProjectionError(
+            "PROJECTION_RESOURCE_LIMIT",
+            `scanned tree exceeds maxTreeBytes (${treeBytes} > ${limits.maxTreeBytes})`,
+          )
+        }
+        resolved.set(relative, {
+          kind: "file",
+          digest: fileDigest(cas, bytes),
+          size: node.size,
+          dev: node.dev,
+          ino: node.ino,
+          nlink: node.nlink,
+        })
+      } finally {
+        for (const fd of openedDirs) closeSync(fd)
       }
     }
-    resolved.set(relative, { kind: "directory", digest: directoryDigest(cas, children), size: node.size, dev: node.dev, ino: node.ino, nlink: node.nlink })
+    // 目录 digest 后序（子项已算）。
+    const dirsSorted = [...nodes.entries()]
+      .filter(([, node]) => node.kind === "directory")
+      .sort(([a], [b]) => (a.split("/").length - b.split("/").length) * 1000 + (a < b ? -1 : a > b ? 1 : 0))
+    for (const [relative] of dirsSorted) {
+      const children = new Map<string, ScannedNode>()
+      const prefix = relative.length === 0 ? "" : `${relative}/`
+      for (const [childRelative, childNode] of resolved) {
+        if (prefix.length === 0 || childRelative.startsWith(prefix)) {
+          const name = childRelative.slice(prefix.length)
+          if (!name.includes("/")) children.set(name, childNode)
+        }
+      }
+      const node = nodes.get(relative)!
+      resolved.set(relative, {
+        kind: "directory",
+        digest: directoryDigest(cas, children),
+        size: 0,
+        dev: node.dev,
+        ino: node.ino,
+        nlink: node.nlink,
+      })
+    }
+  } finally {
+    closeSync(root.fd)
   }
   return resolved
 }
 
 export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDeltaResult {
   const limits = input.limits ?? DEFAULT_PROJECTION_LIMITS
-  const baseNodes = new Map<string, ScannedNode>()
-  walk(input.baseDir, "", baseNodes, limits)
-  const mergedNodes = new Map<string, ScannedNode>()
-  walk(input.mergedDir, "", mergedNodes, limits)
-
-  // digest 计算（文件内容 + 目录子项 canonical；全部进 CAS）。
-  const baseDigested = digestTree(input.baseDir, baseNodes, input.cas, limits)
-  const mergedDigested = digestTree(input.mergedDir, mergedNodes, input.cas, limits)
+  validateProjectionLimits(limits)
+  // P1-5：阶段 1（无跟随遍历记录）→ [onWalkComplete race 窗口] → 阶段 2
+  // （重新锚定读取复核）。walk 与 read 之间任何身份/内容变化 fail-closed。
+  const baseWalked = walkAnchored(input.baseDir, limits)
+  const mergedWalked = walkAnchored(input.mergedDir, limits)
+  input.onWalkComplete?.()
+  const baseDigested = digestAnchored(input.baseDir, baseWalked.nodes, baseWalked.dirs, input.cas, limits)
+  const mergedDigested = digestAnchored(input.mergedDir, mergedWalked.nodes, mergedWalked.dirs, input.cas, limits)
 
   const baseFiles = new Map<string, ScannedNode>()
   const baseDirs = new Set<string>()
@@ -499,29 +559,37 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
     throw new ProjectionError("DELTA_SCAN_FAILED", "projection delta is empty: no world mutation")
   }
 
-  // 重复 objectId 检测（R02.5）：同一 objectId 出现在多个不同 canonical
-  // path 的 put/delete 中 → fail-closed（WorldStore UPSERT 会静默覆盖，
-  // 绝不允许 scanner 输出这种 mutation 序列）。
+  // 重复 objectId 检测（R02.5/P1-1）：同一 objectId 的多个 mutation 必须
+  // identity 完全相同（canonical dedupe 允许），任何冲突（不同 path /
+  // contentRef / objectType / metadata / put+delete 并存）→ fail-closed
+  // （WorldStore UPSERT 会静默覆盖，绝不允许 scanner 输出这种序列）。
   {
-    const idToPaths = new Map<string, string[]>()
+    const idToIdentity = new Map<string, string>()
     for (const mutation of mutations) {
-      if (mutation.type === "object.put" || mutation.type === "object.delete") {
-        const list = idToPaths.get(mutation.objectId) ?? []
-        if (mutation.type === "object.put") {
-          if (!list.includes(mutation.path ?? "")) list.push(mutation.path ?? "")
-        } else {
-          list.push(`<delete>`)
+      if (mutation.type === "object.put") {
+        const identity = canonicalJson({
+          kind: "put",
+          path: mutation.path ?? null,
+          objectType: mutation.objectType,
+          contentRef: mutation.contentRef ?? null,
+          metadata: mutation.metadata ?? {},
+        })
+        const existing = idToIdentity.get(mutation.objectId)
+        if (existing !== undefined && existing !== identity) {
+          throw new ProjectionError(
+            "OBJECT_ID_COLLISION",
+            `objectId ${mutation.objectId} has conflicting mutation identities (path/contentRef/type/metadata)`,
+          )
         }
-        idToPaths.set(mutation.objectId, list)
-      }
-    }
-    for (const [objectId, paths] of idToPaths) {
-      const unique = [...new Set(paths)]
-      if (unique.length > 1) {
-        throw new ProjectionError(
-          "OBJECT_ID_COLLISION",
-          `objectId ${objectId} would collide across paths: ${unique.join(", ")}`,
-        )
+        idToIdentity.set(mutation.objectId, identity)
+      } else if (mutation.type === "object.delete") {
+        if (idToIdentity.has(mutation.objectId)) {
+          throw new ProjectionError(
+            "OBJECT_ID_COLLISION",
+            `objectId ${mutation.objectId} has both put and delete`,
+          )
+        }
+        idToIdentity.set(mutation.objectId, "delete")
       }
     }
   }

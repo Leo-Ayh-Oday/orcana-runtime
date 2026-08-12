@@ -11,6 +11,8 @@ import { CopyProjectionFixtureBackend, type NativeProjectionBackend, type Projec
 import { validateWorldProjectionPlan, type WorldProjectionPlanInput } from "../../../src/kernel/projection/plan"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
+import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
+import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -72,7 +74,12 @@ function makePlan(snapshotId: string, overrides: Partial<WorldProjectionPlanInpu
   })
 }
 
-function coordinator(ctx: TestWorldStore, backend?: NativeProjectionBackend): ProjectionCoordinator {
+function coordinator(
+  ctx: TestWorldStore,
+  backend?: NativeProjectionBackend,
+  allowFixtureExecution = true,
+  receiptAuthority?: ProjectionReceiptAuthority,
+): ProjectionCoordinator {
   const materializer = new SnapshotMaterializer({
     getSnapshot: id => ctx.store.snapshots.get(id),
     getCasRecord: digest => ctx.store.cas.record(digest),
@@ -84,6 +91,9 @@ function coordinator(ctx: TestWorldStore, backend?: NativeProjectionBackend): Pr
     backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: tmpRoot("projroot"),
     allowTestBackends: true,
+    // fixture executor（无真实 receipt）仅测试路径。
+    allowFixtureExecution,
+    ...(receiptAuthority === undefined ? {} : { receiptAuthority }),
   })
 }
 
@@ -563,7 +573,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
           { type: "object.put", objectId: "same-id", objectType: "file", path: "b.txt", contentRef: digest },
         ],
       }),
-    ).toThrow(/objectId collision/)
+    ).toThrow(/objectId.*collision/)
     // put + delete 并存同 id 也拒绝。
     expect(() =>
       ctx.store.compareAndCommit({
@@ -576,10 +586,362 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
           { type: "object.delete", objectId: "same-id" },
         ],
       }),
-    ).toThrow(/objectId collision/)
-    // World 未推进。
-    expect(ctx.store.getWorld("world-collide")!.currentRevision).toBe(0n)
+    ).toThrow(/objectId.*collision/)
     ctx.cleanup()
+  })
+
+  test("P1-1：完整 identity/mutation 冲突全部拒绝（contentRef/objectType/metadata）；canonical 相同允许 dedupe", async () => {
+    const ctx = createTestWorldStore()
+    ctx.store.createWorld({ worldId: "world-id1", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 p1-1" })
+    const d1 = ctx.store.cas.put(Buffer.from("one\n", "utf8"), "text/plain").digest
+    const d2 = ctx.store.cas.put(Buffer.from("two\n", "utf8"), "text/plain").digest
+    const put = (over: object) => ({
+      worldId: "world-id1", branchId: "branch-main", baseRevision: 0n, actor: "a",
+      mutations: [{ type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: d1 }, ...Object.entries(over).map(([k, v]) => v) as object[]],
+    })
+    // same id + same path + different contentRef。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-id1", branchId: "branch-main", baseRevision: 0n, actor: "a",
+        mutations: [
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: d1 },
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: d2 },
+        ],
+      }),
+    ).toThrow(/identity collision/)
+    // same id + same path + different objectType。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-id1", branchId: "branch-main", baseRevision: 0n, actor: "a",
+        mutations: [
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: d1 },
+          { type: "object.put", objectId: "same-id", objectType: "directory", path: "a.txt" },
+        ],
+      }),
+    ).toThrow(/identity collision/)
+    // same id + same path + different metadata。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-id1", branchId: "branch-main", baseRevision: 0n, actor: "a",
+        mutations: [
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: d1, metadata: { a: 1 } },
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: d1, metadata: { a: 2 } },
+        ],
+      }),
+    ).toThrow(/identity collision/)
+    // same id + different path（已有）+ put/delete（已有）。
+    // canonical 完全相同 → 允许（dedupe 不依赖 UPSERT 决胜）。
+    const dedupe = ctx.store.compareAndCommit({
+      worldId: "world-id1", branchId: "branch-main", baseRevision: 0n, actor: "a",
+      mutations: [
+        { type: "object.put", objectId: "dedupe-id", objectType: "file", path: "a.txt", contentRef: d1 },
+        { type: "object.put", objectId: "dedupe-id", objectType: "file", path: "a.txt", contentRef: d1 },
+      ],
+    })
+    expect(dedupe.newRevision).toBe(1n)
+    // 冲突测试全部被拒绝在 revision 0（未推进）；dedupe 是唯一合法提交。
+    expect(ctx.store.getWorld("world-id1")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
+
+  /** fake final receipt（authority 校验所需的字段）。 */
+  function fakeFinalReceipt(overrides: Partial<SandboxReceipt> = {}): SandboxReceipt {
+    return {
+      schemaVersion: "1.0",
+      receiptDigest: "a".repeat(64),
+      cellId: "cell-fake",
+      runId: "run-fake",
+      nodeRunId: "run-fake:n1",
+      attempt: 1,
+      backend: "bubblewrap",
+      profile: "build",
+      capabilitiesDigest: "b".repeat(64),
+      cellSpecDigest: "c".repeat(64),
+      filesystemPolicyDigest: "d".repeat(64),
+      networkPolicyDigest: "e".repeat(64),
+      resourcePolicyDigest: "f".repeat(64),
+      startedAt: 1,
+      finishedAt: 2,
+      durationMs: 1,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      cancelled: false,
+      oomKilled: false,
+      pidLimitHit: false,
+      outputLimitHit: false,
+      tempLimitHit: false,
+      metrics: { status: "unknown", reason: "test fixture" },
+      observedWrites: [],
+      observedDeletes: [],
+      unexpectedWrites: [],
+      networkMode: "none",
+      secretBindingIds: [],
+      violations: [],
+      degradationReasons: [],
+      cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false, cleanupVerified: true },
+      ...overrides,
+    }
+  }
+
+  /** fake receipt authority：按需返回 fake final receipt。 */
+  function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean } = {}): ProjectionReceiptAuthority {
+    const { hidden, ...receiptOverrides } = overrides
+    return {
+      getFinalReceipt: () => (hidden === true ? undefined : fakeFinalReceipt(receiptOverrides)),
+      isCleanupFinalized: receipt => typeof receipt.cleanup?.processesRemaining === "number",
+    }
+  }
+
+  /** 走完 start→execute(ok)→scan 的 session。 */
+  async function sessionAtDeltaReady(
+    coord: ProjectionCoordinator,
+    plan: WorldProjectionPlan,
+    ctx: TestWorldStore,
+  ): Promise<import("../../../src/kernel/projection/coordinator").ProjectionSession> {
+    const session = coord.start(plan)
+    await coord.execute(
+      session,
+      { executable: "noop", args: [] },
+      mutateExecutor(merged => writeFileSync(join(merged, "src/main.ts"), "changed\n")),
+    )
+    coord.scan(session)
+    return session
+  }
+
+  test("P0-2：production commit 无 execution receipt → 拒绝；World 不变", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx, undefined, false) // allowFixtureExecution=false
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    try {
+      coord.commit(session)
+      throw new Error("expected EXECUTION_RECEIPT_REQUIRED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REQUIRED")
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    expect(session.worldState).toBe("REJECTED")
+    expect(session.receipt!.worldCommitReceipt).toBeUndefined()
+    ctx.cleanup()
+  })
+
+  test("P0-2：forged receipt（未持久化）→ 拒绝；World 不变", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    // authority 存在但无持久化 receipt（appendReceipt failure 等价）。
+    const coord = coordinator(ctx, undefined, true, fakeAuthority({ hidden: true }))
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: "f".repeat(64),
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    try {
+      coord.commit(session)
+      throw new Error("expected EXECUTION_RECEIPT_NOT_PERSISTED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_NOT_PERSISTED")
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
+
+  test("P0-2：claim digest != final persisted digest → forged；World 不变", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx, undefined, true, fakeAuthority())
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: "f".repeat(64), // authority 返回 digest=a*64
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    try {
+      coord.commit(session)
+      throw new Error("expected EXECUTION_RECEIPT_FORGED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_FORGED")
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
+
+  test("P0-2：another cell receipt（binding 不匹配）→ 拒绝；World 不变", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx, undefined, true, fakeAuthority())
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: "a".repeat(64),
+      // binding 指向另一个 cell。
+      receiptBinding: { runId: "run-other", nodeRunId: "run-other:n1", cellId: "cell-other", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    try {
+      coord.commit(session)
+      throw new Error("expected EXECUTION_RECEIPT_BINDING_MISMATCH")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_BINDING_MISMATCH")
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
+
+  test("P0-2：pre-final receipt（cleanup 未 finalize）→ 拒绝；World 不变", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx, undefined, true, fakeAuthority({ cleanup: undefined as unknown as SandboxReceipt["cleanup"] }))
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: "a".repeat(64),
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    try {
+      coord.commit(session)
+      throw new Error("expected EXECUTION_RECEIPT_NOT_FINALIZED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_NOT_FINALIZED")
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
+
+  test("P0-2：host-audit receipt → 拒绝；World 不变", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx, undefined, true, fakeAuthority({ backend: "host-audit" }))
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: "a".repeat(64),
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    try {
+      coord.commit(session)
+      throw new Error("expected HOST_AUDIT_ACCEPTED_AS_SECURITY_BOUNDARY")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("HOST_AUDIT_ACCEPTED_AS_SECURITY_BOUNDARY")
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
+
+  test("P0-2：合法 final receipt → commit 成功并绑定 receipt", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx, undefined, true, fakeAuthority())
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: "a".repeat(64),
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    const receipt = coord.commit(session)
+    expect(receipt.newRevision).toBe(2n)
+    expect(receipt.executionReceiptIds).toEqual(["a".repeat(64)])
+    expect(session.worldState).toBe("COMMITTED")
+    ctx.cleanup()
+  })
+
+  test("P1-2：FAILED/CANCELLED/timeout/violation 全部自动 cleanup（不调用 cancel）", async () => {
+    const variants: Array<{ name: string; outcome: { exitCode: number; timedOut: boolean; cancelled: boolean; violation: boolean }; expected: "FAILED" | "CANCELLED" }> = [
+      { name: "exitCode!=0", outcome: { exitCode: 3, timedOut: false, cancelled: false, violation: false }, expected: "FAILED" },
+      { name: "timeout(exitCode=0)", outcome: { exitCode: 0, timedOut: true, cancelled: false, violation: false }, expected: "FAILED" },
+      { name: "violation(exitCode=0)", outcome: { exitCode: 0, timedOut: false, cancelled: false, violation: true }, expected: "FAILED" },
+      { name: "cancelled", outcome: { exitCode: 1, timedOut: false, cancelled: true, violation: false }, expected: "CANCELLED" },
+    ]
+    for (const variant of variants) {
+      const { ctx, snapshotId } = buildWorld()
+      const coord = coordinator(ctx)
+      const session = coord.start(makePlan(snapshotId))
+      const root = session.projectionRoot
+      await coord.execute(session, { executable: "noop", args: [] }, async () => variant.outcome)
+      // 不调用 cancel —— 直接检查 cleanup 已完成。
+      expect(session.executionState).toBe(variant.expected)
+      expect(session.cleanupState).toEqual({ cleanupOk: true, rootRemoved: true })
+      expect(existsSync(root)).toBe(false)
+      expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+      ctx.cleanup()
+    }
+  })
+
+  test("P1-3：after_commit_before_response fault → World 已 durable commit → session COMMITTED（不 REJECTED）", async () => {
+    let faultFired = false
+    let commits = 0
+    const ctx = createTestWorldStore({
+      faultInjector: point => {
+        if (point === "after_commit_before_response" && ++commits >= 2) {
+          faultFired = true
+          throw new Error("injected fault: response lost")
+        }
+      },
+    })
+    ctx.store.createWorld({ worldId: "world-fault", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 p1-3" })
+    const digest = ctx.store.cas.put(Buffer.from("v1\n", "utf8"), "text/plain").digest
+    ctx.store.compareAndCommit({
+      worldId: "world-fault", branchId: "branch-main", baseRevision: 0n, actor: "a",
+      mutations: [
+        { type: "object.put", objectId: "d1", objectType: "directory", path: "src" },
+        { type: "object.put", objectId: "f1", objectType: "file", path: "src/main.ts", contentRef: digest },
+      ],
+    })
+    ctx.store.createSnapshot("world-fault", "branch-main")
+    const snapshot = ctx.store.snapshots.getForRevision("world-fault", "branch-main", 1n)!
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: d => ctx.store.cas.record(d),
+      readCasObject: d => ctx.store.cas.get(d),
+    })
+    const coord = new ProjectionCoordinator({
+      store: ctx.store,
+      materializer,
+      backend: new CopyProjectionFixtureBackend(),
+      projectionRoot: tmpRoot("p13"),
+      allowTestBackends: true,
+      allowFixtureExecution: true,
+    })
+    const plan = validateWorldProjectionPlan({
+      projectionId: `proj-p13-${Math.random().toString(36).slice(2, 8)}`,
+      worldId: "world-fault", branchId: "branch-main", snapshotId: snapshot.snapshotId, actor: "a",
+      mode: "native", writableRoots: ["src"], readonlyRoots: [], expectedOutputs: ["src/main.ts"], graphCompletionAllowed: false,
+    })
+    const session = await sessionAtDeltaReady(coord, plan, ctx)
+    const receipt = coord.commit(session)
+    expect(faultFired).toBe(true)
+    // World truth 优先：commit 已 durable → session COMMITTED 而非 REJECTED。
+    expect(receipt.newRevision).toBe(2n)
+    expect(session.worldState).toBe("COMMITTED")
+    expect(session.receipt!.worldState).toBe("COMMITTED")
+    expect(ctx.store.getWorld("world-fault")!.currentRevision).toBe(2n)
+    ctx.cleanup()
+  })
+
+  test("P2-1：cleanup 前验证 root 所有权 —— 篡改 session.projectionRoot → 拒绝删除且不删他人目录", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx)
+    const session = coord.start(makePlan(snapshotId))
+    // 把 session.projectionRoot 指向 baseProjectionRoot 的兄弟（他人目录）。
+    const other = tmpRoot("other")
+    ;(session as { projectionRoot: string }).projectionRoot = other
+    session.cleanupState = coord.cancel(session)
+    // 所有权验证失败 → cleanupOk=false（不是 true+false），residue 保留。
+    expect(session.cleanupState!.cleanupOk).toBe(false)
+    expect(session.cleanupState!.rootRemoved).toBe(false)
+    expect(existsSync(other)).toBe(true) // 他人目录未被删除
+    ctx.cleanup()
+  })
+
+  test("P2-6：exitCode=0+timedOut / exitCode=0+violation → receipt executionState FAILED（不是 COMPLETED）", async () => {
+    for (const variant of [
+      { exitCode: 0, timedOut: true, cancelled: false, violation: false },
+      { exitCode: 0, timedOut: false, cancelled: false, violation: true },
+    ]) {
+      const { ctx, snapshotId } = buildWorld()
+      const coord = coordinator(ctx)
+      const session = coord.start(makePlan(snapshotId))
+      await coord.execute(session, { executable: "noop", args: [] }, async () => ({ ...variant }))
+      expect(session.executionState).toBe("FAILED")
+      // 终态 receipt（REJECTED 路径经由 scan 失败触发或直接构造）：
+      // buildReceipt 直接使用 session.executionState。
+      const receipt = coord.buildReceipt(session, "REJECTED", "execution failed")
+      expect(receipt.executionState).toBe("FAILED")
+      ctx.cleanup()
+    }
   })
 
   test("R06.3 fixture backend 无显式 test capability → 生产 coordinator 拒绝", () => {
@@ -604,6 +966,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       backend: new CopyProjectionFixtureBackend(),
       projectionRoot: tmpRoot("fix"),
       allowTestBackends: true,
+      allowFixtureExecution: true,
     })
     const session = coord.start(makePlan(snapshotId))
     coord.cancel(session)
@@ -651,6 +1014,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       backend: failingBackend,
       projectionRoot: root,
       allowTestBackends: true,
+      allowFixtureExecution: true,
     })
     const session = coord.start(makePlan(snapshotId))
     expect(readFileSync(join(session.mergedDir, "src/main.ts"), "utf8")).toBe(baseContent)

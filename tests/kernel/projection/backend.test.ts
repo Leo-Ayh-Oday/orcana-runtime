@@ -1,6 +1,7 @@
 /** AK2-T03 — Native Projection Backend（生产 fuse-overlayfs + fixture + 注入）。 */
 
 import { afterEach, describe, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -168,6 +169,43 @@ describe("AK2-T03 生产 fuse-overlayfs backend", () => {
     expect(() =>
       backend.create({ lowerDir: lower, projectionRoot: root, label: "fake2" }),
     ).toThrow(ProjectionError)
+  })
+
+  test("P2-3：fake binary 创建「真的但错误的 FUSE mount」→ attestation 拒绝（挂载前已存在 owned mount）", () => {
+    const root = tmpRoot("wrongfuse")
+    const lower = join(root, "lower")
+    const wrongLower = join(root, "wrong-lower")
+    mkdirSync(lower)
+    mkdirSync(wrongLower)
+    writeFileSync(join(lower, "f.txt"), "x")
+    writeFileSync(join(wrongLower, "other.txt"), "y")
+    chmodSync(lower, 0o755)
+    chmodSync(wrongLower, 0o755)
+    // 先真实挂载一个「错误的」fuse-overlayfs（不同 lower）到目标 merged ——
+    // 这是 invocation 之前已存在的 FUSE mount。
+    const upper = join(root, "upper-wrong")
+    const work = join(root, "work-wrong")
+    const merged = join(root, "merged-p23")
+    mkdirSync(upper, { mode: 0o700 })
+    mkdirSync(work, { mode: 0o700 })
+    mkdirSync(merged, { mode: 0o700 })
+    execFileSync("fuse-overlayfs", ["-o", `lowerdir=${wrongLower},upperdir=${upper},workdir=${work}`, merged])
+    try {
+      // fake binary：exit 0 不挂载 —— 但 merged 已有（错误的）FUSE mount。
+      const fakeBin = join(root, "fuse-overlayfs-fake-p23")
+      writeFileSync(fakeBin, "#!/bin/sh\nexit 0\n")
+      chmodSync(fakeBin, 0o755)
+      const backend = new FuseOverlayfsProjectionBackend(fakeBin)
+      expect(() =>
+        backend.create({ lowerDir: lower, projectionRoot: root, label: "p23" }),
+      ).toThrow(ProjectionError)
+    } finally {
+      try {
+        execFileSync("fusermount3", ["-u", merged], { stdio: "ignore" })
+      } catch {
+        // 已卸载
+      }
+    }
   })
 
   test("R06.2：真实挂载后 cleanup 幂等（二次调用 true；卸载成功后不保留 residue）", () => {

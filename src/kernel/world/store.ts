@@ -1186,27 +1186,35 @@ export class WorldStore {
     const mutations = parseCanonicalJson<WorldMutation[]>(canonicalJson(input.mutations))
     if (mutations.length === 0) throw new Error("World commit requires at least one mutation")
     mutations.forEach(validateWorldMutation)
-    // R02.6：同一 commit 内 objectId 身份冲突必须在 transaction 前拒绝
-    // （不能依赖 UPSERT 静默覆盖）。同一 objectId 出现在多个不同 path
-    // （或 delete 与 put 并存）→ 拒绝。
+    // P1-1：同一 commit 内 objectId 身份冲突必须在 transaction 前拒绝
+    // （不能依赖 UPSERT 静默覆盖）。按完整 identity/mutation 冲突判定：
+    //  (objectId, path, objectType, contentRef, metadata) 完全相同的重复
+    //  put 允许（canonical dedupe）；任何不同（同 id 不同 path / 不同
+    //  contentRef / 不同 objectType / 不同 metadata / put+delete 并存）→ 拒绝。
     {
-      const idToPaths = new Map<string, string[]>()
+      const idToIdentity = new Map<string, string>()
       for (const mutation of mutations) {
         if (mutation.type === "object.put") {
-          const list = idToPaths.get(mutation.objectId) ?? []
-          list.push(mutation.path ?? "")
-          idToPaths.set(mutation.objectId, list)
+          const identity = canonicalJson({
+            kind: "put",
+            path: mutation.path ?? null,
+            objectType: mutation.objectType,
+            contentRef: mutation.contentRef ?? null,
+            metadata: mutation.metadata ?? {},
+          })
+          const existing = idToIdentity.get(mutation.objectId)
+          if (existing !== undefined && existing !== identity) {
+            throw new Error(
+              `World commit objectId identity collision: ${mutation.objectId} has conflicting mutations`,
+            )
+          }
+          idToIdentity.set(mutation.objectId, identity)
         } else if (mutation.type === "object.delete") {
-          const list = idToPaths.get(mutation.objectId) ?? []
-          list.push(`<delete>`)
-          idToPaths.set(mutation.objectId, list)
-        }
-      }
-      for (const [objectId, paths] of idToPaths) {
-        if (new Set(paths).size > 1) {
-          throw new Error(
-            `World commit objectId collision: ${objectId} maps to multiple identities (${[...new Set(paths)].join(", ")})`,
-          )
+          const existing = idToIdentity.get(mutation.objectId)
+          if (existing !== undefined) {
+            throw new Error(`World commit objectId collision: ${mutation.objectId} has both put and delete`)
+          }
+          idToIdentity.set(mutation.objectId, `delete`)
         }
       }
     }

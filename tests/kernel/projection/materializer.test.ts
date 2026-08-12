@@ -86,6 +86,26 @@ function buildWorldWithFiles(): TestWorldStore {
   return ctx
 }
 
+
+/** 生成与 snapshot 身份字段完全一致的 world manifest JSON（P1-4 绑定）。 */
+function worldManifestOf(snapshot: WorldSnapshot): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    type: "world",
+    worldId: snapshot.worldId,
+    branchId: snapshot.branchId,
+    revision: String(snapshot.revision),
+    worldStatus: "active",
+    rootObjectId: "root",
+    filesystemDigest: snapshot.filesystemDigest,
+    memoryDigest: snapshot.memoryDigest,
+    taskStateDigest: snapshot.taskStateDigest,
+    capabilityStateDigest: snapshot.capabilityStateDigest,
+    serviceStateDigest: snapshot.serviceStateDigest,
+    artifactStateDigest: snapshot.artifactStateDigest,
+  })
+}
+
 /** 假 manifest record：通过 R06.5 身份检查（isManifest=true），内容由
  *  readCasObject 注入 —— 用于绕过 CAS integrity 测试解析路径。 */
 function fakeManifestRecord(): CasObjectRecord {
@@ -232,14 +252,30 @@ describe("AK2-T02 反例（表驱动）", () => {
     const base = join(tmpRoot("mal"), "base")
     mkdirSync(base)
     try {
+      // world manifest 身份匹配（P1-4 通过），但 filesystem section 是
+      // 普通 JSON 冒充 → parseFilesystemSection 拒绝。
+      new SnapshotMaterializer({
+        getSnapshot: () => snapshot,
+        getCasRecord: () => fakeManifestRecord(),
+        readCasObject: digest => {
+          if (digest === snapshot.manifestDigest) return Buffer.from(worldManifestOf(snapshot), "utf8")
+          return Buffer.from('{"hello":"world"}', "utf8")
+        },
+      }).materialize(snapshot.snapshotId, base)
+      throw new Error("expected MATERIALIZATION_FAILED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("MATERIALIZATION_FAILED")
+    }
+    // 普通 JSON 冒充 world manifest → 身份检查先拒绝。
+    try {
       new SnapshotMaterializer({
         getSnapshot: () => snapshot,
         getCasRecord: () => fakeManifestRecord(),
         readCasObject: () => Buffer.from('{"hello":"world"}', "utf8"),
       }).materialize(snapshot.snapshotId, base)
-      throw new Error("expected MATERIALIZATION_FAILED")
+      throw new Error("expected SNAPSHOT_MISMATCH")
     } catch (error) {
-      expect((error as ProjectionError).code).toBe("MATERIALIZATION_FAILED")
+      expect((error as ProjectionError).code).toBe("SNAPSHOT_MISMATCH")
     }
   })
 
@@ -271,8 +307,10 @@ describe("AK2-T02 反例（表驱动）", () => {
     const withManifest = (manifest: unknown): ProjectionMaterializerSource => ({
       getSnapshot: () => snapshot,
       getCasRecord: digest => (/^sha256:\d+$/.test(digest) ? fakeManifestRecord() : fakeRawRecord()),
-      readCasObject: digest =>
-        /^sha256:\d+$/.test(digest) ? Buffer.from(JSON.stringify(manifest), "utf8") : Buffer.from("raw", "utf8"),
+      readCasObject: digest => {
+        if (digest === snapshot.manifestDigest) return Buffer.from(worldManifestOf(snapshot), "utf8")
+        return /^sha256:\d+$/.test(digest) ? Buffer.from(JSON.stringify(manifest), "utf8") : Buffer.from("raw", "utf8")
+      },
     })
     const run = (manifest: unknown, expectedCode: import("../../../src/kernel/projection/contracts").ProjectionErrorCode): void => {
       const fresh = join(tmpRoot("bad"), `base-${Math.random().toString(36).slice(2)}`)
@@ -407,7 +445,10 @@ describe("AK2-T02 反例（表驱动）", () => {
     const materializer = new SnapshotMaterializer({
       getSnapshot: () => snapshot,
       getCasRecord: digest => (/^sha256:\d+$/.test(digest) ? fakeManifestRecord() : fakeRawRecord()),
-      readCasObject: digest => (digest === snapshot.filesystemDigest ? sectionBytes : Buffer.from("raw", "utf8")),
+      readCasObject: digest => {
+        if (digest === snapshot.manifestDigest) return Buffer.from(worldManifestOf(snapshot), "utf8")
+        return digest === snapshot.filesystemDigest ? sectionBytes : Buffer.from("raw", "utf8")
+      },
     })
     const result = materializer.materialize(snapshot.snapshotId, base)
     expect(result.fileCount).toBe(1)
@@ -551,6 +592,7 @@ describe("AK2-T02 物化根防护", () => {
           getSnapshot: () => snapshot,
           getCasRecord: digest => (digest === "sha256:fm" || /^sha256:\d+$/.test(digest) ? fakeManifestRecord() : fakeRawRecord()),
           readCasObject: digest => {
+            if (digest === snapshot.manifestDigest) return Buffer.from(worldManifestOf(snapshot), "utf8")
             if (digest === snapshot.filesystemDigest) return sectionManifest()
             if (digest === "sha256:fm") return Buffer.from(JSON.stringify(manifest), "utf8")
             const bytes = readBytes[digest]
@@ -615,7 +657,8 @@ describe("AK2-T02 物化根防护", () => {
       {
         getSnapshot: () => snapshot,
         getCasRecord: digest => (digest === snapshot.filesystemDigest ? fakeManifestRecord() : undefined),
-        readCasObject: () => Buffer.from("x"),
+        readCasObject: digest =>
+          digest === snapshot.manifestDigest ? Buffer.from(worldManifestOf(snapshot), "utf8") : Buffer.from("x"),
       },
       "SNAPSHOT_MISMATCH",
     )
@@ -628,5 +671,6 @@ describe("AK2-T02 物化根防护", () => {
       },
       "SNAPSHOT_MISMATCH",
     )
+    // manifest 与 snapshot 身份不一致（forge）→ 拒绝。
   })
 })

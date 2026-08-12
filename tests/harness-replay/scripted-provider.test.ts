@@ -2,13 +2,15 @@ import { describe, expect, test } from "bun:test"
 import { ScriptedProvider } from "../../evals/harness/scripted-provider"
 import type { ProviderScriptEvent } from "../../evals/harness/contracts"
 import type { StreamEvent } from "../../src/provider/types"
+import { RetryCoordinator } from "../../src/runtime/retry/coordinator"
+import { createRetryLedger } from "../../src/runtime/retry-ledger"
 
 // H12: ScriptedProvider — purpose routing, round boundaries, error variants,
 // usage semantics, idle hang abort.
 
-async function drain(provider: ScriptedProvider, purpose?: string): Promise<StreamEvent[]> {
+async function drain(provider: ScriptedProvider, purpose?: string, retryCoordinator?: RetryCoordinator): Promise<StreamEvent[]> {
   const events: StreamEvent[] = []
-  for await (const event of provider.streamChat({ purpose } as never)) {
+  for await (const event of provider.streamChat({ purpose, retryCoordinator } as never)) {
     events.push(event)
   }
   return events
@@ -77,6 +79,38 @@ describe("ScriptedProvider", () => {
     const events = await drain(provider)
     expect(events[0]).toMatchObject({ type: "error" })
     expect((events[0] as { data: string }).data).toContain("auth")
+  })
+
+  test("retryable error with coordinator permit retries inside the same streamChat (IC04 §34)", async () => {
+    const provider = new ScriptedProvider([
+      { type: "error", errorType: "retryable", message: "stream interrupted" },
+      { type: "text", data: "complete summary" },
+      { type: "round_end" },
+    ])
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 10 })
+    const events = await drain(provider, undefined, coordinator)
+    expect(events.map((e) => e.type)).not.toContain("error")
+    expect(events.map((e) => e.type)).not.toContain("finish")
+    expect(events.some((e) => e.type === "status")).toBe(true)
+    expect(events.some((e) => e.type === "text" && e.data === "complete summary")).toBe(true)
+    // 1 retry authorization (no wrapper here, so no initial-side authorize).
+    expect(coordinator.physicalProviderRequests).toBe(1)
+  })
+
+  test("retryable error denied by coordinator terminates with structured transport_failure (IC04 §37)", async () => {
+    const provider = new ScriptedProvider([
+      { type: "error", errorType: "retryable", message: "stream interrupted" },
+      { type: "error", errorType: "retryable", message: "stream interrupted again" },
+      { type: "text", data: "never" },
+      { type: "round_end" },
+    ])
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 1 })
+    const events = await drain(provider, undefined, coordinator)
+    expect(events.some((e) => e.type === "error")).toBe(true)
+    const finish = events.find((e) => e.type === "finish") as { data: { finishReason: string } } | undefined
+    expect(finish?.data.finishReason).toBe("transport_failure")
+    // Deny stops consumption: the later script events must not surface.
+    expect(events.some((e) => e.type === "text")).toBe(false)
   })
 
   test("idle_timeout hangs until the iterator is closed", async () => {

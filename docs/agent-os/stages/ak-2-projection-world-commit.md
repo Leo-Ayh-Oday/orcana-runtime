@@ -1,7 +1,7 @@
 # AK-2 Projection + World Commit
 
 **Task ID:** `AK2-PROJECTION-001`
-**状态:** `IN_PROGRESS`
+**状态:** `READY_FOR_INDEPENDENT_REVIEW`（候选提交 `ddaed17` 等待独立复审；不等于 PASS/CLOSED）
 **基线 / 回滚点:** `e224ad6bb8aed5cca2d1b8b63f048333cfb88003`
 **专用分支:** `feat/agent-os`
 
@@ -93,3 +93,75 @@ AK-2 的阶段提交可整体回退到 `e224ad6bb8aed5cca2d1b8b63f048333cfb88003
 ### OWNER-DECISION-REQUIRED
 
 - 无。
+
+## AK2-R2 修复记录（候选提交 `ddaed17`，等待独立复审）
+
+### FACT
+
+- R2-00：7 个反例测试先红后绿（UNPROJECTED commit 误接受、cleanup 未证明仍
+  finalized、跨 World receipt 重放、cleaned session reuse、walk 后新增遗漏、
+  cleanup 抛异常无终态、durable commit 后被标 REJECTED）。
+- 本机 bwrap 无 cgroup 委托（`cleanupVerified=false`）→ 真实 strict lane 无
+  cleanup proof → 无 receiptId → fail-closed 验证；真实执行测试如实标注
+  `ENV_BLOCKED`（非缺陷）。
+- bun `statSync` 存在进程内偶发缓存（写入后立即 fstat 可能返回旧 mtime/ctime）
+  —— 已用读后 reopen 二次内容对比补盲窗（内容级权威，不依赖时间戳缓存）。
+
+### R2-01 Execution Intent
+
+- `ProjectionExecutionIntent` 由 coordinator 生成；broker 从 spec 环境变量
+  `ORCANA_PROJECTION_INTENT` 注入 final receipt 的 `projectionIntentDigest`。
+- commit 时 intent 驱动校验：run/node/cell/spec/fs-policy/workspace-root 绑定 +
+  intent 匹配，跨 World/session/命令重放 → `EXECUTION_RECEIPT_REPLAY`；
+  cleaned session 复用 → `CLEANED_SESSION_REUSED`。
+
+### R2-02 Receipt Digest 自洽与 CAS 权威
+
+- `computeReceiptDigest` 剥离被 pre-final spread 继承的旧 `receiptDigest` 字段
+  （canonical 摘要绝不包含被覆盖的自摘要）。
+- `getFinalReceipt` anchored no-follow 读取（openRootAnchored + fstat 验证
+  regular file）+ 重算 digest（tampered → 拒绝）。
+- commit 前 canonical final receipt put 进 `store.cas`；`sha256:` 前缀的
+  executionReceiptId 强制 CAS 存在性 + `world_commit` link；runtime receipt
+  删除后 CAS 仍可恢复 provenance（测试覆盖）。
+
+### R2-03 cleanup truth 严格化
+
+- `isCleanupFinalized`：cleanupVerified===true、processesRemaining===0、
+  mountsReleased/cgroupRemoved===true、cleanupActions 无失败、无 degradation；
+  矩阵测试逐字段拒绝。`processesRemaining=-1` 是"无法测量"如实声明，不充当
+  finalized（cgroup 委托不可用是环境事实）。
+
+### R2-04 状态机唯一真源
+
+- `applyProjectionStateTransition` 显式白名单表；FAILED/CANCELLED/throw →
+  World REJECTED + 异常规范化 cleanup + terminal receipt；post-commit 异常按
+  commitId 查 `getCommit`，World 已 durable → COMMITTED。全状态 × 全事件矩阵
+  测试（未列出的边一律 INVALID_STATE）。
+
+### R2-05 scanner 稳定性
+
+- 阶段 2 每目录重新枚举成员集合 + dev/ino 复核 + 文件读后 reopen 二次内容
+  对比 + mtime/ctime 复核（same-size in-place 确定性检测，测试注入窗口
+  `onFileReadAfter`）；真并发子进程 race 与 6 场景 harness 全覆盖。
+
+### R2-06 mount ownership
+
+- mount identity = mountId + upper 目录 dev/ino（mount id 卸载后会被内核复用，
+  upper 身份是更强绑定）；foreign 重挂载 → `assertMountOwned` false、cleanup
+  拒绝卸载 foreign（真实 fuse-overlayfs 测试）。
+
+### R2-07 store 完整性
+
+- file 缺 contentRef 拒绝、同 commit 内不同 objectId 同 path 冲突拒绝、
+  file-parent collision 拒绝（delete+put 替换允许）；exact duplicate mutation
+  真正 canonical dedupe（单条 ledger event）；materializer 有界流式写入（逐
+  chunk 写 fd，无 parts[]+Buffer.concat 双倍峰值；chunk CAS record size 预检）。
+
+### 门禁
+
+- projection+world+authority-graph **239/239**（7 连绿）；typecheck 0 error、
+  build ✓、git diff --check ✓；19 文件 +1319/−260；worktree 干净（tracked）。
+- `src/runtime/linux/{contracts,broker,receipt}.ts` 最小改动（intent 字段 +
+  digest 剥离），无 authority 放宽。
+- 未 push、未 merge、未建 PR；等待独立复审员对 `ddaed17` 复核。

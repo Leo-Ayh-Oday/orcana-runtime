@@ -346,7 +346,11 @@ export function buildTrackerFromTriage(
   return {
     goal: prompt.trim().slice(0, 120) || "长任务",
     intent: triageToTaskIntent(triage.mode),
-    phase: triage.mode === "full_complex" ? "planning" : "building",
+    // IC05 P4: full_complex 的 planSteps 本身就是 planning artifact ——
+    // 直接进入 building（执行阶段），planning phase 不再作为 execution
+    // lock（ORDINARY_LONG_TASK_PLAN_APPROVAL_LOCK=0）。plan_before_code
+    // （用户显式要求先出方案）保留 planning。
+    phase: triage.mode === "plan_before_code" ? "planning" : "building",
     requiredFiles: requiredFiles.length ? requiredFiles : ["package.json"],
     requiredVerificationKinds: verificationKinds,
     steps,

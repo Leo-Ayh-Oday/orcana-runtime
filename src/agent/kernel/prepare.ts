@@ -13,6 +13,7 @@ import { buildResearchEvidenceContext, buildResearchInsufficientEvidenceMessage 
 import { collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMapTaskLevel } from "../../context/context-map"
 import { createContextDebts, openContextDebtCount } from "../../context/context-debt"
+import { ContextMapReadSession } from "../../context/context-map"
 import { getWorkspaceIoAuthority } from "../../runtime/execution-context"
 import { markPlanAccepted } from "../task-tracker"
 import { planProgress } from "../master-plan"
@@ -141,11 +142,16 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
   if (shouldBuildContextMap) {
     // IC01-R3: production 路径显式注入 WorkspaceIoAuthority —— 无权威时
     // ContextMapReadSession fail closed（所有读取拒绝，绝不隐式放行）。
+    // IC05 P0-D: 复用共享 session —— 其客观状态（authorityMissing /
+    // aborted / budgetExhausted）区分 constitution 客观不存在（absent）与
+    // probe 未完成（unavailable），防止 impossible forever debt。
+    const probeSession = new ContextMapReadSession({ workspace: getWorkspaceIoAuthority() })
     const runtimeContextMap = buildContextMap(ctx.options.projectRoot ?? process.cwd(), {
       taskId: "runtime-task",
       userRequest: ctx.effectivePrompt,
       keywords: explicitFilesForContext,
-    }, { workspace: getWorkspaceIoAuthority() })
+    }, { workspace: getWorkspaceIoAuthority(), session: probeSession })
+    const constitutionProbeCompleted = !probeSession.authorityMissing && !probeSession.aborted && !probeSession.budgetExhausted
     const readiness = evaluateContextReadiness(runtimeContextMap, contextMapLevel)
     const blockers = readiness.blockers
     // IC05 P2: readiness blockers 降级为 ContextDebt（obligation）—— 写工具
@@ -161,6 +167,10 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
       // TaskTracker requiredVerificationKinds 是 Runtime-owned verification
       // plan evidence。
       hasRuntimeVerificationPlan: Boolean(ctx.planning.taskTracker?.requiredVerificationKinds?.length),
+      // P0-D: 只有 bounded probe 客观完成且未找到 constitution 文件才
+      // 判定 absent → unavailable（probe 中断/无权威 → 保持 open，绝不
+      // 把"没读到"当成"客观不存在"）。
+      constitutionProbeFoundNone: !readiness.hasProjectConstitution && constitutionProbeCompleted,
     })
     ctx.contextMap.runtimeContextMap = runtimeContextMap
     ctx.contextMap.contextMapContext = [
@@ -187,6 +197,25 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
       blockers,
       contextMapId: runtimeContextMap.id,
     })
+  }
+
+  // IC05 Correction P0-G: Flash triage 的 structured planSteps 是既有
+  // planning artifact —— 激活 MasterPlan 使步骤客观 progression（master-plan
+  // 节点 tracker 用 scope-N / verify-kind ID，经 skipLegacyStepIds 映射），
+  // 避免任意 planStep ID（api-layer / wire-runtime 等）永久 pending。
+  // 判定：tracker steps 含非 master-plan 格式 ID（非 scope-N/verify-）且
+  // 尚未激活 master plan。
+  if (
+    ctx.planning.taskTracker &&
+    !ctx.planStore.current &&
+    // checkpoint resume 的 tracker 已水合（D4）—— 不重复激活。
+    !ctx.options.resumeFromCheckpoint &&
+    ctx.planning.taskTracker.steps.some(step => !/^(scope-|verify-)/.test(step.id))
+  ) {
+    const planText = ctx.planning.taskTracker.steps.map(step => `- ${step.title}`).join("\n")
+    if (activateMasterPlan(ctx, planText, ctx.planning.taskTracker.goal)) {
+      yield stream({ type: "status", data: `master-plan: ${planProgress(ctx.planStore.current!)} nodes (flash planSteps)` })
+    }
   }
 
   // ── Plan approval flow: user approved the plan via CLI → activate MasterPlan ──

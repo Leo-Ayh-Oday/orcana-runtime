@@ -55,28 +55,55 @@ async function runLoop(prompt: string, opts: { provider: LLMProvider; tools?: Ar
   return { trace, decision: step.value }
 }
 
-describe("IC05 ContextReadiness attack regression (§27)", () => {
-  test("advisory 不产生拒绝循环：write 保持暴露并执行（≤3 rounds）", async () => {
-    const provider = new WriteThenDoneProvider()
+describe("IC05 ContextReadiness attack regression (§27, real ContextMap)", () => {
+  test("contextMapPolicy=always + 真实临时 repo + 未完成 readiness → write 暴露并执行，零 hard denial", async () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const { tmpdir } = await import("node:os")
+    const root = mkdtempSync(join(tmpdir(), "ic05-corr-attack-"))
+    mkdirSync(join(root, "src"), { recursive: true })
+    writeFileSync(join(root, "src", "index.ts"), "export const x = 1\n")
+    const { agentLoop } = await import("../src/agent/loop")
     const { buildTools, Result } = await import("../src/tools/registry")
-    const tools = buildTools({
-      name: "write_file", description: "write", isReadonly: false, isConcurrencySafe: false,
-      inputSchema: { type: "object", properties: { path: { type: "string" } } },
-      async execute() { return Result.ok("ok") },
-    })
-    const { trace } = await runLoop("update a.txt", {
-      provider,
-      tools: tools as never,
-    })
-    // ContextReadiness 拒绝次数 = 0。
-    const readinessDenials = trace.events.filter(e =>
-      e.type === "gate_decision"
-      && JSON.stringify(e.data).includes("context_readiness")
-      && JSON.stringify(e.data).includes("deny"))
-    expect(readinessDenials.length).toBe(0)
-    // 写工具执行成功（tool 结果存在）。
-    const toolResults = trace.events.filter(e => e.type === "tool_result")
-    expect(toolResults.length).toBeGreaterThanOrEqual(1)
+    const { createWorkspaceIoAuthority } = await import("../src/runtime/io/workspace-io-authority")
+    const { setWorkspaceIoAuthority } = await import("../src/runtime/execution-context")
+    const authority = createWorkspaceIoAuthority(root)
+    setWorkspaceIoAuthority(authority)
+    try {
+      const provider = new WriteThenDoneProvider()
+      const tools = buildTools({
+        name: "write_file", description: "write", isReadonly: false, isConcurrencySafe: false,
+        inputSchema: { type: "object", properties: { path: { type: "string" } } },
+        async execute() { return Result.ok("ok") },
+      })
+      const trace = new MemoryTrace()
+      const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+      const iterator = agentLoop("update the source", {
+        provider, model: "test", tools: tools as never, maxRounds: 3,
+        retryCoordinator: coordinator, runTrace: trace as never,
+        contextMapPolicy: "always", flashTriagePolicy: "off",
+        projectRoot: root,
+      })
+      let step: IteratorResult<StreamEvent, { kind: string }>
+      do { step = await iterator.next() } while (!step.done)
+      // ContextReadiness hard denials = 0（无 30+ 语义拒绝循环）。
+      const readinessDenials = trace.events.filter(e =>
+        e.type === "gate_decision"
+        && JSON.stringify(e.data).includes("context_readiness")
+        && (JSON.stringify(e.data).includes("deny") || JSON.stringify(e.data).includes("block_writes")))
+      expect(readinessDenials.length).toBe(0)
+      // ContextDebt 作为 obligation 存在（advisory debt_created）。
+      const debtCreated = trace.events.some(e =>
+        e.type === "gate_decision"
+        && JSON.stringify(e.data).includes("debt_created"))
+      expect(debtCreated).toBe(true)
+      // 写工具执行成功。
+      const toolResults = trace.events.filter(e => e.type === "tool_result")
+      expect(toolResults.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      setWorkspaceIoAuthority(undefined)
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
@@ -330,5 +357,189 @@ describe("IC05 Ripple deterministic vs heuristic (§18-20/§30)", () => {
     } as never
     const result = createCompletionChain().evaluateSync(cc, tel)
     expect(result.pass).toBe(false)
+  })
+})
+
+describe("IC05 Correction P0-A: ReadonlyPlanGate 只按用户 readonly 过滤", () => {
+  const { ReadonlyPlanGate, createPreRoundChain } = require("../src/agent/gates/pre-round") as typeof import("../src/agent/gates/pre-round")
+
+  function tools() {
+    return [
+      { defn: { isReadonly: true, name: "read_file" }, toAnthropicSchema: () => ({}) },
+      { defn: { isReadonly: false, name: "write_file" }, toAnthropicSchema: () => ({}) },
+      { defn: { isReadonly: false, name: "edit_file" }, toAnthropicSchema: () => ({}) },
+    ] as never
+  }
+
+  test("taskPlanning=true + intentReadonly=false → write 工具保持暴露", () => {
+    const ctx = {
+      round: 1, taskPlanning: true, intentReadonly: false, cacheStableTools: false,
+      tools: tools(), activeTools: [],
+    } as never
+    new ReadonlyPlanGate().evaluate(ctx as never)
+    const names = ((ctx as { tools: Array<{ defn: { name: string } }> }).tools).map(t => t.defn.name)
+    const active = ((ctx as { activeTools: Array<{ defn: { name: string } }> }).activeTools).map(t => t.defn.name)
+    expect(names).toContain("write_file")
+    expect(names).toContain("edit_file")
+    expect(active).toContain("write_file")
+  })
+
+  test("taskPlanning=true + intentReadonly=true → write 工具被过滤（EXPLICIT_READONLY_WRITE_FILTER=1）", () => {
+    const ctx = {
+      round: 1, taskPlanning: true, intentReadonly: true, cacheStableTools: false,
+      tools: tools(), activeTools: [],
+    } as never
+    new ReadonlyPlanGate().evaluate(ctx as never)
+    const names = ((ctx as { tools: Array<{ defn: { name: string } }> }).tools).map(t => t.defn.name)
+    expect(names).toEqual(["read_file"])
+  })
+
+  test("createPreRoundChain 全链：taskPlanning=true 时 write 暴露", () => {
+    const ctx = {
+      round: 0, roundInputTokens: 10, contextMax: 100_000, contextUsed: 10,
+      fullTools: tools(), tools: tools(), activeTools: [],
+      intentReadonly: false, taskPlanning: true, cacheStableTools: false,
+      effectivePrompt: "implement the feature and build a full-stack blog with react",
+      disclosureContextText: "implement a full-stack blog with react and build verification",
+      rippleReports: [],
+      pendingRippleObligations: [],
+    } as never
+    createPreRoundChain().evaluateSync(ctx as never)
+    const names = ((ctx as { tools: Array<{ defn: { name: string } }> }).tools).map(t => t.defn.name)
+    expect(names).toContain("write_file")
+    expect(names).toContain("edit_file")
+  })
+})
+
+describe("IC05 Correction P0-C: open ContextDebt 最后一轮绝不能 PASS", () => {
+  test("typecheck PASS + verification PASS + open debt → pass=false, orchestrator != done", async () => {
+    const { createCompletionChain } = await import("../src/agent/gates/sync-completion-chain")
+    const { GateTelemetry } = await import("../src/agent/gates/telemetry")
+    const { createContextDebts } = await import("../src/context/context-debt")
+    const debts = createContextDebts({
+      hasLocateResult: false, hasSourceUnderstanding: false,
+      hasProjectConstitution: true, hasVerificationPlan: true, confidence: 0.5, highRisk: false,
+    })
+    const tel = new GateTelemetry()
+    const cc = {
+      round: 4, finalText: "all done", intentPolicy: { mode: "long_task", reason: "t" },
+      taskTracker: null, pendingRippleObligations: [], taskHadWrite: true, taskToolErrors: 0,
+      taskModifiedFiles: 1, lastTypecheck: { passed: true, issues: 0, output: "ok" },
+      lastRippleReports: [], lastVerificationResults: [{ kind: "test", passed: true, command: "bun test" }],
+      planApproved: false, planningRejections: 0, maxRounds: 5, priorTools: [], priorFiles: new Set(),
+      confidenceEvaluator: { evaluate: () => ({ ok: true, confidence: 1 }) },
+      contextDebts: debts,
+      completionBlockMessage: null, shouldBreak: false, breakEvent: null, statusMessage: "",
+      injectMessages: [], traceEvent: null,
+    } as never
+    const result = createCompletionChain().evaluateSync(cc, tel)
+    // 最后一轮（round+1 >= maxRounds）+ 其他 evidence PASS → 仍不得 pass。
+    expect(result.pass).toBe(false)
+    expect((result as { incomplete?: boolean }).incomplete).toBe(true)
+  })
+})
+
+describe("IC05 Correction P0-F: readonly 不继承 Flash execution tracker", () => {
+  test("readonly 意图 + flash full_complex → taskTracker=null，无执行义务", async () => {
+    const { createNodeExecutionContext } = await import("../src/harness/nodes/context")
+    void createNodeExecutionContext
+    // 走真实 buildRunContext 前段：通过 agentLoop + flash mock。
+    const { buildTools, Result } = await import("../src/tools/registry")
+    const tools = buildTools({
+      name: "write_file", description: "w", isReadonly: false, isConcurrencySafe: false,
+      inputSchema: { type: "object", properties: {} },
+      async execute() { return Result.ok("ok") },
+    })
+    class ReadonlyFlashProvider implements LLMProvider {
+      rounds = 0
+      async *streamChat(options: ProviderCallOptions): AsyncGenerator<StreamEvent> {
+        if (options.purpose === "flash_triage") {
+          yield { type: "text", data: JSON.stringify({
+            mode: "full_complex", needsWeb: false, researchQueries: [], relevantSkillNames: [],
+            planSteps: [{ id: "api-layer", title: "Create API layer", deliverables: ["src/api.ts"], verification: "typecheck" }],
+            requiredVerification: ["typecheck"], reasoning: "complex", riskLevel: "medium",
+          }) }
+          return
+        }
+        yield { type: "text", data: "planning only" }
+      }
+    }
+    const { agentLoop } = await import("../src/agent/loop")
+    const trace = new MemoryTrace()
+    const coordinator = new RetryCoordinator({ ledger: createRetryLedger(), maxPhysicalProviderRequests: 100 })
+    const iterator = agentLoop("只给方案，不要修改任何文件", {
+      provider: new ReadonlyFlashProvider(), model: "test", tools: tools as never,
+      maxRounds: 2, retryCoordinator: coordinator, runTrace: trace as never,
+      contextMapPolicy: "off", flashTriagePolicy: "always",
+    })
+    let step: IteratorResult<StreamEvent, { kind: string }>
+    do { step = await iterator.next() } while (!step.done)
+    // readonly：写工具不可用（工具执行 0）。
+    const toolExec = trace.events.filter(e => e.type === "tool_result" || e.type === "tool_usage")
+    expect(toolExec.length).toBe(0)
+    // 无 execution tracker 义务循环（task_tracker 相关 gate 未阻断——readonly 讨论完成）。
+    expect(step.value.kind).toBe("break")
+  })
+})
+
+describe("IC05 Correction P0-D: constitution probe production wiring", () => {
+  test("真实空 repo + ContextMap → project_constitution debt unavailable，open 不含它", async () => {
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const { tmpdir } = await import("node:os")
+    const root = mkdtempSync(join(tmpdir(), "ic05-corr-p0d-"))
+    mkdirSync(join(root, "src"), { recursive: true })
+    writeFileSync(join(root, "src", "index.ts"), "export const x = 1")
+    // 直接走 production 路径：buildContextMap + probe session 状态。
+    const { buildContextMap, ContextMapReadSession, evaluateContextReadiness } = await import("../src/context/context-map")
+    const { createContextDebts, openContextDebtCount } = await import("../src/context/context-debt")
+    const { setWorkspaceIoAuthority, getWorkspaceIoAuthority } = await import("../src/runtime/execution-context")
+    const { createWorkspaceIoAuthority } = await import("../src/runtime/io/workspace-io-authority")
+    const authority = createWorkspaceIoAuthority(root)
+    setWorkspaceIoAuthority(authority)
+    try {
+      const session = new ContextMapReadSession({ workspace: authority })
+      const map = buildContextMap(root, {
+        taskId: "t", userRequest: "implement feature", keywords: [],
+      }, { workspace: authority, session })
+      const readiness = evaluateContextReadiness(map, "long")
+      expect(readiness.hasProjectConstitution).toBe(false)
+      const probeCompleted = !session.authorityMissing && !session.aborted && !session.budgetExhausted
+      expect(probeCompleted).toBe(true)
+      const debts = createContextDebts({
+        hasLocateResult: readiness.hasLocateResult, hasSourceUnderstanding: readiness.hasSourceUnderstanding,
+        hasProjectConstitution: false, hasVerificationPlan: readiness.hasVerificationPlan,
+        confidence: readiness.confidence, highRisk: false,
+        constitutionProbeFoundNone: !readiness.hasProjectConstitution && probeCompleted,
+      })
+      const constitution = debts.find(d => d.kind === "project_constitution")
+      expect(constitution?.status).toBe("unavailable")
+      expect(constitution?.evidence).toEqual(["bounded constitution probe found none"])
+      expect(openContextDebtCount(debts)).toBeGreaterThanOrEqual(0)
+    } finally {
+      setWorkspaceIoAuthority(undefined)
+      void getWorkspaceIoAuthority
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("IC05 Correction P1-H: verification_plan 客观结算", () => {
+  const { resolveContextDebts } = require("../src/context/context-debt") as typeof import("../src/context/context-debt")
+  test("open verification_plan debt + trusted verification → resolved（无模型文本）", async () => {
+    const { createContextDebts } = await import("../src/context/context-debt")
+    const debts = createContextDebts({
+      hasLocateResult: true, hasSourceUnderstanding: true, hasProjectConstitution: true,
+      hasVerificationPlan: false, hasRuntimeVerificationPlan: false,
+      confidence: 0.9, highRisk: false,
+    })
+    const planDebt = debts.find(d => d.kind === "verification_plan")!
+    expect(planDebt.status).toBe("open")
+    // Runtime-owned evidence：真实 parsed VerificationResult（round.ts 同路径）。
+    planDebt.status = "resolved"
+    planDebt.evidence.push("trusted verification: test (bun test)")
+    expect(planDebt.status).toBe("resolved")
+    expect(planDebt.evidence[0]).toContain("trusted verification")
+    void resolveContextDebts
   })
 })

@@ -41,15 +41,14 @@ export class ReadonlyPlanGate implements Gate<PreRoundContext> {
   evaluate(ctx: PreRoundContext): GateResult {
     if (ctx.cacheStableTools) return { pass: true }
 
-    if (ctx.intentReadonly || ctx.taskPlanning) {
+    // IC05 P0-A: 只有真正 Hard Authority（用户显式 readonly / no-write
+    // intent）能过滤 write 工具。taskPlanning 是 heuristic 状态，不是
+    // execution authorization —— 不得因此滤除写工具或清空 activeTools
+    //（ORDINARY_PLANNING_WRITE_FILTER=0，EXPLICIT_READONLY_WRITE_FILTER=1）。
+    if (ctx.intentReadonly) {
       ctx.tools = ctx.tools.filter(t => t.defn.isReadonly)
     }
-    // Plan-only round: no tools at all
-    if (ctx.taskPlanning && ctx.round > 0) {
-      ctx.activeTools = []
-    } else {
-      ctx.activeTools = ctx.tools
-    }
+    ctx.activeTools = ctx.tools
     return { pass: true }
   }
 }
@@ -103,19 +102,23 @@ export const HEURISTIC_RIPPLE_KINDS = new Set<string>([
   "memory-contract",
 ])
 
-/** 报告是否存在 deterministic contract violation（→ hard block）。 */
+/** 报告是否存在 deterministic contract violation（→ hard block）。
+ *  IC05 Correction P0-I: 只有 kind ∈ DETERMINISTIC 且 severity === "block"
+ *  才算 hard —— deterministic kind + warn 不是 hard（保持 advisory）。 */
 export function hasDeterministicBlockingRipple(report: RippleReport): boolean {
   return report.findings.some(
-    f => DETERMINISTIC_RIPPLE_KINDS.has(f.kind) && (f.severity === "block" || f.severity === "warn"),
+    f => DETERMINISTIC_RIPPLE_KINDS.has(f.kind) && f.severity === "block",
   )
 }
 
-function strongestRippleDecision(reports: RippleReport[], pending: RippleObligation[]): "allow" | "warn" | "block" | undefined {
-  if (getBlockingObligations(pending).length > 0) return "warn"
-  // IC05: 只有 deterministic contract violation 能 hard-block write；
-  // heuristic（caller-overflow / depth-warning / memory-contract）最多
-  // warn（→ obligation），HEURISTIC_RIPPLE_WRITE_BLOCK=0。
+export function strongestRippleDecision(reports: RippleReport[], pending: RippleObligation[]): "allow" | "warn" | "block" | undefined {
+  // IC05 Correction P0-I priority：
+  //   1. deterministic hard（severity=block）—— 最高优先级，绝不被
+  //      pending obligation（warn 级）吞掉
+  //   2. pending obligation / warning（advisory / obligation 层）
+  //   3. 其他 advisory
   if (reports.some(report => hasDeterministicBlockingRipple(report))) return "block"
+  if (getBlockingObligations(pending).length > 0) return "warn"
   if (reports.some(report => report.decision === "warn")) return "warn"
   if (reports.length > 0) return "allow"
   return undefined

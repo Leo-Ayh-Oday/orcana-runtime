@@ -333,7 +333,9 @@ describe("Ripple Engine", () => {
     expect(report.findings.some(f => f.kind === "memory-contract")).toBe(true)
   })
 
-  test("context budget degraded mode escalates ripple warnings to block", () => {
+  // IC05 Correction P0-I: degraded 模式不得把 heuristic warn 升级为 hard
+  // block —— warn 保留（advisory → obligation）。HEURISTIC_RIPPLE_WRITE_BLOCK=0。
+  test("context budget degraded mode does NOT escalate heuristic warnings to block (IC05)", () => {
     const decision = tightenRippleDecision({
       targetFile: "src/a.ts",
       changedSymbols: ["foo"],
@@ -345,7 +347,7 @@ describe("Ripple Engine", () => {
       memoryHits: [],
     }, "degraded")
 
-    expect(decision).toBe("block")
+    expect(decision).toBe("warn")
   })
 
   test("formats cascade suggestions with affected files and next actions", () => {
@@ -398,5 +400,56 @@ describe("Ripple Engine", () => {
     expect(a.hash).toBe(b.hash)
     expect(a.sections).toContain("package.json")
     expect(a.sections).toContain("source-skeleton")
+  })
+})
+
+describe("IC05 Correction P0-E: real ripple write authority (R1/R2/R3)", () => {
+  test("R1: heuristic caller-overflow only → write succeeds, report=warn, disk written", async () => {
+    const root = project({
+      "math.ts": `export function add(a: number, b: number): number { return a + b }\n`,
+      "callers.txt": Array.from({ length: 12 }, (_, i) => `import { add } from "./math" // caller ${i}\n`).join(""),
+    })
+    const tool = buildTool(WRITE_FILE)
+    await recordFullBaselines(root, join(root, "math.ts"))
+    const result = await tool.execute({
+      path: join(root, "math.ts"),
+      content: `export function add(a: number, b: number): number { return a + b + 1 }\n`,
+    }, { projectRoot: root })
+    // heuristic（caller-overflow → warn）：write 允许、磁盘写入。
+    expect(result.success).toBe(true)
+    expect(readFileSync(join(root, "math.ts"), "utf-8")).toContain("a + b + 1")
+  })
+
+  test("R2: deterministic exported-symbol-removal → write blocked, disk unchanged", async () => {
+    const root = project({
+      "math.ts": `export function add(a: number, b: number): number { return a + b }\nexport function sub(a: number, b: number): number { return a - b }\n`,
+      "cart.ts": `import { sub } from "./math"\nexport const total = sub(1, 2)\n`,
+    })
+    const tool = buildTool(EDIT_FILE)
+    await recordFullBaselines(root, join(root, "math.ts"), join(root, "cart.ts"))
+    const before = readFileSync(join(root, "math.ts"), "utf-8")
+    const result = await tool.execute({
+      path: join(root, "math.ts"),
+      old_string: "export function sub(a: number, b: number): number { return a - b }",
+      new_string: "",
+    }, { projectRoot: root })
+    expect(result.success).toBe(false)
+    expect(readFileSync(join(root, "math.ts"), "utf-8")).toBe(before)
+  })
+
+  test("R3: pending obligation + new deterministic hard finding → hard block（不被 warn 吞掉）", async () => {
+    const { strongestRippleDecision } = await import("../src/agent/gates/pre-round")
+    const { createContextDebts } = await import("../src/context/context-debt")
+    void createContextDebts
+    const reports = [{
+      targetFile: "math.ts",
+      decision: "block",
+      findings: [{ kind: "exported-symbol-removal", severity: "block" }],
+      callers: [],
+      apiChanges: [],
+    }]
+    const pending = [{ caller: "old.ts", symbol: "x", reason: "pending", waiver: null }]
+    const decision = strongestRippleDecision(reports as never, pending as never)
+    expect(decision).toBe("block")
   })
 })

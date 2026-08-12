@@ -97,7 +97,7 @@ describe("IC05 ContextDebt: objective resolution (D3/D4/D5)", () => {
 
 describe("IC05 Gate Authority taxonomy (P1)", () => {
   test("hard gates 分类正确", () => {
-    for (const gate of ["permission", "path", "context_budget", "readonly_user_intent", "destructive_risk", "completion_evidence"]) {
+    for (const gate of ["permission", "path", "secret_authority", "freshness_stale_baseline", "context_budget", "resource_budget", "lifecycle_cancellation", "readonly_user_intent", "destructive_risk", "completion_evidence"]) {
       expect(isHardGate(gate), gate).toBe(true)
       expect(authorityClassOf(gate)).toBe("hard")
     }

@@ -18,7 +18,11 @@ export const GATE_AUTHORITY_CLASSIFICATION: Record<string, GateAuthorityClass> =
   // ── Hard Gates：现实 invariant，不得弱化 ──
   permission: "hard",
   path: "hard",
+  secret_authority: "hard",
+  freshness_stale_baseline: "hard",
   context_budget: "hard",
+  resource_budget: "hard",
+  lifecycle_cancellation: "hard",
   readonly_user_intent: "hard",
   destructive_risk: "hard",
   completion_evidence: "hard",

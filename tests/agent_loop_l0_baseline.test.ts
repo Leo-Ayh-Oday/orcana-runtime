@@ -474,7 +474,7 @@ describe("Agent loop L0 behavior baseline", () => {
     }
   })
 
-  test("emits one plan_ready event and one Stop hook after plan approval pause", async () => {
+  test("heuristic planning does not pause for approval; one Stop hook (IC05 P0-B)", async () => {
     resetFallbackRuntime()
     const stopReasons: string[] = []
     const hooks = new HookSystem()
@@ -495,8 +495,11 @@ describe("Agent loop L0 behavior baseline", () => {
       },
     ))
 
+    // IC05 Correction P0-B: Flash heuristic（plan_before_code / full_complex）
+    // 不再触发 mandatory plan_ready / approval pause —— 普通执行任务直接
+    // 继续执行（approval 只由显式 user/caller state 触发）。
     const planReadyEvents = events.filter(event => event.type === "plan_ready")
-    expect(planReadyEvents).toHaveLength(1)
+    expect(planReadyEvents).toHaveLength(0)
     expect(stopReasons).toHaveLength(1)
     assertFallbackRuntimeIsClean()
   })

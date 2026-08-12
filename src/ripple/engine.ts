@@ -397,12 +397,14 @@ export function tightenRippleDecision(report: RippleReport, mode: RuntimeContext
   if (report.decision === "block" && pendingFiles && pendingFiles.has(report.targetFile)) {
     return "warn"
   }
-  if (mode !== "degraded") return report.decision
+  // IC05 Correction P0-I: degraded 模式不得把 heuristic warn / fanout /
+  // caller-overflow / memory-contract / depth-warning 升级为 hard block。
+  // 真正能 block 的只有 deterministic severity=block finding 或
+  // RuntimeContextBudgetMode==="block"（上文）。heuristic 影响保留为
+  // warn（→ obligation，DONE 前偿还）。HEURISTIC_RIPPLE_WRITE_BLOCK=0。
   if (report.decision === "block") return "block"
-  if (report.findings.some(f => f.severity === "warn")) return "block"
-  if (report.callers.length > 2) return "block"
-  if (hasSeverity(report.apiChanges, "block") && report.callers.length > 2) return "warn"
-  return report.decision
+  if (report.findings.some(f => f.severity === "block")) return "block"
+  return "warn"
 }
 
 export function cascadeAwareDecision(report: RippleReport, modifiedFiles: Set<string>, mode: RuntimeContextBudgetMode): RippleDecision {
@@ -414,6 +416,10 @@ export function cascadeAwareDecision(report: RippleReport, modifiedFiles: Set<st
   const actionableFindings = report.findings.filter(f => f.severity !== "info")
   const onlyCascadeFindings = actionableFindings.length > 0 && actionableFindings.every(f => cascadeKinds.has(f.kind))
   if (uncoveredCallers.length === 0 && onlyCascadeFindings) return "allow"
+  // IC05 Correction P0-I: degraded 模式不得把 heuristic warn / fanout 升级
+  // 为 hard block —— 只有 deterministic severity=block 或
+  // RuntimeContextBudgetMode==="block" 能 hard-block（tightenRippleDecision
+  // 已实现）。HEURISTIC_RIPPLE_WRITE_BLOCK=0。
   return tightenRippleDecision(report, mode)
 }
 

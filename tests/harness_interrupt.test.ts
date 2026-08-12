@@ -117,7 +117,10 @@ async function drain(iterable: AsyncIterable<HarnessEvent>): Promise<HarnessEven
 }
 
 describe("Harness H7 interrupts", () => {
-  test("plan approval pauses into waiting with a pending interrupt", async () => {
+  // IC05 Correction P0-B: Flash heuristic（plan_before_code / full_complex）
+  // 不再触发 plan_ready / mandatory approval pause —— 普通执行任务直接
+  // 继续执行（approval 只由显式 user/caller state 触发）。
+  test("heuristic planning no longer pauses for approval (IC05 P0-B)", async () => {
     const harness = createAgentHarness({
       deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
       sessionId: "sess-int-plan",
@@ -129,27 +132,25 @@ describe("Harness H7 interrupts", () => {
     }))
     const runId = events[0]!.runId
     const snapshot = await harness.inspect(runId)
-    expect(snapshot.status).toBe("waiting")
-    expect(snapshot.outcome?.kind).toBe("waiting")
-    expect(snapshot.interrupt?.kind).toBe("plan_approval")
-    expect(snapshot.interrupt?.status).toBe("pending")
-    expect(events.some(e => e.type === "interrupt.created")).toBe(true)
+    expect(snapshot.status).not.toBe("waiting")
+    expect(snapshot.interrupt).toBeUndefined()
+    expect(events.some(e => e.type === "interrupt.created")).toBe(false)
   })
 
-  test("resume with approval continues the run to completion", async () => {
+  test("resume with answer continues the run to completion (interrupt infra)", async () => {
     const harness = createAgentHarness({
-      deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+      deps: { provider: new ClarificationProvider(), tools: [] },
       sessionId: "sess-int-resume",
     })
     const session = await harness.createSession()
-    const events = await drain(harness.run(session.sessionId, { prompt: "Build a complete small service with package setup, API, typecheck verification, tests, and responsive design while preserving existing files.", metadata: {} }))
+    const events = await drain(harness.run(session.sessionId, { prompt: "做一个全栈项目", metadata: {} }))
     const runId = events[0]!.runId
     const snapshot = await harness.inspect(runId)
     const interrupt = snapshot.interrupt!
 
     const resumed = await drain(harness.resume(runId, {
       interruptId: interrupt.interruptId,
-      payload: { accepted: true, planText: "plan text" },
+      payload: { answers: [{ questionId: "scope", answer: "B" }] },
       accepted: true,
       answeredAt: Date.now(),
     }))
@@ -165,23 +166,23 @@ describe("Harness H7 interrupts", () => {
 
   test("repeated resume is refused once answered (idempotency)", async () => {
     const harness = createAgentHarness({
-      deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+      deps: { provider: new ClarificationProvider(), tools: [] },
       sessionId: "sess-int-idem",
     })
     const session = await harness.createSession()
-    const events = await drain(harness.run(session.sessionId, { prompt: "Build a complete small service with package setup, API, typecheck verification, tests, and responsive design while preserving existing files.", metadata: {} }))
+    const events = await drain(harness.run(session.sessionId, { prompt: "做一个全栈项目", metadata: {} }))
     const runId = events[0]!.runId
     const interrupt = (await harness.inspect(runId)).interrupt!
     await drain(harness.resume(runId, {
       interruptId: interrupt.interruptId,
-      payload: { accepted: true },
+      payload: { answers: [{ questionId: "scope", answer: "B" }] },
       accepted: true,
       answeredAt: Date.now(),
     }))
     await expect(async () => {
       for await (const _e of harness.resume(runId, {
         interruptId: interrupt.interruptId,
-        payload: { accepted: true },
+        payload: { answers: [{ questionId: "scope", answer: "B" }] },
         accepted: true,
         answeredAt: Date.now(),
       })) { /* no-op */ }
@@ -190,17 +191,17 @@ describe("Harness H7 interrupts", () => {
 
   test("schema-invalid responses are rejected", async () => {
     const harness = createAgentHarness({
-      deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+      deps: { provider: new ClarificationProvider(), tools: [] },
       sessionId: "sess-int-schema",
     })
     const session = await harness.createSession()
-    const events = await drain(harness.run(session.sessionId, { prompt: "Build a complete small service with package setup, API, typecheck verification, tests, and responsive design while preserving existing files.", metadata: {} }))
+    const events = await drain(harness.run(session.sessionId, { prompt: "做一个全栈项目", metadata: {} }))
     const runId = events[0]!.runId
     const interrupt = (await harness.inspect(runId)).interrupt!
     await expect(async () => {
       for await (const _e of harness.resume(runId, {
         interruptId: interrupt.interruptId,
-        payload: { planText: 42 }, // accepted missing, wrong type
+        payload: { answers: "not-an-array" },
         accepted: true,
         answeredAt: Date.now(),
       })) { /* no-op */ }
@@ -209,17 +210,17 @@ describe("Harness H7 interrupts", () => {
 
   test("rejection is a formal cancelled branch", async () => {
     const harness = createAgentHarness({
-      deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+      deps: { provider: new ClarificationProvider(), tools: [] },
       sessionId: "sess-int-reject",
     })
     const session = await harness.createSession()
-    const events = await drain(harness.run(session.sessionId, { prompt: "Build a complete small service with package setup, API, typecheck verification, tests, and responsive design while preserving existing files.", metadata: {} }))
+    const events = await drain(harness.run(session.sessionId, { prompt: "做一个全栈项目", metadata: {} }))
     const runId = events[0]!.runId
     const interrupt = (await harness.inspect(runId)).interrupt!
 
     const resumed = await drain(harness.resume(runId, {
       interruptId: interrupt.interruptId,
-      payload: { accepted: false },
+      payload: { accepted: false, answers: [{ questionId: "scope", answer: "A" }] },
       accepted: false,
       answeredAt: Date.now(),
     }))
@@ -264,20 +265,20 @@ describe("Harness H7 interrupts", () => {
       const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const hash = () => computeWorkspaceHash(cwd)
       const harness = createAgentHarness({
-        deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+        deps: { provider: new ClarificationProvider(), tools: [] },
         sessionId: "sess-int-cross",
         projectRoot: cwd,
         store,
         workspaceHash: hash,
       })
       const session = await harness.createSession()
-      const events = await drain(harness.run(session.sessionId, { prompt: "Build a complete small service with package setup, API, typecheck verification, tests, and responsive design while preserving existing files.", metadata: {} }))
+      const events = await drain(harness.run(session.sessionId, { prompt: "做一个全栈项目", metadata: {} }))
       const runId = events[0]!.runId
       const interrupt = (await harness.inspect(runId)).interrupt!
 
       // New harness instance (simulated process restart) resumes from store.
       const harnessB = createAgentHarness({
-        deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+        deps: { provider: new ClarificationProvider(), tools: [] },
         sessionId: "sess-int-cross",
         projectRoot: cwd,
         store,
@@ -285,7 +286,7 @@ describe("Harness H7 interrupts", () => {
       })
       const resumed = await drain(harnessB.resume(runId, {
         interruptId: interrupt.interruptId,
-        payload: { accepted: true },
+        payload: { answers: [{ questionId: "scope", answer: "B" }] },
         accepted: true,
         answeredAt: Date.now(),
       }))
@@ -304,14 +305,14 @@ describe("Harness H7 interrupts", () => {
       writeFileSync(join(cwd, "file.txt"), "stable")
       const store = createFileHarnessStore({ root: join(cwd, ".orcana", "harness") })
       const harness = createAgentHarness({
-        deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+        deps: { provider: new ClarificationProvider(), tools: [] },
         sessionId: "sess-int-ws",
         projectRoot: cwd,
         store,
         workspaceHash: () => computeWorkspaceHash(cwd),
       })
       const session = await harness.createSession()
-      const events = await drain(harness.run(session.sessionId, { prompt: "Build a complete small service with package setup, API, typecheck verification, tests, and responsive design while preserving existing files.", metadata: {} }))
+      const events = await drain(harness.run(session.sessionId, { prompt: "做一个全栈项目", metadata: {} }))
       const runId = events[0]!.runId
       const interrupt = (await harness.inspect(runId)).interrupt!
 
@@ -319,7 +320,7 @@ describe("Harness H7 interrupts", () => {
       writeFileSync(join(cwd, "file.txt"), "changed!")
 
       const harnessB = createAgentHarness({
-        deps: { provider: new PlanProvider(), tools: probeTool(), flashTriagePolicy: "always" },
+        deps: { provider: new ClarificationProvider(), tools: [] },
         sessionId: "sess-int-ws",
         projectRoot: cwd,
         store,
@@ -328,7 +329,7 @@ describe("Harness H7 interrupts", () => {
       await expect(async () => {
         for await (const _e of harnessB.resume(runId, {
           interruptId: interrupt.interruptId,
-          payload: { accepted: true },
+          payload: { answers: [{ questionId: "scope", answer: "B" }] },
           accepted: true,
           answeredAt: Date.now(),
         })) { /* no-op */ }

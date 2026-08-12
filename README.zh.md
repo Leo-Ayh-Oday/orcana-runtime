@@ -76,7 +76,7 @@ set DEEPSEEK_API_KEY=sk-your-key-here
 
 Provider、模型、预算、权限、沙箱和 MCP 等高级配置，请参考：
 
-- [中文使用指南](./docs/awesome-deepseek-agent/orcana.zh-CN.md)
+- [中文使用指南](./docs/user-guide/orcana.zh-CN.md)
 - [settings.example.json](./settings.example.json)
 - [.env.example](./.env.example)
 
@@ -317,9 +317,9 @@ Orcana 具备多层上下文管理能力，包括：
 
 > [!IMPORTANT]
 > 当前公开版本与源码版本已经分叉：npm 和 GitHub Latest Release 仍为
-> `0.8.16`，`origin/main` 声明 `0.8.26.1`，活动修复线声明尚未发布的
-> `0.8.26.2` 候选。修改源码中的版本号不等于 npm 包或 GitHub Release
-> 已经发布。
+> `0.8.16`，`origin/main` 声明 `0.8.26.2`，活动修复线声明尚未发布的
+> `0.8.26.3` 候选。修改源码中的版本号不等于 npm 包或 GitHub Release
+> 已经发布。权威版本表见 [SECURITY.md 版本渠道](./SECURITY.md#version-channels)。
 
 | 子系统 | 当前状态 | 说明 |
 |---|---|---|
@@ -339,6 +339,17 @@ Orcana 具备多层上下文管理能力，包括：
 | Typed Execution Graph | 核心已实现，权威闭环中 | `src/workflow/` 已包含类型契约、编译/校验、DAG 调度、读写串行、结果缓存/重放、修复循环、动态编译、中断与 Harness 节点执行；严格重放、不可变审批、缓存溯源以及资源/重试权威仍需闭环 |
 | Multi-Agent | 延后 | 单 Agent Runtime 语义稳定后再进入受约束 Subagent 阶段 |
 | Recursive Self-Evolution | 研究方向 | 不应被视为当前已经稳定交付的能力 |
+
+## 长期方向 —— Governed Agent OS
+
+Orcana 今天还不是 Agent OS。其长期方向是把上述运行时原语演进为一个
+**Linux-first Agent OS**：Agent 可以在其中保持持久运行、持续追求目标、
+恢复状态，并在明确的授权、预算、隔离与证据约束下对真实系统采取行动。
+
+该方向依赖的正是上文描述的运行时原语：长时程执行、状态一致性、运行隔离、
+证据与恢复——每一项都以可治理、可验证的边界形式存在，而不是研究声明。
+向该目标推进的过程会在公开文档与状态页中与诚实的降级说明一起记录，
+不会当作已交付能力来宣传。
 
 ## Orcana 目前不是什么
 
@@ -469,7 +480,7 @@ npm pack --dry-run
 
 | 文档 | 内容 |
 |---|---|
-| [中文使用指南](./docs/awesome-deepseek-agent/orcana.zh-CN.md) | 安装、Provider 配置与首次运行 |
+| [中文使用指南](./docs/user-guide/orcana.zh-CN.md) | 安装、Provider 配置与首次运行 |
 | [当前状态](./docs/status.md) | 公开/源码版本、能力状态与发布门禁 |
 | [Linux 沙盒状态](./docs/linux-foundation/current-status.md) | 后端强制、降级矩阵与声明规则 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Runtime、Agent Loop、Gate 与子系统架构 |

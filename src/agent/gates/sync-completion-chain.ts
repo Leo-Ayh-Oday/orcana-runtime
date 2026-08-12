@@ -159,6 +159,26 @@ export class PlanningArtifactGate implements Gate<CompletionContext> {
   }
 }
 
+// ── Gate: ContextDebt（IC05 P6: obligation —— open debt 禁止 DONE）──
+
+export class ContextDebtCompletionGate implements Gate<CompletionContext> {
+  readonly name = "semantic:context_debt"
+
+  evaluate(ctx: CompletionContext) {
+    const debts = ctx.contextDebts
+    const open = debts?.filter(d => d.status === "open") ?? []
+    if (open.length === 0) return { pass: true }
+    if (ctx.round + 1 >= ctx.maxRounds) return finalRoundNoEvidence(ctx)
+    const lines = open.map(d => `${d.id} (${d.kind}): ${d.requiredAction}`).join("\n")
+    const userMsg = `## ContextDebt 未偿还\nDONE 前需要以下客观上下文证据（advisory 不阻断写，但完成前必须偿还）：\n\n${lines}`
+    continue_(ctx, "semantic:context_debt", compactAssistantContext(ctx.finalText), userMsg,
+      `context-debt: ${open.length} open (${open.map(d => d.kind).join(", ")})`,
+      { openDebts: open.map(d => d.kind), authority: "obligation" })
+    ctx.completionBlockMessage = userMsg
+    return { pass: false, reason: "semantic:context_debt" }
+  }
+}
+
 // ── Gate: Task Tracker Completion ──
 
 export class TaskTrackerCompletionGate implements Gate<CompletionContext> {
@@ -254,6 +274,7 @@ export function createCompletionChain(): GateChain<CompletionContext> {
     new RippleExitGate(),
     new PlanningArtifactGate(),
     new TaskTrackerCompletionGate(),
+    new ContextDebtCompletionGate(),
     new QualityGate(),
   ])
 }

@@ -163,6 +163,8 @@ export interface RunPhaseContext {
     contextMapContext: string
     contextReadinessBlockers: string[]
     contextReadinessBlocked: boolean
+    /** IC05: readiness blockers 降级为 obligation debts（写工具不再被滤除）。 */
+    contextDebts: import("../../context/context-debt").ContextDebt[]
     planContextAttachment: { contextMapId: string; requiredContextEvidence: string[] } | undefined
   }
   CONTEXT_MAX: number

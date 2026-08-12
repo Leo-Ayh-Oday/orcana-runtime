@@ -54,19 +54,15 @@ export class ReadonlyPlanGate implements Gate<PreRoundContext> {
   }
 }
 
-// ── Gate: Context readiness ──
+// ── Gate: Context readiness（IC05 P2: advisory —— 不再 filter write tools）──
 
 export class ContextReadinessToolFilterGate implements Gate<PreRoundContext> {
   readonly name = "policy:context_readiness_filter"
 
   evaluate(ctx: PreRoundContext): GateResult {
-    if (ctx.contextReadinessBlocked) {
-      ctx.tools = ctx.tools.filter(t => t.defn.isReadonly)
-      ctx.activeTools = ctx.tools
-      ctx.contextReadinessBlockActive = true
-    } else {
-      ctx.contextReadinessBlockActive = false
-    }
+    // IC05: ContextReadiness 是 advisory gate。write tools 保持暴露，
+    // readiness blockers 以 ContextDebt（obligation）形式在 DONE 前偿还。
+    ctx.contextReadinessBlockActive = false
     return { pass: true }
   }
 }
@@ -91,9 +87,35 @@ export class RippleToolFilterGate implements Gate<PreRoundContext> {
   }
 }
 
+/** IC05 P5: deterministic contract-violation kinds（真实 API surface diff）。 */
+export const DETERMINISTIC_RIPPLE_KINDS = new Set<string>([
+  "exported-symbol-removal",
+  "deprecated-replacement",
+  "async-return-change",
+  "exported-type-change",
+  "signature-change",
+])
+
+/** IC05 P5: heuristic kinds —— 永远不单独获得 write hard-block 权。 */
+export const HEURISTIC_RIPPLE_KINDS = new Set<string>([
+  "caller-overflow",
+  "depth-warning",
+  "memory-contract",
+])
+
+/** 报告是否存在 deterministic contract violation（→ hard block）。 */
+export function hasDeterministicBlockingRipple(report: RippleReport): boolean {
+  return report.findings.some(
+    f => DETERMINISTIC_RIPPLE_KINDS.has(f.kind) && (f.severity === "block" || f.severity === "warn"),
+  )
+}
+
 function strongestRippleDecision(reports: RippleReport[], pending: RippleObligation[]): "allow" | "warn" | "block" | undefined {
   if (getBlockingObligations(pending).length > 0) return "warn"
-  if (reports.some(report => report.decision === "block")) return "block"
+  // IC05: 只有 deterministic contract violation 能 hard-block write；
+  // heuristic（caller-overflow / depth-warning / memory-contract）最多
+  // warn（→ obligation），HEURISTIC_RIPPLE_WRITE_BLOCK=0。
+  if (reports.some(report => hasDeterministicBlockingRipple(report))) return "block"
   if (reports.some(report => report.decision === "warn")) return "warn"
   if (reports.length > 0) return "allow"
   return undefined

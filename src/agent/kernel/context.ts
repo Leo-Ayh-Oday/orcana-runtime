@@ -22,7 +22,7 @@ import { CacheTracker } from "../../provider/cache-tracker"
 import { ErrorTracker } from "../round/pre-loop"
 import { GateTelemetry } from "../gates/telemetry"
 import { buildContextKernel } from "../../context/kernel"
-import { classifyIntent } from "../intent"
+import { classifyIntent, resolveRuntimeIntent } from "../intent"
 import {
   FlashTriage,
   buildTrackerFromTriage,
@@ -270,8 +270,10 @@ export async function buildRunContext(
   let initialTriageSkillPrompts: string[] = []
 
   if (triageResult) {
-    // Flash succeeded — use semantic classification
-    initialIntentPolicy = { mode: triageModeToIntent(triageResult.mode), reason: `Flash triage: ${triageResult.reasoning}` }
+    // Flash succeeded — use semantic classification，但 deterministic 用户
+    // no-write 意图优先（resolveRuntimeIntent）。
+    const triageIntent: ReturnType<typeof classifyIntent> = { mode: triageModeToIntent(triageResult.mode), reason: `Flash triage: ${triageResult.reasoning}` }
+    initialIntentPolicy = resolveRuntimeIntent(effectivePrompt, triageIntent)
     const trackerDef = buildTrackerFromTriage(triageResult, effectivePrompt)
     if (trackerDef) {
       initialTaskTracker = { ...trackerDef, verificationEvidence: {}, verification: trackerDef.requiredVerificationKinds.map(k => k === "typecheck" ? "运行类型检查" : k === "test" ? "运行测试" : k === "build" ? "运行构建" : "运行验证") }
@@ -455,6 +457,7 @@ export async function buildRunContext(
       contextMapContext: "",
       contextReadinessBlockers: [],
       contextReadinessBlocked: false,
+      contextDebts: [],
       planContextAttachment: undefined,
     },
     CONTEXT_MAX,

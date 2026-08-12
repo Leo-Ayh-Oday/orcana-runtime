@@ -784,7 +784,10 @@ describe("IC01-R3 hardlink 策略 —— 未授权多链接文件 fail closed（
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
-  })
+    // 10,400 个真实文件的写入在 self-hosted/负载宿主上可能超过 bun 默认
+    // 5s；60s 是该测试在真实 FS 上建树的诚实上界（算法断言本身是
+    // elapsed < 2s，不受影响）。
+  }, 60_000)
 
   test("rename 竞态不能形成放行：读取前被换为多链接文件 → 拒绝（pre-open + post-open 双层）", async () => {
     const p = join(ROOT, "src", "race-target.txt")

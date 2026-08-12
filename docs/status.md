@@ -13,8 +13,10 @@ override current code, current tests, real runtime evidence or a later audit.
 |---|---:|---|
 | npm `latest` | `0.8.16` | Current public package |
 | GitHub Latest Release | `v0.8.16` | Current public Release/tag |
-| `origin/main` | `0.8.26.1` | Unreleased source |
-| Active repair line | `0.8.26.2` | Unreleased candidate |
+| `origin/main` | `0.8.26.2` | Unreleased source (RC-18 convergence baseline `fe913ed`) |
+| Active repair line | `0.8.26.3` | Unreleased candidate (production-closure line, R2-0 + PR-E1) |
+
+Version-truth source of record: [SECURITY.md Version Channels](../SECURITY.md#version-channels).
 
 There is no automatic npm/GitHub Release workflow. A `package.json` version is
 not a release until a clean candidate passes the release gates, receives owner
@@ -56,8 +58,8 @@ installed back from the public registry for smoke verification.
 | Evidence / Completion | `IMPLEMENTED`, frontier incomplete | Receipt/Evidence criteria exist; dependency-frontier invalidation and all external modification detection remain incomplete |
 | Approval / Cache / Replay | `PARTIAL` | Implementations and deterministic harnesses exist; immutable approval grants, provenance-complete cache identity and zero-live-side-effect strict runtime replay remain closure work |
 | Typed Execution Graph | `IMPLEMENTED`, authority closure remains | `src/workflow/` provides typed contracts, compiler/validation, DAG scheduling, read/write serialization, result cache/replay, repair loops, dynamic compilation, interrupts, agent/worktree coordination and Harness-node execution; strict replay, immutable approval, cache provenance and authoritative resource/retry/liveness integration remain partial |
-| GitHub Actions | `CI_BLOCKED_EXTERNAL` | The account billing lock prevents jobs before the first step; zero-step failures are not code failures |
-| Release | `NOT_RELEASED` after `0.8.16` | Source versions `0.8.26.1/.2` have not been reconciled with npm or GitHub Releases |
+| GitHub Actions | `LOCAL_REAL_VERIFIED` | Self-hosted runner (`orcana-linux-runtime`); triggers limited to `push → main` + `workflow_dispatch`; 2026-08-12 CI and Linux Sandbox Lanes all green |
+| Release | `NOT_RELEASED` after `0.8.16` | Source versions `0.8.26.2/.3` have not been reconciled with npm or GitHub Releases |
 
 ## Linux development-host observation
 

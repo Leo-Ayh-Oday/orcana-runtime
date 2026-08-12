@@ -76,7 +76,7 @@ set DEEPSEEK_API_KEY=sk-your-key-here
 
 For advanced configuration — providers, models, budgets, permissions, sandbox and MCP — see:
 
-- [User guide](./docs/awesome-deepseek-agent/orcana.md)
+- [User guide](./docs/user-guide/orcana.md)
 - [settings.example.json](./settings.example.json)
 - [.env.example](./.env.example)
 
@@ -317,9 +317,11 @@ Orcana has multi-layer context management, including:
 
 > [!IMPORTANT]
 > Publication and source versions are currently split: npm and GitHub Latest
-> Release are `0.8.16`, `origin/main` declares `0.8.26.1`, and the active
-> repair line declares the unreleased candidate `0.8.26.2`. A source version
-> change is not evidence that a package or Release was published.
+> Release are `0.8.16`, `origin/main` declares `0.8.26.2`, and the active
+> repair line declares the unreleased candidate `0.8.26.3`. A source version
+> change is not evidence that a package or Release was published. The
+> [Security Policy Version Channels](./SECURITY.md#version-channels) is the
+> authoritative version-truth table.
 
 | Subsystem | Status | Notes |
 |---|---|---|
@@ -339,6 +341,19 @@ Orcana has multi-layer context management, including:
 | Typed Execution Graph | Core implemented; authority closure in progress | `src/workflow/` contains typed contracts, compiler/validation, DAG scheduling, read/write serialization, result cache/replay, repair loops, dynamic compilation, interrupts and Harness node execution; strict replay, immutable approval, cache provenance and resource/retry authority still need closure |
 | Multi-Agent | Deferred | Constrained Subagent stage comes after single-agent runtime semantics stabilize |
 | Recursive Self-Evolution | Research direction | Not to be treated as a stably delivered current capability |
+
+## Long-term direction — Governed Agent OS
+
+Orcana is not an Agent OS today. Its long-term direction is to evolve these
+runtime primitives into a Linux-first Agent OS where agents can remain
+persistent, pursue goals, recover state and act on real systems under explicit
+authority, budgets, isolation and evidence constraints.
+
+The runtime primitives this direction builds on are the ones described above:
+long-horizon execution, state consistency, run isolation, evidence and
+recovery — each as a governed, verifiable boundary rather than a research
+claim. Progress toward this goal is tracked in public docs and status pages
+alongside honest degradation notes, not as shipped capability marketing.
 
 ## What Orcana is not
 
@@ -477,7 +492,7 @@ npm pack --dry-run
 
 | Doc | Contents |
 |---|---|
-| [User guide](./docs/awesome-deepseek-agent/orcana.md) | Installation, provider setup and first run |
+| [User guide](./docs/user-guide/orcana.md) | Installation, provider setup and first run |
 | [Current status](./docs/status.md) | Public/source versions, capability status and release gates |
 | [Linux sandbox status](./docs/linux-foundation/current-status.md) | Backend enforcement, degradation matrix and claim rules |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Runtime, agent loop, gates and subsystem architecture |

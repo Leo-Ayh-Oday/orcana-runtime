@@ -24,8 +24,10 @@ Orcana 已经实现 Linux `ProcessExecutor → LinuxExecutionBroker → Backend`
 |---|---:|---|
 | npm `latest` | `0.8.16` | 当前公开包 |
 | GitHub Latest Release | `v0.8.16` | 当前公开 Release/tag |
-| `origin/main` 源码 | `0.8.26.1` | 未发布到 npm/Release |
-| 当前修复线源码 | `0.8.26.2` | 未发布候选；不能当作公开版本 |
+| `origin/main` 源码 | `0.8.26.2` | 未发布到 npm/Release（RC-18 汇合基线 `fe913ed`） |
+| 当前修复线源码 | `0.8.26.3` | 未发布候选（生产收口线，R2-0 + PR-E1）；不能当作公开版本 |
+
+权威版本表：`SECURITY.md` Version Channels。
 
 仓库没有自动 npm/GitHub Release 工作流。`package.json` 版本变化不会自动发布；发布必须从干净、验收完成且明确授权的提交执行。
 

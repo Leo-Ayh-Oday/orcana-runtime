@@ -55,7 +55,7 @@ const arg = process.argv[2] ?? ""
 
 function printHelp() {
   console.log([
-    "Orcana Runtime — model-agnostic agent runtime for evidence-gated recursive self-evolution",
+    "Orcana Runtime — model-agnostic agent runtime for reliable, governed, evidence-backed long-horizon execution",
     "",
     "Usage:",
     "  orcana [prompt]",

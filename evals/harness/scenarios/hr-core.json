@@ -164,7 +164,7 @@
   },
   {
    "caseId": "HR-006",
-   "title": "Provider Stream 中断后恢复",
+   "title": "Provider 流中断经 Provider 层重试恢复（IC04）",
    "input": {
     "prompt": "summarize",
     "maxRounds": 3
@@ -172,16 +172,9 @@
    "initialWorkspace": {},
    "providerScript": [
     {
-     "type": "text",
-     "data": "partial "
-    },
-    {
      "type": "error",
      "errorType": "retryable",
      "message": "stream interrupted"
-    },
-    {
-     "type": "round_end"
     },
     {
      "type": "text",
@@ -197,8 +190,8 @@
     },
     "events": [
      {
-      "type": "error.raised",
-      "count": 1
+      "type": "text.emitted",
+      "minCount": 1
      }
     ],
     "artifacts": {

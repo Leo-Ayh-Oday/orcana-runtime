@@ -9,7 +9,7 @@
  * consume the main script.
  */
 
-import type { LLMProvider, ProviderCallOptions, StreamEvent } from "../../src/provider/types"
+import type { LLMProvider, ProviderCallOptions, ProviderFinishInfo, StreamEvent } from "../../src/provider/types"
 import type { ProviderScriptEvent, ProviderCallPurpose } from "./contracts"
 
 export class ScriptedProvider implements LLMProvider {
@@ -47,22 +47,27 @@ export class ScriptedProvider implements LLMProvider {
         cursor += 1
         break
       }
-      yield* this.yieldEvent(event)
+      const shouldContinue = yield* this.yieldEvent(event, options)
+      if (!shouldContinue) {
+        cursor += 1
+        break
+      }
     }
     this.cursors.set(purpose, cursor)
   }
 
-  private async *yieldEvent(event: ProviderScriptEvent): AsyncGenerator<StreamEvent> {
+  /** Yields one scripted event; returns whether the round should continue consuming. */
+  private async *yieldEvent(event: ProviderScriptEvent, options: ProviderCallOptions): AsyncGenerator<StreamEvent, boolean> {
     switch (event.type) {
       case "text":
         yield { type: "text", data: event.data }
-        return
+        return true
       case "tool_call":
         yield {
           type: "tool_call",
           data: { id: `script-call-${++this.toolCallCounter}`, name: event.name, input: event.input },
         }
-        return
+        return true
       case "usage":
         yield {
           type: "token_usage",
@@ -73,38 +78,59 @@ export class ScriptedProvider implements LLMProvider {
             cacheSource: "provider",
           },
         }
-        return
+        return true
       case "error":
         // non_retryable → auth-style message (hits isNonRetryableProviderStreamError);
-        // retryable → plain failure text (decideProviderFailureRecovery decides).
-        yield {
-          type: "error",
-          data: event.errorType === "non_retryable"
-            ? (event.message ?? "auth: invalid api key")
-            : (event.message ?? "provider stream interrupted"),
+        // the failure surfaces to the kernel which fail-closes.
+        if (event.errorType === "non_retryable") {
+          yield { type: "error", data: event.message ?? "auth: invalid api key" }
+          return true
         }
-        return
+        // IC04 §34/§37: retryable errors follow the production provider retry
+        // contract — the same streamChat call retries internally:
+        //   coordinator authorize → reissue (consume the next script event as
+        //   the retry response) and keep going;
+        //   coordinator deny → structured transport_failure termination (the
+        //   kernel fail-closes, never a whole-round continuation).
+        if (options.retryCoordinator) {
+          const permit = options.retryCoordinator.authorizeProviderAttempt({})
+          if (!permit.allowed) {
+            yield { type: "error", data: event.message ?? "provider stream interrupted" }
+            yield {
+              type: "finish",
+              data: {
+                finishReason: "transport_failure",
+                rawStopReason: undefined,
+                completedToolCallCount: 0,
+                partialToolCall: false,
+              } satisfies ProviderFinishInfo,
+            }
+            return false
+          }
+        }
+        yield { type: "status", data: `provider retry: ${event.message ?? "stream interrupted"}` }
+        return true
       case "idle_timeout":
         // Hangs until the harness aborts/returns the iterator (wall-time
         // watchdog or idle timeout). The hanging await is abandoned when the
         // caller closes the generator. Caller must set maxWallTimeMs.
         yield { type: "status", data: "scripted-provider: idle hang" }
         await new Promise<void>(() => {})
-        return
+        return true
       case "plan_ready":
         yield { type: "plan_ready", data: { planText: event.planText } }
-        return
+        return true
       case "clarification_ready":
         yield { type: "clarification_ready", data: event.questions }
-        return
+        return true
       case "status":
         yield { type: "status", data: event.data }
-        return
+        return true
       case "thinking_blocks":
         yield { type: "thinking_blocks", data: event.data }
-        return
+        return true
       case "round_end":
-        return
+        return true
     }
   }
 

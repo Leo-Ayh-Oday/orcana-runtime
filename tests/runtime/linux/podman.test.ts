@@ -39,6 +39,11 @@ function baseSpec(overrides: Partial<ExecutionCellSpec> = {}): ExecutionCellSpec
 const caps = probeLinuxCapabilities()
 const podmanAvailable = caps.podman.available && caps.podman.rootlessReady
 
+// Real rootless-podman container runs on self-hosted / loaded WSL hosts take
+// seconds to warm up (userns init, conmon, first pull); 60s is the honest
+// bound for a real backend run, not a behavior assertion.
+const REAL_PODMAN_TIMEOUT_MS = 60_000
+
 describe("LF-6: image policy", () => {
   test("digest-locked image accepted", () => {
     expect(validateImageRef(DIGEST_IMAGE).ok).toBe(true)
@@ -156,7 +161,7 @@ describe("LF-6: true container (runs only when rootless podman ready)", () => {
       events.push(event.type)
     }
     expect(events).toContain("cell.receipt")
-  })
+  }, REAL_PODMAN_TIMEOUT_MS)
 
   podmanTest("receipt records rootless-podman backend", async () => {
     const backend = createPodmanBackend()
@@ -170,7 +175,7 @@ describe("LF-6: true container (runs only when rootless podman ready)", () => {
       }
     }
     expect(receiptSeen).toBe(true)
-  })
+  }, REAL_PODMAN_TIMEOUT_MS)
 })
 
 describe("PR-7: podman production wiring", () => {
@@ -238,5 +243,5 @@ describe("PR-7: podman production wiring", () => {
       // 但绝不能是 IMAGE_NOT_APPROVED（审批已通过）。
       expect(String(error)).not.toContain("IMAGE_NOT_APPROVED")
     }
-  })
+  }, REAL_PODMAN_TIMEOUT_MS)
 })

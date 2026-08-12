@@ -9,10 +9,11 @@ import type { WorldProjectionPlan, WorldProjectionPlanInput } from "./contracts"
 
 export type { WorldProjectionPlanInput }
 import { ProjectionError } from "./contracts"
-import { assertProjectionId, buildProjectionScope } from "./path-policy"
+import { assertProjectionId, assertSafeProjectionId, buildProjectionScope } from "./path-policy"
 
 export function validateWorldProjectionPlan(input: WorldProjectionPlanInput): WorldProjectionPlan {
-  const projectionId = assertProjectionId(input.projectionId, "projectionId")
+  // projectionId 是文件系统 token：safe-token 语法（拒绝 / \ . .. 等）。
+  const projectionId = assertSafeProjectionId(input.projectionId)
   const worldId = assertProjectionId(input.worldId, "worldId")
   const branchId = assertProjectionId(input.branchId, "branchId")
   const snapshotId = assertProjectionId(input.snapshotId, "snapshotId")

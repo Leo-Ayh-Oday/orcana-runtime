@@ -3,7 +3,9 @@
  *
  * 只从 plan 指定的 immutable snapshot 物化：
  * - 内容来源 = snapshot.filesystemDigest 对应的 canonical world-section
- *   manifest + CAS bytes；**绝不读取当前 World HEAD**；
+ *   manifest + CAS bytes；**绝不读取当前 World HEAD**；contentRef 按 CAS
+ *   记录区分 raw bytes 与 AK-1 FileManifest（chunk 校验后按序重建）；
+ * - 只接受 snapshotId，身份字段从 WorldStore 严格校验（R06.5）；
  * - 只物化 regular file 与 directory（拒绝 symlink/hardlink/device/FIFO/
  *   socket 语义的 entry；kind=workspace 无 path 时跳过，带 path 拒绝）；
  * - 拒绝 duplicate path、file/directory collision 与 path escape；
@@ -25,13 +27,16 @@ import {
 } from "node:fs"
 import { join, resolve, sep } from "node:path"
 import type { CasDigest, WorldSnapshot } from "../world/contracts"
-import { ProjectionError } from "./contracts"
+import { ProjectionError, DEFAULT_PROJECTION_LIMITS } from "./contracts"
 import { canonicalizeProjectionPath } from "./path-policy"
 import { parseCanonicalJson } from "../world/canonical"
 
 /** 物化内容源 —— 只读消费 WorldStore 的公开快照/CAS 边界。 */
 export interface ProjectionMaterializerSource {
   readonly getSnapshot: (snapshotId: string) => WorldSnapshot | undefined
+  /** CAS 对象元数据（isManifest/mediaTypes）—— 用于区分 raw content 与
+   *  FileManifest，不创建第二套格式。 */
+  readonly getCasRecord: (digest: CasDigest) => import("../world/contracts").CasObjectRecord | undefined
   readonly readCasObject: (digest: CasDigest) => Buffer
 }
 
@@ -120,18 +125,26 @@ export function parseFilesystemSection(bytes: Buffer): MaterializedSectionManife
   })
 }
 
-/** 物化器 —— 从 snapshot 重建 immutable lower base。 */
+/** 物化器 —— 从 snapshot 重建 immutable lower base。
+ *  只接受 snapshotId；snapshot 身份字段全部从 WorldStore 获取并严格匹配
+ *  （worldId/branchId/revision/filesystemDigest/全部 section digest），
+ *  不信任调用方构造的 WorldSnapshot。 */
 export class SnapshotMaterializer {
-  constructor(private readonly source: ProjectionMaterializerSource) {}
+  constructor(
+    private readonly source: ProjectionMaterializerSource,
+    private readonly limits: import("./contracts").ProjectionLimits = DEFAULT_PROJECTION_LIMITS,
+  ) {}
 
   /**
    * 物化 snapshot 到 baseDir（必须已存在且为空）。返回只读 lower base。
    * 不访问 World HEAD；snapshot 内容完全来自 CAS。
    */
-  materialize(snapshot: WorldSnapshot, baseDir: string): MaterializedBase {
-    if (!this.source.getSnapshot(snapshot.snapshotId)) {
-      throw new ProjectionError("SNAPSHOT_NOT_FOUND", `snapshot ${snapshot.snapshotId} is not stored`)
+  materialize(snapshotId: string, baseDir: string): MaterializedBase {
+    const snapshot = this.source.getSnapshot(snapshotId)
+    if (!snapshot) {
+      throw new ProjectionError("SNAPSHOT_NOT_FOUND", `snapshot ${snapshotId} is not stored`)
     }
+    this.assertCanonicalSnapshot(snapshot)
     const absoluteBase = resolve(baseDir)
     if (!existsSync(absoluteBase)) {
       throw new ProjectionError("MATERIALIZATION_FAILED", `materialization root does not exist: ${absoluteBase}`)
@@ -220,6 +233,10 @@ export class SnapshotMaterializer {
     // 逐级自建」保证无既有 symlink 可跟随）。
     let fileCount = 0
     let directoryCount = 0
+    let treeBytes = 0
+    if (manifest.entries.length > this.limits.maxEntries) {
+      throw new ProjectionError("PROJECTION_RESOURCE_LIMIT", `filesystem manifest entries exceed limit (${manifest.entries.length} > ${this.limits.maxEntries})`)
+    }
     const plannedDirectories = [...byPath.entries()]
       .filter(([, entry]) => entry.kind === "directory")
       .map(([path]) => path)
@@ -235,7 +252,20 @@ export class SnapshotMaterializer {
       if (entry.kind !== "file") continue
       const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
       if (parent.length > 0) this.ensureDirectory(absoluteBase, parent)
-      const content = this.readFileContent(entry.contentRef!)
+      const content = this.rebuildFileBytes(entry.contentRef!, path)
+      if (content.byteLength > this.limits.maxFileBytes) {
+        throw new ProjectionError(
+          "PROJECTION_RESOURCE_LIMIT",
+          `file ${path} exceeds maxFileBytes (${content.byteLength} > ${this.limits.maxFileBytes})`,
+        )
+      }
+      treeBytes += content.byteLength
+      if (treeBytes > this.limits.maxTreeBytes) {
+        throw new ProjectionError(
+          "PROJECTION_RESOURCE_LIMIT",
+          `materialized tree exceeds maxTreeBytes (${treeBytes} > ${this.limits.maxTreeBytes})`,
+        )
+      }
       const target = this.joinWithin(absoluteBase, path)
       const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o444)
       try {
@@ -260,31 +290,174 @@ export class SnapshotMaterializer {
     })
   }
 
-  /** 读取 section manifest（source 错误统一包装为 MATERIALIZATION_FAILED）。 */
-  private readSectionManifest(digest: CasDigest): Buffer {
+  /** 从 WorldStore 严格校验 canonical snapshot 身份字段（R06.5）：
+   *  worldId/branchId/revision 非空；全部 section digest 存在且为
+   *  manifest 记录；filesystemDigest 对应 section manifest 可读。 */
+  private assertCanonicalSnapshot(snapshot: WorldSnapshot): void {
+    const fail = (detail: string): never => {
+      throw new ProjectionError("SNAPSHOT_MISMATCH", `canonical snapshot ${snapshot.snapshotId} failed identity check: ${detail}`)
+    }
+    if (typeof snapshot.worldId !== "string" || snapshot.worldId.length === 0) fail("worldId missing")
+    if (typeof snapshot.branchId !== "string" || snapshot.branchId.length === 0) fail("branchId missing")
+    if (typeof snapshot.revision !== "bigint" && typeof snapshot.revision !== "number") fail("revision missing")
+    const digests: Array<[string, CasDigest | undefined]> = [
+      ["filesystem", snapshot.filesystemDigest],
+      ["memory", snapshot.memoryDigest],
+      ["taskState", snapshot.taskStateDigest],
+      ["capabilityState", snapshot.capabilityStateDigest],
+      ["serviceState", snapshot.serviceStateDigest],
+      ["artifactState", snapshot.artifactStateDigest],
+    ]
+    for (const [label, digest] of digests) {
+      if (typeof digest !== "string" || !digest.startsWith("sha256:")) fail(`${label}Digest missing`)
+      const record = this.source.getCasRecord(digest as CasDigest)
+      if (!record) {
+        fail(`${label}Digest ${digest} has no CAS record`)
+        return
+      }
+      if (record.isManifest !== true) fail(`${label}Digest ${digest} is not a manifest`)
+    }
+    // manifestDigest 存在（world manifest 引用闭合由 CAS integrity 保证）。
+    if (typeof snapshot.manifestDigest !== "string" || !snapshot.manifestDigest.startsWith("sha256:")) {
+      fail("manifestDigest missing")
+    }
+  }
+
+  /** 重建文件原始 bytes（R04）：识别 raw CAS content 与 AK-1 FileManifest。
+   *  FileManifest：完整解析 schema、校验 chunk digest/offset/size/顺序/
+   *  总长度，按序重建；缺失/重复/重叠/越界/digest 错误全部 fail-closed。
+   *  有界：manifest.size 与总字节受 maxFileBytes/maxFileChunks 限制。 */
+  private rebuildFileBytes(contentRef: CasDigest, path: string): Buffer {
+    const record = this.source.getCasRecord(contentRef)
+    if (!record) {
+      throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: CAS object ${contentRef} is not registered`)
+    }
+    const recordIsManifest = record.isManifest
+    if (recordIsManifest) {
+      const manifest = this.parseFileManifest(contentRef, path)
+      if (manifest.size > this.limits.maxFileBytes) {
+        throw new ProjectionError(
+          "PROJECTION_RESOURCE_LIMIT",
+          `file ${path}: FileManifest size ${manifest.size} exceeds maxFileBytes ${this.limits.maxFileBytes}`,
+        )
+      }
+      if (manifest.chunks.length > this.limits.maxFileChunks) {
+        throw new ProjectionError(
+          "PROJECTION_RESOURCE_LIMIT",
+          `file ${path}: FileManifest chunk count ${manifest.chunks.length} exceeds maxFileChunks ${this.limits.maxFileChunks}`,
+        )
+      }
+      // chunk 顺序重建（CAS record.size 由 CAS 自身校验，这里逐 chunk 复核）。
+      const parts: Buffer[] = []
+      let expectedOffset = 0
+      for (let index = 0; index < manifest.chunks.length; index++) {
+        const chunk = manifest.chunks[index]!
+        if (chunk.offset !== expectedOffset) {
+          throw new ProjectionError(
+            "MATERIALIZATION_FAILED",
+            `file ${path}: FileManifest chunk ${index} offset ${chunk.offset} != expected ${expectedOffset} (gap/overlap)`,
+          )
+        }
+        const bytes = this.readCasObjectSafe(chunk.digest, `file ${path} chunk ${index}`)
+        if (bytes.byteLength !== chunk.size) {
+          throw new ProjectionError(
+            "MATERIALIZATION_FAILED",
+            `file ${path}: chunk ${index} size ${bytes.byteLength} != declared ${chunk.size}`,
+          )
+        }
+        parts.push(bytes)
+        expectedOffset += chunk.size
+      }
+      if (expectedOffset !== manifest.size) {
+        throw new ProjectionError(
+          "MATERIALIZATION_FAILED",
+          `file ${path}: FileManifest chunks cover ${expectedOffset} bytes, declared size ${manifest.size}`,
+        )
+      }
+      return Buffer.concat(parts, manifest.size)
+    }
+    return this.readCasObjectSafe(contentRef, `file ${path}`)
+  }
+
+  /** 解析并校验 AK-1 FileManifest schema（type==="file" + chunks 连续覆盖）。 */
+  private parseFileManifest(digest: CasDigest, path: string): import("../world/contracts").FileManifest {
+    let bytes: Buffer
+    try {
+      bytes = this.source.readCasObject(digest)
+    } catch (error) {
+      throw new ProjectionError(
+        "MATERIALIZATION_FAILED",
+        `file ${path}: cannot read FileManifest ${digest}`,
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+    let parsed: unknown
+    try {
+      parsed = parseCanonicalJson<unknown>(bytes.toString("utf8"))
+    } catch {
+      throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} is not canonical JSON`)
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} must be an object`)
+    }
+    const manifest = parsed as Record<string, unknown>
+    if (manifest.schemaVersion !== 1 || manifest.type !== "file") {
+      throw new ProjectionError(
+        "MATERIALIZATION_FAILED",
+        `file ${path}: CAS manifest ${digest} is not a FileManifest (schemaVersion=${String(manifest.schemaVersion)}, type=${String(manifest.type)})`,
+      )
+    }
+    if (typeof manifest.mediaType !== "string" || manifest.mediaType.length === 0) {
+      throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} mediaType missing`)
+    }
+    if (typeof manifest.size !== "number" || !Number.isSafeInteger(manifest.size) || manifest.size < 0) {
+      throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} size invalid`)
+    }
+    if (!Array.isArray(manifest.chunks)) {
+      throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} chunks must be an array`)
+    }
+    if (manifest.size === 0 && manifest.chunks.length !== 0) {
+      throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} empty size with chunks`)
+    }
+    const chunks: import("../world/contracts").FileManifestChunk[] = []
+    for (let index = 0; index < manifest.chunks.length; index++) {
+      const raw = manifest.chunks[index]
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest chunk ${index} must be an object`)
+      }
+      const chunk = raw as Record<string, unknown>
+      if (typeof chunk.digest !== "string" || !chunk.digest.startsWith("sha256:")) {
+        throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest chunk ${index} digest invalid`)
+      }
+      if (typeof chunk.offset !== "number" || !Number.isSafeInteger(chunk.offset) || chunk.offset < 0) {
+        throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest chunk ${index} offset invalid`)
+      }
+      if (typeof chunk.size !== "number" || !Number.isSafeInteger(chunk.size) || chunk.size <= 0) {
+        throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest chunk ${index} size invalid`)
+      }
+      chunks.push({ digest: chunk.digest as CasDigest, offset: chunk.offset, size: chunk.size })
+    }
+    return Object.freeze({ schemaVersion: 1, type: "file", mediaType: manifest.mediaType, size: manifest.size, chunks: Object.freeze(chunks) })
+  }
+
+  /** 读取 CAS 对象（source 错误统一包装为 MATERIALIZATION_FAILED）。 */
+  private readCasObjectSafe(digest: CasDigest, label: string): Buffer {
     try {
       return this.source.readCasObject(digest)
     } catch (error) {
       throw new ProjectionError(
         "MATERIALIZATION_FAILED",
-        `cannot read filesystem section manifest ${digest}`,
+        `cannot read ${label} (${digest})`,
         error instanceof Error ? error.message : String(error),
       )
     }
   }
 
-  /** 读取文件内容（source 错误统一包装为 MATERIALIZATION_FAILED）。 */
-  private readFileContent(digest: CasDigest): Buffer {
-    try {
-      return this.source.readCasObject(digest)
-    } catch (error) {
-      throw new ProjectionError(
-        "MATERIALIZATION_FAILED",
-        `cannot read file content ${digest}`,
-        error instanceof Error ? error.message : String(error),
-      )
-    }
+  /** 读取 section manifest（source 错误统一包装为 MATERIALIZATION_FAILED）。 */
+  private readSectionManifest(digest: CasDigest): Buffer {
+    return this.readCasObjectSafe(digest, "filesystem section manifest")
   }
+
 
   /** 路径 canonicalize 错误统一包装为 MATERIALIZATION_FAILED。 */
   private canonicalEntryPath(path: string, entry: MaterializedSectionEntry): string {
@@ -298,9 +471,15 @@ export class SnapshotMaterializer {
     }
   }
 
-  /** 逐级创建目录；任何既有非目录或 symlink → 拒绝。 */
+  /** 逐级创建目录；任何既有非目录或 symlink → 拒绝。深度受配额限制。 */
   private ensureDirectory(base: string, rel: string): void {
     const segments = rel.split("/")
+    if (segments.length > this.limits.maxDepth) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `path depth exceeds maxDepth: ${rel}`,
+      )
+    }
     let current = base
     for (const segment of segments) {
       current = join(current, segment)

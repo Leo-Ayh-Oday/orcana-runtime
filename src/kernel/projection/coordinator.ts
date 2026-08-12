@@ -19,7 +19,7 @@
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve, sep } from "node:path"
 import { WorldConflictError } from "../world/contracts"
 import type { WorldStore } from "../world/store"
 import type { NativeProjectionBackend, ProjectionInstance } from "./backend"
@@ -64,6 +64,8 @@ export interface ProjectionSession {
   delta?: ProjectionDeltaResult
   outcome?: ProjectionExecutionOutcome
   receipt?: WorldProjectionReceipt
+  /** 单一 cleanup 状态机的最新结果（任何退出路径都记录）。 */
+  cleanupState?: { cleanupOk: boolean; rootRemoved: boolean }
 }
 
 export interface ProjectionCommand {
@@ -85,6 +87,25 @@ export interface ProjectionCoordinatorOptions {
   readonly backend: NativeProjectionBackend
   /** 投影根（默认 os.tmpdir()/orcana-ak2）。 */
   readonly projectionRoot?: string
+  /** 显式 test capability：允许 kind="fixture" backend（生产必须缺省拒绝）。 */
+  readonly allowTestBackends?: boolean
+}
+
+/** 单一 cleanup 状态机结果。 */
+export interface ProjectionCleanupResult {
+  /** 真实卸载/删除是否成功；false 时 residue 保留（可诊断）。 */
+  readonly cleanupOk: boolean
+  /** projection root 是否已删除。 */
+  readonly rootRemoved: boolean
+}
+
+/** 所有退出路径（executor throw / FAILED / CANCELLED / scan failure /
+ *  validation rejection / expected output failure / WORLD_HEAD_MOVED /
+ *  compareAndCommit failure / unmount failure / root deletion failure）
+ *  必须经过的单一清理流程。 */
+export interface ProjectionCleanupMachine {
+  /** 卸载 + 删根；unmount 失败时保留 residue 并返回 cleanupOk=false。 */
+  cleanup(session: ProjectionSession): ProjectionCleanupResult
 }
 
 export class ProjectionCoordinator {
@@ -97,6 +118,13 @@ export class ProjectionCoordinator {
     this.store = options.store
     this.materializer = options.materializer
     this.backend = options.backend
+    // 生产 gate：fixture backend 必须显式 test capability 才可经 coordinator 使用。
+    if (options.backend.kind === "fixture" && options.allowTestBackends !== true) {
+      throw new ProjectionError(
+        "BACKEND_UNAVAILABLE",
+        "test fixture backend requires explicit allowTestBackends (test-only capability); production coordinator refuses it",
+      )
+    }
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
   }
 
@@ -124,7 +152,17 @@ export class ProjectionCoordinator {
       )
     }
 
-    const projectionRoot = join(this.baseProjectionRoot, plan.projectionId)
+    const resolvedBase = resolve(this.baseProjectionRoot)
+    // strict descendant：projection root 必须是固定 root 的直接子目录。
+    // assertSafeProjectionId 已保证 token 无路径分隔符；此处 resolve 后
+    // 再验证（防御：projectionRoot 构造与所有权不变量）。
+    const projectionRoot = resolve(join(resolvedBase, plan.projectionId))
+    if (projectionRoot === resolvedBase || !projectionRoot.startsWith(resolvedBase + sep)) {
+      throw new ProjectionError(
+        "PROJECTION_ROOT_ESCAPE",
+        `projection root escapes base root: ${projectionRoot}`,
+      )
+    }
     if (existsSync(projectionRoot)) {
       throw new ProjectionError("PROJECTION_ALREADY_CLOSED", `projection root exists: ${projectionRoot}`)
     }
@@ -133,7 +171,14 @@ export class ProjectionCoordinator {
     try {
       mkdirSync(baseDir, { mode: 0o700 })
       // 物化 immutable lower（内容只来自 snapshot CAS，不读 World HEAD）。
-      this.materializer.materialize(snapshot, baseDir)
+      // materializer 从 WorldStore 取 canonical snapshot 并严格校验身份字段。
+      const materialized = this.materializer.materialize(plan.snapshotId, baseDir)
+      if (materialized.snapshot.worldId !== plan.worldId || materialized.snapshot.branchId !== plan.branchId) {
+        throw new ProjectionError(
+          "SNAPSHOT_MISMATCH",
+          `canonical snapshot ${plan.snapshotId} belongs to ${materialized.snapshot.worldId}/${materialized.snapshot.branchId}, plan wants ${plan.worldId}/${plan.branchId}`,
+        )
+      }
       const instance = this.backend.create({ lowerDir: baseDir, projectionRoot, label: "m" })
       instance.assertReady()
       return {
@@ -152,8 +197,8 @@ export class ProjectionCoordinator {
   }
 
   /** PROJECTED → RUNNING → COMPLETED/FAILED/CANCELLED。
-   *  executor 抛异常时也执行 cleanup（不变量：任何路径不留残留），
-   *  然后原样重抛（调用方决定重试/上报策略）。 */
+   *  executor 抛异常时也走同一 cleanup 状态机（不变量：任何退出路径不留
+   *  残留），然后原样重抛（调用方决定重试/上报策略）。 */
   async execute(session: ProjectionSession, command: ProjectionCommand, executor: ProjectionExecutor): Promise<ProjectionExecutionOutcome> {
     if (session.worldState !== "PROJECTED") {
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", `execute requires PROJECTED, got ${session.worldState}`)
@@ -165,11 +210,7 @@ export class ProjectionCoordinator {
       outcome = await executor(session.mergedDir, command)
     } catch (error) {
       session.executionState = "FAILED"
-      try {
-        session.instance.cleanup()
-      } finally {
-        this.removeProjectionRoot(session.projectionRoot)
-      }
+      session.cleanupState = this.cleanupSession(session)
       throw error
     }
     session.outcome = outcome
@@ -179,7 +220,8 @@ export class ProjectionCoordinator {
     return outcome
   }
 
-  /** COMPLETED → DELTA_READY：确定性 delta（新内容已入 CAS）。 */
+  /** COMPLETED → DELTA_READY：确定性 delta（新内容已入 CAS）。
+   *  扫描失败（TOCTOU/资源上限/非法条目）→ 同一 cleanup 状态机 + REJECTED。 */
   scan(session: ProjectionSession): ProjectionDeltaResult {
     if (session.executionState !== "COMPLETED") {
       throw new ProjectionError(
@@ -187,23 +229,34 @@ export class ProjectionCoordinator {
         `delta scan requires COMPLETED execution, got ${session.executionState}`,
       )
     }
-    const baseIndex = this.buildBaseIndex(session)
-    const delta = scanProjectionDelta({
-      baseDir: session.baseDir,
-      mergedDir: session.mergedDir,
-      baseIndex,
-      cas: this.store.cas,
-      worldId: session.plan.worldId,
-      branchId: session.plan.branchId,
-      baseRevision: this.store.snapshots.get(session.plan.snapshotId)!.revision,
-    })
-    session.delta = delta
-    session.worldState = "DELTA_READY"
-    return delta
+    try {
+      const baseIndex = this.buildBaseIndex(session)
+      const delta = scanProjectionDelta({
+        baseDir: session.baseDir,
+        mergedDir: session.mergedDir,
+        baseIndex,
+        cas: this.store.cas,
+        worldId: session.plan.worldId,
+        branchId: session.plan.branchId,
+        baseRevision: this.store.snapshots.get(session.plan.snapshotId)!.revision,
+      })
+      session.delta = delta
+      session.worldState = "DELTA_READY"
+      return delta
+    } catch (error) {
+      session.cleanupState = this.cleanupSession(session)
+      session.worldState = "REJECTED"
+      session.receipt = this.buildReceipt(session, "REJECTED", (error as Error).message, session.delta)
+      throw error
+    }
   }
 
   /** DELTA_READY → COMMIT_PENDING → COMMITTED；失败 → REJECTED/CONFLICTED。
-   *  返回 store 的 WorldCommitReceipt（正交状态 receipt 在 session.receipt）。 */
+   *  返回 store 的 WorldCommitReceipt（正交状态 receipt 在 session.receipt）。
+   *
+   *  cleanup 顺序（R03）：validate → 真实卸载（失败保留 residue 并阻止
+   *  commit）→ 删除 projection root → compareAndCommit。validate 不再
+   *  伪造 cleanupOk；所有失败路径统一走 cleanupSession。 */
   commit(session: ProjectionSession): import("../world/contracts").WorldCommitReceipt {
     if (session.worldState !== "DELTA_READY") {
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", `commit requires DELTA_READY, got ${session.worldState}`)
@@ -219,7 +272,8 @@ export class ProjectionCoordinator {
 
     session.worldState = "COMMIT_PENDING"
     try {
-      // 1. 验证（merged 仍挂载：expected outputs 存在性/类型）。
+      // 1. 验证（merged 仍挂载：expected outputs 存在性/类型；不接收
+      //    cleanupOk —— cleanup 的真实结果由下面的卸载步骤决定）。
       try {
         validateProjectionCommit({
           plan: session.plan,
@@ -230,22 +284,32 @@ export class ProjectionCoordinator {
           delta,
           mergedDir: session.mergedDir,
           outcome,
-          cleanupOk: true,
         })
       } catch (error) {
         // stale head（validate 层）→ CONFLICTED，不自动 retry。
         if (error instanceof ProjectionError && error.code === "WORLD_HEAD_MOVED") {
-          session.worldState = "CONFLICTED"
-          session.receipt = this.buildReceipt(session, "CONFLICTED", "WORLD_HEAD_MOVED", delta)
-          throw error
+          throw new ProjectionError("WORLD_HEAD_MOVED", error.message)
         }
         throw error
       }
-      // 2. cleanup 成功后才允许 commit（只卸载本 projection 资源）。
+      // 2. 确认真实卸载成功后才允许删除/提交；unmount 失败 → 保留 residue。
       if (!session.instance.cleanup()) {
-        throw new ProjectionError("CLEANUP_FAILED", "projection cleanup failed; world commit refused")
+        throw new ProjectionError(
+          "CLEANUP_FAILED",
+          "projection unmount failed; residue retained for diagnosis; world commit refused",
+        )
       }
-      // 3. compare-and-commit（baseRevision = snapshot.revision）。
+      // 3. 卸载成功后删除 projection root；删除失败同样阻止 commit（不吞错）。
+      try {
+        this.removeProjectionRoot(session.projectionRoot)
+      } catch (error) {
+        throw new ProjectionError(
+          "CLEANUP_FAILED",
+          "projection root removal failed; world commit refused",
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+      // 4. compare-and-commit（baseRevision = snapshot.revision）。
       let receipt
       try {
         receipt = this.store.compareAndCommit({
@@ -260,8 +324,6 @@ export class ProjectionCoordinator {
         })
       } catch (error) {
         if (error instanceof WorldConflictError) {
-          session.worldState = "CONFLICTED"
-          session.receipt = this.buildReceipt(session, "CONFLICTED", "WORLD_HEAD_MOVED", delta)
           throw new ProjectionError("WORLD_HEAD_MOVED", error.message)
         }
         throw error
@@ -271,25 +333,44 @@ export class ProjectionCoordinator {
       }
       session.worldState = "COMMITTED"
       session.receipt = this.buildReceipt(session, "COMMITTED", undefined, delta, receipt)
+      // 已 COMMITTED：本地清理结果只记录，不再改变世界状态。
+      session.cleanupState = { cleanupOk: true, rootRemoved: true }
       return receipt
     } catch (error) {
-      if (error instanceof ProjectionError && error.code === "WORLD_HEAD_MOVED") throw error
+      // 所有失败路径：同一 cleanup 状态机（幂等；unmount 失败保留 residue）。
+      session.cleanupState = this.cleanupSession(session)
+      if (error instanceof ProjectionError && error.code === "WORLD_HEAD_MOVED") {
+        session.worldState = "CONFLICTED"
+        session.receipt = this.buildReceipt(session, "CONFLICTED", "WORLD_HEAD_MOVED", delta)
+        throw error
+      }
       session.worldState = "REJECTED"
       session.receipt = this.buildReceipt(session, "REJECTED", (error as Error).message, delta)
       throw error
-    } finally {
-      // 任何路径都清理投影根（instance 已卸载；根目录删除幂等）。
-      this.removeProjectionRoot(session.projectionRoot)
     }
   }
 
-  /** 取消/失败路径：cleanup（幂等）。 */
-  cancel(session: ProjectionSession): void {
-    try {
-      session.instance.cleanup()
-    } finally {
-      this.removeProjectionRoot(session.projectionRoot)
+  /** 取消/失败路径：同一 cleanup 状态机（幂等）。 */
+  cancel(session: ProjectionSession): ProjectionCleanupResult {
+    session.cleanupState = this.cleanupSession(session)
+    return session.cleanupState
+  }
+
+  /** 单一 cleanup 状态机：真实卸载 → 成功才删 upper/work/root；
+   *  unmount 失败 → 保留 residue（可诊断），返回 cleanupOk=false。
+   *  幂等：重复调用安全（backend.cleanup 幂等；root 删除 force）。 */
+  private cleanupSession(session: ProjectionSession): ProjectionCleanupResult {
+    const cleanupOk = session.instance.cleanup()
+    let rootRemoved = false
+    if (cleanupOk) {
+      try {
+        this.removeProjectionRoot(session.projectionRoot)
+        rootRemoved = true
+      } catch {
+        rootRemoved = false
+      }
     }
+    return Object.freeze({ cleanupOk, rootRemoved })
   }
 
   /** 生成正交状态 receipt（Effect=NONE、Evidence=PENDING）。 */
@@ -341,16 +422,8 @@ export class ProjectionCoordinator {
   }
 
   private removeProjectionRoot(root: string): void {
-    try {
-      this.chmodTreeWritable(root)
-    } catch {
-      // 已删
-    }
-    try {
-      rmSync(root, { recursive: true, force: true })
-    } catch {
-      // cleanup failure 由 instance.cleanup() 报告；根删除尽力而为
-    }
+    this.chmodTreeWritable(root)
+    rmSync(root, { recursive: true, force: true })
   }
 
   private chmodTreeWritable(dir: string): void {

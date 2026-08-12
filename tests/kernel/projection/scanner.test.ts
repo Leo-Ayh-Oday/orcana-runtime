@@ -1,7 +1,8 @@
 /** AK2-T04 — Deterministic Delta Scanner 测试。 */
 
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
@@ -49,7 +50,7 @@ interface ScanHarness {
   readonly merged: string
   readonly cas: MemCas
   readonly baseIndex: Map<string, MaterializedSectionEntry>
-  scan(): ReturnType<typeof scanProjectionDelta>
+  scan(limits?: Parameters<typeof scanProjectionDelta>[0]["limits"]): ReturnType<typeof scanProjectionDelta>
 }
 
 function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness {
@@ -60,7 +61,7 @@ function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness 
   mkdirSync(merged)
   const cas = new MemCas()
   const baseIndex = new Map<string, MaterializedSectionEntry>()
-  const scan = (): ReturnType<typeof scanProjectionDelta> =>
+  const scan = (limits?: Parameters<typeof scanProjectionDelta>[0]["limits"]): ReturnType<typeof scanProjectionDelta> =>
     scanProjectionDelta({
       baseDir: base,
       mergedDir: merged,
@@ -69,6 +70,7 @@ function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness 
       worldId,
       branchId,
       baseRevision,
+      ...(limits === undefined ? {} : { limits }),
     })
   return { base, merged, cas, baseIndex, scan }
 }
@@ -299,5 +301,104 @@ describe("AK2-T04 故障", () => {
     } catch (error) {
       expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
     }
+  })
+
+  test("R05：hardlink（nlink>1）出现在 merged → 拒绝", () => {
+    const h = harness()
+    writeFileSync(join(h.merged, "orig.txt"), "same")
+    linkSync(join(h.merged, "orig.txt"), join(h.merged, "alias.txt"))
+    try {
+      h.scan()
+      throw new Error("expected DELTA_SCAN_FAILED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+    }
+  })
+
+  test("R05：非法名称（CR/LF/反斜杠）→ 拒绝；dot segment 由 walk 防御（readdir 不返回）", () => {
+    const names = ["bad\rname.txt", "bad\nname.txt", "bad\\name.txt"]
+    for (const name of names) {
+      const h = harness()
+      writeFileSync(join(h.merged, "ok.txt"), "x")
+      writeFileSync(join(h.merged, name), "y")
+      try {
+        h.scan()
+        throw new Error(`expected DELTA_SCAN_FAILED for name ${JSON.stringify(name)}`)
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+  })
+
+  test("R05：无效 UTF-8 文件名 → 拒绝（python3 创建原始字节，locale 无关）", () => {
+    const h = harness()
+    writeFileSync(join(h.merged, "ok.txt"), "x")
+    // bun 的 Buffer 路径编码依赖 locale（C.UTF-8 下会替换为合法 UTF-8 序列）；
+    // 用 python3 bytes 路径创建真正的非法 UTF-8 文件名（locale 无关）。
+    const script = `open(b"${join(h.merged, "bad")}\\xff\\xfe.bin", "wb").write(b"y")`
+    execFileSync("python3", ["-c", script])
+    try {
+      h.scan()
+      throw new Error("expected DELTA_SCAN_FAILED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+    }
+  })
+
+  test("R05/R06.7：资源配额超限 → PROJECTION_RESOURCE_LIMIT（entry 数/深度/文件字节/总字节）", () => {
+    const small = { maxDepth: 4, maxEntries: 100, maxFileBytes: 32, maxTreeBytes: 64, maxFileChunks: 8 }
+    // entry 数超限。
+    {
+      const h = harness()
+      for (let index = 0; index < 120; index++) writeFileSync(join(h.merged, `f${index}.txt`), "x")
+      try {
+        h.scan(small)
+        throw new Error("expected entry limit")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("PROJECTION_RESOURCE_LIMIT")
+      }
+    }
+    // 深度超限（merged 侧深树）。
+    {
+      const h = harness()
+      const deep = join(h.merged, "a/b/c/d/e/f.txt")
+      mkdirSync(join(h.merged, "a/b/c/d/e"), { recursive: true })
+      writeFileSync(deep, "x")
+      try {
+        h.scan(small)
+        throw new Error("expected depth limit")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("PROJECTION_RESOURCE_LIMIT")
+      }
+    }
+    // 单文件字节超限（merged 侧新增大文件）。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "big.txt"), Buffer.alloc(64))
+      try {
+        h.scan(small)
+        throw new Error("expected file byte limit")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("PROJECTION_RESOURCE_LIMIT")
+      }
+    }
+    // 总字节超限（多文件累计）。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "a.txt"), Buffer.alloc(40))
+      writeFileSync(join(h.merged, "b.txt"), Buffer.alloc(40))
+      try {
+        h.scan(small)
+        throw new Error("expected tree byte limit")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("PROJECTION_RESOURCE_LIMIT")
+      }
+    }
+    // 配额内合法。
+    expect(() => {
+      const h = harness()
+      writeFileSync(join(h.merged, "ok.txt"), "ok")
+      h.scan(small)
+    }).not.toThrow()
   })
 })

@@ -5,13 +5,14 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
+import { createFileManifest } from "../../../src/kernel/world/manifests"
 import {
   SnapshotMaterializer,
   parseFilesystemSection,
   type ProjectionMaterializerSource,
 } from "../../../src/kernel/projection/materializer"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
-import type { CasDigest, WorldSnapshot } from "../../../src/kernel/world"
+import type { CasDigest, CasObjectRecord, WorldSnapshot } from "../../../src/kernel/world"
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -85,9 +86,36 @@ function buildWorldWithFiles(): TestWorldStore {
   return ctx
 }
 
+/** 假 manifest record：通过 R06.5 身份检查（isManifest=true），内容由
+ *  readCasObject 注入 —— 用于绕过 CAS integrity 测试解析路径。 */
+function fakeManifestRecord(): CasObjectRecord {
+  return {
+    digest: "sha256:0" as CasDigest,
+    size: 0,
+    mediaType: "application/vnd.orcana.manifest+json",
+    mediaTypes: [],
+    isManifest: true,
+    createdAt: 0,
+    refCount: 0,
+  }
+}
+
+function fakeRawRecord(): CasObjectRecord {
+  return {
+    digest: "sha256:0" as CasDigest,
+    size: 0,
+    mediaType: "application/octet-stream",
+    mediaTypes: [],
+    isManifest: false,
+    createdAt: 0,
+    refCount: 0,
+  }
+}
+
 function materializerOf(ctx: TestWorldStore): SnapshotMaterializer {
   const source: ProjectionMaterializerSource = {
     getSnapshot: snapshotId => ctx.store.snapshots.get(snapshotId),
+    getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   }
   return new SnapshotMaterializer(source)
@@ -100,7 +128,7 @@ describe("AK2-T02 基本物化", () => {
     const base = join(tmpRoot("mat"), "base")
     mkdirSync(base)
 
-    const materialized = materializerOf(ctx).materialize(snapshot, base)
+    const materialized = materializerOf(ctx).materialize(snapshot.snapshotId, base)
     expect(materialized.fileCount).toBe(1)
     expect(materialized.directoryCount).toBe(1)
     expect(readFileSync(join(base, "src/main.ts"), "utf8")).toBe("export const x = 1\n")
@@ -117,7 +145,7 @@ describe("AK2-T02 基本物化", () => {
     const snapshot = ctx.store.snapshots.getForRevision("world-m", "branch-main", 1n)!
     const baseA = join(tmpRoot("stale"), "base-a")
     mkdirSync(baseA)
-    const first = materializerOf(ctx).materialize(snapshot, baseA)
+    const first = materializerOf(ctx).materialize(snapshot.snapshotId, baseA)
 
     // World head 前进（revision 2，修改 main.ts + 新增文件）。
     const newBytes = Buffer.from('export const x = 999\n', "utf8")
@@ -138,7 +166,7 @@ describe("AK2-T02 基本物化", () => {
     // 旧 snapshot 再物化 → 仍是 revision 1 内容（stale immutable）。
     const baseB = join(tmpRoot("stale"), "base-b")
     mkdirSync(baseB)
-    const second = materializerOf(ctx).materialize(snapshot, baseB)
+    const second = materializerOf(ctx).materialize(snapshot.snapshotId, baseB)
     expect(second.snapshot.revision).toBe(1n)
     expect(readFileSync(join(baseB, "src/main.ts"), "utf8")).toBe("export const x = 1\n")
     expect(existsSync(join(baseB, "src/extra.ts"))).toBe(false)
@@ -154,7 +182,7 @@ describe("AK2-T02 基本物化", () => {
     mkdirSync(base)
     const ghost: WorldSnapshot = { ...snapshot, snapshotId: "snapshot:ghost" }
     try {
-      materializerOf(ctx).materialize(ghost, base)
+      materializerOf(ctx).materialize(ghost.snapshotId, base)
       throw new Error("expected SNAPSHOT_NOT_FOUND")
     } catch (error) {
       expect((error as ProjectionError).code).toBe("SNAPSHOT_NOT_FOUND")
@@ -169,20 +197,16 @@ describe("AK2-T02 反例（表驱动）", () => {
     const snapshot = ctx.store.snapshots.getForRevision("world-m", "branch-main", 1n)!
     const source: ProjectionMaterializerSource = {
       getSnapshot: id => ctx.store.snapshots.get(id),
-      readCasObject: digest => {
-        if (digest === "sha256:deadbeef") throw new Error("CAS object missing")
-        return ctx.store.cas.get(digest)
+      getCasRecord: digest => ctx.store.cas.record(digest),
+      // 身份检查通过（record 存在）后，内容读取失败 → MATERIALIZATION_FAILED。
+      readCasObject: () => {
+        throw new Error("CAS object missing")
       },
-    }
-    // 篡改 snapshot.filesystemDigest 指向不存在的 section manifest。
-    const tampered: WorldSnapshot = {
-      ...snapshot,
-      filesystemDigest: "sha256:deadbeef" as CasDigest,
     }
     const base = join(tmpRoot("miss"), "base")
     mkdirSync(base)
     try {
-      new SnapshotMaterializer(source).materialize(tampered, base)
+      new SnapshotMaterializer(source).materialize(snapshot.snapshotId, base)
       throw new Error("expected MATERIALIZATION_FAILED")
     } catch (error) {
       expect((error as ProjectionError).code).toBe("MATERIALIZATION_FAILED")
@@ -191,19 +215,32 @@ describe("AK2-T02 反例（表驱动）", () => {
   })
 
   test("malformed manifest：普通 JSON 冒充 section manifest → 拒绝", () => {
-    const ctx = buildWorldWithFiles()
-    const snapshot = ctx.store.snapshots.getForRevision("world-m", "branch-main", 1n)!
-    const junk = ctx.store.cas.put(Buffer.from('{"hello":"world"}', "utf8"), "application/json").digest
-    const tampered: WorldSnapshot = { ...snapshot, filesystemDigest: junk }
+    const snapshot: WorldSnapshot = {
+      snapshotId: "snapshot:mal",
+      worldId: "w",
+      branchId: "b",
+      revision: 1n,
+      manifestDigest: "sha256:1" as CasDigest,
+      filesystemDigest: "sha256:2" as CasDigest,
+      memoryDigest: "sha256:3" as CasDigest,
+      taskStateDigest: "sha256:4" as CasDigest,
+      capabilityStateDigest: "sha256:5" as CasDigest,
+      serviceStateDigest: "sha256:6" as CasDigest,
+      artifactStateDigest: "sha256:7" as CasDigest,
+      createdAt: 1,
+    }
     const base = join(tmpRoot("mal"), "base")
     mkdirSync(base)
     try {
-      materializerOf(ctx).materialize(tampered, base)
+      new SnapshotMaterializer({
+        getSnapshot: () => snapshot,
+        getCasRecord: () => fakeManifestRecord(),
+        readCasObject: () => Buffer.from('{"hello":"world"}', "utf8"),
+      }).materialize(snapshot.snapshotId, base)
       throw new Error("expected MATERIALIZATION_FAILED")
     } catch (error) {
       expect((error as ProjectionError).code).toBe("MATERIALIZATION_FAILED")
     }
-    ctx.cleanup()
   })
 
   test("duplicate path / file-directory collision / 非法 kind / 非 canonical path / 无 path → 拒绝", () => {
@@ -211,6 +248,7 @@ describe("AK2-T02 反例（表驱动）", () => {
     mkdirSync(base)
     const materializer = new SnapshotMaterializer({
       getSnapshot: () => undefined,
+      getCasRecord: () => undefined,
       readCasObject: () => Buffer.from("x"),
     })
     const snapshot: WorldSnapshot = {
@@ -232,13 +270,15 @@ describe("AK2-T02 反例（表驱动）", () => {
     // 承认 snapshot 但 filesystemDigest 指向注入的 manifest bytes。
     const withManifest = (manifest: unknown): ProjectionMaterializerSource => ({
       getSnapshot: () => snapshot,
-      readCasObject: () => Buffer.from(JSON.stringify(manifest), "utf8"),
+      getCasRecord: digest => (/^sha256:\d+$/.test(digest) ? fakeManifestRecord() : fakeRawRecord()),
+      readCasObject: digest =>
+        /^sha256:\d+$/.test(digest) ? Buffer.from(JSON.stringify(manifest), "utf8") : Buffer.from("raw", "utf8"),
     })
     const run = (manifest: unknown, expectedCode: import("../../../src/kernel/projection/contracts").ProjectionErrorCode): void => {
       const fresh = join(tmpRoot("bad"), `base-${Math.random().toString(36).slice(2)}`)
       mkdirSync(fresh)
       try {
-        new SnapshotMaterializer(withManifest(manifest)).materialize(snapshot, fresh)
+        new SnapshotMaterializer(withManifest(manifest)).materialize(snapshot.snapshotId, fresh)
         throw new Error(`expected ${expectedCode}`)
       } catch (error) {
         expect((error as ProjectionError).code).toBe(expectedCode)
@@ -352,23 +392,24 @@ describe("AK2-T02 反例（表驱动）", () => {
       artifactStateDigest: "sha256:7" as CasDigest,
       createdAt: 1,
     }
+    const sectionBytes = Buffer.from(
+      JSON.stringify({
+        schemaVersion: 1,
+        type: "world-section",
+        section: "filesystem",
+        entries: [
+          { id: "ws", kind: "workspace" },
+          { id: "a", kind: "file", path: "a.txt", contentRef: "sha256:aa" },
+        ],
+      }),
+      "utf8",
+    )
     const materializer = new SnapshotMaterializer({
       getSnapshot: () => snapshot,
-      readCasObject: () =>
-        Buffer.from(
-          JSON.stringify({
-            schemaVersion: 1,
-            type: "world-section",
-            section: "filesystem",
-            entries: [
-              { id: "ws", kind: "workspace" },
-              { id: "a", kind: "file", path: "a.txt", contentRef: "sha256:aa" },
-            ],
-          }),
-          "utf8",
-        ),
+      getCasRecord: digest => (/^sha256:\d+$/.test(digest) ? fakeManifestRecord() : fakeRawRecord()),
+      readCasObject: digest => (digest === snapshot.filesystemDigest ? sectionBytes : Buffer.from("raw", "utf8")),
     })
-    const result = materializer.materialize(snapshot, base)
+    const result = materializer.materialize(snapshot.snapshotId, base)
     expect(result.fileCount).toBe(1)
     expect(existsSync(join(base, "a.txt"))).toBe(true)
   })
@@ -397,7 +438,7 @@ describe("AK2-T02 物化根防护", () => {
     const snapshot = ctx.store.snapshots.getForRevision("world-m", "branch-main", 1n)!
     const missing = join(tmpRoot("root"), "nope")
     try {
-      materializerOf(ctx).materialize(snapshot, missing)
+      materializerOf(ctx).materialize(snapshot.snapshotId, missing)
       throw new Error("expected MATERIALIZATION_FAILED")
     } catch (error) {
       expect((error as ProjectionError).code).toBe("MATERIALIZATION_FAILED")
@@ -406,7 +447,7 @@ describe("AK2-T02 物化根防护", () => {
     mkdirSync(nonEmpty)
     writeFileSync(join(nonEmpty, "existing.txt"), "x")
     try {
-      materializerOf(ctx).materialize(snapshot, nonEmpty)
+      materializerOf(ctx).materialize(snapshot.snapshotId, nonEmpty)
       throw new Error("expected MATERIALIZATION_FAILED")
     } catch (error) {
       expect((error as ProjectionError).code).toBe("MATERIALIZATION_FAILED")
@@ -433,12 +474,159 @@ describe("AK2-T02 物化根防护", () => {
     const snapshot = ctx.store.snapshots.getForRevision("w2", "b", 1n)!
     const base = join(tmpRoot("deep"), "base")
     mkdirSync(base)
-    const materialized = materializerOf(ctx).materialize(snapshot, base)
+    const materialized = materializerOf(ctx).materialize(snapshot.snapshotId, base)
     expect(materialized.fileCount).toBe(1)
     expect(readFileSync(join(base, "a/b/c/deep.txt"), "utf8")).toBe("deep\n")
     // 未声明目录也可写（物化后 chmod 只读作用于声明的目录；隐式目录保持可写
     // 由 backend lower 层以只读方式暴露 —— 此处仅验证内容）。
     expect(existsSync(join(base, "a/b/c"))).toBe(true)
     ctx.cleanup()
+  })
+
+  test("R04：>1MiB 多 chunk FileManifest 重建逐字节一致；空 FileManifest 物化为空文件", () => {
+    const ctx = createTestWorldStore()
+    ctx.store.createWorld({ worldId: "world-big", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 r04" })
+    // 1 MiB + 123 字节 → DEFAULT_FILE_CHUNK_SIZE(1MiB) 下 2 个 chunk。
+    const big = Buffer.alloc(1024 * 1024 + 123)
+    for (let index = 0; index < big.length; index++) big[index] = (index * 31 + 7) % 256
+    const bigManifest = createFileManifest(ctx.store.cas, big, "application/octet-stream")
+    const emptyManifest = createFileManifest(ctx.store.cas, Buffer.alloc(0), "application/octet-stream")
+    ctx.store.compareAndCommit({
+      worldId: "world-big",
+      branchId: "branch-main",
+      baseRevision: 0n,
+      actor: "actor:test",
+      mutations: [
+        { type: "object.put", objectId: "big", objectType: "file", path: "big.bin", contentRef: bigManifest.digest },
+        { type: "object.put", objectId: "empty", objectType: "file", path: "empty.bin", contentRef: emptyManifest.digest },
+      ],
+    })
+    ctx.store.createSnapshot("world-big", "branch-main")
+    const snapshot = ctx.store.snapshots.getForRevision("world-big", "branch-main", 1n)!
+    const base = join(tmpRoot("r04"), "base")
+    mkdirSync(base)
+    const materialized = materializerOf(ctx).materialize(snapshot.snapshotId, base)
+    expect(materialized.fileCount).toBe(2)
+    expect(readFileSync(join(base, "big.bin")).equals(big)).toBe(true)
+    expect(readFileSync(join(base, "empty.bin")).byteLength).toBe(0)
+    ctx.cleanup()
+  })
+
+  test("R04：FileManifest chunk 缺失/重叠/越界/digest 错 → fail-closed", () => {
+    const snapshot: WorldSnapshot = {
+      snapshotId: "snapshot:r04bad",
+      worldId: "w",
+      branchId: "b",
+      revision: 1n,
+      manifestDigest: "sha256:1" as CasDigest,
+      filesystemDigest: "sha256:2" as CasDigest,
+      memoryDigest: "sha256:3" as CasDigest,
+      taskStateDigest: "sha256:4" as CasDigest,
+      capabilityStateDigest: "sha256:5" as CasDigest,
+      serviceStateDigest: "sha256:6" as CasDigest,
+      artifactStateDigest: "sha256:7" as CasDigest,
+      createdAt: 1,
+    }
+    const sectionManifest = () =>
+      Buffer.from(
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "world-section",
+          section: "filesystem",
+          entries: [
+            { id: "ws", kind: "workspace" },
+            { id: "f", kind: "file", path: "a.bin", contentRef: "sha256:fm" },
+          ],
+        }),
+        "utf8",
+      )
+    const chunkA = Buffer.alloc(3, 0xaa)
+    const chunkB = Buffer.alloc(3, 0xbb)
+    const digests = { a: "sha256:ca" as CasDigest, b: "sha256:cb" as CasDigest }
+    const run = (manifest: unknown, readBytes: Record<string, Buffer>): import("../../../src/kernel/projection/contracts").ProjectionErrorCode => {
+      const base = join(tmpRoot("r04bad"), `b-${Math.random().toString(36).slice(2)}`)
+      mkdirSync(base)
+      try {
+        new SnapshotMaterializer({
+          getSnapshot: () => snapshot,
+          getCasRecord: digest => (digest === "sha256:fm" || /^sha256:\d+$/.test(digest) ? fakeManifestRecord() : fakeRawRecord()),
+          readCasObject: digest => {
+            if (digest === snapshot.filesystemDigest) return sectionManifest()
+            if (digest === "sha256:fm") return Buffer.from(JSON.stringify(manifest), "utf8")
+            const bytes = readBytes[digest]
+            if (bytes === undefined) throw new Error(`CAS object missing: ${digest}`)
+            return bytes
+          },
+        }).materialize(snapshot.snapshotId, base)
+        return "INVALID_PATH" as never
+      } catch (error) {
+        return (error as ProjectionError).code
+      }
+    }
+    const manifest = (chunks: unknown) => JSON.stringify({ schemaVersion: 1, type: "file", mediaType: "application/octet-stream", size: 6, chunks })
+    // 缺失 chunk（manifest 引用不存在的对象）。
+    expect(run(manifest([{ digest: digests.a, offset: 0, size: 3 }]), {})).toBe("MATERIALIZATION_FAILED")
+    // gap（offset 4 应连续 3）。
+    expect(
+      run(manifest([{ digest: digests.a, offset: 0, size: 3 }, { digest: digests.b, offset: 4, size: 2 }]), { [digests.a]: chunkA, [digests.b]: chunkB }),
+    ).toBe("MATERIALIZATION_FAILED")
+    // overlap（offset 2 与前 chunk 重叠）。
+    expect(
+      run(manifest([{ digest: digests.a, offset: 0, size: 3 }, { digest: digests.b, offset: 2, size: 2 }]), { [digests.a]: chunkA, [digests.b]: chunkB }),
+    ).toBe("MATERIALIZATION_FAILED")
+    // size 不匹配（chunk 内容长度 != 声明）。
+    expect(
+      run(manifest([{ digest: digests.a, offset: 0, size: 5 }, { digest: digests.b, offset: 5, size: 1 }]), { [digests.a]: chunkA, [digests.b]: chunkB }),
+    ).toBe("MATERIALIZATION_FAILED")
+    // 总长不匹配（chunks 覆盖 6 ≠ 声明 7）。
+    expect(
+      run(manifest([{ digest: digests.a, offset: 0, size: 3 }, { digest: digests.b, offset: 3, size: 3 }]), { [digests.a]: chunkA, [digests.b]: chunkB }),
+    ).toBe("MATERIALIZATION_FAILED")
+  })
+
+  test("R06.5：snapshotId 与 filesystemDigest 不匹配（身份检查）→ SNAPSHOT_MISMATCH", () => {
+    const snapshot: WorldSnapshot = {
+      snapshotId: "snapshot:r065",
+      worldId: "w",
+      branchId: "b",
+      revision: 1n,
+      manifestDigest: "sha256:1" as CasDigest,
+      filesystemDigest: "sha256:2" as CasDigest,
+      memoryDigest: "sha256:3" as CasDigest,
+      taskStateDigest: "sha256:4" as CasDigest,
+      capabilityStateDigest: "sha256:5" as CasDigest,
+      serviceStateDigest: "sha256:6" as CasDigest,
+      artifactStateDigest: "sha256:7" as CasDigest,
+      createdAt: 1,
+    }
+    const expectCode = (source: ProjectionMaterializerSource, code: import("../../../src/kernel/projection/contracts").ProjectionErrorCode): void => {
+      const base = join(tmpRoot("r065"), `b-${Math.random().toString(36).slice(2)}`)
+      mkdirSync(base)
+      try {
+        new SnapshotMaterializer(source).materialize(snapshot.snapshotId, base)
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe(code)
+        return
+      }
+      throw new Error(`expected ${code}`)
+    }
+    // memoryDigest 无 manifest 记录 → 身份拒绝。
+    expectCode(
+      {
+        getSnapshot: () => snapshot,
+        getCasRecord: digest => (digest === snapshot.filesystemDigest ? fakeManifestRecord() : undefined),
+        readCasObject: () => Buffer.from("x"),
+      },
+      "SNAPSHOT_MISMATCH",
+    )
+    // filesystemDigest 无记录 → 身份拒绝。
+    expectCode(
+      {
+        getSnapshot: () => snapshot,
+        getCasRecord: () => undefined,
+        readCasObject: () => Buffer.from("x"),
+      },
+      "SNAPSHOT_MISMATCH",
+    )
   })
 })

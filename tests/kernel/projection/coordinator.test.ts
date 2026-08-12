@@ -1,7 +1,7 @@
 /** AK2-T05 — Projection Coordinator 状态机 + 故障矩阵（fixture backend）。 */
 
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
@@ -75,6 +75,7 @@ function makePlan(snapshotId: string, overrides: Partial<WorldProjectionPlanInpu
 function coordinator(ctx: TestWorldStore, backend?: NativeProjectionBackend): ProjectionCoordinator {
   const materializer = new SnapshotMaterializer({
     getSnapshot: id => ctx.store.snapshots.get(id),
+    getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   })
   return new ProjectionCoordinator({
@@ -82,6 +83,7 @@ function coordinator(ctx: TestWorldStore, backend?: NativeProjectionBackend): Pr
     materializer,
     backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: tmpRoot("projroot"),
+    allowTestBackends: true,
   })
 }
 
@@ -140,11 +142,12 @@ describe("AK2-T05 纵向状态机（fixture backend）", () => {
     expect(snapshot2.revision).toBe(2n)
     const materialized = new SnapshotMaterializer({
       getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: digest => ctx.store.cas.record(digest),
       readCasObject: digest => ctx.store.cas.get(digest),
     })
     const base2 = join(tmpRoot("rev2"), "base")
     mkdirSync(base2)
-    materialized.materialize(snapshot2, base2)
+    materialized.materialize(snapshot2.snapshotId, base2)
     expect(readFileSync(join(base2, "src/main.ts"), "utf8")).toBe(newContent)
     expect(ctx.store.verifyIntegrity()).toEqual([])
     ctx.cleanup()
@@ -432,9 +435,13 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
     }
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
-    // cancel 清理投影（包括 symlink 内容）。
-    coord.cancel(session)
+    // R03：scan 失败走同一 cleanup 状态机 —— 终态 REJECTED、根已删、
+    // cleanupState 记录成功（不再需要显式 cancel）。
+    expect(session.worldState).toBe("REJECTED")
+    expect(session.receipt!.worldState).toBe("REJECTED")
+    expect(session.cleanupState).toEqual({ cleanupOk: true, rootRemoved: true })
     expect(existsSync(session.projectionRoot)).toBe(false)
+    expect(session.receipt!.executionState).toBe("COMPLETED")
     ctx.cleanup()
   })
 
@@ -459,6 +466,215 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     expect(existsSync(root)).toBe(false)
     // World 不受影响（revision 0 → 1 未被 commit 触碰）。
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    // R03：executor throw 走同一 cleanup 状态机。
+    expect(session.cleanupState).toEqual({ cleanupOk: true, rootRemoved: true })
+    ctx.cleanup()
+  })
+
+  test("R02 纵向：同内容 a.txt/b.txt 与两个空目录 commit 后对象均存在，不互相覆盖", async () => {
+    const ctx = createTestWorldStore()
+    ctx.store.createWorld({ worldId: "world-id", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 r02" })
+    const digest = ctx.store.cas.put(Buffer.from("identical content\n", "utf8"), "text/plain").digest
+    ctx.store.compareAndCommit({
+      worldId: "world-id",
+      branchId: "branch-main",
+      baseRevision: 0n,
+      actor: "actor:test",
+      mutations: [
+        { type: "object.put", objectId: "d1", objectType: "directory", path: "src" },
+        { type: "object.put", objectId: "d2", objectType: "directory", path: "lib" },
+        { type: "object.put", objectId: "f1", objectType: "file", path: "src/a.txt", contentRef: digest },
+        { type: "object.put", objectId: "f2", objectType: "file", path: "src/b.txt", contentRef: digest },
+      ],
+    })
+    ctx.store.createSnapshot("world-id", "branch-main")
+    const snapshot = ctx.store.snapshots.getForRevision("world-id", "branch-main", 1n)!
+    const coord = coordinator(ctx)
+    const plan = validateWorldProjectionPlan({
+      projectionId: `proj-r02-${Math.random().toString(36).slice(2, 8)}`,
+      worldId: "world-id",
+      branchId: "branch-main",
+      snapshotId: snapshot.snapshotId,
+      actor: "actor:test",
+      mode: "native",
+      writableRoots: ["src", "lib"],
+      readonlyRoots: [],
+      expectedOutputs: ["src/a.txt"],
+      graphCompletionAllowed: false,
+    })
+    const session = coord.start(plan)
+    // 两个同内容文件 + 两个空目录物化（派生 objectId 必须不同 —— 无覆盖）。
+    expect(readFileSync(join(session.mergedDir, "src/a.txt"), "utf8")).toBe("identical content\n")
+    expect(readFileSync(join(session.mergedDir, "src/b.txt"), "utf8")).toBe("identical content\n")
+    expect(existsSync(join(session.mergedDir, "lib"))).toBe(true)
+    const outcome = await coord.execute(
+      session,
+      { executable: "noop", args: [] },
+      mutateExecutor(merged => writeFileSync(join(merged, "src/a.txt"), "changed\n")),
+    )
+    expect(outcome.exitCode).toBe(0)
+    const delta = coord.scan(session)
+    // write 保留 base objectId（src/a.txt 与 src/b.txt 的 objectId 不同）。
+    const writeEntry = delta.entries.find(entry => entry.kind === "write" && entry.path === "src/a.txt")!
+    const bEntry = delta.entries.find(entry => entry.kind === "write" && entry.path === "src/b.txt")
+    expect(bEntry).toBeUndefined()
+    // write 保留既有 object identity（来自 snapshot section manifest id）。
+    expect(writeEntry.objectId).toBe("f1")
+    const receipt = coord.commit(session)
+    expect(receipt.newRevision).toBe(2n)
+    // 两个对象都在 World 中（path 各归其位，无 UPSERT 覆盖）。
+    const objects = ctx.store.listObjects("world-id", "branch-main")
+    const a = objects.find(o => o.path === "src/a.txt")
+    const b = objects.find(o => o.path === "src/b.txt")
+    expect(a).toBeDefined()
+    expect(b).toBeDefined()
+    expect(a!.objectId).not.toBe(b!.objectId)
+    // a.txt 已被 execution 改为 changed\n；b.txt 保留原内容 digest。
+    expect(a!.contentRef).not.toBe(digest)
+    expect(b!.contentRef).toBe(digest)
+    // commit → snapshot → materialize：路径与内容完整。
+    ctx.store.createSnapshot("world-id", "branch-main")
+    const snapshot2 = ctx.store.snapshots.getForRevision("world-id", "branch-main", 2n)!
+    const base2 = join(tmpRoot("r02rev2"), "base")
+    mkdirSync(base2)
+    new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: d => ctx.store.cas.record(d),
+      readCasObject: d => ctx.store.cas.get(d),
+    }).materialize(snapshot2.snapshotId, base2)
+    expect(readFileSync(join(base2, "src/a.txt"), "utf8")).toBe("changed\n")
+    expect(readFileSync(join(base2, "src/b.txt"), "utf8")).toBe("identical content\n")
+    expect(existsSync(join(base2, "lib"))).toBe(true)
+    ctx.cleanup()
+  })
+
+  test("R02.6 store 层：同 commit 内 objectId 冲突身份拒绝（不依赖 UPSERT 覆盖）", async () => {
+    const ctx = createTestWorldStore()
+    ctx.store.createWorld({ worldId: "world-collide", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 r02.6" })
+    const digest = ctx.store.cas.put(Buffer.from("x\n", "utf8"), "text/plain").digest
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-collide",
+        branchId: "branch-main",
+        baseRevision: 0n,
+        actor: "actor:test",
+        mutations: [
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: digest },
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "b.txt", contentRef: digest },
+        ],
+      }),
+    ).toThrow(/objectId collision/)
+    // put + delete 并存同 id 也拒绝。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-collide",
+        branchId: "branch-main",
+        baseRevision: 0n,
+        actor: "actor:test",
+        mutations: [
+          { type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: digest },
+          { type: "object.delete", objectId: "same-id" },
+        ],
+      }),
+    ).toThrow(/objectId collision/)
+    // World 未推进。
+    expect(ctx.store.getWorld("world-collide")!.currentRevision).toBe(0n)
+    ctx.cleanup()
+  })
+
+  test("R06.3 fixture backend 无显式 test capability → 生产 coordinator 拒绝", () => {
+    const { ctx, snapshotId } = buildWorld()
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: d => ctx.store.cas.record(d),
+      readCasObject: d => ctx.store.cas.get(d),
+    })
+    expect(() =>
+      new ProjectionCoordinator({
+        store: ctx.store,
+        materializer,
+        backend: new CopyProjectionFixtureBackend(),
+        projectionRoot: tmpRoot("nofix"),
+      }),
+    ).toThrow(ProjectionError)
+    // 显式 capability 才放行。
+    const coord = new ProjectionCoordinator({
+      store: ctx.store,
+      materializer,
+      backend: new CopyProjectionFixtureBackend(),
+      projectionRoot: tmpRoot("fix"),
+      allowTestBackends: true,
+    })
+    const session = coord.start(makePlan(snapshotId))
+    coord.cancel(session)
+    ctx.cleanup()
+  })
+
+  test("R03：unmount 失败 → CLEANUP_FAILED 阻止 commit；residue 保留可诊断；World 未推进", async () => {
+    const { ctx, snapshotId, baseContent } = buildWorld()
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: d => ctx.store.cas.record(d),
+      readCasObject: d => ctx.store.cas.get(d),
+    })
+    const root = tmpRoot("residue")
+    // stub backend：真实 fixture 语义但 cleanup 恒 false（模拟 unmount 失败）。
+    const failingBackend: NativeProjectionBackend = {
+      id: "fixture-failing",
+      kind: "fixture",
+      create(input) {
+        const merged = join(input.projectionRoot, "merged-m")
+        mkdirSync(merged, { mode: 0o700 })
+        cpSync(input.lowerDir, merged, { recursive: true })
+        // 模拟 upper 语义：副本可写（lower 0444 不继承）。
+        const chmodTree = (dir: string): void => {
+          for (const entry of readdirSync(dir)) {
+            const full = join(dir, entry)
+            const stat = lstatSync(full)
+            if (stat.isDirectory()) chmodTree(full)
+            else if (stat.isFile()) chmodSync(full, 0o644)
+          }
+        }
+        chmodTree(merged)
+        return {
+          backend: "fixture",
+          mergedPath: merged,
+          writeLayerPath: merged,
+          assertReady: () => undefined,
+          cleanup: () => false,
+        }
+      },
+    }
+    const coord = new ProjectionCoordinator({
+      store: ctx.store,
+      materializer,
+      backend: failingBackend,
+      projectionRoot: root,
+      allowTestBackends: true,
+    })
+    const session = coord.start(makePlan(snapshotId))
+    expect(readFileSync(join(session.mergedDir, "src/main.ts"), "utf8")).toBe(baseContent)
+    await coord.execute(
+      session,
+      { executable: "noop", args: [] },
+      mutateExecutor(merged => writeFileSync(join(merged, "src/main.ts"), "changed\n")),
+    )
+    coord.scan(session)
+    try {
+      coord.commit(session)
+      throw new Error("expected CLEANUP_FAILED")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("CLEANUP_FAILED")
+    }
+    // World 未推进；无 receipt（正交状态）。
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    expect(session.worldState).toBe("REJECTED")
+    expect(session.receipt!.worldState).toBe("REJECTED")
+    expect(session.receipt!.worldCommitReceipt).toBeUndefined()
+    // cleanup 状态机：unmount 失败 → residue 保留（root 未删除，可诊断）。
+    expect(session.cleanupState).toEqual({ cleanupOk: false, rootRemoved: false })
+    expect(existsSync(session.projectionRoot)).toBe(true)
+    expect(existsSync(join(session.projectionRoot, "merged-m"))).toBe(true)
     ctx.cleanup()
   })
 })

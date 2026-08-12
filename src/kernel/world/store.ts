@@ -1186,6 +1186,30 @@ export class WorldStore {
     const mutations = parseCanonicalJson<WorldMutation[]>(canonicalJson(input.mutations))
     if (mutations.length === 0) throw new Error("World commit requires at least one mutation")
     mutations.forEach(validateWorldMutation)
+    // R02.6：同一 commit 内 objectId 身份冲突必须在 transaction 前拒绝
+    // （不能依赖 UPSERT 静默覆盖）。同一 objectId 出现在多个不同 path
+    // （或 delete 与 put 并存）→ 拒绝。
+    {
+      const idToPaths = new Map<string, string[]>()
+      for (const mutation of mutations) {
+        if (mutation.type === "object.put") {
+          const list = idToPaths.get(mutation.objectId) ?? []
+          list.push(mutation.path ?? "")
+          idToPaths.set(mutation.objectId, list)
+        } else if (mutation.type === "object.delete") {
+          const list = idToPaths.get(mutation.objectId) ?? []
+          list.push(`<delete>`)
+          idToPaths.set(mutation.objectId, list)
+        }
+      }
+      for (const [objectId, paths] of idToPaths) {
+        if (new Set(paths).size > 1) {
+          throw new Error(
+            `World commit objectId collision: ${objectId} maps to multiple identities (${[...new Set(paths)].join(", ")})`,
+          )
+        }
+      }
+    }
     const commitId = input.commitId ?? this.idFactory("commit")
     const executionReceiptIds = parseCanonicalJson<string[]>(
       canonicalJson(input.executionReceiptIds ?? []),

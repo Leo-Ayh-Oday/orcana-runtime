@@ -74,6 +74,7 @@ async function runVerticalSlice(
 
   const materializer = new SnapshotMaterializer({
     getSnapshot: id => ctx.store.snapshots.get(id),
+    getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   })
   const coord = new ProjectionCoordinator({
@@ -81,6 +82,8 @@ async function runVerticalSlice(
     materializer,
     backend,
     projectionRoot: tmpRoot("proj"),
+    // A 层 fixture backend 需要显式 test capability（R06.3）。
+    allowTestBackends: backend.kind === "fixture" ? true : undefined,
   })
   // 4. native projection。
   const plan = validateWorldProjectionPlan({
@@ -131,8 +134,9 @@ async function runVerticalSlice(
   mkdirSync(base2)
   new SnapshotMaterializer({
     getSnapshot: id => ctx.store.snapshots.get(id),
+    getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
-  }).materialize(snapshot2, base2)
+  }).materialize(snapshot2.snapshotId, base2)
   expect(readFileSync(join(base2, "src/main.ts"), "utf8")).toBe(newContent)
   expect(ctx.store.verifyIntegrity()).toEqual([])
   expect(ctx.store.cas.has(snapshot2.manifestDigest)).toBe(true)
@@ -149,10 +153,11 @@ async function fixtureExecutor(cwd: string): Promise<import("../../../src/kernel
   return { exitCode: 0, timedOut: false, cancelled: false, violation: false }
 }
 
-/** B 层 executor：真实 Linux Broker（host-audit 后端在 projection merged
- *  视图上执行 /bin/sh）。 */
+/** B 层 executor：真实 Linux Broker —— 真实能力探测 + bubblewrap strict
+ *  lane（R01.4：host-audit 不能作为 AK-2 安全边界；本机已验证
+ *  bwrap unprivilegedUsable）。 */
 function brokerExecutorFactory(merged: string) {
-  const broker = createLinuxBroker({ mode: "enabled", testCapabilities: HOST_AUDIT_TEST_CAPABILITIES })
+  const broker = createLinuxBroker({ mode: "enabled" })
   const registry = new WorkspaceAuthorityRegistry()
   const workspace = registry.registerAgentWorktree({
     projectId: "ak2-slice",
@@ -197,6 +202,24 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
       const result = await runVerticalSlice(new FuseOverlayfsProjectionBackend(), async cwd => {
         // 真实 broker：在 fused merged 视图上执行 /bin/sh 修改文件。
         const executor = brokerExecutorFactory(cwd)
+        // R01.5：执行域（bwrap 隔离视图）无法寻址 ../base（projection root
+        // 兄弟）与宿主路径 —— 只看到 /workspace（merged）映射；宿主 /tmp
+        // 是空 tmpfs（marker 不可见）；/home 不在只读布局内（不可达）。
+        const marker = join(tmpdir(), `ak2-host-marker-${process.pid}`)
+        writeFileSync(marker, "host")
+        try {
+          const isolationResult = await executor.execute(cwd, {
+            executable: "/bin/sh",
+            args: ["-c", `{ test -e ../base && echo BASE_VISIBLE || echo base_hidden; test -e ${marker} && echo HOST_TMP_VISIBLE || echo host_tmp_hidden; test -e /home/fuqiang/worktrees/orcana-agent-os && echo HOST_HOME_VISIBLE || echo host_home_hidden; } > src/isolation.txt`],
+          })
+          expect(isolationResult.outcome.exitCode).toBe(0)
+          const isolationOutput = readFileSync(join(cwd, "src/isolation.txt"), "utf8")
+          expect(isolationOutput).toContain("base_hidden")
+          expect(isolationOutput).toContain("host_tmp_hidden")
+          expect(isolationOutput).toContain("host_home_hidden")
+        } finally {
+          rmSync(marker, { force: true })
+        }
         const { outcome } = await executor.execute(cwd, {
           executable: "/bin/sh",
           args: ["-c", "echo 'export const answer = 42' > src/main.ts"],
@@ -229,6 +252,7 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
       const snapshot = ctx.store.snapshots.getForRevision("world-vf", "b", 1n)!
       const materializer = new SnapshotMaterializer({
         getSnapshot: id => ctx.store.snapshots.get(id),
+        getCasRecord: digest => ctx.store.cas.record(digest),
         readCasObject: d => ctx.store.cas.get(d),
       })
       const root = tmpRoot("bfail")

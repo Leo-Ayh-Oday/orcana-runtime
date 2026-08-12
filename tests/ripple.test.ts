@@ -333,7 +333,9 @@ describe("Ripple Engine", () => {
     expect(report.findings.some(f => f.kind === "memory-contract")).toBe(true)
   })
 
-  test("context budget degraded mode escalates ripple warnings to block", () => {
+  // IC05 Correction P0-I: degraded 模式不得把 heuristic warn 升级为 hard
+  // block —— warn 保留（advisory → obligation）。HEURISTIC_RIPPLE_WRITE_BLOCK=0。
+  test("context budget degraded mode does NOT escalate heuristic warnings to block (IC05)", () => {
     const decision = tightenRippleDecision({
       targetFile: "src/a.ts",
       changedSymbols: ["foo"],
@@ -345,7 +347,7 @@ describe("Ripple Engine", () => {
       memoryHits: [],
     }, "degraded")
 
-    expect(decision).toBe("block")
+    expect(decision).toBe("warn")
   })
 
   test("formats cascade suggestions with affected files and next actions", () => {
@@ -398,5 +400,114 @@ describe("Ripple Engine", () => {
     expect(a.hash).toBe(b.hash)
     expect(a.sections).toContain("package.json")
     expect(a.sections).toContain("source-skeleton")
+  })
+})
+
+describe("IC05 Correction P0-E: real ripple write authority (R1/R2/R3)", () => {
+  // IC05 Correction P0-L + O: 单一事实链 —— WRITE_FILE.execute 的
+  // metadata.rippleReport 是唯一 report 来源（不预热 previewEdit）。
+  // 非导出函数真实 signature 变更 + 12 个真实 .ts caller → heuristic warn
+  // → write 允许 + 磁盘写入；同一 report → obligation → DONE blocked → waive 释放。
+  test("R1: real heuristic caller-overflow same-report E2E (WRITE ALLOW → OBLIGATION → DONE BLOCK → WAIVE)", async () => {
+    const files: Record<string, string> = {
+      "target.ts": `function helper(a: number): number {\n  return a\n}\n`,
+    }
+    for (let i = 1; i <= 12; i++) {
+      files[`caller${String(i).padStart(2, "0")}.ts`] = `import { helper } from "./target"\nconst r${i} = helper(${i})\n`
+    }
+    const root = project(files)
+    const tool = buildTool(WRITE_FILE)
+    await recordFullBaselines(root, join(root, "target.ts"))
+
+    const before = readFileSync(join(root, "target.ts"), "utf-8")
+    // §9: 真实 signature change（non-exported 加参数）→ signature_changed
+    // severity=warn（不是 body-only 偶然解析）。
+    const after = before.replace("function helper(a: number): number {", "function helper(a: number, extra = 0): number {")
+
+    // 直接执行 —— 从 result.metadata.rippleReport 取 actual report。
+    const result = await tool.execute({
+      path: join(root, "target.ts"),
+      content: after,
+    }, { projectRoot: root })
+
+    // write 允许 + 磁盘写入。
+    expect(result.success).toBe(true)
+    expect(readFileSync(join(root, "target.ts"), "utf-8")).toContain("extra = 0")
+    const actualReport = (result.metadata as Record<string, unknown> | undefined)?.rippleReport as {
+      callers: unknown[]; findings: Array<{ kind: string; severity: string }>; decision: string
+    }
+    expect(actualReport).toBeTruthy()
+
+    // actual report 是真实 heuristic caller-overflow（无 deterministic block）。
+    expect(actualReport.callers.length).toBeGreaterThanOrEqual(11)
+    expect(actualReport.findings.some(f => f.kind === "caller-overflow")).toBe(true)
+    expect(actualReport.findings.find(f => f.kind === "caller-overflow")?.severity).toBe("warn")
+    expect(actualReport.findings.some(f => f.severity === "block")).toBe(false)
+    expect(actualReport.decision).toBe("warn")
+
+    // 同一 actualReport → obligations。
+    const { obligationsFromReport } = await import("../src/ripple/obligations")
+    const obligations = obligationsFromReport(actualReport as never, new Set())
+    expect(obligations.length).toBeGreaterThan(0)
+
+    // RippleExitGate → DONE blocked。
+    const { createCompletionChain } = await import("../src/agent/gates/sync-completion-chain")
+    const { GateTelemetry } = await import("../src/agent/gates/telemetry")
+    const tel = new GateTelemetry()
+    const cc = {
+      round: 0, finalText: "done", intentPolicy: { mode: "long_task", reason: "t" },
+      taskTracker: null, pendingRippleObligations: obligations,
+      taskHadWrite: true, taskToolErrors: 0, taskModifiedFiles: 1, lastTypecheck: undefined,
+      lastRippleReports: [actualReport], lastVerificationResults: [], planApproved: false,
+      planningRejections: 0, maxRounds: 5, priorTools: [], priorFiles: new Set(),
+      confidenceEvaluator: { evaluate: () => ({ ok: true, confidence: 1 }), evaluateSync: () => ({ ok: true, confidence: 1 }) },
+      completionBlockMessage: null, shouldBreak: false, breakEvent: null, statusMessage: "",
+      injectMessages: [], traceEvent: null,
+    } as never
+    expect(createCompletionChain().evaluateSync(cc, tel).pass).toBe(false)
+
+    // waiver 释放。
+    const waived = obligations.map((o, i) => ({
+      caller: o.caller,
+      symbol: o.symbol,
+      reason: o.reason,
+      waiver: { reason: "manual review", timestamp: Date.now(), waiveId: `w-${i}` },
+    }))
+    const tel2 = new GateTelemetry()
+    const cc2 = { ...(cc as object), pendingRippleObligations: waived }
+    expect(createCompletionChain().evaluateSync(cc2 as never, tel2).pass).toBe(true)
+  })
+
+  test("R2: deterministic exported-symbol-removal → write blocked, disk unchanged", async () => {
+    const root = project({
+      "math.ts": `export function add(a: number, b: number): number { return a + b }\nexport function sub(a: number, b: number): number { return a - b }\n`,
+      "cart.ts": `import { sub } from "./math"\nexport const total = sub(1, 2)\n`,
+    })
+    const tool = buildTool(EDIT_FILE)
+    await recordFullBaselines(root, join(root, "math.ts"), join(root, "cart.ts"))
+    const before = readFileSync(join(root, "math.ts"), "utf-8")
+    const result = await tool.execute({
+      path: join(root, "math.ts"),
+      old_string: "export function sub(a: number, b: number): number { return a - b }",
+      new_string: "",
+    }, { projectRoot: root })
+    expect(result.success).toBe(false)
+    expect(readFileSync(join(root, "math.ts"), "utf-8")).toBe(before)
+  })
+
+  test("R3: pending obligation + new deterministic hard finding → hard block（不被 warn 吞掉）", async () => {
+    const { strongestRippleDecision } = await import("../src/agent/gates/pre-round")
+    const { createContextDebts } = await import("../src/context/context-debt")
+    void createContextDebts
+    const reports = [{
+      targetFile: "math.ts",
+      decision: "block",
+      findings: [{ kind: "exported-symbol-removal", severity: "block" }],
+      callers: [],
+      apiChanges: [],
+    }]
+    const pending = [{ caller: "old.ts", symbol: "x", reason: "pending", waiver: null }]
+    const decision = strongestRippleDecision(reports as never, pending as never)
+    expect(decision).toBe("block")
   })
 })

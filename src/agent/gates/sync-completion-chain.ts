@@ -104,58 +104,59 @@ export class PlanningArtifactGate implements Gate<CompletionContext> {
       return { pass: false, reason: "semantic:planning_accepted" }
     }
 
+    // IC05 Correction P0-B: planning quality 是 advisory，不是 execution
+    // authorization。普通 execution intent（mode != readonly）下：
+    //  - 评估计划只做 advisory telemetry（score/missing/signals）
+    //  - 计划 artifact 消费 → transition building
+    //  - 绝不 semantic:planning_revise（无强制修订循环）
+    //  - 绝不 plan_ready / mandatory approval pause（Flash heuristic 不能
+    //    触发 plan_ready；approval 只由显式 planApproved user state 触发）
     const planningGate = evaluatePlanningArtifact(ctx.finalText, ctx.taskTracker)
-    const assistantMsg = compactAssistantContext(ctx.finalText)
-
-    if (!planningGate.ok) {
-      // PR 3: use evaluatePlanForcePass instead of bare forcePlanningPassAfterLimit
-      const forceResult = evaluatePlanForcePass({
-        rejections: ctx.planningRejections,
-        planText: ctx.finalText,
-        goal: ctx.taskTracker.goal,
-      })
-
-      if (!forceResult.allow) {
-        // Still within retry budget — revision needed
-        const userMsg = formatPlanningGatePrompt(planningGate, ctx.taskTracker)
-        continue_(ctx, "semantic:planning_revise", assistantMsg, userMsg,
-          `planning-gate: revise plan (${planningGate.missing.length} missing)`,
-          { missing: planningGate.missing, score: planningGate.score })
-        ctx.completionBlockMessage = userMsg
-        ;(ctx as unknown as Record<string, unknown>)._planningRejected = true
-        return { pass: false, reason: "semantic:planning_revise" }
-      }
-
-      // Force-pass with minimal viable packet
-      ;(ctx as unknown as Record<string, unknown>)._planningForcePass = true
-      ;(ctx as unknown as Record<string, unknown>)._planningForcePassPacket = forceResult.fallbackPacket
-    }
-
-    // Plan passed (or force-passed with packet)
+    markPlanAccepted(ctx.taskTracker)
     ;(ctx as unknown as Record<string, unknown>)._planningPassed = true
     ;(ctx as unknown as Record<string, unknown>)._planningScore = planningGate.score
     ;(ctx as unknown as Record<string, unknown>)._planningSignals = planningGate.signals
     ;(ctx as unknown as Record<string, unknown>)._planningMissing = planningGate.missing
 
-    // Plan ready — yield plan_ready, break for user approval
-    // loop.ts handles the yield + break after chain returns
-    ctx.shouldBreak = true
-    ctx.breakEvent = {
-      type: "plan_ready",
-      data: {
-        planText: ctx.finalText.slice(0, 3000),
-        score: planningGate.score,
-        signals: planningGate.signals,
-        goal: ctx.taskTracker.goal,
-        steps: ctx.taskTracker.steps.map(s => ({ id: s.id, title: s.title })),
-        requiredFiles: ctx.taskTracker.requiredFiles,
-        requiredVerificationKinds: ctx.taskTracker.requiredVerificationKinds,
-        missingItems: planningGate.missing,
-      },
+    ctx.shouldBreak = false
+    ctx.statusMessage = `planning-advisory: score ${planningGate.score}/8${planningGate.missing.length ? ` (${planningGate.missing.length} missing)` : ""}`
+    ctx.traceEvent = {
+      gate: "planning",
+      authority: "advisory",
+      decision: "advisory",
+      score: planningGate.score,
+      missing: planningGate.missing,
+      signals: planningGate.signals,
     }
-    ctx.statusMessage = "plan-mode: awaiting user approval"
-    ctx.traceEvent = { gate: "planning", decision: "plan_ready", score: planningGate.score }
-    return { pass: false, reason: "semantic:planning_ready" }
+    // 直接继续执行（不 block completion；后续 TaskTracker/Evidence gate
+    // 决定完成）。
+    return { pass: true }
+  }
+}
+
+// ── Gate: ContextDebt（IC05 P6: obligation —— open debt 禁止 DONE）──
+
+export class ContextDebtCompletionGate implements Gate<CompletionContext> {
+  readonly name = "semantic:context_debt"
+
+  evaluate(ctx: CompletionContext) {
+    const debts = ctx.contextDebts
+    const open = debts?.filter(d => d.status === "open") ?? []
+    if (open.length === 0) return { pass: true }
+    // IC05 Correction P0-C: open ContextDebt 时 DONE 永远不可能 —— 无论
+    // typecheck/tests/build 等 evidence 是否通过。最后一轮也必须
+    // pass=false / incomplete（绝不复用 finalRoundNoEvidence —— 它可能
+    // 因其他 evidence PASS 而放行）。CONTEXT_DEBT_COMPLETION_BYPASS=0。
+    if (ctx.round + 1 >= ctx.maxRounds) {
+      return { pass: false, reason: "semantic:context_debt", incomplete: true }
+    }
+    const lines = open.map(d => `${d.id} (${d.kind}): ${d.requiredAction}`).join("\n")
+    const userMsg = `## ContextDebt 未偿还\nDONE 前需要以下客观上下文证据（advisory 不阻断写，但完成前必须偿还）：\n\n${lines}`
+    continue_(ctx, "semantic:context_debt", compactAssistantContext(ctx.finalText), userMsg,
+      `context-debt: ${open.length} open (${open.map(d => d.kind).join(", ")})`,
+      { openDebts: open.map(d => d.kind), authority: "obligation" })
+    ctx.completionBlockMessage = userMsg
+    return { pass: false, reason: "semantic:context_debt" }
   }
 }
 
@@ -254,6 +255,7 @@ export function createCompletionChain(): GateChain<CompletionContext> {
     new RippleExitGate(),
     new PlanningArtifactGate(),
     new TaskTrackerCompletionGate(),
+    new ContextDebtCompletionGate(),
     new QualityGate(),
   ])
 }

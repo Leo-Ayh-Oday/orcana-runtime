@@ -12,10 +12,13 @@ import { shouldRunResearch } from "../research-router"
 import { buildResearchEvidenceContext, buildResearchInsufficientEvidenceMessage } from "../research-answer"
 import { collectResearchEvidence, explicitRequiredFiles } from "../round/pre-loop"
 import { buildContextMap, contextEvidenceForMap, evaluateContextReadiness, formatContextMapSummary, selectContextMapTaskLevel, type ContextMapTaskLevel } from "../../context/context-map"
+import { createContextDebts, openContextDebtCount } from "../../context/context-debt"
+import { ContextMapReadSession } from "../../context/context-map"
 import { getWorkspaceIoAuthority } from "../../runtime/execution-context"
 import { markPlanAccepted } from "../task-tracker"
 import { planProgress } from "../master-plan"
 import { activateMasterPlan } from "./master-plan"
+import { DEFAULT_BUDGET, DEFAULT_RIPPLE, isFilePath } from "../task-packet"
 import { patch, stream, trace } from "./effects"
 import type { LoopDecision, RunEffect, RunPhaseContext } from "./types"
 
@@ -140,36 +143,119 @@ export async function* prepareRun(ctx: RunPhaseContext): AsyncGenerator<RunEffec
   if (shouldBuildContextMap) {
     // IC01-R3: production 路径显式注入 WorkspaceIoAuthority —— 无权威时
     // ContextMapReadSession fail closed（所有读取拒绝，绝不隐式放行）。
+    // IC05 P0-D: 复用共享 session —— 其客观状态（authorityMissing /
+    // aborted / budgetExhausted）区分 constitution 客观不存在（absent）与
+    // probe 未完成（unavailable），防止 impossible forever debt。
+    const probeSession = new ContextMapReadSession({ workspace: getWorkspaceIoAuthority() })
     const runtimeContextMap = buildContextMap(ctx.options.projectRoot ?? process.cwd(), {
       taskId: "runtime-task",
       userRequest: ctx.effectivePrompt,
       keywords: explicitFilesForContext,
-    }, { workspace: getWorkspaceIoAuthority() })
+    }, { workspace: getWorkspaceIoAuthority(), session: probeSession })
+    // IC05 Correction P0: constitution probe 客观结局由 loadProjectConstitution
+    // 判定 —— absent（bounded probe 完成且候选全部客观不存在）才 unavailable；
+    // read_failed / incomplete（存在但被拒/未完成）保持 open。
+    const constitutionProbeStatus = runtimeContextMap.projectConstitution.constitutionProbe
     const readiness = evaluateContextReadiness(runtimeContextMap, contextMapLevel)
     const blockers = readiness.blockers
-    const blocked = contextMapLevel === "high_risk" && blockers.length > 0
+    // IC05 P2: readiness blockers 降级为 ContextDebt（obligation）—— 写工具
+    // 保持可用，DONE 前需偿还。contextReadinessBlocked 恒 false（legacy
+    // field 保留兼容，不再拥有 hard authority）。
+    const debts = createContextDebts({
+      hasLocateResult: readiness.hasLocateResult,
+      hasSourceUnderstanding: readiness.hasSourceUnderstanding,
+      hasProjectConstitution: readiness.hasProjectConstitution,
+      hasVerificationPlan: readiness.hasVerificationPlan,
+      confidence: readiness.confidence,
+      highRisk: contextMapLevel === "high_risk",
+      // TaskTracker requiredVerificationKinds 是 Runtime-owned verification
+      // plan evidence。
+      hasRuntimeVerificationPlan: Boolean(ctx.planning.taskTracker?.requiredVerificationKinds?.length),
+      // P0-D: 只有 probe 客观判定 absent 才 unavailable —— read_failed /
+      // incomplete（存在但读取被拒 / probe 中断 / 无权威）保持 open，绝不
+      // 把"存在但读不到"当"客观不存在"。
+      constitutionProbeFoundNone: !readiness.hasProjectConstitution && constitutionProbeStatus === "absent",
+    })
     ctx.contextMap.runtimeContextMap = runtimeContextMap
     ctx.contextMap.contextMapContext = [
       "## Context Map",
       `level: ${contextMapLevel}`,
       formatContextMapSummary(runtimeContextMap),
       `readiness: ${blockers.length ? blockers.join(" | ") : "ready"}`,
-      blocked ? "ContextReadiness blocked write tools until more context is acquired." : "",
+      blockers.length ? `ContextDebt open: ${debts.filter(d => d.status === "open").map(d => d.kind).join(", ")} (advisory — writes allowed)` : "",
     ].filter(Boolean).join("\n")
     ctx.contextMap.contextReadinessBlockers = blockers
-    ctx.contextMap.contextReadinessBlocked = blocked
+    ctx.contextMap.contextReadinessBlocked = false
+    ctx.contextMap.contextDebts = debts
     ctx.contextMap.planContextAttachment = {
       contextMapId: runtimeContextMap.id,
       requiredContextEvidence: contextEvidenceForMap(runtimeContextMap),
     }
-    yield stream({ type: "status", data: `context-map: ${runtimeContextMap.id} ${contextMapLevel} ${blockers.length ? "blocked" : "ready"}` })
+    yield stream({ type: "status", data: `context-map: ${runtimeContextMap.id} ${contextMapLevel} ${debts.length ? "advisory" : "ready"} (${openContextDebtCount(debts)} debts)` })
     yield trace("gate_decision", {
       gate: "context_readiness",
-      decision: blocked ? "block_writes" : "pass",
+      authority: "advisory",
+      decision: debts.length ? "debt_created" : "pass",
+      openDebtCount: openContextDebtCount(debts),
       level: contextMapLevel,
       blockers,
       contextMapId: runtimeContextMap.id,
     })
+  }
+
+  // IC05 Correction P0-G: Flash triage 的 structured planSteps 是既有
+  // planning artifact —— 通过 forcePassPacket 直接进入 MasterPlan
+  // （createMasterPlanFromPacket / createTaskTrackerFromPacket 保真：scope-N
+  // ↔ deliverables 文件、verify-kind ↔ requiredVerification），杜绝
+  // title round-trip 丢 evidence（deliverables / verification 不丢失）。
+  // 判定：tracker steps 含非 master-plan 格式 ID（非 scope-N/verify-）且
+  // 尚未激活 master plan。
+  if (
+    ctx.planning.taskTracker &&
+    !ctx.planStore.current &&
+    // checkpoint resume 的 tracker 已水合（D4）—— 不重复激活。
+    !ctx.options.resumeFromCheckpoint &&
+    ctx.planning.taskTracker.steps.some(step => !/^(scope-|verify-)/.test(step.id))
+  ) {
+    const tracker = ctx.planning.taskTracker
+    // 只有 concrete 文件路径 deliverables 进 scope —— 抽象标题（非文件）
+    // 不作为 completion-hard file obligation（§4：禁止 impossible scope-N）。
+    const scope = tracker.requiredFiles.filter(file => isFilePath(file))
+    if (scope.length > 0 && activateMasterPlan(ctx, "", tracker.goal, {
+      taskId: "flash-triage",
+      nodeId: "1",
+      title: tracker.goal,
+      goal: tracker.goal,
+      scope,
+      doneCriteria: scope.map(file => `已写入 ${file}`),
+      verification: tracker.requiredVerificationKinds.map(kind => ({
+        kind,
+        description: `运行 ${kind} 验证`,
+        command: undefined as string | undefined,
+      })),
+      ripplePolicy: { ...DEFAULT_RIPPLE },
+      contextBudget: { ...DEFAULT_BUDGET },
+    })) {
+      yield stream({ type: "status", data: `master-plan: structured flash planSteps (${scope.length} deliverables, ${tracker.requiredVerificationKinds.length} verification)` })
+    } else if (scope.length === 0) {
+      // IC05 Correction M: 无 concrete deliverable —— Flash plan titles 是
+      // advisory artifact，不得进入 completion-hard step list。最小确定性
+      // tracker：只保留 Runtime 可客观偿还的 verification obligation
+      // （steps=[{id:"verification"}] + requiredVerificationKinds），由
+      // updateTaskTrackerAfterTools() 的 verification 路径偿还。
+      const verificationKinds = tracker.requiredVerificationKinds
+      ctx.planning.taskTracker = {
+        goal: tracker.goal,
+        intent: tracker.intent,
+        phase: "building",
+        requiredFiles: [],
+        requiredVerificationKinds: verificationKinds,
+        steps: [{ id: "verification", title: "运行验证命令", status: "running" }],
+        verificationEvidence: {},
+        verification: verificationKinds.map(k => k === "typecheck" ? "运行类型检查" : k === "test" ? "运行测试" : k === "build" ? "运行构建" : "运行验证"),
+      }
+      yield stream({ type: "status", data: `task-tracker: verification-only (${verificationKinds.length} kinds, no concrete deliverables)` })
+    }
   }
 
   // ── Plan approval flow: user approved the plan via CLI → activate MasterPlan ──

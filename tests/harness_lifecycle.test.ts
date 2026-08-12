@@ -67,7 +67,7 @@ class PlanProvider implements LLMProvider {
       yield {
         type: "text",
         data: JSON.stringify({
-          mode: "full_complex",
+          mode: "plan_before_code",
           needsWeb: false,
           researchQueries: [],
           relevantSkillNames: [],
@@ -147,16 +147,17 @@ describe("Harness H2 lifecycle outcomes", () => {
     expect(result.outcomeKind).toBe("completed")
   })
 
-  test("plan approval pause → waiting with plan-approval interrupt", async () => {
+  // IC05 Correction P0-B: heuristic planning 不再 plan_ready pause ——
+  // 普通执行任务直接继续（approval 只由显式 user/caller state 触发）。
+  test("heuristic planning no longer pauses for approval (IC05 P0-B)", async () => {
     const result = await runAndInspect(
       { provider: new PlanProvider(), tools: [], flashTriagePolicy: "always" },
       "Build a complete small service with package setup, API, and typecheck verification.",
     )
-    expect(result.status).toBe("waiting")
-    expect(result.outcomeKind).toBe("waiting")
-    // Plan-ready bridge event surfaced before the waiting lifecycle event.
+    expect(result.status).not.toBe("waiting")
+    expect(result.outcomeKind).not.toBe("waiting")
     const planReadys = result.events.filter(e => "planReady" in e.payload)
-    expect(planReadys).toHaveLength(1)
+    expect(planReadys).toHaveLength(0)
   })
 
   test("clarification pause → waiting with clarification interrupt", async () => {

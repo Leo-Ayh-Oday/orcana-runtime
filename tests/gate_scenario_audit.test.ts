@@ -288,12 +288,12 @@ describe("ShellSideEffectGuard: detection coverage", () => {
 // ════════════════════════════════════════════
 
 describe("Completion: 4 sync gates always evaluate", () => {
-  test("All 4 completion gates run for readonly", () => {
+  test("All 5 completion gates run for readonly", () => {
     const tel = new GateTelemetry()
     createCompletionChain().evaluateSync(cc({ intentPolicy: { mode: "readonly", reason: "讨论" } }), tel)
     const gates = tel.gateNames()
     console.log(`  Completion gates: ${gates.join(", ")}`)
-    expect(gates.length).toBe(4)
+    expect(gates.length).toBe(5)
     expect(gates).toContain("semantic:ripple_exit")
     expect(gates).toContain("semantic:planning_artifact")
     expect(gates).toContain("semantic:task_tracker")
@@ -350,10 +350,10 @@ describe("Summary: real gate counts", () => {
     expect(r.allowed).toBe(true) // passes all 9 checks
   })
 
-  test("Completion: always 4 sync gates (before orchestrator phases)", () => {
+  test("Completion: always 5 sync gates (before orchestrator phases)", () => {
     const tel = new GateTelemetry()
     createCompletionChain().evaluateSync(cc(), tel)
-    expect(tel.gateNames().length).toBe(4)
+    expect(tel.gateNames().length).toBe(5)
   })
 })
 

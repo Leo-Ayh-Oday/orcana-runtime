@@ -181,38 +181,14 @@ export function evaluateToolPolicy(input: ToolPolicyInput): ToolPolicyResult {
     }
   }
 
-  // Gate 5: Planning phase — block writes before plan accepted
-  if (tool && taskTracker?.phase === "planning" && !tool.defn.isReadonly) {
-    const planningGate = evaluatePlanningArtifact(finalText, taskTracker)
-    const blockMessage = planningGate.ok
-      ? `任务追踪已阻止：长任务必须先完成规划回合，规划阶段不允许在同一轮调用 ${toolCall.name}。下一轮将进入执行阶段。`
-      : formatPlanningBlockedToolResult(planningGate)
-    return {
-      allowed: false,
-      reason: "planning_phase",
-      blockMessage,
-      category: cat,
-      incrementRateLimit: cat,
-      source: "policy:planning_phase",
-      priority: 5,
-    }
-  }
-
-  // Gate 6: ContextReadiness blocks writes before enough project context exists.
-  if (tool && input.contextReadinessBlocked && !tool.defn.isReadonly) {
-    const blockers = input.contextReadinessBlockers?.length
-      ? input.contextReadinessBlockers.join("; ")
-      : "ContextMap readiness is incomplete."
-    return {
-      allowed: false,
-      reason: "context_readiness",
-      blockMessage: `ContextReadiness gate blocked ${toolCall.name}: ${blockers} Continue with readonly locate/read/search work before editing.`,
-      category: cat,
-      incrementRateLimit: cat,
-      source: "policy:context_readiness",
-      priority: 6,
-    }
-  }
+  // IC05 P3: planning phase 与 ContextReadiness 不再拥有写拒绝权。
+  //  - planning_phase：planning 是 artifact/advisory，不是 execution
+  //    authorization（PLANNING_PHASE_WRITE_DENY=0）。planning 状态只影响
+  //    status/prompt/advisory。
+  //  - context_readiness：advisory gate，blockers 已降级为 ContextDebt
+  //    (obligation)（CONTEXT_READINESS_TOOL_POLICY_DENY=0）。
+  //  input.contextReadinessBlocked 字段保留兼容（恒 false），不再产生
+  //  allowed=false / reason="context_readiness"。
 
   // Gate 7: Web search failure (RT-5: network-policy owns the boundary)
   const networkGate = networkToolBlocked(toolCall.name, webSearchFailedThisTurn, webSearchFailReason)

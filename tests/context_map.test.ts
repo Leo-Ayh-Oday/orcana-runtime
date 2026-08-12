@@ -268,7 +268,7 @@ describe("IC01-R5 全部导出入口 fail-closed —— 存在/不存在路径�
     saveContextMap(existRoot, {
       id: archiveId,
       taskId: "t",
-      projectConstitution: { architectureNotes: [], codingRules: [], forbiddenActions: [], buildCommands: [], testCommands: [], knownPitfalls: [], importantFiles: [] },
+      projectConstitution: { architectureNotes: [], codingRules: [], forbiddenActions: [], buildCommands: [], testCommands: [], knownPitfalls: [], importantFiles: [], constitutionProbe: "absent" },
       repoStructure: { packageManager: "unknown", workspaces: [], sourceRoots: [], testRoots: [], configFiles: [], entrypoints: [], moduleHints: [] },
       locateResult: { primaryFiles: [], secondaryFiles: [], relevantSymbols: [], definitions: [], references: [], suspectedTests: [], confidence: 0.2, unresolvedQuestions: [] },
       sourceUnderstanding: { filesRead: [], dataFlowNotes: [], callFlow: [], invariants: [], assumptions: [], risks: [], likelyEditTargets: [] },

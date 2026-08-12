@@ -86,6 +86,8 @@ export interface CompletionOrchestratorInput {
   recentTurns?: Array<{ role: string; content: string }>
   /** Plan text previously approved by the user/UI and passed back into this run. */
   approvedPlanText?: string
+  /** IC05 P6: ContextDebt obligation snapshot（open debt 禁止 DONE）。 */
+  contextDebts?: import("../context/context-debt").ContextDebt[]
 }
 
 // ── Decision ──
@@ -627,6 +629,8 @@ export class CompletionOrchestrator {
       confidenceEvaluator: input.confidenceEvaluator,
       // GATE-04 (GS-06): 同一 obligation 每轮一个 authority。
       missingTaskRequirements: obligationSnapshot,
+      // IC05 P6: ContextDebt obligation snapshot（open → DONE 禁止）。
+      contextDebts: input.contextDebts ?? [],
       // Outputs (initialized empty)
       completionBlockMessage: null,
       shouldBreak: false,

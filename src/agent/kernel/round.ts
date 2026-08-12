@@ -78,6 +78,7 @@ import { decideProviderFailureRecovery } from "../provider/failure-policy"
 import { collectRecentTurns, compactHistoricalToolResults, updateStateMachine } from "../round/post-loop"
 import { currentNode, planProgress } from "../master-plan"
 import { activateMasterPlan, tryNodeTransition } from "./master-plan"
+import { resolveContextDebts } from "../../context/context-debt"
 import { patch, stream, trace, wrapEvents } from "./effects"
 import type { LoopDecision, RunEffect, RunPhaseContext } from "./types"
 
@@ -685,6 +686,7 @@ export async function* runRound(
       gateTelemetry,
       recentTurns: collectRecentTurns(rawMessages, 6),
       approvedPlanText: options.planText,
+      contextDebts: ctx.contextMap.contextDebts,
     })
 
     // Apply orchestrator side effects
@@ -856,6 +858,34 @@ export async function* runRound(
   }))
   if (batchResult.aborted) return { kind: "return", reason: "tool_batch_aborted" }
 
+  // IC05 P6: ContextDebt 客观偿还 —— 本轮成功的 context-acquisition 工具
+  // 调用 resolve 对应债务（toolLedger 是唯一 success 事实来源，模型文本
+  // 无 authority）。
+  if (ctx.contextMap.contextDebts.length > 0) {
+    const acquisitionEvidence = completedToolCalls
+      .filter(tc => ctx.toolLedger.findById(tc.id)?.success)
+      .map(tc => ({
+        kind: "locate_result" as const,
+        tool: tc.name,
+        target: typeof tc.input?.path === "string" ? tc.input.path : undefined,
+      }))
+    if (acquisitionEvidence.length > 0) {
+      resolveContextDebts(ctx.contextMap.contextDebts, acquisitionEvidence)
+    }
+    // IC05 Correction P1-H: 真实可信 verification 结果（parsed
+    // VerificationResult，非任意 shell 文本）→ verification_plan debt
+    // 客观结算（Runtime-owned evidence）。
+    if (verificationResultsThisRound.some(r => r.passed)) {
+      const planDebt = ctx.contextMap.contextDebts.find(d => d.kind === "verification_plan" && d.status === "open")
+      if (planDebt) {
+        planDebt.status = "resolved"
+        planDebt.evidence.push(
+          `trusted verification: ${verificationResultsThisRound.filter(r => r.passed).map(r => `${r.kind} (${r.command})`).join(", ")}`,
+        )
+      }
+    }
+  }
+
   // TB2-1: 受约束恢复结束——本轮成功执行了工具调用，复位 thinking 降级。
   if (execution.protocolRecoveryActive && completedToolCalls.length > 0) {
     yield patch({ execution: { protocolRecoveryActive: false } })
@@ -971,28 +1001,31 @@ export async function* runRound(
       yield stream({ type: "status", data: "任务追踪: 用户已确认规划，进入执行阶段" })
       yield patch({ planning: { planApproved: false } })
     } else {
+      // IC05 P4: planning 是 advisory —— 评估计划质量只发 advisory telemetry，
+      // 不再强制 revise loop（PLANNING_QUALITY_HARD_BLOCK=0）。planning phase
+      // 不是 execution authorization。
       const planningGate = evaluatePlanningArtifact(finalText, planning.taskTracker)
-      if (planningGate.ok) {
+      // 确定性 transition：已有 plan artifact 或本轮已成功执行 write-class
+      // action → 计划视为 accepted，进入执行阶段（planning phase 不得继续
+      // 作为 execution lock）。
+      const wroteThisRound = Array.from(modifiedFilesThisRound.values()).length > 0 || execution.modifiedFiles.size > 0
+      const planConsumed = planningGate.ok || wroteThisRound || round + 1 >= ctx.maxRounds
+      yield stream({ type: "status", data: `planning-advisory: score ${planningGate.score}/8${planningGate.missing.length ? ` (${planningGate.missing.length} missing)` : ""}` })
+      yield trace("gate_decision", {
+        gate: "planning",
+        authority: "advisory",
+        decision: "advisory",
+        score: planningGate.score,
+        missing: planningGate.missing,
+        signals: planningGate.signals,
+        planConsumed,
+      })
+      if (planConsumed) {
         markPlanAccepted(planning.taskTracker)
-        if (activateMasterPlan(ctx, finalText, planning.taskTracker.goal)) {
+        if (planningGate.ok && activateMasterPlan(ctx, finalText, planning.taskTracker.goal)) {
           yield stream({ type: "status", data: `master-plan: ${planProgressOf(ctx)} nodes` })
         }
-        yield stream({ type: "status", data: "任务追踪: 已读取计划，进入执行阶段" })
-        yield trace("gate_decision", {
-          gate: "planning",
-          decision: "accepted",
-          score: planningGate.score,
-          signals: planningGate.signals,
-        })
-      } else if (round + 1 < ctx.maxRounds) {
-        postToolPlanningPrompt = formatPlanningGatePrompt(planningGate, planning.taskTracker)
-        yield stream({ type: "status", data: `planning-gate: revise plan (${planningGate.missing.length} missing)` })
-        yield trace("gate_decision", {
-          gate: "planning",
-          decision: "revise",
-          missing: planningGate.missing,
-          score: planningGate.score,
-        })
+        yield stream({ type: "status", data: "任务追踪: 计划 artifact 已消费，进入执行阶段" })
       }
     }
   }

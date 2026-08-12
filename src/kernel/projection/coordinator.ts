@@ -17,7 +17,7 @@
  *   CONFLICTED（WORLD_HEAD_MOVED）。
  */
 
-import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WorldConflictError } from "../world/contracts"
@@ -151,14 +151,27 @@ export class ProjectionCoordinator {
     }
   }
 
-  /** PROJECTED → RUNNING → COMPLETED/FAILED/CANCELLED。 */
+  /** PROJECTED → RUNNING → COMPLETED/FAILED/CANCELLED。
+   *  executor 抛异常时也执行 cleanup（不变量：任何路径不留残留），
+   *  然后原样重抛（调用方决定重试/上报策略）。 */
   async execute(session: ProjectionSession, command: ProjectionCommand, executor: ProjectionExecutor): Promise<ProjectionExecutionOutcome> {
     if (session.worldState !== "PROJECTED") {
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", `execute requires PROJECTED, got ${session.worldState}`)
     }
     session.executionState = "STARTING"
     session.executionState = "RUNNING"
-    const outcome = await executor(session.mergedDir, command)
+    let outcome: ProjectionExecutionOutcome
+    try {
+      outcome = await executor(session.mergedDir, command)
+    } catch (error) {
+      session.executionState = "FAILED"
+      try {
+        session.instance.cleanup()
+      } finally {
+        this.removeProjectionRoot(session.projectionRoot)
+      }
+      throw error
+    }
     session.outcome = outcome
     if (outcome.cancelled) session.executionState = "CANCELLED"
     else if (outcome.exitCode !== 0 || outcome.timedOut || outcome.violation) session.executionState = "FAILED"
@@ -342,7 +355,6 @@ export class ProjectionCoordinator {
 
   private chmodTreeWritable(dir: string): void {
     if (!existsSync(dir)) return
-    const { chmodSync, lstatSync, readdirSync } = require("node:fs") as typeof import("node:fs")
     chmodSync(dir, 0o700)
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry)

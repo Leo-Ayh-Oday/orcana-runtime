@@ -55,6 +55,8 @@ describe("AK2-T01 path canonicalization 表驱动", () => {
     ["/", "INVALID_PATH", "root absolute"],
     ["a\0b", "INVALID_PATH", "NUL"],
     ["a\\b", "INVALID_PATH", "backslash"],
+    ["a\rb", "INVALID_PATH", "CR"],
+    ["a\nb", "INVALID_PATH", "LF"],
     ["a//b", "NON_CANONICAL_PATH", "duplicate separator"],
     ["a/", "NON_CANONICAL_PATH", "trailing slash"],
     ["/a/", "INVALID_PATH", "absolute trailing"],
@@ -138,12 +140,12 @@ describe("AK2-T01 scope 反例表", () => {
       "GRAPH_COMPLETION_FORBIDDEN",
     )
   })
-  test("projectionId/worldId/branchId/snapshotId/actor 空或非法拒绝", () => {
+  test("projectionId/worldId/branchId/snapshotId/actor 空或非法拒绝（错误码按 label 精确映射）", () => {
     expectReject(basePlan({ projectionId: "" }), "INVALID_PROJECTION_ID")
     expectReject(basePlan({ worldId: "  " }), "INVALID_WORLD_ID")
-    expectReject(basePlan({ branchId: "a\nb" }), "INVALID_WORLD_ID")
-    expectReject(basePlan({ snapshotId: "x\0y" }), "INVALID_WORLD_ID")
-    expectReject(basePlan({ actor: "" }), "INVALID_WORLD_ID")
+    expectReject(basePlan({ branchId: "a\nb" }), "INVALID_BRANCH_ID")
+    expectReject(basePlan({ snapshotId: "x\0y" }), "INVALID_SNAPSHOT_ID")
+    expectReject(basePlan({ actor: "" }), "INVALID_ACTOR")
     expectReject(basePlan({ projectionId: "x".repeat(513) }), "INVALID_PROJECTION_ID")
   })
   test("writable/readonly 无关路径合法", () => {
@@ -185,5 +187,27 @@ describe("AK2-T01 plan 冻结与归属", () => {
     const plan = validateWorldProjectionPlan(basePlan({ writableRoots: writable }))
     writable.push("evil")
     expect(plan.writableRoots).toEqual(["src"])
+  })
+
+  test("ID 验证错误码按 label 精确映射（不统一归 INVALID_WORLD_ID）", () => {
+    const cases: Array<[Partial<WorldProjectionPlanInput>, import("../../../src/kernel/projection/contracts").ProjectionErrorCode]> = [
+      [{ projectionId: "" }, "INVALID_PROJECTION_ID"],
+      [{ worldId: "" }, "INVALID_WORLD_ID"],
+      [{ branchId: "" }, "INVALID_BRANCH_ID"],
+      [{ snapshotId: "" }, "INVALID_SNAPSHOT_ID"],
+      [{ actor: "" }, "INVALID_ACTOR"],
+      [{ projectionId: "  " }, "INVALID_PROJECTION_ID"],
+      [{ worldId: "a\nb" }, "INVALID_WORLD_ID"],
+      [{ branchId: "x".repeat(513) }, "INVALID_BRANCH_ID"],
+    ]
+    for (const [overrides, code] of cases) {
+      try {
+        validateWorldProjectionPlan(basePlan(overrides))
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe(code)
+        continue
+      }
+      throw new Error(`expected rejection ${code} for ${JSON.stringify(overrides)}`)
+    }
   })
 })

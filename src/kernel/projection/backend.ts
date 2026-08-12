@@ -20,6 +20,7 @@
 
 import { execFileSync, execFile } from "node:child_process"
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -192,7 +193,6 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
    *  fuse-overlayfs 对只读目录的 copy-up 会 EACCES，overlay 层语义已保证
    *  merged 写入落 upper）。lower 物理文件保持 0444 只读。 */
   private chmodMergedWritable(merged: string): void {
-    const { chmodSync, lstatSync, readdirSync } = require("node:fs") as typeof import("node:fs")
     const visit = (dir: string): void => {
       for (const entry of readdirSync(dir)) {
         const full = join(dir, entry)
@@ -218,7 +218,6 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
 }
 
 function makeTreeWritable(root: string): void {
-  const { chmodSync, lstatSync, readdirSync } = require("node:fs") as typeof import("node:fs")
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry)

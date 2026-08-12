@@ -437,4 +437,28 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     expect(existsSync(session.projectionRoot)).toBe(false)
     ctx.cleanup()
   })
+
+  test("executor 抛异常 → execute 标记 FAILED 并清理投影根（不变量：任何路径不留残留）", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx)
+    const session = coord.start(makePlan(snapshotId))
+    const root = session.projectionRoot
+    expect(existsSync(join(root, "merged-m"))).toBe(true)
+
+    await expect(
+      coord.execute(
+        session,
+        { executable: "noop", args: [] },
+        async () => {
+          throw new Error("executor exploded")
+        },
+      ),
+    ).rejects.toThrow("executor exploded")
+    expect(session.executionState).toBe("FAILED")
+    // 投影根（含挂载点/upper）已被清理，无残留。
+    expect(existsSync(root)).toBe(false)
+    // World 不受影响（revision 0 → 1 未被 commit 触碰）。
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
 })

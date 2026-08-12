@@ -69,13 +69,15 @@ export function openRootAnchored(rootPath: string): { fd: number; identity: DirI
   return { fd, identity: { dev: stat.dev, ino: stat.ino } }
 }
 
-/** 从锚定目录 fd 读取文件（O_NOFOLLOW；fstat 前后验证 dev/ino/type/size/nlink
- *  与 walk 记录一致；swap/swap-back/grow → DELTA_SCAN_FAILED）。 */
+/** 从锚定目录 fd 读取文件（O_NOFOLLOW；fstat 前后验证 dev/ino/type/size/
+ *  nlink/mtime/ctime 与 walk 记录一致；swap/swap-back/grow/same-size
+ *  in-place mutation → DELTA_SCAN_FAILED）。 */
 export function readFileAnchored(
   parentFd: number,
   name: string,
-  expected: { readonly dev: number; readonly ino: number; readonly size: number; readonly nlink: number },
+  expected: { readonly dev: number; readonly ino: number; readonly size: number; readonly nlink: number; readonly mtimeMs?: number; readonly ctimeMs?: number },
   relative: string,
+  onReadAfter?: (relative: string) => void,
 ): Buffer {
   const fd = openAtNoFollow(parentFd, name)
   try {
@@ -89,7 +91,25 @@ export function readFileAnchored(
     if (before.nlink !== expected.nlink) {
       throw new ProjectionError("DELTA_SCAN_FAILED", `entry link count changed during scan: ${relative}`)
     }
+    if (expected.mtimeMs !== undefined && before.mtimeMs !== expected.mtimeMs) {
+      throw new ProjectionError("DELTA_SCAN_FAILED", `entry mtime changed during scan (in-place mutation): ${relative}`)
+    }
+    if (expected.ctimeMs !== undefined && before.ctimeMs !== expected.ctimeMs) {
+      throw new ProjectionError("DELTA_SCAN_FAILED", `entry ctime changed during scan (in-place mutation): ${relative}`)
+    }
     const bytes = readFileSync(fd)
+    // 测试注入窗口：读取后、复核前（模拟读取期间被同 size 原地覆盖）。
+    onReadAfter?.(relative)
+    // R2-05：读后二次读取（reopen）内容对比 —— bun 的 statSync 存在进程内
+    // 偶发缓存（写入后立即 fstat 可能返回旧时间戳），时间戳检查之上叠加
+    // 内容级校验（同 size 原地覆盖必然被捕获；缓存盲窗不产生假阴性）。
+    let verify: Buffer
+    const verifyFd = openAtNoFollow(parentFd, name)
+    try {
+      verify = readFileSync(verifyFd)
+    } finally {
+      closeSync(verifyFd)
+    }
     const after = fstatSync(fd)
     if (!after.isFile() || after.dev !== expected.dev || after.ino !== expected.ino) {
       throw new ProjectionError("DELTA_SCAN_FAILED", `entry identity changed during read: ${relative}`)
@@ -97,8 +117,14 @@ export function readFileAnchored(
     if (after.nlink !== expected.nlink) {
       throw new ProjectionError("DELTA_SCAN_FAILED", `entry link count changed during read: ${relative}`)
     }
+    if (expected.mtimeMs !== undefined && after.mtimeMs !== expected.mtimeMs) {
+      throw new ProjectionError("DELTA_SCAN_FAILED", `entry mtime changed during read (in-place mutation): ${relative}`)
+    }
     if (bytes.byteLength !== expected.size) {
       throw new ProjectionError("DELTA_SCAN_FAILED", `file size changed during scan (grow/shrink): ${relative}`)
+    }
+    if (verify.byteLength !== bytes.byteLength || !verify.equals(bytes)) {
+      throw new ProjectionError("DELTA_SCAN_FAILED", `file content changed during scan (in-place mutation): ${relative}`)
     }
     return bytes
   } finally {

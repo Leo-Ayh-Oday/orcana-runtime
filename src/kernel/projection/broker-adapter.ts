@@ -29,7 +29,7 @@ import type {
   TrustedExecutionAuthority,
   UntrustedCapabilityRequest,
 } from "../../runtime/linux/contracts"
-import { ProjectionError } from "./contracts"
+import { ProjectionError, projectionIntentDigest } from "./contracts"
 import type { ProjectionExecutionOutcome } from "./validator"
 import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "./receipt-authority"
 
@@ -64,9 +64,23 @@ export class LinuxBrokerProjectionExecutor {
   /** 执行一个命令；返回 Execution 事实（receipt id 仅记录 Execution）。 */
   async execute(
     cwd: string,
-    command: { executable: string; args: readonly string[]; timeoutMs?: number; signal?: AbortSignal },
+    command: { executable: string; args: readonly string[]; timeoutMs?: number; signal?: AbortSignal; intent?: import("./contracts").ProjectionExecutionIntent },
   ): Promise<BrokerProjectionExecution> {
-    const { broker, authority } = this.options
+    const { broker } = this.options
+    // R2-01：coordinator 注入的 Execution Intent —— runId 绑定 intent（不可
+    // 复用 nonce）；intent digest 注入 spec 环境变量 → broker 填入 final
+    // receipt.projectionIntentDigest（打破 outcome 自报 binding 循环）。
+    const intent = command.intent
+    const authority = intent === undefined
+      ? this.options.authority
+      : {
+          ...this.options.authority,
+          identity: {
+            ...this.options.authority.identity,
+            runId: intent.intentId,
+            nodeRunId: `${intent.intentId}:n1`,
+          },
+        }
     // 只接收 projection workspace：authority 的物理根必须就是 merged 视图。
     if (resolve(authority.workspace.hostRoot) !== resolve(cwd)) {
       throw new ProjectionError(
@@ -110,6 +124,11 @@ export class LinuxBrokerProjectionExecutor {
       timeoutMs: command.timeoutMs ?? this.options.timeoutMs,
       writableMounts,
       readonlyMounts,
+      // R2-01：intent digest 注入环境变量（进入 cellSpecDigest → broker
+      // 注入 final receipt.projectionIntentDigest）。
+      ...(intent === undefined
+        ? {}
+        : { env: { ORCANA_PROJECTION_INTENT: projectionIntentDigest(intent) } }),
     }
     const spec = broker.compileRequest(request, authority)
 

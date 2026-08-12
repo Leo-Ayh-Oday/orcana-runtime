@@ -54,6 +54,9 @@ export interface ProjectionInstance {
   readonly writeLayerPath: string
   /** 确认 mount ready（生产 backend 挂载成功 + merged 可读）。 */
   readonly assertReady: () => void
+  /** R2-06：复核 merged 仍是本次创建的同一 mount（生产 backend）；
+   *  fixture 返回 true（无真实 mount）。 */
+  readonly assertMountOwned?: () => boolean
   /**
    * 清理本 projection 自己创建的资源（卸载 merged、删除 upper/work）。
    * 返回清理是否成功；失败时调用方必须阻止 World commit。
@@ -169,6 +172,7 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     if (!existsSync(merged)) mkdirSync(merged, { mode: 0o700 })
 
     let mounted = false
+    let afterMountId: string | undefined
     try {
       // P2-3：invocation 之前不允许存在对应 owned mount —— 挂载前快照
       // merged 的 mountinfo 状态（已有 FUSE 挂载 → 拒绝：不是本次创建）。
@@ -187,7 +191,7 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 真实 FUSE mount；且挂载 identity 必须是 invocation 后新出现的
       //（fake binary 创建“真的但错误的 FUSE mount”在 before 快照即拒绝；
       //  返回 0 未挂载 → mountinfo 无新条目 → 拒绝）。
-      const afterMountId = ownedFuseMountId(merged)
+      afterMountId = ownedFuseMountId(merged)
       if (
         afterMountId === undefined ||
         afterMountId === beforeMountId ||
@@ -215,9 +219,21 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 文件保持只读（写永远落在 upper，lower 不可被 merged 写穿透）。
       this.chmodMergedWritable(merged)
     } catch (error) {
-      // 挂载失败 → 清理已建目录后抛出（挂载点删除 best-effort —— EBUSY
-      // 残留交给 cleanup/residue 语义，不掩盖原始 attestation 错误）。
-      if (mounted) this.unmount(merged)
+      // R2-06-5：真实挂载中且 unmount 失败时不得递归删除 upper/work/merged
+      //（可能仍在被内核使用 —— residue 保留供诊断）。从未挂载（fake/未
+      // 挂载成功）→ 目录安全可删。
+      if (mounted && this.isFuseMount(merged)) {
+        const unmounted = this.unmount(merged)
+        if (!unmounted) {
+          throw error instanceof ProjectionError
+            ? error
+            : new ProjectionError(
+                "BACKEND_UNAVAILABLE",
+                `fuse-overlayfs mount failed for ${label} (unmount failed; residue retained)`,
+                error instanceof Error ? error.message : String(error),
+              )
+        }
+      }
       try {
         rmSync(upper, { recursive: true, force: true })
         rmSync(work, { recursive: true, force: true })
@@ -234,6 +250,12 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
           )
     }
 
+    // R2-06：本次 create 的 mount identity（mountId + upper 目录身份 ——
+    // mount id 在卸载重挂载时会被内核复用，upper dev/ino 是更强的绑定：
+    // 攻击者替换 upper 重挂载 → 身份不匹配 → fail-closed）。
+    const mountId = afterMountId
+    const upperStat = lstatSync(upper)
+    const upperIdentity = { dev: upperStat.dev, ino: upperStat.ino }
     return {
       backend: "fuse-overlayfs",
       mergedPath: merged,
@@ -242,19 +264,47 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
         statSync(merged)
         readdirSync(merged)
       },
+      // R2-06：复核 merged 仍是本次创建的同一 mount —— mountId 匹配 +
+      // mountpoint 未被 symlink/rename 替换 + upper 目录身份一致（mount id
+      // 会被内核复用，upper dev/ino 绑定本次创建）。execute 前/后、scan
+      // 前、cleanup 时调用；mount 消失/被替换 → false（fail-closed）。
+      assertMountOwned: () => {
+        if (!existsSync(merged)) return false
+        try {
+          const stat = lstatSync(merged)
+          if (stat.isSymbolicLink()) return false
+        } catch {
+          return false
+        }
+        if (ownedFuseMountId(merged) !== mountId) return false
+        try {
+          const upperNow = lstatSync(upper)
+          if (upperNow.dev !== upperIdentity.dev || upperNow.ino !== upperIdentity.ino) return false
+        } catch {
+          return false
+        }
+        return true
+      },
       cleanup: () => {
         if (!existsSync(merged) && !existsSync(upper) && !existsSync(work)) return true
-        if (this.isFuseMount(merged)) {
+        // R2-06-4：只卸载本 projection 创建的 mount（mountId 匹配）；
+        // foreign mount 拒绝卸载。
+        let upperOwned = false
+        try {
+          const upperNow = lstatSync(upper)
+          upperOwned = upperNow.dev === upperIdentity.dev && upperNow.ino === upperIdentity.ino
+        } catch {
+          upperOwned = false
+        }
+        if (this.isFuseMount(merged) && ownedFuseMountId(merged) === mountId && upperOwned) {
           const unmounted = this.unmount(merged)
           if (!unmounted) {
-            // R03.2/3：确认真实卸载成功前禁止删除仍在使用的 upper/work/merged。
-            // unmount 失败 → 保留 residue（可诊断），返回 false（调用方必须
-            // 阻止 World commit 并报告 CLEANUP_FAILED）。
+            // R03.2/3 + R2-06-5：确认真实卸载成功前禁止删除仍在使用的
+            // upper/work/merged（unmount 失败 → residue 保留，返回 false）。
             return false
           }
         }
-        // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work/merged
-        //（merged 卸载后是空挂载点目录，一并清理 —— 无 residue）。
+        // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work/merged。
         rmSync(upper, { recursive: true, force: true })
         rmSync(work, { recursive: true, force: true })
         rmSync(merged, { recursive: true, force: true })

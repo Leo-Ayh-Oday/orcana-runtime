@@ -603,6 +603,7 @@ describe("AK-1 WorldStore", () => {
             type: "object.put",
             objectId: "array-object-metadata",
             objectType: "file",
+            contentRef: content.digest,
             metadata: [],
           } as unknown as WorldMutation,
           error: /metadata must be a plain record/,
@@ -653,6 +654,7 @@ describe("AK-1 WorldStore", () => {
           type: "object.put" as const,
           objectId: `valid-${objectType}`,
           objectType,
+          ...(objectType === "file" ? { contentRef: content.digest } : {}),
           metadata: { objectType },
         })),
       })

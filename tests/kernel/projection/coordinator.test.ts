@@ -11,6 +11,7 @@ import { CopyProjectionFixtureBackend, type NativeProjectionBackend, type Projec
 import { validateWorldProjectionPlan, type WorldProjectionPlanInput } from "../../../src/kernel/projection/plan"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
+import type { CasDigest } from "../../../src/kernel/world"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
 import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
 
@@ -644,11 +645,11 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     ctx.cleanup()
   })
 
-  /** fake final receipt（authority 校验所需的字段）。 */
+  /** fake final receipt（authority 校验所需的字段；receiptDigest 必须是
+   *  真实可验证的 canonical 摘要 —— R2-02 digest 自洽）。 */
   function fakeFinalReceipt(overrides: Partial<SandboxReceipt> = {}): SandboxReceipt {
-    return {
+    const base = {
       schemaVersion: "1.0",
-      receiptDigest: "a".repeat(64),
       cellId: "cell-fake",
       runId: "run-fake",
       nodeRunId: "run-fake:n1",
@@ -681,16 +682,61 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       degradationReasons: [],
       cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false, cleanupVerified: true },
       ...overrides,
-    }
+    } as Omit<SandboxReceipt, "receiptDigest">
+    const { computeReceiptDigest } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
+    return { ...base, receiptDigest: computeReceiptDigest(base) }
   }
 
-  /** fake receipt authority：按需返回 fake final receipt。 */
-  function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean } = {}): ProjectionReceiptAuthority {
+  /** fake receipt authority：按需返回 fake final receipt。R2-01 后按
+   *  intentId 查找；测试在 commit 前用 setIntentDigest(session.intent) 绑定
+   *  当前 session 的 intent digest（模拟 broker 注入）。 */
+  function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean } = {}): ProjectionReceiptAuthority & {
+    setIntentDigest(digest: string | undefined): void
+    setCleanupFinalized(finalized: boolean): void
+    currentDigest(): string | undefined
+  } {
     const { hidden, ...receiptOverrides } = overrides
-    return {
-      getFinalReceipt: () => (hidden === true ? undefined : fakeFinalReceipt(receiptOverrides)),
-      isCleanupFinalized: receipt => typeof receipt.cleanup?.processesRemaining === "number",
+    let intentDigest: string | undefined
+    let cleanupFinalized = true
+    // 预生成 digest（receipt 内容在构造时固定）。
+    const seedReceipt = fakeFinalReceipt(receiptOverrides)
+    let latestDigest: string | undefined = seedReceipt.receiptDigest
+    const inner: ProjectionReceiptAuthority = {
+      getFinalReceipt: () => {
+        if (hidden === true) return undefined
+        if (intentDigest === undefined) return undefined
+        // digest 必须与最终内容（含 projectionIntentDigest）自洽 —— 与
+        // broker 注入 intent 后重算 digest 的语义一致。
+        const receipt = fakeFinalReceipt(receiptOverrides)
+        const { receiptDigest: _rd, ...content } = receipt
+        const withIntent = { ...content, projectionIntentDigest: intentDigest }
+        const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
+        latestDigest = crd(withIntent)
+        return { ...content, projectionIntentDigest: intentDigest, receiptDigest: latestDigest }
+      },
+      isCleanupFinalized: () => cleanupFinalized,
     }
+    return Object.assign(inner, {
+      setIntentDigest(digest: string | undefined): void {
+        intentDigest = digest
+      },
+      setCleanupFinalized(finalized: boolean): void {
+        cleanupFinalized = finalized
+      },
+      currentDigest(): string | undefined {
+        // intent 已绑定时，digest 必须反映最终内容（含 projectionIntentDigest）。
+        if (intentDigest === undefined) return latestDigest
+        const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
+        const { receiptDigest: _rd, ...content } = fakeFinalReceipt(receiptOverrides)
+        return crd({ ...content, projectionIntentDigest: intentDigest })
+      },
+    })
+  }
+
+  /** 用当前 session.intent 配置 fake authority（模拟 broker 注入 intent）。 */
+  function bindIntent(auth: ReturnType<typeof fakeAuthority>, session: { intent: { intentId: string; worldId: string; branchId: string; snapshotId: string; projectionId: string; sessionNonce: string; mergedRootIdentity: { dev: number; ino: number }; command: { executable: string; args: readonly string[]; timeoutMs?: number }; scopeDigest: string } }): void {
+    const { projectionIntentDigest: pid } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
+    auth.setIntentDigest(pid(session.intent))
   }
 
   /** 走完 start→execute(ok)→scan 的 session。 */
@@ -708,6 +754,354 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     coord.scan(session)
     return session
   }
+
+  test("R2-00-2：cleanupVerified=false / processesRemaining=-1 / mountsReleased=false 的 receipt 不得被认定 finalized", () => {
+    const { RuntimeStateReceiptAuthority } = require("../../../src/kernel/projection/receipt-authority") as typeof import("../../../src/kernel/projection/receipt-authority")
+    const auth = new RuntimeStateReceiptAuthority()
+    // 未证明的 cleanup 全部必须拒绝（当前只检查类型 → 误接受）。
+    expect(auth.isCleanupFinalized({ cleanup: { processesRemaining: -1, mountsReleased: false, cgroupRemoved: false, worktreeRetained: false, cleanupVerified: false } } as never)).toBe(false)
+    expect(auth.isCleanupFinalized({ cleanup: { processesRemaining: 3, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false, cleanupVerified: false } } as never)).toBe(false)
+    expect(auth.isCleanupFinalized({ cleanup: { processesRemaining: 0, mountsReleased: false, cgroupRemoved: true, worktreeRetained: false, cleanupVerified: true } } as never)).toBe(false)
+    // 真正证明的 cleanup 才接受。
+    expect(auth.isCleanupFinalized({ cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false, cleanupVerified: true } } as never)).toBe(true)
+  })
+
+  test("R2-00-3：历史有效 receipt 不得跨 World 重放（binding 必须来自 coordinator 当前 session）", async () => {
+    // world-A 用 receipt X commit 成功。
+    const { ctx: ctxA, snapshotId: snapA } = buildWorld()
+    const authA = fakeAuthority()
+    const coordA = coordinator(ctxA, undefined, true, authA)
+    const sessionA = await sessionAtDeltaReady(coordA, makePlan(snapA), ctxA)
+    bindIntent(authA, sessionA)
+    sessionA.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: authA.currentDigest()!,
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: sessionA.mergedDir },
+    }
+    const receiptA = coordA.commit(sessionA)
+    expect(receiptA.newRevision).toBe(2n)
+    // world-B（不同 worldId）用同一 receipt 重放 → 必须拒绝（REPLAY）。
+    const ctxB = createTestWorldStore()
+    ctxB.store.createWorld({ worldId: "world-replay", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 r2-00-3" })
+    const digestB = ctxB.store.cas.put(Buffer.from("v1\n", "utf8"), "text/plain").digest
+    ctxB.store.compareAndCommit({
+      worldId: "world-replay", branchId: "branch-main", baseRevision: 0n, actor: "a",
+      mutations: [
+        { type: "object.put", objectId: "d1", objectType: "directory", path: "src" },
+        { type: "object.put", objectId: "f1", objectType: "file", path: "src/main.ts", contentRef: digestB },
+      ],
+    })
+    ctxB.store.createSnapshot("world-replay", "branch-main")
+    const snapB = ctxB.store.snapshots.getForRevision("world-replay", "branch-main", 1n)!
+    const materializerB = new SnapshotMaterializer({
+      getSnapshot: id => ctxB.store.snapshots.get(id),
+      getCasRecord: d => ctxB.store.cas.record(d),
+      readCasObject: d => ctxB.store.cas.get(d),
+    })
+    const authB = fakeAuthority()
+    const coordB = new ProjectionCoordinator({
+      store: ctxB.store, materializer: materializerB, backend: new CopyProjectionFixtureBackend(),
+      projectionRoot: tmpRoot("replay"), allowTestBackends: true, allowFixtureExecution: true, receiptAuthority: authB,
+    })
+    const planB = validateWorldProjectionPlan({
+      projectionId: `proj-replay-${Math.random().toString(36).slice(2, 8)}`,
+      worldId: "world-replay", branchId: "branch-main", snapshotId: snapB.snapshotId, actor: "a",
+      mode: "native", writableRoots: ["src"], readonlyRoots: [], expectedOutputs: ["src/main.ts"], graphCompletionAllowed: false,
+    })
+    const sessionB = await sessionAtDeltaReady(coordB, planB, ctxB)
+    // 重放场景：把 world-A 的 intent digest 绑定到 world-B 的 authority
+    // （攻击者复用 world-A 的 receipt）。
+    bindIntent(authB, sessionA)
+    sessionB.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      // 重放 world-A 的 receipt（同 binding、同 intent digest）。
+      executionReceiptId: authB.currentDigest()!,
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: sessionB.mergedDir },
+    }
+    try {
+      coordB.commit(sessionB)
+      throw new Error("expected receipt replay rejection")
+    } catch (error) {
+      // R2-01：world-B 的 intent 与 world-A 的 receipt intent 不匹配 → REPLAY。
+      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REPLAY")
+    }
+    expect(ctxB.store.getWorld("world-replay")!.currentRevision).toBe(1n)
+    ctxA.cleanup()
+    ctxB.cleanup()
+  })
+
+  test("R2-00-4：FAILED/CANCELLED（已 cleanup）后 session 不得再次 execute（cleaned session reuse）", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx)
+    const session = coord.start(makePlan(snapshotId))
+    await coord.execute(session, { executable: "noop", args: [] }, async () => ({ exitCode: 3, timedOut: false, cancelled: false, violation: false }))
+    // FAILED → 已自动 cleanup（root 删除）。
+    expect(session.executionState).toBe("FAILED")
+    expect(existsSync(session.projectionRoot)).toBe(false)
+    // 再次 execute 必须拒绝（cleaned session reuse）。
+    await expect(
+      coord.execute(session, { executable: "noop", args: [] }, async () => ({ exitCode: 0, timedOut: false, cancelled: false, violation: false })),
+    ).rejects.toMatchObject({ code: "CLEANED_SESSION_REUSED" })
+    ctx.cleanup()
+  })
+
+  test("R2-00-6：cleanup 抛异常 → session 必须进入可靠终态（REJECTED + residue evidence），异常不得逃逸状态机", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: d => ctx.store.cas.record(d),
+      readCasObject: d => ctx.store.cas.get(d),
+    })
+    const root = tmpRoot("cleanupthrow")
+    const throwingBackend: NativeProjectionBackend = {
+      id: "fixture-throwing", kind: "fixture",
+      create(input) {
+        const merged = join(input.projectionRoot, "merged-m")
+        mkdirSync(merged, { mode: 0o700 })
+        cpSync(input.lowerDir, merged, { recursive: true })
+        const chmodTree = (dir: string): void => {
+          for (const entry of readdirSync(dir)) {
+            const full = join(dir, entry)
+            const stat = lstatSync(full)
+            if (stat.isDirectory()) chmodTree(full)
+            else if (stat.isFile()) chmodSync(full, 0o644)
+          }
+        }
+        chmodTree(merged)
+        return {
+          backend: "fixture", mergedPath: merged, writeLayerPath: merged,
+          assertReady: () => undefined,
+          cleanup: () => { throw new Error("cleanup exploded") },
+        }
+      },
+    }
+    const coord = new ProjectionCoordinator({
+      store: ctx.store, materializer, backend: throwingBackend, projectionRoot: root,
+      allowTestBackends: true, allowFixtureExecution: true,
+    })
+    const session = coord.start(makePlan(snapshotId))
+    // FAILED 触发自动 cleanup → cleanup 抛异常 → 必须规范化终态。
+    await coord.execute(session, { executable: "noop", args: [] }, async () => ({ exitCode: 1, timedOut: false, cancelled: false, violation: false }))
+    // 可靠终态：REJECTED（或明确 failure 终态）+ cleanupState 记录失败。
+    expect(["REJECTED", "FAILED"]).toContain(session.worldState)
+    expect(session.cleanupState).toBeDefined()
+    expect(session.cleanupState!.cleanupOk).toBe(false)
+    expect(session.receipt).toBeDefined()
+    ctx.cleanup()
+  })
+
+  test("R2-00-7：durable World commit 后，本地 delta divergence 不得把 session 标成 REJECTED", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const coord = coordinator(ctx)
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    // 篡改 session.delta 的 deltaDigest（本地 divergence）—— compareAndCommit
+    // 仍会成功（World durable），随后 divergence 检查抛出。
+    const originalDelta = session.delta!
+    session.delta = { ...originalDelta, deltaDigest: "sha256:deadbeef" as CasDigest }
+    const receipt = coord.commit(session)
+    // World 已 durable commit → session 必须 COMMITTED（不得 REJECTED）。
+    expect(receipt.newRevision).toBe(2n)
+    expect(session.worldState).toBe("COMMITTED")
+    expect(session.receipt!.worldState).toBe("COMMITTED")
+    ctx.cleanup()
+  })
+
+  test("R2-08：同一 World 内 cross-snapshot/session receipt replay 拒绝（intent 绑定 snapshot/projection/nonce）", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const auth = fakeAuthority()
+    const coord = coordinator(ctx, undefined, true, auth)
+    const sessionA = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, sessionA)
+    sessionA.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: auth.currentDigest()!,
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: sessionA.mergedDir },
+    }
+    const receiptA = coord.commit(sessionA)
+    expect(receiptA.newRevision).toBe(2n)
+    // 同一 World 的新 session（新 snapshot 派生）重放 sessionA 的 receipt → 拒绝。
+    ctx.store.createSnapshot("world-c", "branch-main")
+    const snapB = ctx.store.snapshots.getForRevision("world-c", "branch-main", 2n)!
+    const coordB = coordinator(ctx, undefined, true, auth)
+    const planB = validateWorldProjectionPlan({
+      projectionId: `proj-replay2-${Math.random().toString(36).slice(2, 8)}`,
+      worldId: "world-c", branchId: "branch-main", snapshotId: snapB.snapshotId, actor: "actor:test",
+      mode: "native", writableRoots: ["src"], readonlyRoots: ["docs"], expectedOutputs: ["src/main.ts"], graphCompletionAllowed: false,
+    })
+    const sessionB = coordB.start(planB)
+    await coordB.execute(
+      sessionB,
+      { executable: "noop", args: [] },
+      mutateExecutor(merged => writeFileSync(join(merged, "src/main.ts"), "changed2\n")),
+    )
+    coordB.scan(sessionB)
+    // 重放 sessionA 的 intent digest（同一 authority）。
+    bindIntent(auth, sessionA)
+    sessionB.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: auth.currentDigest()!,
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: sessionB.mergedDir },
+    }
+    try {
+      coordB.commit(sessionB)
+      throw new Error("expected cross-session replay rejection")
+    } catch (error) {
+      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REPLAY")
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(2n)
+    ctx.cleanup()
+  })
+
+  test("R2-02：tampered receipt digest → authority 拒绝（自洽校验）", async () => {
+    const { RuntimeStateReceiptAuthority: RSRA } = require("../../../src/kernel/projection/receipt-authority") as typeof import("../../../src/kernel/projection/receipt-authority")
+    const { RuntimeStateStore } = require("../../../src/runtime/linux/recovery/state-store") as typeof import("../../../src/runtime/linux/recovery/state-store")
+    const { computeReceiptDigest } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
+    const root = tmpRoot("tamper")
+    const store = new RuntimeStateStore({ root })
+    const auth = new RSRA(store)
+    const runId = `run-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+    const cellId = "cell-tampered"
+    const dir = join(root, "runs", runId, "receipts")
+    mkdirSync(dir, { recursive: true })
+    const content = { ...fakeFinalReceipt(), projectionIntentDigest: "i".repeat(64) }
+    const { receiptDigest: _rd, ...rest } = content
+    const valid = { ...rest, receiptDigest: computeReceiptDigest(rest) }
+    writeFileSync(join(dir, `${cellId}.json`), JSON.stringify(valid))
+    expect(auth.getFinalReceipt(runId, cellId)).toBeDefined()
+    // 篡改 exitCode（digest 不再自洽）→ 拒绝。
+    const tampered = { ...valid, exitCode: 1 }
+    writeFileSync(join(dir, `${cellId}.json`), JSON.stringify(tampered))
+    expect(auth.getFinalReceipt(runId, cellId)).toBeUndefined()
+  })
+
+  test("R2-02：runtime receipt 删除后，World CAS 仍可恢复 receipt provenance", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const auth = fakeAuthority()
+    const coord = coordinator(ctx, undefined, true, auth)
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, session)
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: auth.currentDigest()!,
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    const receipt = coord.commit(session)
+    expect(receipt.newRevision).toBe(2n)
+    // receipt 内容已在 World CAS（sha256: 前缀 digest）。
+    const casDigest = `sha256:${auth.currentDigest()!}` as CasDigest
+    expect(ctx.store.cas.has(casDigest)).toBe(true)
+    const recovered = JSON.parse(ctx.store.cas.get(casDigest).toString("utf8")) as { cellId: string; runId: string }
+    expect(recovered.cellId).toBe("cell-fake")
+    expect(recovered.runId).toBe("run-fake")
+    ctx.cleanup()
+  })
+
+  test("R2-01-8：一个 intent 只授权一个 cell（多 cell 只提交最后一张被禁止）", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const auth = fakeAuthority()
+    const coord = coordinator(ctx, undefined, true, auth)
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, session)
+    // 模拟「多 cell 只提交最后一张」：outcome 声称 cell-other（不是
+    // authority 返回的 cell-fake）→ binding mismatch（最后一个 cell 的
+    // receipt 无法通过 intent 绑定）。
+    session.outcome = {
+      exitCode: 0, timedOut: false, cancelled: false, violation: false,
+      executionReceiptId: auth.currentDigest()!,
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-other", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
+    }
+    try {
+      coord.commit(session)
+      throw new Error("expected multi-cell rejection")
+    } catch (error) {
+      expect((error as ProjectionError).code).toMatch(/BINDING_MISMATCH|NOT_PERSISTED/)
+    }
+    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    ctx.cleanup()
+  })
+
+  test("R2-03：cleanup truth 矩阵 —— 每个未证明字段单独拒绝", () => {
+    const { RuntimeStateReceiptAuthority: RSRA } = require("../../../src/kernel/projection/receipt-authority") as typeof import("../../../src/kernel/projection/receipt-authority")
+    const auth = new RSRA()
+    const good = { cleanup: { processesRemaining: 0, mountsReleased: true, cgroupRemoved: true, worktreeRetained: false, cleanupVerified: true } }
+    expect(auth.isCleanupFinalized({ ...fakeFinalReceipt(), ...good } as never)).toBe(true)
+    const cases: Array<[Partial<SandboxReceipt["cleanup"]>, string]> = [
+      [{ cleanupVerified: false }, "cleanupVerified=false"],
+      [{ processesRemaining: -1 }, "processesRemaining=-1 (unmeasured)"],
+      [{ processesRemaining: 3 }, "processesRemaining>0 (residue)"],
+      [{ mountsReleased: false }, "mountsReleased=false"],
+      [{ cgroupRemoved: false }, "cgroup/cgroupRemoved=false"],
+    ]
+    for (const [cleanup, label] of cases) {
+      const receipt = { ...fakeFinalReceipt(), cleanup: { ...good.cleanup, ...cleanup } }
+      expect(auth.isCleanupFinalized(receipt as never)).toBe(false)
+      void label
+    }
+    // cleanup action 失败（receipt 顶层 cleanupActions）→ 拒绝。
+    expect(
+      auth.isCleanupFinalized({ ...fakeFinalReceipt(), cleanup: good.cleanup, cleanupActions: [{ ok: false, kind: "secrets" }] } as never),
+    ).toBe(false)
+    // container backend 需要 containerRemoved。
+    const podman = { ...fakeFinalReceipt({ backend: "rootless-podman" }), cleanup: { ...good.cleanup, containerRemoved: false } }
+    expect(auth.isCleanupFinalized(podman as never)).toBe(false)
+    // degradation 未证明 → 拒绝。
+    const degraded = { ...fakeFinalReceipt(), degradationReasons: ["bwrap unavailable"] }
+    expect(auth.isCleanupFinalized(degraded as never)).toBe(false)
+  })
+
+  test("R2-07：duplicate path（不同 objectId 同 path）/ file-parent collision / file 缺 contentRef 全部拒绝", async () => {
+    const ctx = createTestWorldStore()
+    ctx.store.createWorld({ worldId: "world-r207", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 r2-07" })
+    const d1 = ctx.store.cas.put(Buffer.from("one\n", "utf8"), "text/plain").digest
+    // 两个不同 objectId 同一 path（put+put）→ 拒绝。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-r207", branchId: "branch-main", baseRevision: 0n, actor: "a",
+        mutations: [
+          { type: "object.put", objectId: "id-a", objectType: "file", path: "x.txt", contentRef: d1 },
+          { type: "object.put", objectId: "id-b", objectType: "file", path: "x.txt", contentRef: d1 },
+        ],
+      }),
+    ).toThrow(/path collision/)
+    // file-parent collision：a 是 file，同时创建 a/b.ts → 拒绝。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-r207", branchId: "branch-main", baseRevision: 0n, actor: "a",
+        mutations: [
+          { type: "object.put", objectId: "id-a", objectType: "file", path: "a", contentRef: d1 },
+          { type: "object.put", objectId: "id-b", objectType: "file", path: "a/b.ts", contentRef: d1 },
+        ],
+      }),
+    ).toThrow(/file-parent collision/)
+    // file 缺 contentRef → 拒绝。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "world-r207", branchId: "branch-main", baseRevision: 0n, actor: "a",
+        mutations: [{ type: "object.put", objectId: "id-a", objectType: "file", path: "x.txt" }],
+      }),
+    ).toThrow(/requires contentRef/)
+    // World 未推进。
+    expect(ctx.store.getWorld("world-r207")!.currentRevision).toBe(0n)
+    ctx.cleanup()
+  })
+
+  test("R2-07-5：exact duplicate mutation 真正 canonical dedupe（单条 ledger event）", async () => {
+    const ctx = createTestWorldStore()
+    ctx.store.createWorld({ worldId: "world-dedupe", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 r2-07-5" })
+    const d1 = ctx.store.cas.put(Buffer.from("x\n", "utf8"), "text/plain").digest
+    const receipt = ctx.store.compareAndCommit({
+      worldId: "world-dedupe", branchId: "branch-main", baseRevision: 0n, actor: "a",
+      mutations: [
+        { type: "object.put", objectId: "dedupe-id", objectType: "file", path: "a.txt", contentRef: d1 },
+        { type: "object.put", objectId: "dedupe-id", objectType: "file", path: "a.txt", contentRef: d1 },
+      ],
+    })
+    expect(receipt.newRevision).toBe(1n)
+    // 只产生一条 ledger event（dedupe 后 mutations 单条）。
+    const events = ctx.store.ledger.list("world-dedupe").filter(e => e.eventType === "world.object.updated")
+    expect(events.length).toBe(1)
+    ctx.cleanup()
+  })
 
   test("P0-2：production commit 无 execution receipt → 拒绝；World 不变", async () => {
     const { ctx, snapshotId } = buildWorld()
@@ -747,8 +1141,10 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
 
   test("P0-2：claim digest != final persisted digest → forged；World 不变", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, undefined, true, fakeAuthority())
+    const auth = fakeAuthority()
+    const coord = coordinator(ctx, undefined, true, auth)
     const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, session)
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: "f".repeat(64), // authority 返回 digest=a*64
@@ -766,11 +1162,13 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
 
   test("P0-2：another cell receipt（binding 不匹配）→ 拒绝；World 不变", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, undefined, true, fakeAuthority())
+    const auth = fakeAuthority()
+    const coord = coordinator(ctx, undefined, true, auth)
     const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, session)
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
-      executionReceiptId: "a".repeat(64),
+      executionReceiptId: auth.currentDigest()!,
       // binding 指向另一个 cell。
       receiptBinding: { runId: "run-other", nodeRunId: "run-other:n1", cellId: "cell-other", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
     }
@@ -786,8 +1184,11 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
 
   test("P0-2：pre-final receipt（cleanup 未 finalize）→ 拒绝；World 不变", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, undefined, true, fakeAuthority({ cleanup: undefined as unknown as SandboxReceipt["cleanup"] }))
+    const auth = fakeAuthority({ cleanup: undefined as unknown as SandboxReceipt["cleanup"] })
+    auth.setCleanupFinalized(false)
+    const coord = coordinator(ctx, undefined, true, auth)
     const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, session)
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: "a".repeat(64),
@@ -805,11 +1206,13 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
 
   test("P0-2：host-audit receipt → 拒绝；World 不变", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, undefined, true, fakeAuthority({ backend: "host-audit" }))
+    const auth = fakeAuthority({ backend: "host-audit" })
+    const coord = coordinator(ctx, undefined, true, auth)
     const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, session)
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
-      executionReceiptId: "a".repeat(64),
+      executionReceiptId: auth.currentDigest()!,
       receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
     }
     try {
@@ -824,16 +1227,18 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
 
   test("P0-2：合法 final receipt → commit 成功并绑定 receipt", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, undefined, true, fakeAuthority())
+    const auth = fakeAuthority()
+    const coord = coordinator(ctx, undefined, true, auth)
     const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    bindIntent(auth, session)
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
-      executionReceiptId: "a".repeat(64),
+      executionReceiptId: auth.currentDigest()!,
       receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: "d".repeat(64), workspaceHostRoot: session.mergedDir },
     }
     const receipt = coord.commit(session)
     expect(receipt.newRevision).toBe(2n)
-    expect(receipt.executionReceiptIds).toEqual(["a".repeat(64)])
+    expect(receipt.executionReceiptIds).toEqual([`sha256:${auth.currentDigest()!}`])
     expect(session.worldState).toBe("COMMITTED")
     ctx.cleanup()
   })

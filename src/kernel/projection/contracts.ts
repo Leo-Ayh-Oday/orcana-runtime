@@ -116,57 +116,88 @@ export type ProjectionStateTransition =
   | { readonly kind: "conflicted" }
   | { readonly kind: "rejected" }
 
-/** 状态机模型：唯一真源 —— coordinator 的所有状态变更都必须经过它。
- *  每步同时给出新的 world 与 execution 状态；非法转移抛错。 */
+/** 状态对（from 或 to）。 */
+export type ProjectionStatePair = {
+  readonly world: ProjectionWorldState
+  readonly execution: ProjectionExecutionState
+}
+
+/** R2-04：显式状态迁移白名单 —— (fromWorld, fromExecution, event) → target。
+ *  未列出的任何组合一律 INVALID_STATE。 */
+export const PROJECTION_TRANSITION_TABLE: Readonly<Record<ProjectionStateTransition["kind"], ReadonlyArray<{ readonly from: ProjectionStatePair; readonly to: ProjectionStatePair }>>> =
+  Object.freeze({
+    start: Object.freeze([{ from: { world: "UNPROJECTED", execution: "PENDING" }, to: { world: "PROJECTED", execution: "PENDING" } }]),
+    "execute-start": Object.freeze([{ from: { world: "PROJECTED", execution: "PENDING" }, to: { world: "PROJECTED", execution: "STARTING" } }]),
+    "execute-running": Object.freeze([{ from: { world: "PROJECTED", execution: "STARTING" }, to: { world: "PROJECTED", execution: "RUNNING" } }]),
+    "execute-completed": Object.freeze([{ from: { world: "PROJECTED", execution: "RUNNING" }, to: { world: "PROJECTED", execution: "COMPLETED" } }]),
+    "execute-failed": Object.freeze([{ from: { world: "PROJECTED", execution: "RUNNING" }, to: { world: "PROJECTED", execution: "FAILED" } }]),
+    "execute-cancelled": Object.freeze([{ from: { world: "PROJECTED", execution: "RUNNING" }, to: { world: "PROJECTED", execution: "CANCELLED" } }]),
+    "scan-completed": Object.freeze([
+      { from: { world: "PROJECTED", execution: "COMPLETED" }, to: { world: "DELTA_READY", execution: "COMPLETED" } },
+    ]),
+    "commit-pending": Object.freeze([{ from: { world: "DELTA_READY", execution: "COMPLETED" }, to: { world: "COMMIT_PENDING", execution: "COMPLETED" } }]),
+    committed: Object.freeze([{ from: { world: "COMMIT_PENDING", execution: "COMPLETED" }, to: { world: "COMMITTED", execution: "COMPLETED" } }]),
+    conflicted: Object.freeze([{ from: { world: "COMMIT_PENDING", execution: "COMPLETED" }, to: { world: "CONFLICTED", execution: "COMPLETED" } }]),
+    // rejected 保留 execution（REJECTED 可配 COMPLETED/FAILED/CANCELLED）。
+    rejected: Object.freeze([
+      { from: { world: "PROJECTED", execution: "FAILED" }, to: { world: "REJECTED", execution: "FAILED" } },
+      { from: { world: "PROJECTED", execution: "CANCELLED" }, to: { world: "REJECTED", execution: "CANCELLED" } },
+      { from: { world: "PROJECTED", execution: "COMPLETED" }, to: { world: "REJECTED", execution: "COMPLETED" } },
+      { from: { world: "DELTA_READY", execution: "COMPLETED" }, to: { world: "REJECTED", execution: "COMPLETED" } },
+      { from: { world: "COMMIT_PENDING", execution: "COMPLETED" }, to: { world: "REJECTED", execution: "COMPLETED" } },
+    ]),
+  }) as unknown as Readonly<Record<ProjectionStateTransition["kind"], ReadonlyArray<{ readonly from: ProjectionStatePair; readonly to: ProjectionStatePair }>>>
+
+/** R2-01：Projection Execution Intent —— coordinator 在 start 时生成、
+ *  不可复用（session nonce）的期望执行绑定。Expected binding 来自当前
+ *  session/plan/command（不是 outcome 自报）。 */
+export interface ProjectionExecutionIntent {
+  /** 每次 start 唯一（uuid）。 */
+  readonly intentId: string
+  readonly worldId: string
+  readonly branchId: string
+  readonly snapshotId: string
+  readonly projectionId: string
+  /** session 唯一 nonce（uuid）—— 历史 intent 不可重放。 */
+  readonly sessionNonce: string
+  /** resolved merged root 的 dev/ino 身份。 */
+  readonly mergedRootIdentity: { readonly dev: number; readonly ino: number }
+  /** 当前 command（executable/args/timeoutMs）。 */
+  readonly command: { readonly executable: string; readonly args: readonly string[]; readonly timeoutMs?: number }
+  /** canonical(writableRoots + readonlyRoots) 的摘要（filesystem policy）。 */
+  readonly scopeDigest: string
+}
+
+/** intent 的 canonical 摘要（注入 spec 环境变量 → 进入 cellSpecDigest →
+ *  由 broker 填入 final receipt.projectionIntentDigest）。 */
+export function projectionIntentDigest(intent: ProjectionExecutionIntent): string {
+  const { canonicalJson, sha256Digest } = require("../world/canonical") as typeof import("../world/canonical")
+  return sha256Digest(Buffer.from(canonicalJson(intent), "utf8"))
+}
+
+/** 状态机模型：唯一真源（R2-04）—— 显式白名单查表；未列出的边一律
+ *  INVALID_STATE（含终态、未投影直接 committed、非法起点等）。 */
 export function applyProjectionStateTransition(
   world: ProjectionWorldState,
   execution: ProjectionExecutionState,
   transition: ProjectionStateTransition,
 ): { readonly world: ProjectionWorldState; readonly execution: ProjectionExecutionState } {
-  const next =
-    transition.kind === "start"
-      ? { world: "PROJECTED", execution: "PENDING" }
-      : transition.kind === "execute-start"
-        ? { world: "PROJECTED", execution: "STARTING" }
-        : transition.kind === "execute-running"
-          ? { world: "PROJECTED", execution: "RUNNING" }
-          : transition.kind === "execute-completed"
-            ? { world: "PROJECTED", execution: "COMPLETED" }
-            : transition.kind === "execute-failed"
-              ? { world: "PROJECTED", execution: "FAILED" }
-              : transition.kind === "execute-cancelled"
-                ? { world: "PROJECTED", execution: "CANCELLED" }
-                : transition.kind === "scan-completed"
-                  ? { world: "DELTA_READY", execution: "COMPLETED" }
-                  : transition.kind === "commit-pending"
-                    ? { world: "COMMIT_PENDING", execution: "COMPLETED" }
-                    : transition.kind === "committed"
-                      ? { world: "COMMITTED", execution: "COMPLETED" }
-                      : transition.kind === "conflicted"
-                        ? { world: "CONFLICTED", execution: "COMPLETED" }
-                        : { world: "REJECTED", execution }
-  const from = { world, execution }
-  if (!isValidProjectionStateVector(from.world, from.execution)) {
-    throw new ProjectionError(
-      "INVALID_STATE",
-      `projection state machine entered from illegal state (${from.world}/${from.execution})`,
-    )
+  const entries = PROJECTION_TRANSITION_TABLE[transition.kind]
+  for (const entry of entries) {
+    if (entry.from.world === world && entry.from.execution === execution) {
+      if (!isValidProjectionStateVector(entry.to.world, entry.to.execution)) {
+        throw new ProjectionError(
+          "INVALID_STATE",
+          `projection transition ${transition.kind} would reach illegal state (${entry.to.world}/${entry.to.execution})`,
+        )
+      }
+      return entry.to
+    }
   }
-  // 终态（COMMITTED/CONFLICTED/REJECTED）不可再转移。
-  if (from.world === "COMMITTED" || from.world === "CONFLICTED" || from.world === "REJECTED") {
-    throw new ProjectionError(
-      "INVALID_STATE",
-      `projection state ${from.world} is terminal; no further transition (${transition.kind})`,
-    )
-  }
-  const to = { world: next.world as ProjectionWorldState, execution: next.execution as ProjectionExecutionState }
-  if (!isValidProjectionStateVector(to.world, to.execution)) {
-    throw new ProjectionError(
-      "INVALID_STATE",
-      `projection transition ${transition.kind} would reach illegal state (${to.world}/${to.execution})`,
-    )
-  }
-  return to
+  throw new ProjectionError(
+    "INVALID_STATE",
+    `projection transition ${transition.kind} is not allowed from (${world}/${execution})`,
+  )
 }
 
 /** WorldProjectionPlan —— 由调用方（Graph/调度）构造、本模块 runtime
@@ -309,7 +340,9 @@ export type ProjectionErrorCode =
   | "PROJECTION_RESOURCE_LIMIT"
   | "PROJECTION_ROOT_ESCAPE"
   | "INVALID_STATE"
+  | "CLEANED_SESSION_REUSED"
   | "EXECUTION_RECEIPT_REQUIRED"
+  | "EXECUTION_RECEIPT_REPLAY"
   | "EXECUTION_RECEIPT_NOT_PERSISTED"
   | "EXECUTION_RECEIPT_NOT_FINALIZED"
   | "EXECUTION_RECEIPT_FORGED"

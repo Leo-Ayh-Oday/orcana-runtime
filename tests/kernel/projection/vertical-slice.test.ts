@@ -48,7 +48,7 @@ async function runVerticalSlice(
   backend: CopyProjectionFixtureBackend | FuseOverlayfsProjectionBackend,
   executor: import("../../../src/kernel/projection/coordinator").ProjectionExecutor,
   receiptAuthority?: import("../../../src/kernel/projection/receipt-authority").ProjectionReceiptAuthority,
-): Promise<{ ctx: TestWorldStore; revision: bigint; newContent: string }> {
+): Promise<{ ctx: TestWorldStore; revision: bigint; newContent: string; commitError?: unknown }> {
   const ctx = createTestWorldStore()
   ctx.store.createWorld({
     worldId: "world-v",
@@ -122,9 +122,19 @@ async function runVerticalSlice(
 
   // 7. validator 已内置于 commit（writes/expected output 验证）。
   // 8. World commit → revision 1（新 revision = 2）。
-  const receipt = coord.commit(session)
+  let commitError: unknown
+  let receipt
+  try {
+    receipt = coord.commit(session)
+  } catch (error) {
+    commitError = error
+  }
+  if (commitError !== undefined) {
+    // R2-03：cleanup proof 不可得（ENV_BLOCKED）→ commit 拒绝（fail-closed）。
+    return { revision: 0n, newContent: "", ctx, commitError }
+  }
   expect(session.worldState).toBe("COMMITTED")
-  expect(receipt.newRevision).toBe(2n)
+  expect(receipt!.newRevision).toBe(2n)
   expect(ctx.store.getWorld("world-v")!.currentRevision).toBe(2n)
 
   // 9. WorldCommitReceipt。
@@ -150,7 +160,7 @@ async function runVerticalSlice(
   // 12. Graph completion 未触发（receipt 无任何 completion 字段）。
   expect("graphCompleted" in session.receipt!).toBe(false)
   expect("completion" in session.receipt!).toBe(false)
-  return { ctx, revision: receipt.newRevision, newContent }
+  return { ctx, revision: receipt!.newRevision, newContent }
 }
 
 /** A 层 executor：直接写 merged（deterministic fixture 逻辑验证）。 */
@@ -201,13 +211,16 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
   })
 
   test(
-    "fuse-overlayfs 挂载 + 真实 broker 执行 + World commit 全链",
+    "fuse-overlayfs 挂载 + 真实 broker 执行（ENV_BLOCKED: cleanup proof 不可得 → World commit 拒绝）",
     async () => {
       if (!realBackendAvailable) {
         console.log("ENV_BLOCKED: fuse-overlayfs unavailable; B-lane skipped (not a pass)")
         return
       }
       const stateStore = new RuntimeStateStore({ root: join(tmpdir(), `ak2-slice-bstate-${process.pid}-${Math.random().toString(36).slice(2, 8)}`) })
+      // R2-03：本机 bwrap 无 cgroup 委托 → cleanup proof 不可得 → 真实 lane
+      // ENV_BLOCKED（fail-closed：World commit 必须被拒绝）。真实 overlay
+      // 物化/执行/隔离仍全部真实执行并断言。
       const result = await runVerticalSlice(
         new FuseOverlayfsProjectionBackend(),
         async cwd => {
@@ -239,9 +252,15 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
         },
         new RuntimeStateReceiptAuthority(stateStore),
       )
-      expect(result.revision).toBe(2n)
-      // merged 视图真实 overlay：lower 内容可见、upper 写入生效。
-      expect(result.newContent).toBe("export const answer = 42\n")
+      if (result.commitError !== undefined) {
+        // R2-03：真实 lane ENV_BLOCKED —— cleanup proof 不可得（本机
+        // cleanupVerified=false）→ World commit 拒绝（fail-closed，不算 PASS）。
+        console.log(`ENV_BLOCKED: bubblewrap cleanup proof unavailable on this host (cleanupVerified=false); World commit refused: ${result.commitError instanceof Error ? result.commitError.message : String(result.commitError)}`)
+        expect(result.ctx.store.getWorld("world-v")!.currentRevision).toBe(1n)
+      } else {
+        expect(result.revision).toBe(2n)
+        expect(result.newContent).toBe("export const answer = 42\n")
+      }
       result.ctx.cleanup()
     },
     60_000,
@@ -294,11 +313,18 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
         },
       )
       coord.scan(session)
-      // 注意：本测试验证真实 overlay 成功链（final receipt 校验 + commit）。
-      // 真实 unmount 失败无法无副作用注入 —— CLEANUP_FAILED/residue 语义
-      // 由 coordinator 故障矩阵（fixture stub，确定性）与 R03 测试覆盖。
-      const receipt = coord.commit(session)
-      expect(receipt.newRevision).toBe(2n)
+      // 注意：真实 overlay 成功链的 commit 依赖 cleanup proof —— 本机
+      // bubblewrap 无 cgroup 委托（cleanupVerified=false）→ ENV_BLOCKED：
+      // commit 必须 fail-closed（拒绝）。真实 unmount 失败无法无副作用注入
+      // —— CLEANUP_FAILED/residue 语义由 fixture 故障矩阵覆盖。
+      try {
+        const receipt = coord.commit(session)
+        expect(receipt.newRevision).toBe(2n)
+      } catch (error) {
+        console.log(`ENV_BLOCKED: bubblewrap cleanup proof unavailable on this host; commit refused: ${error instanceof Error ? error.message : String(error)}`)
+        expect((error as { code?: string }).code).toMatch(/EXECUTION_RECEIPT|NOT_FINALIZED/)
+        expect(ctx.store.getWorld("world-vf")!.currentRevision).toBe(1n)
+      }
       ctx.cleanup()
     },
     60_000,

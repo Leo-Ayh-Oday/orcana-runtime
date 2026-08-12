@@ -255,24 +255,25 @@ export class SnapshotMaterializer {
       if (entry.kind !== "file") continue
       const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
       if (parent.length > 0) this.ensureDirectory(absoluteBase, parent)
-      const content = this.rebuildFileBytes(entry.contentRef!, path)
-      if (content.byteLength > this.limits.maxFileBytes) {
-        throw new ProjectionError(
-          "PROJECTION_RESOURCE_LIMIT",
-          `file ${path} exceeds maxFileBytes (${content.byteLength} > ${this.limits.maxFileBytes})`,
-        )
-      }
-      treeBytes += content.byteLength
-      if (treeBytes > this.limits.maxTreeBytes) {
-        throw new ProjectionError(
-          "PROJECTION_RESOURCE_LIMIT",
-          `materialized tree exceeds maxTreeBytes (${treeBytes} > ${this.limits.maxTreeBytes})`,
-        )
-      }
       const target = this.joinWithin(absoluteBase, path)
       const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o444)
       try {
-        writeFileSync(fd, content, { mode: 0o444 })
+        // R2-07-9：有界流式写入（逐 chunk 写目标 fd —— 避免
+        // parts[] + Buffer.concat 的近双倍峰值；配额在读取/分配前生效）。
+        const written = this.writeFileStreamed(entry.contentRef!, fd, path)
+        if (written > this.limits.maxFileBytes) {
+          throw new ProjectionError(
+            "PROJECTION_RESOURCE_LIMIT",
+            `file ${path} exceeds maxFileBytes (${written} > ${this.limits.maxFileBytes})`,
+          )
+        }
+        treeBytes += written
+        if (treeBytes > this.limits.maxTreeBytes) {
+          throw new ProjectionError(
+            "PROJECTION_RESOURCE_LIMIT",
+            `materialized tree exceeds maxTreeBytes (${treeBytes} > ${this.limits.maxTreeBytes})`,
+          )
+        }
       } finally {
         closeSync(fd)
       }
@@ -370,63 +371,80 @@ export class SnapshotMaterializer {
    *  FileManifest。**分配前限制**：先查 CAS record.size（字节上限）——
    *  任何超过 maxFileBytes 的对象在读取/UTF-8 转换/JSON parse/chunks
    *  数组分配之前拒绝（malicious huge manifest fail-closed）。 */
-  private rebuildFileBytes(contentRef: CasDigest, path: string): Buffer {
+  /** R2-07-8/9：有界流式写入 —— 配额（CAS record size / manifest size /
+   *  chunk count / 剩余预算）在每次读取与分配之前生效；逐 chunk 写目标
+   *  fd（峰值 = 单 chunk，无 parts[] + Buffer.concat 双倍峰值）。返回
+   *  写入总字节。 */
+  private writeFileStreamed(contentRef: CasDigest, fd: number, path: string): number {
     const record = this.source.getCasRecord(contentRef)
     if (!record) {
       throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: CAS object ${contentRef} is not registered`)
     }
-    // P2-2：CAS-record byte ceiling 在任何大读取/分配之前生效。
+    // P2-2/R2-07-6：CAS-record byte ceiling 在任何大读取/分配之前生效。
     if (record.size > this.limits.maxFileBytes) {
       throw new ProjectionError(
         "PROJECTION_RESOURCE_LIMIT",
         `file ${path}: CAS object ${contentRef} size ${record.size} exceeds maxFileBytes ${this.limits.maxFileBytes} (refused before read/allocation)`,
       )
     }
-    const recordIsManifest = record.isManifest
-    if (recordIsManifest) {
-      const manifest = this.parseFileManifest(contentRef, path)
-      if (manifest.size > this.limits.maxFileBytes) {
-        throw new ProjectionError(
-          "PROJECTION_RESOURCE_LIMIT",
-          `file ${path}: FileManifest size ${manifest.size} exceeds maxFileBytes ${this.limits.maxFileBytes}`,
-        )
-      }
-      if (manifest.chunks.length > this.limits.maxFileChunks) {
-        throw new ProjectionError(
-          "PROJECTION_RESOURCE_LIMIT",
-          `file ${path}: FileManifest chunk count ${manifest.chunks.length} exceeds maxFileChunks ${this.limits.maxFileChunks}`,
-        )
-      }
-      // chunk 顺序重建（CAS record.size 由 CAS 自身校验，这里逐 chunk 复核）。
-      const parts: Buffer[] = []
-      let expectedOffset = 0
-      for (let index = 0; index < manifest.chunks.length; index++) {
-        const chunk = manifest.chunks[index]!
-        if (chunk.offset !== expectedOffset) {
-          throw new ProjectionError(
-            "MATERIALIZATION_FAILED",
-            `file ${path}: FileManifest chunk ${index} offset ${chunk.offset} != expected ${expectedOffset} (gap/overlap)`,
-          )
-        }
-        const bytes = this.readCasObjectSafe(chunk.digest, `file ${path} chunk ${index}`)
-        if (bytes.byteLength !== chunk.size) {
-          throw new ProjectionError(
-            "MATERIALIZATION_FAILED",
-            `file ${path}: chunk ${index} size ${bytes.byteLength} != declared ${chunk.size}`,
-          )
-        }
-        parts.push(bytes)
-        expectedOffset += chunk.size
-      }
-      if (expectedOffset !== manifest.size) {
+    if (!record.isManifest) {
+      const bytes = this.readCasObjectSafe(contentRef, `file ${path}`)
+      writeFileSync(fd, bytes)
+      return bytes.byteLength
+    }
+    const manifest = this.parseFileManifest(contentRef, path)
+    if (manifest.size > this.limits.maxFileBytes) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `file ${path}: FileManifest size ${manifest.size} exceeds maxFileBytes ${this.limits.maxFileBytes}`,
+      )
+    }
+    if (manifest.chunks.length > this.limits.maxFileChunks) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `file ${path}: FileManifest chunk count ${manifest.chunks.length} exceeds maxFileChunks ${this.limits.maxFileChunks}`,
+      )
+    }
+    let written = 0
+    for (let index = 0; index < manifest.chunks.length; index++) {
+      const chunk = manifest.chunks[index]!
+      if (chunk.offset !== written) {
         throw new ProjectionError(
           "MATERIALIZATION_FAILED",
-          `file ${path}: FileManifest chunks cover ${expectedOffset} bytes, declared size ${manifest.size}`,
+          `file ${path}: FileManifest chunk ${index} offset ${chunk.offset} != expected ${written} (gap/overlap)`,
         )
       }
-      return Buffer.concat(parts, manifest.size)
+      // R2-07-8：chunk 读取前检查 CAS record.size / 声明 size / 剩余预算。
+      if (written + chunk.size > manifest.size) {
+        throw new ProjectionError(
+          "MATERIALIZATION_FAILED",
+          `file ${path}: chunk ${index} exceeds declared manifest size (${written + chunk.size} > ${manifest.size})`,
+        )
+      }
+      const chunkRecord = this.source.getCasRecord(chunk.digest)
+      if (!chunkRecord || chunkRecord.size !== chunk.size) {
+        throw new ProjectionError(
+          "MATERIALIZATION_FAILED",
+          `file ${path}: chunk ${index} CAS record size ${chunkRecord?.size ?? "<missing>"} != declared ${chunk.size} (refused before read)`,
+        )
+      }
+      const bytes = this.readCasObjectSafe(chunk.digest, `file ${path} chunk ${index}`)
+      if (bytes.byteLength !== chunk.size) {
+        throw new ProjectionError(
+          "MATERIALIZATION_FAILED",
+          `file ${path}: chunk ${index} size ${bytes.byteLength} != declared ${chunk.size}`,
+        )
+      }
+      writeFileSync(fd, bytes)
+      written += chunk.size
     }
-    return this.readCasObjectSafe(contentRef, `file ${path}`)
+    if (written !== manifest.size) {
+      throw new ProjectionError(
+        "MATERIALIZATION_FAILED",
+        `file ${path}: FileManifest chunks cover ${written} bytes, declared size ${manifest.size}`,
+      )
+    }
+    return written
   }
 
   /** 解析并校验 AK-1 FileManifest schema（type==="file" + chunks 连续覆盖）。 */

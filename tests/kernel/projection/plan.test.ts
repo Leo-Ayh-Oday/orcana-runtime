@@ -243,6 +243,58 @@ describe("AK2-T01 plan 冻结与归属", () => {
     }
   })
 
+  test("R2-00-1：UNPROJECTED/PENDING + committed 必须拒绝（反例冻结）", () => {
+    const { applyProjectionStateTransition } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
+    // 未投影 session 不允许直接 committed。
+    expect(() => applyProjectionStateTransition("UNPROJECTED", "PENDING", { kind: "committed" })).toThrow(ProjectionError)
+    // 未投影也不允许 execute/scan/commit-pending/rejected（必须先 start）。
+    expect(() => applyProjectionStateTransition("UNPROJECTED", "PENDING", { kind: "execute-running" })).toThrow(ProjectionError)
+    expect(() => applyProjectionStateTransition("UNPROJECTED", "PENDING", { kind: "scan-completed" })).toThrow(ProjectionError)
+    expect(() => applyProjectionStateTransition("UNPROJECTED", "PENDING", { kind: "commit-pending" })).toThrow(ProjectionError)
+  })
+
+  test("R2-04：全状态 × 全事件迁移矩阵（未列出的边一律 INVALID_STATE）", () => {
+    const { applyProjectionStateTransition, PROJECTION_TRANSITION_TABLE } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
+    const worlds = ["UNPROJECTED", "PROJECTED", "DELTA_READY", "COMMIT_PENDING", "COMMITTED", "CONFLICTED", "REJECTED"] as const
+    const executions = ["PENDING", "STARTING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"] as const
+    const events = ["start", "execute-start", "execute-running", "execute-completed", "execute-failed", "execute-cancelled", "scan-completed", "commit-pending", "committed", "conflicted", "rejected"] as const
+    // 合法边集合：从表提取。
+    const legal = new Set<string>()
+    for (const event of events) {
+      for (const entry of PROJECTION_TRANSITION_TABLE[event]) {
+        legal.add(`${entry.from.world}/${entry.from.execution}->${event}`)
+      }
+    }
+    let legalCount = 0
+    let illegalCount = 0
+    for (const world of worlds) {
+      for (const execution of executions) {
+        for (const event of events) {
+          const key = `${world}/${execution}->${event}`
+          try {
+            applyProjectionStateTransition(world, execution, { kind: event })
+            if (!legal.has(key)) {
+              throw new Error(`transition ${key} accepted but not in explicit table (false green)`)
+            }
+            legalCount++
+          } catch (error) {
+            if ((error as { code?: string }).code === "INVALID_STATE") {
+              if (legal.has(key)) {
+                throw new Error(`transition ${key} is in explicit table but rejected (false red)`)
+              }
+              illegalCount++
+            } else {
+              throw error
+            }
+          }
+        }
+      }
+    }
+    // 表内的边必须全部可达；表外的边全部拒绝。
+    expect(legalCount).toBe(legal.size)
+    expect(legalCount + illegalCount).toBe(worlds.length * executions.length * events.length)
+  })
+
   test("P2-4：ProjectionLimits 运行时验证（NaN/Infinity/0/负/unsafe/跨字段）", () => {
     const { validateProjectionLimits } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
     const base = { maxDepth: 64, maxEntries: 100, maxFileBytes: 1024, maxTreeBytes: 4096, maxFileChunks: 8 }

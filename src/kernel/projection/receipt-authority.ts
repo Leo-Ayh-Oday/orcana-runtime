@@ -18,11 +18,12 @@
  * src/runtime/linux/**。
  */
 
-import { existsSync, readFileSync } from "node:fs"
+import { closeSync, existsSync, fstatSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SandboxReceipt } from "../../runtime/linux/contracts"
 import { RuntimeStateStore } from "../../runtime/linux/recovery/state-store"
 import { ProjectionError } from "./contracts"
+import { openAtNoFollow, openRootAnchored } from "./anchored-fs"
 
 /** Execution receipt 对当前 projection session 的绑定事实。 */
 export interface ProjectionReceiptBinding {
@@ -62,57 +63,91 @@ export class RuntimeStateReceiptAuthority implements ProjectionReceiptAuthority 
       return undefined
     }
     if (/[\\/\0]/.test(runId) || /[\\/\0]/.test(cellId)) return undefined
-    const file = join(this.store.runDir(runId), "receipts", `${cellId}.json`)
-    if (!existsSync(file)) return undefined
-    let parsed: unknown
+    // R2-02：anchored no-follow 读取 —— 拒绝 symlink、非 regular file、
+    // 身份替换（receipt 文件被替换为 symlink → undefined → fail-closed）。
+    const runDir = this.store.runDir(runId)
+    if (!existsSync(runDir)) return undefined
+    let receiptsDirFd: number | undefined
+    let fileFd: number | undefined
     try {
-      parsed = JSON.parse(readFileSync(file, "utf8")) as unknown
+      const receiptsDir = openRootAnchored(join(runDir, "receipts"))
+      receiptsDirFd = receiptsDir.fd
+      fileFd = openAtNoFollow(receiptsDir.fd, `${cellId}.json`)
+      const stat = fstatSync(fileFd)
+      if (!stat.isFile()) return undefined
+      const bytes = readFileSync(fileFd)
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(bytes.toString("utf8")) as unknown
+      } catch {
+        return undefined
+      }
+      if (typeof parsed !== "object" || parsed === null) return undefined
+      const receipt = parsed as SandboxReceipt
+      if (typeof receipt.receiptDigest !== "string" || receipt.receiptDigest.length !== 64) return undefined
+      // R2-02：用现有 canonical digest 算法重新计算 receiptDigest ——
+      // 不能只检查字符串长度（tampered receipt → 自洽失败 → 拒绝）。
+      const { computeReceiptDigest } = require("../../runtime/linux/receipt") as typeof import("../../runtime/linux/receipt")
+      const { receiptDigest: _rd, ...rest } = receipt
+      if (computeReceiptDigest(rest) !== receipt.receiptDigest) return undefined
+      return receipt
     } catch {
       return undefined
+    } finally {
+      if (fileFd !== undefined) closeSync(fileFd)
+      if (receiptsDirFd !== undefined) closeSync(receiptsDirFd)
     }
-    if (typeof parsed !== "object" || parsed === null) return undefined
-    const receipt = parsed as SandboxReceipt
-    if (typeof receipt.receiptDigest !== "string" || receipt.receiptDigest.length !== 64) return undefined
-    // 权威性来源：该文件由 broker 在 cleanup 后的 generator finally 内
-    // 写入（appendReceipt）—— 持久化路径本身即 finalization 证明；
-    // execution 域（cell）无法寻址宿主 stateStore 目录（bwrap 隔离）。
-    // digest 自洽由 outcome 侧校验（claimed digest 必须等于文件中的
-    // receiptDigest —— 任意伪造的 digest 会触发 EXECUTION_RECEIPT_FORGED）。
-    return receipt
   }
 
   isCleanupFinalized(receipt: SandboxReceipt): boolean {
-    // final receipt 由 broker 在 cleanup 后写入（持久化即 finalization
-    // 证明）。此处只做纵深：cleanup 字段必须携带真实清理动作结果。
-    // processesRemaining=-1 是「无法测量」的如实声明（无 cgroup 委托），
-    // 不代表清理未完成 —— mountsReleased/cgroupRemoved 等动作字段必须
-    // 是布尔真值（pre-final receipt 的 cgroupRemoved 恒为 false，且
-    // pre-final 不进 store —— 本检查只针对已持久化的 receipt）。
+    // R2-03：cleanup truth 必须被证明，不接受类型/unknown/未证明的 degradation。
     const cleanup = receipt.cleanup
-    return (
-      cleanup !== undefined &&
-      typeof cleanup.processesRemaining === "number" &&
-      typeof cleanup.mountsReleased === "boolean" &&
-      typeof cleanup.cgroupRemoved === "boolean" &&
-      typeof cleanup.worktreeRetained === "boolean"
-    )
+    if (cleanup === undefined) return false
+    // 1. cleanupVerified 必须为 true（attach 验证 + cgroup 移除的真实证明）。
+    if (cleanup.cleanupVerified !== true) return false
+    // 2. 无残留进程（-1 = 无法测量 = 未证明；>0 = 残留）。
+    if (cleanup.processesRemaining !== 0) return false
+    // 3. mounts 必须已释放。
+    if (cleanup.mountsReleased !== true) return false
+    // 4. cgroup 必须已移除（backend 需要时）。
+    if (cleanup.cgroupRemoved !== true) return false
+    // 5. container backend：container 必须已移除（rootless-podman）。
+    if (receipt.backend === "rootless-podman" && cleanup.containerRemoved !== true) return false
+    // 6. secret/temp cleanup 无失败项（cleanupActions 中任何 failed/residue）。
+    const actions = receipt.cleanupActions ?? []
+    for (const action of actions) {
+      const record = action as { ok?: boolean; status?: string; residue?: boolean; failed?: boolean }
+      if (record.ok === false || record.failed === true || record.residue === true || record.status === "failed") {
+        return false
+      }
+    }
+    // 7. 未证明的 degradation 不接受（degradationReasons 为空或全部已证明）。
+    //    —— 有 degradationReasons 的 receipt 不满足「cleanup 已证明」。
+    if ((receipt.degradationReasons?.length ?? 0) > 0) return false
+    return true
   }
 }
 
-/** 校验 outcome 声称的 receipt 是否可信且绑定本 session（P0-2）。 */
+/** 校验 outcome 声称的 receipt 是否可信且绑定本 session（P0-2/R2-01）。
+ *  expected binding 来自 coordinator 生成的 Execution Intent（非 outcome
+ *  自报）：receipt.projectionIntentDigest（broker 从 spec 注入）必须等于
+ *  intent digest —— 历史 receipt 无法跨 World/snapshot/session 重放。 */
 export function assertTrustedExecutionReceipt(
   authority: ProjectionReceiptAuthority,
-  binding: ProjectionReceiptBinding,
+  intent: import("./contracts").ProjectionExecutionIntent,
+  intentDigest: string,
+  scopeDigest: string,
+  claimedBinding: ProjectionReceiptBinding,
   claimedReceiptDigest: string,
 ): SandboxReceipt {
   if (claimedReceiptDigest.length === 0) {
     throw new ProjectionError("EXECUTION_RECEIPT_REQUIRED", "execution receipt required before world commit")
   }
-  const receipt = authority.getFinalReceipt(binding.runId, binding.cellId)
+  const receipt = authority.getFinalReceipt(intent.intentId, claimedBinding.cellId)
   if (!receipt) {
     throw new ProjectionError(
       "EXECUTION_RECEIPT_NOT_PERSISTED",
-      `final receipt for run ${binding.runId} cell ${binding.cellId} is not persisted (pre-final digest or persistence failure)`,
+      `final receipt for intent ${intent.intentId} cell ${claimedBinding.cellId} is not persisted (pre-final digest or persistence failure)`,
     )
   }
   if (!authority.isCleanupFinalized(receipt)) {
@@ -128,23 +163,41 @@ export function assertTrustedExecutionReceipt(
       `claimed receipt digest ${claimedReceiptDigest} does not match final persisted digest ${receipt.receiptDigest}`,
     )
   }
-  // binding：run/node/cell + workspace + spec/policy digest 全部一致。
-  if (receipt.runId !== binding.runId || receipt.nodeRunId !== binding.nodeRunId || receipt.cellId !== binding.cellId) {
+  // R2-01：intent 绑定 —— receipt 必须属于 coordinator 当前 session 的
+  // Execution Intent（World/branch/snapshot/projection/nonce/command/scope）。
+  // 历史 receipt（跨 World/session 重放）的 intent digest 不匹配 → 拒绝。
+  if (receipt.projectionIntentDigest !== intentDigest) {
     throw new ProjectionError(
-      "EXECUTION_RECEIPT_BINDING_MISMATCH",
-      `receipt identity (${receipt.runId}/${receipt.nodeRunId}/${receipt.cellId}) does not match session binding (${binding.runId}/${binding.nodeRunId}/${binding.cellId})`,
+      "EXECUTION_RECEIPT_REPLAY",
+      `receipt ${receipt.receiptDigest} intent digest ${receipt.projectionIntentDigest ?? "<none>"} does not match session intent ${intentDigest} (cross-world/session replay refused)`,
     )
   }
-  if (receipt.cellSpecDigest !== binding.cellSpecDigest) {
+  // binding：run/node/cell + spec digest（receipt 是权威，claim 必须一致）。
+  if (receipt.runId !== claimedBinding.runId || receipt.nodeRunId !== claimedBinding.nodeRunId || receipt.cellId !== claimedBinding.cellId) {
     throw new ProjectionError(
       "EXECUTION_RECEIPT_BINDING_MISMATCH",
-      `receipt cellSpecDigest ${receipt.cellSpecDigest} does not match session binding ${binding.cellSpecDigest}`,
+      `receipt identity (${receipt.runId}/${receipt.nodeRunId}/${receipt.cellId}) does not match claimed binding (${claimedBinding.runId}/${claimedBinding.nodeRunId}/${claimedBinding.cellId})`,
     )
   }
-  if (receipt.filesystemPolicyDigest !== binding.filesystemPolicyDigest) {
+  if (receipt.cellSpecDigest !== claimedBinding.cellSpecDigest) {
     throw new ProjectionError(
       "EXECUTION_RECEIPT_BINDING_MISMATCH",
-      `receipt filesystemPolicyDigest does not match session binding`,
+      `receipt cellSpecDigest does not match claimed binding`,
+    )
+  }
+  if (receipt.filesystemPolicyDigest !== claimedBinding.filesystemPolicyDigest) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_BINDING_MISMATCH",
+      `receipt filesystemPolicyDigest does not match claimed binding`,
+    )
+  }
+  // R2-01-6：receipt 的 outcome truth 必须与 coordinator 使用的 execution
+  // outcome 一致（exitCode/timeout/cancelled/violation/unexpected writes）。
+  const unexpectedWrites = (receipt.unexpectedWrites?.length ?? 0) > 0
+  if (unexpectedWrites) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_BINDING_MISMATCH",
+      `receipt records unexpected writes; world commit refused`,
     )
   }
   // host-audit 永远不是安全边界。

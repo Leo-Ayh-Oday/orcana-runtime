@@ -329,6 +329,10 @@ function validateWorldMutation(mutation: WorldMutation, index: number): void {
       if (mutation.path !== undefined) {
         assertNonEmptyString(mutation.path, `${prefix} path`)
       }
+      // R2-07-3：file object 必须携带 contentRef（缺少 → 拒绝）。
+      if (mutation.objectType === "file" && mutation.contentRef === undefined) {
+        throw new Error(`${prefix} file object requires contentRef`)
+      }
       assertPlainMetadata(mutation.metadata, `${prefix} metadata`)
       return
     case "object.delete":
@@ -1183,9 +1187,49 @@ export class WorldStore {
   }
 
   compareAndCommit(input: WorldCommitRequest): WorldCommitReceipt {
-    const mutations = parseCanonicalJson<WorldMutation[]>(canonicalJson(input.mutations))
+    let mutations: WorldMutation[] = parseCanonicalJson<WorldMutation[]>(canonicalJson(input.mutations))
     if (mutations.length === 0) throw new Error("World commit requires at least one mutation")
     mutations.forEach(validateWorldMutation)
+    // R2-07-5：exact duplicate mutation 真正 canonical dedupe（完整 canonical
+    // 内容相同 → 只保留首现）—— 不是允许两条重复 ledger event。
+    {
+      const seen = new Set<string>()
+      const deduped: WorldMutation[] = []
+      for (const mutation of mutations) {
+        const identity = canonicalJson(mutation)
+        if (seen.has(identity)) continue
+        seen.add(identity)
+        deduped.push(mutation)
+      }
+      mutations = deduped
+    }
+    // R2-07-1/2：同 commit 内路径冲突（两个不同 objectId 同一 path 的
+    // put+put）与 file-parent collision（file 的祖先被声明为 file）必须
+    // 在 transaction 前拒绝。delete+put 同 path（替换）允许。
+    {
+      const pathToObject = new Map<string, string>()
+      const pathKinds = new Map<string, string>()
+      for (const mutation of mutations) {
+        if (mutation.type !== "object.put" || mutation.path === undefined) continue
+        const existing = pathToObject.get(mutation.path)
+        if (existing !== undefined && existing !== mutation.objectId) {
+          throw new Error(
+            `World commit path collision: ${mutation.path} mapped by both ${existing} and ${mutation.objectId}`,
+          )
+        }
+        let parent = mutation.path.includes("/") ? mutation.path.slice(0, mutation.path.lastIndexOf("/")) : undefined
+        while (parent !== undefined && parent.length > 0) {
+          if (pathKinds.get(parent) === "file") {
+            throw new Error(
+              `World commit file-parent collision: ${parent} is a file but ${mutation.path} descends from it`,
+            )
+          }
+          parent = parent.includes("/") ? parent.slice(0, parent.lastIndexOf("/")) : undefined
+        }
+        pathToObject.set(mutation.path, mutation.objectId)
+        pathKinds.set(mutation.path, mutation.objectType)
+      }
+    }
     // P1-1：同一 commit 内 objectId 身份冲突必须在 transaction 前拒绝
     // （不能依赖 UPSERT 静默覆盖）。按完整 identity/mutation 冲突判定：
     //  (objectId, path, objectType, contentRef, metadata) 完全相同的重复
@@ -1233,6 +1277,20 @@ export class WorldStore {
       assertNonEmptyString(receiptId, `World commit executionReceiptIds[${index}]`))
     effectReceiptIds.forEach((receiptId, index) =>
       assertNonEmptyString(receiptId, `World commit effectReceiptIds[${index}]`))
+    // R2-02：execution receipt 的 canonical 内容必须在 World CAS 中（durable
+    // provenance —— runtime receipt store 删除后仍可恢复），并在此 commit
+    // 建立 world_commit owner reference。receiptId 必须可解析为 CAS 对象。
+    for (const receiptId of executionReceiptIds) {
+      // R2-02：CAS digest 形式的 receipt id（sha256: 前缀）必须已在 World
+      // CAS 中（durable provenance）并建立 world_commit owner reference。
+      // 非 CAS digest 形式的任意 id（AK-1 通用语义）不强制。
+      if (typeof receiptId !== "string" || !receiptId.startsWith("sha256:")) continue
+      const receiptCasDigest = receiptId as CasDigest
+      if (!this.cas.has(receiptCasDigest)) {
+        throw new Error(`World commit execution receipt is not in CAS: ${receiptId}`)
+      }
+      this.cas.link("world_commit", commitId, receiptCasDigest)
+    }
     const request = Object.freeze({
       worldId: input.worldId,
       branchId: input.branchId,

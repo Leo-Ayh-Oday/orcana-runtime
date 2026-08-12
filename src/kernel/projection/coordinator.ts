@@ -18,13 +18,14 @@
  */
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs"
+import { canonicalJson, sha256Digest } from "../world/canonical"
 import { tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
 import { WorldConflictError } from "../world/contracts"
 import type { WorldStore } from "../world/store"
 import type { NativeProjectionBackend, ProjectionInstance } from "./backend"
 import type { WorldProjectionPlan, WorldProjectionReceipt } from "./contracts"
-import { ProjectionError, applyProjectionStateTransition } from "./contracts"
+import { ProjectionError, applyProjectionStateTransition, projectionIntentDigest, type ProjectionExecutionIntent } from "./contracts"
 import {
   parseFilesystemSection,
   type MaterializedSectionEntry,
@@ -69,9 +70,11 @@ export interface ProjectionSession {
   outcome?: ProjectionExecutionOutcome
   /** 本次 commit 的预生成 commitId（P1-3：post-commit uncertainty 查询锚）。 */
   commitId?: string
+  /** R2-01：coordinator 生成的 Execution Intent（期望 binding 真源）。 */
+  intent: ProjectionExecutionIntent
   receipt?: WorldProjectionReceipt
   /** 单一 cleanup 状态机的最新结果（任何退出路径都记录）。 */
-  cleanupState?: { cleanupOk: boolean; rootRemoved: boolean }
+  cleanupState?: { cleanupOk: boolean; rootRemoved: boolean; error?: string }
 }
 
 export interface ProjectionCommand {
@@ -79,6 +82,8 @@ export interface ProjectionCommand {
   readonly args: readonly string[]
   readonly timeoutMs?: number
   readonly signal?: AbortSignal
+  /** R2-01：coordinator 注入的 Execution Intent（executor/adapter 使用）。 */
+  readonly intent?: ProjectionExecutionIntent
 }
 
 /** 执行器注入点：adapter（T06）/ 测试 executor。 */
@@ -110,6 +115,8 @@ export interface ProjectionCleanupResult {
   readonly cleanupOk: boolean
   /** projection root 是否已删除。 */
   readonly rootRemoved: boolean
+  /** cleanup 异常消息（R2-00-6：异常规范化记录，不逃逸）。 */
+  readonly error?: string
 }
 
 /** 所有退出路径（executor throw / FAILED / CANCELLED / scan failure /
@@ -201,6 +208,20 @@ export class ProjectionCoordinator {
       }
       const instance = this.backend.create({ lowerDir: baseDir, projectionRoot, label: "m" })
       instance.assertReady()
+      // R2-01：Execution Intent —— 期望 binding 真源（world/branch/snapshot/
+      // projection/session nonce/merged root identity/command/scope）。
+      const mergedStat = lstatSync(instance.mergedPath)
+      const intent: ProjectionExecutionIntent = {
+        intentId: randomUUID(),
+        worldId: plan.worldId,
+        branchId: plan.branchId,
+        snapshotId: plan.snapshotId,
+        projectionId: plan.projectionId,
+        sessionNonce: randomUUID(),
+        mergedRootIdentity: { dev: mergedStat.dev, ino: mergedStat.ino },
+        command: { executable: "", args: [] },
+        scopeDigest: "",
+      }
       return {
         plan,
         projectionRoot,
@@ -208,56 +229,122 @@ export class ProjectionCoordinator {
         mergedDir: instance.mergedPath,
         instance,
         rootIdentity,
+        intent,
         worldState: "PROJECTED",
         executionState: "PENDING",
       }
     } catch (error) {
-      this.removeProjectionRoot(projectionRoot)
+      // R2-06-8：start 失败路径也走 ownership-verified cleanup（dev/ino
+      // 身份验证 + 非 symlink + descendant），禁止直接 pathname 递归删除。
+      try {
+        const stat = lstatSync(projectionRoot)
+        if (!stat.isSymbolicLink() && stat.dev === rootIdentity.dev && stat.ino === rootIdentity.ino) {
+          this.removeProjectionRoot(projectionRoot)
+        }
+      } catch {
+        // root 已不存在或身份不符 —— 不删除（residue 保留）。
+      }
       throw error
     }
   }
 
-  /** PROJECTED → RUNNING → COMPLETED/FAILED/CANCELLED（P1-2：所有
+  /** PROJECTED → RUNNING → COMPLETED/FAILED/CANCELLED（P1-2/R2-04：所有
    *  terminal 路径 —— executor throw / FAILED / CANCELLED / timeout /
-   *  violation —— 自动进入同一 cleanup 状态机；调用方无需额外 cancel）。 */
+   *  violation —— 自动 cleanup + world→REJECTED + terminal receipt；
+   *  cleanup 抛异常被规范化为 cleanupState 失败记录，绝不逃逸状态机）。 */
   async execute(session: ProjectionSession, command: ProjectionCommand, executor: ProjectionExecutor): Promise<ProjectionExecutionOutcome> {
     if (session.worldState !== "PROJECTED") {
+      if (session.worldState === "REJECTED" && session.cleanupState !== undefined) {
+        // 已清理的终态 session 不可复用（R2-00-4）。
+        throw new ProjectionError(
+          "CLEANED_SESSION_REUSED",
+          `session is terminal (${session.worldState}); cleaned projection cannot be reused for execute`,
+        )
+      }
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", `execute requires PROJECTED, got ${session.worldState}`)
+    }
+    // R2-06-2：execute 前复核 mount 仍是本 session 创建（替换/消失 → 拒绝）。
+    if (session.instance.assertMountOwned?.() === false) {
+      throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount no longer owned by this session; execute refused")
     }
     this.transition(session, { kind: "execute-start" })
     this.transition(session, { kind: "execute-running" })
-    let outcome: ProjectionExecutionOutcome
+    // R2-01：command 绑定 intent（executable/args/scope 快照进 intent）。
+    const intentCommand = {
+      executable: command.executable,
+      args: [...command.args],
+      ...(command.timeoutMs === undefined ? {} : { timeoutMs: command.timeoutMs }),
+    }
+    const intent: ProjectionExecutionIntent = {
+      ...session.intent,
+      command: intentCommand,
+      scopeDigest: this.scopeDigestOf(session.plan),
+    }
+    session.intent = intent
+    const boundCommand: ProjectionCommand = { ...command, intent }
+    let outcome: ProjectionExecutionOutcome | undefined
+    let terminalFailure: unknown = undefined
     try {
-      outcome = await executor(session.mergedDir, command)
+      outcome = await executor(session.mergedDir, boundCommand)
     } catch (error) {
       this.transition(session, { kind: "execute-failed" })
-      session.cleanupState = this.cleanupSession(session)
-      throw error
+      terminalFailure = error
     }
-    session.outcome = outcome
-    if (outcome.cancelled) {
-      this.transition(session, { kind: "execute-cancelled" })
-    } else if (outcome.exitCode !== 0 || outcome.timedOut || outcome.violation) {
-      this.transition(session, { kind: "execute-failed" })
-    } else {
-      this.transition(session, { kind: "execute-completed" })
+    if (terminalFailure === undefined && outcome !== undefined) {
+      session.outcome = outcome
+      if (outcome.cancelled) {
+        this.transition(session, { kind: "execute-cancelled" })
+      } else if (outcome.exitCode !== 0 || outcome.timedOut || outcome.violation) {
+        this.transition(session, { kind: "execute-failed" })
+      } else {
+        this.transition(session, { kind: "execute-completed" })
+      }
     }
-    // P1-2：FAILED / CANCELLED / timeout / violation 是 terminal ——
-    // 自动 cleanup（调用方不再需要 coord.cancel(session)）。
+    // R2-06-2：execute 后复核（COMPLETED 时 mount 必须仍是本 session 的）。
+    if (session.executionState === "COMPLETED" && session.instance.assertMountOwned?.() === false) {
+      throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount replaced during execution; scan refused")
+    }
+    // FAILED / CANCELLED / executor throw 是 terminal：world→REJECTED +
+    // 统一 cleanup（异常规范化）+ terminal receipt。
     if (session.executionState === "FAILED" || session.executionState === "CANCELLED") {
-      session.cleanupState = this.cleanupSession(session)
+      this.transition(session, { kind: "rejected" })
+      session.cleanupState = this.cleanupSessionSafe(session)
+      session.receipt = this.buildReceipt(
+        session,
+        "REJECTED",
+        terminalFailure === undefined ? undefined : terminalFailure instanceof Error ? terminalFailure.message : String(terminalFailure),
+      )
+      if (terminalFailure !== undefined) throw terminalFailure
     }
-    return outcome
+    // terminalFailure 分支已 throw —— 此处 outcome 必定义。
+    return outcome as ProjectionExecutionOutcome
   }
 
   /** COMPLETED → DELTA_READY：确定性 delta（新内容已入 CAS）。
-   *  扫描失败（TOCTOU/资源上限/非法条目）→ 同一 cleanup 状态机 + REJECTED。 */
+   *  扫描失败（TOCTOU/资源上限/非法条目）→ 同一 cleanup 状态机 + REJECTED。
+   *  R2-05-5：后台进程未证明终止（cleanup 未 finalized）不得进入 scan。 */
   scan(session: ProjectionSession): ProjectionDeltaResult {
     if (session.executionState !== "COMPLETED") {
       throw new ProjectionError(
         "PROJECTION_NOT_PROJECTED",
         `delta scan requires COMPLETED execution, got ${session.executionState}`,
       )
+    }
+    // R2-06-2：scan 前复核 mount 仍属本 session。
+    if (session.instance.assertMountOwned?.() === false) {
+      throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount no longer owned by this session; scan refused")
+    }
+    // R2-05-5：production 路径 —— receipt 的 cleanup 必须已证明
+    // （processesRemaining===0 等）；未证明（后台进程可能存活）→ 拒绝 scan。
+    const outcome = session.outcome
+    if (outcome !== undefined && outcome.executionReceiptId !== undefined && this.receiptAuthority !== undefined && outcome.receiptBinding !== undefined) {
+      const finalReceipt = this.receiptAuthority.getFinalReceipt(session.intent.intentId, outcome.receiptBinding.cellId)
+      if (finalReceipt === undefined || !this.receiptAuthority.isCleanupFinalized(finalReceipt)) {
+        throw new ProjectionError(
+          "PROJECTION_NOT_PROJECTED",
+          "execution cleanup not proven (processes may remain); delta scan refused",
+        )
+      }
     }
     try {
       const baseIndex = this.buildBaseIndex(session)
@@ -303,9 +390,12 @@ export class ProjectionCoordinator {
 
     this.transition(session, { kind: "commit-pending" })
     try {
-      // 1. 可信 execution receipt 校验（P0-2）：production commit 必须证明
-      //    receipt 存在、已持久化、cleanup-finalized、绑定本 session、
-      //    非 host-audit。fixture executor 只在显式 test capability 下放行。
+      // 1. 可信 execution receipt 校验（P0-2/R2-01）：expected binding 来自
+      //    coordinator 当前 session 的 Execution Intent（world/branch/snapshot/
+      //    projection/nonce/merged root/command/scope），不是 outcome 自报。
+      //    receipt.projectionIntentDigest 由 broker 从 spec 注入 —— 历史
+      //    receipt 无法跨 World/session 重放。fixture executor 只在显式
+      //    test-only capability 下放行。
       if (outcome.executionReceiptId !== undefined) {
         if (this.receiptAuthority === undefined || outcome.receiptBinding === undefined) {
           throw new ProjectionError(
@@ -313,11 +403,20 @@ export class ProjectionCoordinator {
             "execution receipt presented without receipt authority/binding; world commit refused",
           )
         }
-        assertTrustedExecutionReceipt(
+        const verifiedReceipt = assertTrustedExecutionReceipt(
           this.receiptAuthority,
+          session.intent,
+          projectionIntentDigest(session.intent),
+          this.scopeDigestOf(session.plan),
           outcome.receiptBinding,
           outcome.executionReceiptId,
         )
+        // R2-02：canonical final receipt 进入 World CAS —— 由 World commit
+        // 建立 world_commit owner reference（durable provenance；runtime
+        // receipt store 删除后仍可恢复）。content 的 canonical 摘要 ==
+        // receiptDigest（authority 已做自洽校验）。
+        const { receiptDigest: _rd, ...receiptContent } = verifiedReceipt
+        this.store.cas.put(Buffer.from(canonicalJson(receiptContent), "utf8"))
       } else if (!this.allowFixtureExecution) {
         // 无 receipt（fixture executor 路径）且未显式授权 → production bypass。
         throw new ProjectionError(
@@ -362,8 +461,9 @@ export class ProjectionCoordinator {
           error instanceof Error ? error.message : String(error),
         )
       }
-      // 5. compare-and-commit（P1-3：commitId 预生成 —— post-commit
-      //    uncertainty 的权威查询锚）。
+      // 5. compare-and-commit（P1-3/R2-00-7：commitId 预生成 —— post-commit
+      //    uncertainty 的权威查询锚；divergence 检查也在 post-commit 查询
+      //    保护内 —— World 已 durable 时绝不 REJECTED）。
       const commitId = session.commitId ?? `ak2-${session.plan.projectionId}-${randomUUID()}`
       session.commitId = commitId
       let receipt
@@ -377,26 +477,27 @@ export class ProjectionCoordinator {
           mutations: delta.mutations,
           ...(outcome.executionReceiptId === undefined
             ? {}
-            : { executionReceiptIds: [outcome.executionReceiptId] }),
+            : { executionReceiptIds: [`sha256:${outcome.executionReceiptId}`] }),
         })
+        if (receipt.deltaDigest !== delta.deltaDigest) {
+          throw new ProjectionError("DELTA_SCAN_FAILED", "commit delta digest diverged from scanned delta")
+        }
       } catch (error) {
         if (error instanceof WorldConflictError) {
           throw new ProjectionError("WORLD_HEAD_MOVED", error.message)
         }
-        // P1-3：World truth 优先于本地控制流异常 —— compareAndCommit 抛错
-        // 但权威 commit 记录已存在且 deltaDigest 与本次扫描一致 → 该 commit
-        // 已经 durable（如 after_commit_before_response fault）→ COMMITTED。
+        // World truth 优先于本地控制流异常（P1-3/R2-00-7）：commitId 是
+        // 本次 session 预生成的 uuid —— 权威 commit 记录存在即证明本次
+        // commit 已经 durable（含 after_commit_before_response fault 与
+        // 本地 delta divergence）→ COMMITTED（绝不 REJECTED）。
         const committed = this.store.getCommit(commitId)
-        if (committed !== undefined && committed.deltaDigest === delta.deltaDigest) {
+        if (committed !== undefined) {
           this.transition(session, { kind: "committed" })
           session.receipt = this.buildReceipt(session, "COMMITTED", undefined, delta, committed)
           session.cleanupState = { cleanupOk: true, rootRemoved: true }
           return committed
         }
         throw error
-      }
-      if (receipt.deltaDigest !== delta.deltaDigest) {
-        throw new ProjectionError("DELTA_SCAN_FAILED", "commit delta digest diverged from scanned delta")
       }
       this.transition(session, { kind: "committed" })
       session.receipt = this.buildReceipt(session, "COMMITTED", undefined, delta, receipt)
@@ -441,6 +542,20 @@ export class ProjectionCoordinator {
     return Object.freeze({ cleanupOk: cleanupOk && rootRemoved, rootRemoved })
   }
 
+  /** R2-00-6/R2-03：cleanup 抛异常被规范化为明确 cleanup failure ——
+   *  异常绝不逃逸状态机（residue 保留，cleanupOk=false 记录）。 */
+  private cleanupSessionSafe(session: ProjectionSession): ProjectionCleanupResult {
+    try {
+      return this.cleanupSession(session)
+    } catch (error) {
+      return Object.freeze({
+        cleanupOk: false,
+        rootRemoved: false,
+        ...(error instanceof Error ? { error: error.message } : {}),
+      })
+    }
+  }
+
   /** P2-1：删除前重新验证 root 所有权 —— strict descendant of fixed base
    *  root、projectionId 派生路径、session 创建的 dev/ino、非 symlink。
    *  任何不符 → 拒绝删除（residue 保留；CLEANUP_FAILED 由调用方包装）。 */
@@ -475,6 +590,13 @@ export class ProjectionCoordinator {
       )
     }
     this.removeProjectionRoot(actual)
+  }
+
+  /** R2-01：plan scope 的 canonical 摘要（filesystem policy binding）。 */
+  private scopeDigestOf(plan: WorldProjectionPlan): string {
+    return sha256Digest(
+      Buffer.from(canonicalJson({ writableRoots: plan.writableRoots, readonlyRoots: plan.readonlyRoots }), "utf8"),
+    )
   }
 
   /** 状态机唯一入口（P2-5）：所有 world/execution 变更经

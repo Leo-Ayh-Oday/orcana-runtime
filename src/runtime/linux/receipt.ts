@@ -99,7 +99,11 @@ export interface ReceiptInput {
  *  Evidence 绑定此摘要（而非 cellSpecDigest）——绑定退出结果、清理状态、
  *  指标与违规信息（PR-2）。 */
 export function computeReceiptDigest(receipt: Omit<SandboxReceipt, "receiptDigest">): string {
-  return digestOf(receipt)
+  // R2-02：digest 必须对「去除 receiptDigest 字段」的完整 Receipt 计算。
+  // broker 组装 final receipt 时可能从 pre-final spread 继承 receiptDigest
+  // —— 必须剥离（canonical 摘要绝不能包含被覆盖的旧自摘要字段）。
+  const { receiptDigest: _stripped, ...rest } = receipt as SandboxReceipt
+  return digestOf(rest)
 }
 
 export function buildReceipt(input: ReceiptInput): SandboxReceipt {

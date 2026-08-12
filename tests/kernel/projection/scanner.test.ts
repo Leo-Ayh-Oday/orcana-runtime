@@ -50,7 +50,7 @@ interface ScanHarness {
   readonly merged: string
   readonly cas: MemCas
   readonly baseIndex: Map<string, MaterializedSectionEntry>
-  scan(limits?: Parameters<typeof scanProjectionDelta>[0]["limits"], onWalkComplete?: () => void): ReturnType<typeof scanProjectionDelta>
+  scan(limits?: Parameters<typeof scanProjectionDelta>[0]["limits"], onWalkComplete?: () => void, onFileReadAfter?: (relative: string) => void): ReturnType<typeof scanProjectionDelta>
 }
 
 function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness {
@@ -64,6 +64,7 @@ function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness 
   const scan = (
     limits?: Parameters<typeof scanProjectionDelta>[0]["limits"],
     onWalkComplete?: () => void,
+    onFileReadAfter?: (relative: string) => void,
   ): ReturnType<typeof scanProjectionDelta> =>
     scanProjectionDelta({
       baseDir: base,
@@ -75,6 +76,7 @@ function harness(worldId = "w", branchId = "b", baseRevision = 1n): ScanHarness 
       baseRevision,
       ...(limits === undefined ? {} : { limits }),
       ...(onWalkComplete === undefined ? {} : { onWalkComplete }),
+      ...(onFileReadAfter === undefined ? {} : { onFileReadAfter }),
     })
   return { base, merged, cas, baseIndex, scan }
 }
@@ -522,6 +524,78 @@ describe("AK2-T04 故障", () => {
       } catch (error) {
         expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
       }
+    }
+  })
+
+  test("R2-00-5：walk 后新增 file/directory/FIFO 不得被静默遗漏（阶段 2 必须重新枚举）", () => {
+    // 新增文件。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "existing.txt"), "x")
+      let hookRan = false
+      try {
+        h.scan(undefined, () => {
+          hookRan = true
+          writeFileSync(join(h.merged, "added-after-walk.txt"), "sneaky")
+        })
+        throw new Error("expected silent-omission rejection")
+      } catch (error) {
+        expect(hookRan).toBe(true)
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+    // 新增目录（含内容）。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "existing.txt"), "x")
+      let hookRan = false
+      try {
+        h.scan(undefined, () => {
+          hookRan = true
+          mkdirSync(join(h.merged, "added-dir"))
+          writeFileSync(join(h.merged, "added-dir/nested.txt"), "n")
+        })
+        throw new Error("expected silent-omission rejection")
+      } catch (error) {
+        expect(hookRan).toBe(true)
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+    // 新增 FIFO。
+    {
+      const h = harness()
+      writeFileSync(join(h.merged, "existing.txt"), "x")
+      let hookRan = false
+      try {
+        h.scan(undefined, () => {
+          hookRan = true
+          execFileSync("mkfifo", [join(h.merged, "added-pipe")])
+        })
+        throw new Error("expected silent-omission rejection")
+      } catch (error) {
+        expect(hookRan).toBe(true)
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
+    }
+  })
+
+  test("R2-05：same-size in-place mutation（mtime/ctime 变化）→ fail-closed", () => {
+    const h = harness()
+    writeFileSync(join(h.merged, "target.txt"), "AAAABBBB")
+    let hookRan = false
+    try {
+      h.scan(undefined, undefined, () => {
+        hookRan = true
+        // 同 size 原地覆盖（inode 不变，内容/时间戳变化）—— 发生在
+        // 文件读取后、复核前（读后二次读取内容对比 + mtime/ctime 复核
+        // 双重检测；bun statSync 偶发缓存旧时间戳，内容级校验是权威）。
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2)
+        writeFileSync(join(h.merged, "target.txt"), "BBBBAAAA")
+      })
+      throw new Error("expected in-place mutation rejection")
+    } catch (error) {
+      expect(hookRan).toBe(true)
+      expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
     }
   })
 

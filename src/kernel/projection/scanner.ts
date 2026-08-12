@@ -72,6 +72,9 @@ export interface ProjectionScanInput {
   /** 测试注入：阶段 1（walk）完成后调用 —— deterministic race harness
    *  （P1-5）。生产不传。 */
   readonly onWalkComplete?: () => void
+  /** R2-05：测试注入窗口 —— merged 文件读取后、复核前（确定性 same-size
+   *  in-place mutation 检测）。生产调用不传。 */
+  readonly onFileReadAfter?: (relative: string) => void
 }
 
 export type ProjectionDeltaEntry =
@@ -119,6 +122,9 @@ interface ScannedNode {
   readonly dev: number
   readonly ino: number
   readonly nlink: number
+  /** R2-05：mtime/ctime 稳定性（same-size in-place mutation 检测）。 */
+  readonly mtimeMs?: number
+  readonly ctimeMs?: number
 }
 
 /** deterministic digest（文件内容 / 目录子项 canonical）。 */
@@ -212,9 +218,11 @@ function isValidUtf8Bytes(bytes: Buffer): boolean {
 function walkAnchored(
   rootPath: string,
   limits: ProjectionLimits,
-): { nodes: Map<string, ScannedNode>; dirs: Map<string, DirIdentity> } {
+): { nodes: Map<string, ScannedNode>; dirs: Map<string, DirIdentity>; dirChildren: Map<string, Set<string>> } {
   const nodes = new Map<string, ScannedNode>()
   const dirs = new Map<string, DirIdentity>()
+  // R2-05：阶段 1 每个目录的成员名集合（阶段 2 重新枚举比较）。
+  const dirChildren = new Map<string, Set<string>>()
   const root = openRootAnchored(rootPath)
   /** P3：每个节点 set 前检查（exactly N accepted / N+1 rejected）。 */
   const reserveEntry = (relative: string): void => {
@@ -245,6 +253,7 @@ function walkAnchored(
       }
       return bytes.toString("utf8")
     })
+    dirChildren.set(relative, new Set(names))
     for (const child of names.sort()) {
       const childRel = relative.length === 0 ? child : `${relative}/${child}`
       assertSafeEntryName(child, childRel)
@@ -284,7 +293,7 @@ function walkAnchored(
         }
         reserveEntry(childRel)
         closeSync(childFd)
-        nodes.set(childRel, { kind: "file", size: stat.size, dev: stat.dev, ino: stat.ino, nlink: stat.nlink })
+        nodes.set(childRel, { kind: "file", size: stat.size, dev: stat.dev, ino: stat.ino, nlink: stat.nlink, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs })
         continue
       }
       if (stat.isDirectory()) {
@@ -304,7 +313,7 @@ function walkAnchored(
   } finally {
     closeSync(root.fd)
   }
-  return { nodes, dirs }
+  return { nodes, dirs, dirChildren }
 }
 
 /** 阶段 2：重新锚定读取（P1-5）—— 对每个文件从根逐层 openDirAnchored，
@@ -313,27 +322,37 @@ function walkAnchored(
  *  grow → fail-closed）；总字节受 maxTreeBytes 配额。 */
 function digestAnchored(
   rootPath: string,
-  nodes: Map<string, ScannedNode>,
-  dirs: Map<string, DirIdentity>,
+  walked: { nodes: Map<string, ScannedNode>; dirs: Map<string, DirIdentity>; dirChildren: Map<string, Set<string>> },
   cas: ProjectionDeltaCas,
   limits: ProjectionLimits,
+  onFileReadAfter?: (relative: string) => void,
 ): Map<string, ScannedNode> {
+  const { nodes, dirs, dirChildren } = walked
   const resolved = new Map<string, ScannedNode>()
   const root = openRootAnchored(rootPath)
   const openedDirs: number[] = []
   try {
     let treeBytes = 0
-    const files = [...nodes.entries()]
-      .filter(([, node]) => node.kind === "file")
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    for (const [relative, node] of files) {
+    // R2-05：目录按深度升序遍历（父先）—— 每个目录重新锚定（dev/ino
+    // 复核）+ 重新枚举（成员集合与阶段 1 完全一致；walk 后新增/删除 →
+    // fail-closed）+ 子文件 anchored 读取（fstat 前后含 mtime/ctime）。
+    const dirsSorted = [...nodes.entries()]
+      .filter(([, node]) => node.kind === "directory")
+      .sort(([a], [b]) => (a.split("/").length - b.split("/").length) * 1000 + (a < b ? -1 : a > b ? 1 : 0))
+    for (const [relative] of dirsSorted) {
       const segments = relative.split("/")
       let dirFd = root.fd
       openedDirs.length = 0
       try {
-        // 逐层锚定到父目录（每层验证身份）。
-        for (let index = 0; index < segments.length - 1; index++) {
-          const { fd, identity } = openDirAnchored(dirFd, segments[index]!)
+        // 逐层锚定（每层目录 identity 与阶段 1 复核 —— root 与空目录同样
+        // 覆盖：dirsSorted 含所有目录）。
+        for (let index = 0; index < segments.length; index++) {
+          const isRoot = index === 0 && relative === ""
+          if (isRoot) {
+            continue
+          }
+          const name = segments[index]!
+          const { fd, identity } = openDirAnchored(dirFd, name)
           const expected = dirs.get(segments.slice(0, index + 1).join("/"))
           if (expected === undefined || expected.dev !== identity.dev || expected.ino !== identity.ino) {
             closeSync(fd)
@@ -345,32 +364,72 @@ function digestAnchored(
           openedDirs.push(fd)
           dirFd = fd
         }
-        const name = segments[segments.length - 1]!
-        const bytes = readFileAnchored(dirFd, name, { dev: node.dev, ino: node.ino, size: node.size, nlink: node.nlink }, relative)
-        treeBytes += bytes.byteLength
-        if (treeBytes > limits.maxTreeBytes) {
+        // R2-05：重新枚举并比较完整成员集合（新增/删除 → fail-closed）。
+        const expectedMembers = dirChildren.get(relative)
+        if (expectedMembers === undefined) {
+          throw new ProjectionError("DELTA_SCAN_FAILED", `directory ${relative} missing walk membership snapshot`)
+        }
+        const currentMembers = new Set<string>()
+        for (const raw of readDirAnchored(dirFd)) {
+          const bytes = Buffer.from(raw)
+          if (!isValidUtf8Bytes(bytes)) {
+            throw new ProjectionError("DELTA_SCAN_FAILED", `invalid UTF-8 entry name in ${relative}`)
+          }
+          currentMembers.add(bytes.toString("utf8"))
+        }
+        if (currentMembers.size !== expectedMembers.size) {
           throw new ProjectionError(
-            "PROJECTION_RESOURCE_LIMIT",
-            `scanned tree exceeds maxTreeBytes (${treeBytes} > ${limits.maxTreeBytes})`,
+            "DELTA_SCAN_FAILED",
+            `directory membership changed during scan: ${relative} (${currentMembers.size} != ${expectedMembers.size})`,
           )
         }
-        resolved.set(relative, {
-          kind: "file",
-          digest: fileDigest(cas, bytes),
-          size: node.size,
-          dev: node.dev,
-          ino: node.ino,
-          nlink: node.nlink,
-        })
+        for (const member of currentMembers) {
+          if (!expectedMembers.has(member)) {
+            throw new ProjectionError(
+              "DELTA_SCAN_FAILED",
+              `directory membership changed during scan: ${relative} gained ${member}`,
+            )
+          }
+        }
+        // 本目录的直接子文件：anchored 读取 + digest。
+        const prefix = relative.length === 0 ? "" : `${relative}/`
+        for (const [childRelative, childNode] of nodes) {
+          if (!childRelative.startsWith(prefix)) continue
+          const name = childRelative.slice(prefix.length)
+          if (name.includes("/") || childNode.kind !== "file") continue
+          if (resolved.has(childRelative)) continue
+          const bytes = readFileAnchored(
+            dirFd,
+            name,
+            { dev: childNode.dev, ino: childNode.ino, size: childNode.size, nlink: childNode.nlink, mtimeMs: childNode.mtimeMs, ctimeMs: childNode.ctimeMs },
+            childRelative,
+            onFileReadAfter,
+          )
+          treeBytes += bytes.byteLength
+          if (treeBytes > limits.maxTreeBytes) {
+            throw new ProjectionError(
+              "PROJECTION_RESOURCE_LIMIT",
+              `scanned tree exceeds maxTreeBytes (${treeBytes} > ${limits.maxTreeBytes})`,
+            )
+          }
+          resolved.set(childRelative, {
+            kind: "file",
+            digest: fileDigest(cas, bytes),
+            size: childNode.size,
+            dev: childNode.dev,
+            ino: childNode.ino,
+            nlink: childNode.nlink,
+          })
+        }
       } finally {
         for (const fd of openedDirs) closeSync(fd)
       }
     }
     // 目录 digest 后序（子项已算）。
-    const dirsSorted = [...nodes.entries()]
+    const dirsSorted2 = [...nodes.entries()]
       .filter(([, node]) => node.kind === "directory")
       .sort(([a], [b]) => (a.split("/").length - b.split("/").length) * 1000 + (a < b ? -1 : a > b ? 1 : 0))
-    for (const [relative] of dirsSorted) {
+    for (const [relative] of dirsSorted2) {
       const children = new Map<string, ScannedNode>()
       const prefix = relative.length === 0 ? "" : `${relative}/`
       for (const [childRelative, childNode] of resolved) {
@@ -403,8 +462,8 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
   const baseWalked = walkAnchored(input.baseDir, limits)
   const mergedWalked = walkAnchored(input.mergedDir, limits)
   input.onWalkComplete?.()
-  const baseDigested = digestAnchored(input.baseDir, baseWalked.nodes, baseWalked.dirs, input.cas, limits)
-  const mergedDigested = digestAnchored(input.mergedDir, mergedWalked.nodes, mergedWalked.dirs, input.cas, limits)
+  const baseDigested = digestAnchored(input.baseDir, baseWalked, input.cas, limits)
+  const mergedDigested = digestAnchored(input.mergedDir, mergedWalked, input.cas, limits, input.onFileReadAfter)
 
   const baseFiles = new Map<string, ScannedNode>()
   const baseDirs = new Set<string>()

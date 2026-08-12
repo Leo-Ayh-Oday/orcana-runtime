@@ -710,6 +710,11 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             // B7：统一清理动作结果 + secret 交付生命周期记录随 Receipt 审计。
             const finalReceipt: SandboxReceipt = {
               ...cellReceipt,
+              // AK-2 R2-01：从 spec 环境变量注入 Projection Execution Intent
+              // 摘要（投影 coordinator 生成；binding 打破 outcome 自报循环）。
+              ...(compiled.environment.variables["ORCANA_PROJECTION_INTENT"] === undefined
+                ? {}
+                : { projectionIntentDigest: compiled.environment.variables["ORCANA_PROJECTION_INTENT"] }),
               degradationReasons: attachFailure
                 ? [...cellReceipt.degradationReasons, attachFailure]
                 : cellReceipt.degradationReasons,

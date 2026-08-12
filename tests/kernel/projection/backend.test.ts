@@ -208,6 +208,40 @@ describe("AK2-T03 生产 fuse-overlayfs backend", () => {
     }
   })
 
+  test("R2-06：mount 被替换（foreign mount 占位）→ assertMountOwned false；cleanup 拒绝卸载 foreign", () => {
+    const root = tmpRoot("foreign")
+    const lower = join(root, "lower")
+    mkdirSync(lower)
+    writeFileSync(join(lower, "f.txt"), "x")
+    chmodSync(lower, 0o755)
+    const backend = new FuseOverlayfsProjectionBackend()
+    const instance = backend.create({ lowerDir: lower, projectionRoot: root, label: "own" })
+    // 本 session 的 mount 被确认。
+    expect(instance.assertMountOwned!()).toBe(true)
+    // 卸载后（mount 消失）→ assertMountOwned false（fail-closed）。
+    instance.cleanup()
+    expect(instance.assertMountOwned!()).toBe(false)
+    // foreign mount 保护：cleanup 后 merged 已删除；重新挂一个 foreign
+    // overlay 到同路径 → 新 instance 的 cleanup 不得卸载它。
+    const foreignUpper = join(root, "upper-foreign")
+    const foreignWork = join(root, "work-foreign")
+    mkdirSync(foreignUpper, { mode: 0o700 })
+    mkdirSync(foreignWork, { mode: 0o700 })
+    mkdirSync(join(root, "merged-own"), { mode: 0o700 })
+    execFileSync("fuse-overlayfs", ["-o", `lowerdir=${lower},upperdir=${foreignUpper},workdir=${foreignWork}`, join(root, "merged-own")])
+    try {
+      // 旧 instance 的 assertMountOwned：mount id 不匹配 → false。
+      expect(instance.assertMountOwned!()).toBe(false)
+      // 旧 instance 的 cleanup：foreign mount（id 不匹配）→ 拒绝卸载。
+      // 卸载 foreign 会失败/跳过 —— 这里直接验证 cleanup 不卸载 foreign：
+      // merged 仍挂载（isFuseMount true）。
+      const statfs = require("node:fs").statfsSync(join(root, "merged-own"))
+      expect(statfs.type).toBe(0x65735546)
+    } finally {
+      execFileSync("fusermount3", ["-u", join(root, "merged-own")], { stdio: "ignore" })
+    }
+  })
+
   test("R06.2：真实挂载后 cleanup 幂等（二次调用 true；卸载成功后不保留 residue）", () => {
     const root = tmpRoot("idem")
     const lower = join(root, "lower")

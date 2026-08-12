@@ -20,6 +20,9 @@ export interface SupervisorOptions {
   cwd: string
   /** 显式构造的完整环境（禁止宿主 env 继承 —— environment.ts）。 */
   env: Record<string, string>
+  /** IC06: claimId 运行时传输 —— spawn 前 final override 写入
+   *  ORCANA_CLAIM_ID（runtime metadata；禁止 model/tool/request 覆盖）。 */
+  claimId?: string
   stdin?: "closed" | "pipe"
   limits: OutputLimits
   wallTimeMs: number
@@ -74,6 +77,11 @@ export function spawnSupervised(options: SupervisorOptions): SpawnedProcess {
   }
   let executable = options.executable
   let args = options.args
+  // IC06: claimId final override —— spawn 环境唯一注入点（spawnSupervised
+  // 是 Linux runtime 唯一 spawn 入口；任何 request/tool env 无法覆盖）。
+  if (options.claimId) {
+    options.env = { ...options.env, ORCANA_CLAIM_ID: options.claimId }
+  }
   if (options.launcherHandshake && process.platform === "linux") {
     // 包装进程：read 阻塞（释放令牌）→ exec 目标。exec 替换进程自身，
     // PID/进程组不变；目标 stdin 为 pipe（释放后 end → EOF ≈ closed）。

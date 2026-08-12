@@ -128,7 +128,14 @@ describe("LR2-1 Gates (L1-H)", () => {
     const state = new StateStore(join(dir, "execd.db"))
     const foreign: ExecdServerDepsStub = { sockPath }
     const server = new ExecdServer(
-      { sockPath, state, submitCell: async () => ({ cellId: "x", runId: "r", idempotent: false }), getCell: () => undefined, cancelCell: async () => {}, cancelAgent: async () => {}, cancelRun: async () => {}, cleanupRun: async () => ({ removed: 0 }), acquireLease: async (r, t) => ({ leaseId: "L", expiresAt: t }), renewLease: async () => ({ expiresAt: 0 }), releaseLease: async () => {}, listRecoverableRuns: () => [], attachLogs: () => ({ cellId: "", kind: "stdout", data: "", totalBytes: 0, eof: true }) },
+      { sockPath, state, submitCell: async () => ({ cellId: "x", runId: "r", idempotent: false }), getCell: () => undefined, cancelCell: async () => {}, cancelAgent: async () => {}, cancelRun: async () => {}, cleanupRun: async () => ({ removed: 0 }), acquireLease: async (r, t) => ({ leaseId: "L", expiresAt: t }), renewLease: async () => ({ expiresAt: 0 }), releaseLease: async () => {}, listRecoverableRuns: () => [], attachLogs: () => ({ cellId: "", kind: "stdout", data: "", totalBytes: 0, eof: true }), capacity: {
+        reserve: async () => ({ ok: false, reason: "stub" }),
+        releaseRequested: async () => ({ state: "SUSPECT", phase: "SUSPECT" }),
+        updatePhase: async () => {},
+        reconcile: async () => ({ freed: 0, remainingCharged: 0 }),
+        status: async () => ({ capacity: { cpuQuota: 0, memoryBytes: 0, pids: 0, networkSlots: 0, tempBytes: 0, concurrentCells: 0 }, available: { cpuQuota: 0, memoryBytes: 0, pids: 0, ioWeight: 0, networkSlots: 0, tempBytes: 0 }, charged: 0, claims: [] }),
+        close: async () => {},
+      } },
       undefined, undefined,
       fixedApprovalTokenProvider(["test-token"]),
       () => ({ pid: 1, uid: 65534, gid: 65534 }), // nobody —— 异 uid

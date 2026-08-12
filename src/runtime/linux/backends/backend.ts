@@ -33,6 +33,8 @@ export interface BackendRunContext {
   cleanupVerify?: () => Partial<SandboxReceipt["cleanup"]>
   /** 运行期物化材料（seccomp/secret/cache 宿主路径）——不属于 Policy Spec。 */
   materialization?: ExecutionMaterialization
+  /** IC06: claimId 运行时传输（→ env ORCANA_CLAIM_ID，runtime metadata）。 */
+  claimId?: string
 }
 
 export interface ExecutionBackend {
@@ -103,6 +105,7 @@ export async function* streamBackendRun(
     args: compiled.argv.slice(1),
     cwd: compiled.cwd,
     env: compiled.env,
+    claimId: ctx.claimId,
     limits: { stdoutMaxBytes: spec.resources.stdoutMaxBytes, stderrMaxBytes: spec.resources.stderrMaxBytes },
     wallTimeMs: spec.resources.wallTimeMs,
     detectDaemon: spec.lifecycle.killOnParentExit,

@@ -35,6 +35,9 @@ export interface ExecdServerDeps {
   listRecoverableRuns: () => Array<{ runId: string; cellCount: number }>
   /** L2-B：AttachLogs 大对象回放（execd 组装时注入 LogStore）。 */
   attachLogs: (cellId: string, kind: "stdout" | "stderr", offset: number) => import("./log-store").AttachChunk
+  /** IC06：Hard Authority 路由（in-process HostCapacityAuthority）。
+   *  capacity.* 消息强制 SO_PEERCRED —— 不可用即 FAIL CLOSED。 */
+  capacity: import("../runtime/linux/scheduler/host-capacity").CapacityAuthority
 }
 
 interface Connection {

@@ -26,6 +26,14 @@ function testDeps(state: StateStore, overrides: Partial<ExecdServerDeps> = {}): 
     releaseLease: async () => {},
     listRecoverableRuns: () => [],
     attachLogs: () => ({ cellId: "", kind: "stdout", data: "", totalBytes: 0, eof: true }),
+    capacity: {
+      reserve: async () => ({ ok: false, reason: "stub" }),
+      releaseRequested: async () => ({ state: "SUSPECT", phase: "SUSPECT" }),
+      updatePhase: async () => {},
+      reconcile: async () => ({ freed: 0, remainingCharged: 0 }),
+      status: async () => ({ capacity: { cpuQuota: 0, memoryBytes: 0, pids: 0, networkSlots: 0, tempBytes: 0, concurrentCells: 0 }, available: { cpuQuota: 0, memoryBytes: 0, pids: 0, ioWeight: 0, networkSlots: 0, tempBytes: 0 }, charged: 0, claims: [] }),
+      close: async () => {},
+    },
     ...overrides,
   }
 }

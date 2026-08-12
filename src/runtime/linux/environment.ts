@@ -61,6 +61,7 @@ export const RUNTIME_RESERVED_ENV_KEYS = [
   "ORCANA_CELL_ID",
   "ORCANA_SANDBOX",
   "ORCANA_WORKSPACE_ID",
+  "ORCANA_CLAIM_ID",
 ] as const
 
 export interface BuildEnvironmentInput {

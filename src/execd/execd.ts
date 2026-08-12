@@ -15,6 +15,7 @@ import { Recovery } from "./recovery"
 import { ExecdServer, type ExecdServerDeps } from "./server"
 import { LogStore } from "./log-store"
 import { createLinuxBroker, type LinuxExecutionBroker } from "../runtime/linux/broker"
+import { createHostCapacityAuthority, readProcessStartticks } from "../runtime/linux/scheduler/host-capacity"
 import { envApprovalTokenProvider, type ApprovalTokenProvider } from "./approval"
 
 /** M3：租约过期扫描间隔（daemon 常驻定时器）。 */
@@ -29,6 +30,8 @@ export interface ExecdOptions {
   approval?: ApprovalTokenProvider
   /** L2-B：大对象日志根目录（缺省 $TMPDIR/orcana-execd/logs）。 */
   logRoot?: string
+  /** IC06：authority 并发 Cell 上限（缺省 6；测试可注入小值）。 */
+  capacityMaxConcurrentCells?: number
 }
 
 export interface Execd {
@@ -37,6 +40,8 @@ export interface Execd {
   leaseManager: LeaseManager
   recovery: Recovery
   server: ExecdServer
+  /** IC06：authority object（in-process 视图 —— 供测试/维护）。 */
+  authority: import("../runtime/linux/scheduler/host-capacity").HostCapacityAuthority
   start(): Promise<void>
   stop(): Promise<void>
 }
@@ -47,7 +52,15 @@ export function createExecd(opts: ExecdOptions): Execd {
   }
   mkdirSync(dirname(opts.statePath), { recursive: true, mode: 0o700 })
   const state = new StateStore(opts.statePath)
-  const broker = opts.broker ?? createLinuxBroker({ mode: "enabled" })
+
+  // IC06：Authority bootstrap —— server-side HostCapacityAuthority 先于
+  // 一切执行路径创建（AUTHORITY_SELF_BOOTSTRAP_CYCLE=0：execd 内部不经
+  // socket self-RPC，broker 直接注入同一 in-process object）。
+  const authority = createHostCapacityAuthority({
+    dbPath: join(dirname(opts.statePath), "capacity.db"),
+    maxConcurrentCells: opts.capacityMaxConcurrentCells,
+  })
+  const broker = opts.broker ?? createLinuxBroker({ mode: "enabled", capacityAuthority: authority })
 
   // L2-B（B2 修复）：大对象日志落盘（AttachLogs 回放源；索引在 SQLite）。
   const logStore = new LogStore({
@@ -93,6 +106,8 @@ export function createExecd(opts: ExecdOptions): Execd {
     releaseLease: leaseId => Promise.resolve(leaseManager.release(leaseId)),
     listRecoverableRuns: () => cellManager.listRecoverableRuns(),
     attachLogs: (cellId, kind, offset) => logStore.attach(cellId, kind, offset),
+    // IC06：capacity.* Hard Authority 路由（同一 in-process object）。
+    capacity: authority,
   }
   const server = new ExecdServer(deps, undefined, undefined, opts.approval ?? envApprovalTokenProvider())
 
@@ -103,6 +118,15 @@ export function createExecd(opts: ExecdOptions): Execd {
   let leaseSweepTimer: ReturnType<typeof setInterval> | undefined
 
   const start = async (): Promise<void> => {
+    // IC06：authority 启动 reconcile（SUSPECT/QUARANTINED claims 由 server
+    // 独立 reality 收敛）→ 再启动恢复与监听 —— EXECD_ADMISSION_BEFORE_
+    // RECOVERY_CHARGE=0（外部 admission 只在恢复记账完成后开放）。
+    await authority.reconcile({
+      uid: process.getuid?.() ?? -1,
+      pid: process.pid,
+      startticks: readProcessStartticks(process.pid) ?? 0,
+      clientInstanceId: `execd-${process.pid}`,
+    })
     await server.start()
     // 启动恢复：收敛崩溃残留（SAME_BOOT_CRASH_UNRECOVERED = 0）。
     // M15：recovery.run 内部已按分支广播（不再此处重播）。
@@ -125,7 +149,8 @@ export function createExecd(opts: ExecdOptions): Execd {
     if (leaseSweepTimer) clearInterval(leaseSweepTimer)
     await server.stop()
     state.close()
+    await authority.close()
     started = false
   }
-  return { state, cellManager, leaseManager, recovery, server, start, stop }
+  return { state, cellManager, leaseManager, recovery, server, authority, start, stop }
 }

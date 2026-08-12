@@ -43,7 +43,15 @@ export function backendAvailability(caps: LinuxCapabilities): BackendAvailabilit
 }
 
 /** 选择后端；strict profile 在隔离后端不可用时拒绝（DEGRADATION_NOT_ALLOWED）。 */
-export function selectBackend(spec: ExecutionCellSpec, caps: LinuxCapabilities): BackendSelection {
+/** IC06: Hard Authority 模式下 host-audit 必须 FAIL CLOSED
+ *  （HOST_AUDIT_RESOURCE_AUTHORITY_ESCAPE=0）—— host-audit 无隔离，
+ *  same-uid workload 可直接篡改 authority 周边文件系统状态。
+ *  hardAuthority 缺省 false（legacy 语义不变）。 */
+export interface SelectBackendOptions {
+  hardAuthority?: boolean
+}
+
+export function selectBackend(spec: ExecutionCellSpec, caps: LinuxCapabilities, options: SelectBackendOptions = {}): BackendSelection {
   const defaults = profileDefaults(spec.profile)
   const available = backendAvailability(caps)
   const byId = (id: string) => available.find(a => a.id === id)
@@ -52,6 +60,8 @@ export function selectBackend(spec: ExecutionCellSpec, caps: LinuxCapabilities):
     const entry = byId(id)
     if (!entry?.available) return false
     if (id === "host-audit") {
+      // IC06: Hard Authority 下拒绝 host-audit（fail closed）。
+      if (options.hardAuthority) return false
       // Host Audit 仅限：minimum=audit 且显式允许降级
       if (spec.isolation.minimum !== "audit") return false
       if (!spec.isolation.allowDegradation && defaults.allowDegradation === false) return false

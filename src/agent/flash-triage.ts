@@ -351,7 +351,11 @@ export function buildTrackerFromTriage(
     // planning artifact / MasterPlan 输入（P0-G），不构成 execution lock。
     // 真正"只给方案不要执行"由 resolveRuntimeIntent() → readonly 保护。
     phase: "building",
-    requiredFiles: requiredFiles.length ? requiredFiles : ["package.json"],
+    // IC05 Correction M: Flash heuristic 无 structured deliverables 时
+    // Runtime 不得发明 package.json obligation —— requiredFiles 只含真实
+    // structured deliverables，允许空数组
+    // （FLASH_NO_DELIVERABLE_FALSE_FILE_OBLIGATION=0）。
+    requiredFiles: requiredFiles,
     requiredVerificationKinds: verificationKinds,
     steps,
   }

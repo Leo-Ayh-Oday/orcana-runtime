@@ -165,26 +165,35 @@ export class ContextMapReadSession {
    *  - 预算耗尽 / 中止 → ""（并置位标记，调用方循环提前退出）
    *  - 只分配 min(size, capBytes, maxFileBytes, 剩余预算) 字节。 */
   readText(path: string, capBytes: number, lexicalRoot: string): string {
-    if (this.aborted || this.budgetExhausted) return ""
+    return this.readTextWithOutcome(path, capBytes, lexicalRoot).text
+  }
+
+  /** IC05 Correction N: 带客观结局的读取 —— 区分"读取成功（可能 0 字节）"
+   *  与"读取失败（authority deny / canonical / stat / open-read）"。空文件
+   *  读取成功 ok=true，绝不是 read_failed（EMPTY_READABLE_CONSTITUTION_
+   *  FALSE_FAILURE=0）。abort/budget → ok=false + 既有标记（incomplete）。 */
+  readTextWithOutcome(path: string, capBytes: number, lexicalRoot: string): { ok: boolean; text: string } {
+    if (this.aborted || this.budgetExhausted) return { ok: false, text: "" }
     if (this.signal?.aborted) {
       this.aborted = true
-      return ""
+      return { ok: false, text: "" }
     }
-    if (this.authorityMissing) return ""
+    if (this.authorityMissing) return { ok: false, text: "" }
     // 权威读取强制（秘密 / 越界 / symlink 逃逸）—— lexical + canonical 双查。
     const violation = enforceWorkspaceRead(this.workspace!, path, path, lexicalRoot)
-    if (violation) return ""
+    if (violation) return { ok: false, text: "" }
     let info
     try {
       info = this.reader.statSync(path)
     } catch {
-      return ""
+      return { ok: false, text: "" }
     }
-    if (!info.isRegular) return ""
+    if (!info.isRegular) return { ok: false, text: "" }
     const limit = Math.min(info.size, capBytes, this.reader.maxFileBytes, this.budgetRemaining)
     if (limit <= 0) {
       if (info.size > 0) this.budgetExhausted = true
-      return ""
+      // 0 字节文件：读取成功（空内容）—— 不是失败。
+      return { ok: info.size === 0, text: "" }
     }
     try {
       const buffer = this.reader.readSync(path, limit, {
@@ -195,12 +204,12 @@ export class ContextMapReadSession {
       })
       this.bytesRead += buffer.length
       if (this.bytesRead >= this.budgetBytes) this.budgetExhausted = true
-      return buffer.toString("utf-8")
+      return { ok: true, text: buffer.toString("utf-8") }
     } catch (error) {
       if (error instanceof FileReadError && error.code === "ABORTED") {
         this.aborted = true
       }
-      return ""
+      return { ok: false, text: "" }
     }
   }
 
@@ -271,16 +280,17 @@ export function loadProjectConstitution(
     // IC01-R2: 读取经过权威强制（README/src symlink 指向根外或 secret →
     // 拒绝，不进入 importantFiles）；有界读取 —— 大型 README/规则文件/
     // lockfile 绝不整体读入（共享累计预算内）。
-    const text = session.readText(abs, 20_000, root)
-    if (!text) {
+    const outcome = session.readTextWithOutcome(abs, 20_000, root)
+    if (!outcome.ok) {
       // IC05 Correction P0: 文件客观存在（existsSync 已确认）但读取被拒/
       // 失败（authority deny / canonical violation / stat-read failure）——
-      // 这是 read_failed，不是 absent。
+      // 这是 read_failed，不是 absent。空文件读取成功（ok=true, text=""）
+      // 不是失败（Correction N）。
       hadReadFailure = true
       continue
     }
     importantFiles.push(file)
-    classifyConstitutionText(file, text, { notes, rules, forbidden, buildCommands, testCommands, pitfalls })
+    classifyConstitutionText(file, outcome.text, { notes, rules, forbidden, buildCommands, testCommands, pitfalls })
   }
 
   if (!session.aborted && !session.budgetExhausted) {

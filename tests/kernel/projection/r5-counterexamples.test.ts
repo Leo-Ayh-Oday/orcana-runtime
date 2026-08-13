@@ -165,13 +165,13 @@ function coordinator(
     getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   })
+  const effective = options.receiptAuthority ?? new TestReceiptAuthority()
   return new ProjectionCoordinator({
     store: ctx.store,
     materializer,
     backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: options.projectionRoot ?? tmpRoot("projroot"),
-    allowTestBackends: true,
-    ...(options.receiptAuthority === undefined ? {} : { receiptAuthority: options.receiptAuthority }),
+    receiptAuthority: effective,
     ...options,
   } as never)
 }
@@ -251,10 +251,21 @@ function authorityFor(merged: string): TrustedExecutionAuthority {
 describe("AK2-R5 反例（R5-00 先红冻结）", () => {
   test("R5-00-1：任意调用方实现 kind:'fixture' + allowTestBackends=true 不得获得 receiptless World commit", async () => {
     const { ctx, snapshotId } = buildWorld()
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: digest => ctx.store.cas.record(digest),
+      readCasObject: digest => ctx.store.cas.get(digest),
+    })
     let coord: ProjectionCoordinator | undefined
     try {
-      // 结构化 backend + TypeScript cast 均不能放大 authority。
-      coord = coordinator(ctx, undefined, { allowTestBackends: true as never })
+      // 结构化 backend + TypeScript cast + allowTestBackends 均不能放大 authority。
+      coord = new ProjectionCoordinator({
+        store: ctx.store,
+        materializer,
+        backend: new CopyProjectionFixtureBackend(),
+        projectionRoot: tmpRoot("r5-1"),
+        allowTestBackends: true as never,
+      } as never)
     } catch (error) {
       // 构造即拒绝（R5-01：production coordinator 不存在 receiptless 分支）。
       expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REQUIRED")
@@ -262,6 +273,7 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       ctx.cleanup()
       return
     }
+    // 基线行为：构造成功 → receiptless outcome 必须仍被拒绝（scan 门无条件）。
     const session = coord!.start(makePlan(snapshotId))
     await coord!.execute(
       session,
@@ -272,15 +284,14 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
         return { exitCode: 0, timedOut: false, cancelled: false, violation: false }
       },
     )
-    coord!.scan(session)
-    let commitError: unknown
+    let scanError: unknown
     try {
-      coord!.commit(session)
+      coord!.scan(session)
     } catch (error) {
-      commitError = error
+      scanError = error
     }
-    // RED at baseline：receiptless fixture commit 被接受（revision 推进）。
-    expect(commitError).toBeDefined()
+    // RED at baseline：receiptless fixture scan/commit 被接受。
+    expect(scanError).toBeDefined()
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
     ctx.cleanup()
   })
@@ -651,7 +662,7 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
 
   test("R5-00-7e：commit preflight getWorld 抛异常 → 必须 terminalize（SNAPSHOT_MISMATCH 保留）", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const harness = createHarness()
+    const harness = createHarness(merged => writeFileSync(join(merged, "src/main.ts"), "changed\n"))
     // togglable wrapper：start/execute/scan 正常，commit preflight 时 getWorld 抛异常。
     let failGetWorld = false
     const wrapped = Object.create(ctx.store) as WorldStore
@@ -815,6 +826,6 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
 })
 
 /** 本地 harness 工厂（保持测试简洁）。 */
-function createHarness(): ReturnType<typeof import("./test-fixtures").createFixtureHarness> {
-  return (require("./test-fixtures") as typeof import("./test-fixtures")).createFixtureHarness()
+function createHarness(mutate?: (merged: string) => void): ReturnType<typeof import("./test-fixtures").createFixtureHarness> {
+  return (require("./test-fixtures") as typeof import("./test-fixtures")).createFixtureHarness(mutate)
 }

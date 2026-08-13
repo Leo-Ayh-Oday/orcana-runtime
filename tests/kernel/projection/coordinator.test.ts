@@ -451,7 +451,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     // cleanupState 记录成功（不再需要显式 cancel）。
     expect(session.worldState).toBe("REJECTED")
     expect(session.receipt!.worldState).toBe("REJECTED")
-    expect(session.cleanupState).toEqual({ cleanupOk: true, rootRemoved: true })
+    expect(session.cleanupState).toMatchObject({ cleanupOk: true, rootRemoved: true })
     expect(existsSync(session.projectionRoot)).toBe(false)
     expect(session.receipt!.executionState).toBe("COMPLETED")
     ctx.cleanup()
@@ -479,7 +479,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     // World 不受影响（revision 0 → 1 未被 commit 触碰）。
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
     // R03：executor throw 走同一 cleanup 状态机。
-    expect(session.cleanupState).toEqual({ cleanupOk: true, rootRemoved: true })
+    expect(session.cleanupState).toMatchObject({ cleanupOk: true, rootRemoved: true })
     ctx.cleanup()
   })
 
@@ -1320,7 +1320,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       await coord.execute(session, { executable: "noop", args: [] }, async () => variant.outcome)
       // 不调用 cancel —— 直接检查 cleanup 已完成。
       expect(session.executionState).toBe(variant.expected)
-      expect(session.cleanupState).toEqual({ cleanupOk: true, rootRemoved: true })
+      expect(session.cleanupState).toMatchObject({ cleanupOk: true, rootRemoved: true })
       expect(existsSync(root)).toBe(false)
       expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
       ctx.cleanup()
@@ -1386,7 +1386,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     // 把 session.projectionRoot 指向 baseProjectionRoot 的兄弟（他人目录）。
     const other = tmpRoot("other")
     ;(session as { projectionRoot: string }).projectionRoot = other
-    session.cleanupState = coord.cancel(session)
+    session.cleanupState = await coord.cancel(session)
     // 所有权验证失败 → cleanupOk=false（不是 true+false），residue 保留。
     expect(session.cleanupState!.cleanupOk).toBe(false)
     expect(session.cleanupState!.rootRemoved).toBe(false)
@@ -1510,7 +1510,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     expect(session.receipt!.worldState).toBe("REJECTED")
     expect(session.receipt!.worldCommitReceipt).toBeUndefined()
     // cleanup 状态机：unmount 失败 → residue 保留（root 未删除，可诊断）。
-    expect(session.cleanupState).toEqual({ cleanupOk: false, rootRemoved: false })
+    expect(session.cleanupState).toMatchObject({ cleanupOk: false, rootRemoved: false })
     expect(existsSync(session.projectionRoot)).toBe(true)
     expect(existsSync(join(session.projectionRoot, "merged-m"))).toBe(true)
     ctx.cleanup()

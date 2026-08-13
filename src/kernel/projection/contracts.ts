@@ -22,6 +22,7 @@ export type ProjectionWorldState =
   | "COMMITTED"
   | "CONFLICTED"
   | "REJECTED"
+  | "RECONCILING"
 
 /** Execution 正交状态 —— 只描述 Linux 上实际发生了什么。 */
 export type ProjectionExecutionState =
@@ -59,6 +60,9 @@ export interface ProjectionStateVector {
  *  - CONFLICTED：仅 COMPLETED（stale head 冲突）
  *  - REJECTED：COMPLETED/FAILED/CANCELLED（执行成功但世界拒绝；执行
  *    失败；执行取消）
+ *  - RECONCILING：COMPLETED（R5-03：post-commit divergence —— commitId
+ *    已 durable 但 request digest 与本 session 不一致；**不得谎报
+ *    REJECTED** —— 显式 UNKNOWN/RECONCILING 状态，等待人工对账）
  *
  *  effect/evidence 在 AK-2 恒为 NONE/PENDING；graph completion 不在
  *  此模型中。 */
@@ -92,6 +96,9 @@ export const PROJECTION_STATE_VECTORS: Readonly<Record<ProjectionWorldState, rea
       Object.freeze({ execution: "FAILED", world: "REJECTED", effect: "NONE", evidence: "PENDING" }),
       Object.freeze({ execution: "CANCELLED", world: "REJECTED", effect: "NONE", evidence: "PENDING" }),
     ]),
+    RECONCILING: Object.freeze([
+      Object.freeze({ execution: "COMPLETED", world: "RECONCILING", effect: "NONE", evidence: "PENDING" }),
+    ]),
   })
 
 /** 合法 world/execution 组合的唯一真源（reachable model）。 */
@@ -114,6 +121,7 @@ export type ProjectionStateTransition =
   | { readonly kind: "commit-pending" }
   | { readonly kind: "committed" }
   | { readonly kind: "conflicted" }
+  | { readonly kind: "reconciling" }
   | { readonly kind: "rejected" }
 
 /** 状态对（from 或 to）。 */
@@ -142,6 +150,9 @@ export const PROJECTION_TRANSITION_TABLE: Readonly<Record<ProjectionStateTransit
     "commit-pending": Object.freeze([{ from: { world: "DELTA_READY", execution: "COMPLETED" }, to: { world: "COMMIT_PENDING", execution: "COMPLETED" } }]),
     committed: Object.freeze([{ from: { world: "COMMIT_PENDING", execution: "COMPLETED" }, to: { world: "COMMITTED", execution: "COMPLETED" } }]),
     conflicted: Object.freeze([{ from: { world: "COMMIT_PENDING", execution: "COMPLETED" }, to: { world: "CONFLICTED", execution: "COMPLETED" } }]),
+    // R5-03：post-commit divergence —— commitId durable 但 request digest
+    // 不一致 → 显式 RECONCILING（不得谎报 REJECTED）。
+    reconciling: Object.freeze([{ from: { world: "COMMIT_PENDING", execution: "COMPLETED" }, to: { world: "RECONCILING", execution: "COMPLETED" } }]),
     // rejected 保留 execution（REJECTED 可配 COMPLETED/FAILED/CANCELLED）。
     rejected: Object.freeze([
       { from: { world: "PROJECTED", execution: "FAILED" }, to: { world: "REJECTED", execution: "FAILED" } },

@@ -353,6 +353,12 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     expect(readFileSync(join(base, "sentinel2"), "utf8")).toBe("SENTINEL2")
     expect(readdirSync(`${base}.old`)).toEqual(["sentinel"])
     expect(readFileSync(join(`${base}.old`, "sentinel"), "utf8")).toBe("keep")
+    // 清理 base.old（rename 后的原 base —— afterEach 只删 base）。
+    try {
+      rmSync(`${base}.old`, { recursive: true, force: true })
+    } catch {
+      // 已删
+    }
     ctx.cleanup()
   })
 
@@ -807,42 +813,52 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     const harness = createHarness()
     const coord = coordinator(ctx, harness.backend, { receiptAuthority: harness.authority })
     const session = coord.start(makePlan(snapshotId))
-    await coord.execute(session, { executable: "noop", args: [] }, harness.executor)
-    // 直接 seal（执行 writer 已终止后）。
-    const sealed = session.instance.sealForScan!()
-    expect("error" in sealed).toBe(false)
-    const sealedPath = (sealed as { sealedPath: string }).sealedPath
-    session.sealedPath = sealedPath
-    // 同 UID 直接写 sealed 视图的 writeLayer（fixture：merged === writeLayer）。
-    chmodSync(sealedPath, 0o755)
-    writeFileSync(join(sealedPath, "src/tampered.txt"), "tampered\n")
-    let delta: unknown
-    let scanError: unknown
     try {
-      delta = coord.scan(session)
-    } catch (error) {
-      scanError = error
+      await coord.execute(session, { executable: "noop", args: [] }, harness.executor)
+      // 直接 seal（执行 writer 已终止后）。
+      const sealed = session.instance.sealForScan!()
+      expect("error" in sealed).toBe(false)
+      const sealedPath = (sealed as { sealedPath: string }).sealedPath
+      session.sealedPath = sealedPath
+      // 同 UID 直接写 sealed 视图的 writeLayer（fixture：merged === writeLayer）。
+      chmodSync(sealedPath, 0o755)
+      writeFileSync(join(sealedPath, "src/tampered.txt"), "tampered\n")
+      let delta: unknown
+      let scanError: unknown
+      try {
+        delta = coord.scan(session)
+      } catch (error) {
+        scanError = error
+      }
+      // 期望 fail-closed：不得返回成功 delta。
+      // KNOWN RED：same-UID 架构无法阻止（无 kernel-owned immutable view）。
+      // 不伪造 GREEN —— 该项标记 OWNER-DECISION-REQUIRED。
+      expect(scanError).toBeDefined()
+      if (scanError === undefined) {
+        throw new Error(
+          "R5-00-9 KNOWN RED: sealed view accepted a same-UID direct upper write and returned a success delta (OWNER-DECISION-REQUIRED: no kernel-owned immutable seal in same-UID architecture)",
+        )
+      }
+      expect(delta).toBeUndefined()
+      // 且不得 commit。
+      let commitError: unknown
+      try {
+        coord.commit(session)
+      } catch (error) {
+        commitError = error
+      }
+      expect(commitError).toBeDefined()
+      expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
+    } finally {
+      // 已知 RED 测试也必须清理 sealed 树（0444/0555 无法被 afterEach 的
+      // rmSync 直接删除 —— 走 session cleanup 还原 mode 后删除）。
+      try {
+        void coord.cancel(session)
+      } catch {
+        // 已清理
+      }
+      ctx.cleanup()
     }
-    // 期望 fail-closed：不得返回成功 delta。
-    // KNOWN RED：same-UID 架构无法阻止（无 kernel-owned immutable view）。
-    // 不伪造 GREEN —— 该项标记 OWNER-DECISION-REQUIRED。
-    expect(scanError).toBeDefined()
-    if (scanError === undefined) {
-      throw new Error(
-        "R5-00-9 KNOWN RED: sealed view accepted a same-UID direct upper write and returned a success delta (OWNER-DECISION-REQUIRED: no kernel-owned immutable seal in same-UID architecture)",
-      )
-    }
-    expect(delta).toBeUndefined()
-    // 且不得 commit。
-    let commitError: unknown
-    try {
-      coord.commit(session)
-    } catch (error) {
-      commitError = error
-    }
-    expect(commitError).toBeDefined()
-    expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
-    ctx.cleanup()
   })
 
   test("R5-01 导出面 inventory：生产模块不得导出任何 fixture/test authority 能力（PUBLIC_FIXTURE_AUTHORITY = 0）", () => {

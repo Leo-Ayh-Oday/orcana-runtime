@@ -330,8 +330,8 @@ describe("AK2-T02 反例（表驱动）", () => {
         type: "world-section",
         section: "filesystem",
         entries: [
-          { id: "a", kind: "file", path: "x.txt", contentRef: "sha256:aa" },
-          { id: "b", kind: "file", path: "x.txt", contentRef: "sha256:bb" },
+          { id: "a", kind: "file", representation: "raw", path: "x.txt", contentRef: "sha256:aa" },
+          { id: "b", kind: "file", representation: "raw", path: "x.txt", contentRef: "sha256:bb" },
         ],
       },
       "MATERIALIZATION_FAILED",
@@ -343,8 +343,8 @@ describe("AK2-T02 反例（表驱动）", () => {
         type: "world-section",
         section: "filesystem",
         entries: [
-          { id: "a", kind: "file", path: "dir", contentRef: "sha256:aa" },
-          { id: "b", kind: "file", path: "dir/x.txt", contentRef: "sha256:bb" },
+          { id: "a", kind: "file", representation: "raw", path: "dir", contentRef: "sha256:aa" },
+          { id: "b", kind: "file", representation: "raw", path: "dir/x.txt", contentRef: "sha256:bb" },
         ],
       },
       "MATERIALIZATION_FAILED",
@@ -405,8 +405,8 @@ describe("AK2-T02 反例（表驱动）", () => {
         type: "world-section",
         section: "filesystem",
         entries: [
-          { id: "b", kind: "file", path: "z.txt", contentRef: "sha256:bb" },
-          { id: "a", kind: "file", path: "a.txt", contentRef: "sha256:aa" },
+          { id: "b", kind: "file", representation: "raw", path: "z.txt", contentRef: "sha256:bb" },
+          { id: "a", kind: "file", representation: "raw", path: "a.txt", contentRef: "sha256:aa" },
         ],
       },
       "MATERIALIZATION_FAILED",
@@ -437,7 +437,7 @@ describe("AK2-T02 反例（表驱动）", () => {
         section: "filesystem",
         entries: [
           { id: "ws", kind: "workspace" },
-          { id: "a", kind: "file", path: "a.txt", contentRef: "sha256:aa" },
+          { id: "a", kind: "file", path: "a.txt", contentRef: "sha256:aa", representation: "raw" },
         ],
       }),
       "utf8",
@@ -591,7 +591,7 @@ describe("AK2-T02 物化根防护", () => {
           section: "filesystem",
           entries: [
             { id: "ws", kind: "workspace" },
-            { id: "f", kind: "file", path: "a.bin", contentRef: "sha256:fm" },
+            { id: "f", kind: "file", path: "a.bin", contentRef: "sha256:fm", representation: "file-manifest" },
           ],
         }),
         "utf8",

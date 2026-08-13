@@ -260,11 +260,25 @@ function parseManifestReferences(content: Buffer, digest: CasDigest): CasDigest[
     const ids = new Set<string>()
     for (const [index, rawEntry] of root.entries.entries()) {
       const entry = manifestRecord(rawEntry, `section manifest ${digest} entry ${index}`)
-      assertManifestKeys(entry, ["id", "kind"], ["path", "contentRef", "metadata"], `section manifest ${digest} entry ${index}`)
+      assertManifestKeys(entry, ["id", "kind"], ["path", "contentRef", "metadata", "representation"], `section manifest ${digest} entry ${index}`)
       const id = manifestString(entry.id, `section manifest ${digest} entry ${index} id`)
-      manifestString(entry.kind, `section manifest ${digest} entry ${index} kind`)
+      const kind = manifestString(entry.kind, `section manifest ${digest} entry ${index} kind`)
       if (ids.has(id)) throw new CasIntegrityError(`section manifest ${digest} contains duplicate id ${id}`)
       ids.add(id)
+      // R5-07：内容表示类型的不可变判别子 —— kind === "file" 必须显式
+      // 声明 representation（raw | file-manifest）；其它 kind 必须缺省。
+      // 旧格式（file 无 representation）明确、确定、fail-closed 拒绝。
+      if (kind === "file") {
+        if (entry.representation !== "raw" && entry.representation !== "file-manifest") {
+          throw new CasIntegrityError(
+            `section manifest ${digest} entry ${index} (${id}): file entry requires representation ("raw" | "file-manifest") — old-format snapshots are rejected fail-closed`,
+          )
+        }
+      } else if (entry.representation !== undefined) {
+        throw new CasIntegrityError(
+          `section manifest ${digest} entry ${index} (${id}): representation is only valid for kind "file"`,
+        )
+      }
       const path = entry.path === undefined
         ? ""
         : manifestString(entry.path, `section manifest ${digest} entry ${index} path`)

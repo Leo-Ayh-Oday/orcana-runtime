@@ -46,6 +46,8 @@ export interface MaterializedSectionEntry {
   readonly kind: string
   readonly path?: string
   readonly contentRef?: CasDigest
+  /** R5-07：内容表示类型（不可变判别子；kind=file 必填）。 */
+  readonly representation?: "raw" | "file-manifest"
   readonly metadata?: Readonly<Record<string, unknown>>
 }
 
@@ -106,6 +108,12 @@ export function parseFilesystemSection(bytes: Buffer): MaterializedSectionManife
     if (entry.contentRef !== undefined && typeof entry.contentRef !== "string") {
       throw new ProjectionError("MATERIALIZATION_FAILED", "filesystem section entry contentRef must be a string")
     }
+    if (entry.representation !== undefined && entry.representation !== "raw" && entry.representation !== "file-manifest") {
+      throw new ProjectionError(
+        "MATERIALIZATION_FAILED",
+        `filesystem section entry ${String(entry.id)} has invalid representation ${String(entry.representation)}`,
+      )
+    }
     if (entry.metadata !== undefined && (typeof entry.metadata !== "object" || entry.metadata === null || Array.isArray(entry.metadata))) {
       throw new ProjectionError("MATERIALIZATION_FAILED", "filesystem section entry metadata must be a plain record")
     }
@@ -114,6 +122,7 @@ export function parseFilesystemSection(bytes: Buffer): MaterializedSectionManife
       kind: entry.kind,
       ...(entry.path === undefined ? {} : { path: entry.path }),
       ...(entry.contentRef === undefined ? {} : { contentRef: entry.contentRef as CasDigest }),
+      ...(entry.representation === undefined ? {} : { representation: entry.representation as "raw" | "file-manifest" }),
       ...(entry.metadata === undefined ? {} : { metadata: entry.metadata as Readonly<Record<string, unknown>> }),
     })
   }
@@ -213,6 +222,21 @@ export class SnapshotMaterializer {
         if (entry.contentRef === undefined) {
           throw new ProjectionError("MATERIALIZATION_FAILED", `file entry ${entry.id} has no contentRef`)
         }
+        // R5-07：表示类型必须由 snapshot 显式绑定（不可变判别子）——
+        // 不得从 CAS 的全局可变 isManifest 推断（promotion 后同一 digest
+        // 会被翻转 → 双重解释）。旧格式（无 representation）明确、确定、
+        // fail-closed 拒绝（不静默 reinterpretation）。
+        if (entry.representation !== "raw" && entry.representation !== "file-manifest") {
+          throw new ProjectionError(
+            "MATERIALIZATION_FAILED",
+            `file entry ${entry.id} has no explicit content representation ("raw" | "file-manifest"); old-format snapshot entries are rejected fail-closed`,
+          )
+        }
+      } else if (entry.representation !== undefined) {
+        throw new ProjectionError(
+          "MATERIALIZATION_FAILED",
+          `filesystem entry ${entry.id} (${entry.kind}) must not carry a content representation`,
+        )
       } else if (entry.kind === "directory") {
         // 目录允许无 contentRef；有 contentRef 时的存在性由 CAS integrity
         // 保证（snapshot 存储时 assertManifestReferences 已闭合引用），
@@ -267,13 +291,14 @@ export class SnapshotMaterializer {
       const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
       if (parent.length > 0) this.ensureDirectory(absoluteBase, parent)
       const target = this.joinWithin(absoluteBase, path)
-      // R4-08：累计 tree budget 预留必须使用 logical 大小 —— FileManifest
-      // JSON 可以很小而 logical file 很大。预算超限必须在打开目标文件、
-      // 读取 chunk、写入任何字节之前拒绝（不是先分配再检查）。
+      // R4-08/R5-07：累计 tree budget 预留必须使用 logical 大小 ——
+      // FileManifest JSON 可以很小而 logical file 很大。预算超限必须在
+      // 打开目标文件、读取 chunk、写入任何字节之前拒绝（不是先分配再检查）。
+      // 表示类型只来自 snapshot 的不可变判别子（不是 record.isManifest）。
       const contentRecord = this.source.getCasRecord(entry.contentRef!)
       let declaredSize = contentRecord?.size
       let preParsedManifest: import("../world/contracts").FileManifest | undefined
-      if (contentRecord?.isManifest === true) {
+      if (entry.representation === "file-manifest") {
         // 解析一次（不重复 parse/copy manifest），logical size 进入预算。
         preParsedManifest = this.parseFileManifest(entry.contentRef!, path)
         declaredSize = preParsedManifest.size
@@ -288,7 +313,8 @@ export class SnapshotMaterializer {
       try {
         // R2-07-9：有界流式写入（逐 chunk 写目标 fd —— 避免
         // parts[] + Buffer.concat 的近双倍峰值；配额在读取/分配前生效）。
-        const written = this.writeFileStreamed(entry.contentRef!, fd, path, preParsedManifest)
+        // representation 必填性已在上方 byPath 校验（file 条目）保证。
+        const written = this.writeFileStreamed(entry.contentRef!, fd, path, entry.representation!, preParsedManifest)
         if (written > this.limits.maxFileBytes) {
           throw new ProjectionError(
             "PROJECTION_RESOURCE_LIMIT",
@@ -406,12 +432,19 @@ export class SnapshotMaterializer {
    *  FileManifest。**分配前限制**：先查 CAS record.size（字节上限）——
    *  任何超过 maxFileBytes 的对象在读取/UTF-8 转换/JSON parse/chunks
    *  数组分配之前拒绝（malicious huge manifest fail-closed）。 */
-  /** R2-07-8/9 + R4-08：有界流式写入 —— 配额（CAS record size /
+  /** R2-07-8/9 + R4-08 + R5-07：有界流式写入 —— 配额（CAS record size /
    *  manifest logical size / chunk count / 剩余预算）在每次读取与分配之前
    *  生效；逐 chunk 写目标 fd（峰值 = 单 chunk，无 parts[] + Buffer.concat
    *  双倍峰值）。返回写入总字节。preParsedManifest 由调用方预解析（R4-08
-   *  ：不重复 parse/copy manifest —— logical size 预算 + 写入共用一次解析）。 */
-  private writeFileStreamed(contentRef: CasDigest, fd: number, path: string, preParsedManifest?: import("../world/contracts").FileManifest): number {
+   *  ：不重复 parse/copy manifest）。表示类型只来自 snapshot 的不可变判别子
+   *  （representation —— 不读取 CAS 的全局可变 isManifest）。 */
+  private writeFileStreamed(
+    contentRef: CasDigest,
+    fd: number,
+    path: string,
+    representation: "raw" | "file-manifest",
+    preParsedManifest?: import("../world/contracts").FileManifest,
+  ): number {
     const record = this.source.getCasRecord(contentRef)
     if (!record) {
       throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: CAS object ${contentRef} is not registered`)
@@ -423,7 +456,7 @@ export class SnapshotMaterializer {
         `file ${path}: CAS object ${contentRef} size ${record.size} exceeds maxFileBytes ${this.limits.maxFileBytes} (refused before read/allocation)`,
       )
     }
-    if (!record.isManifest) {
+    if (representation === "raw") {
       const bytes = this.readCasObjectSafe(contentRef, `file ${path}`)
       writeFileSync(fd, bytes)
       return bytes.byteLength

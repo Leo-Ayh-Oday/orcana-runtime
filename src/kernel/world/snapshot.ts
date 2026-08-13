@@ -56,12 +56,24 @@ function snapshotFromRow(row: SnapshotRow): WorldSnapshot {
   }
 }
 
-function objectEntry(object: WorldObject): SectionManifestEntry {
+/** R5-07：内容表示类型的不可变绑定 —— 在 snapshot 创建时从 CAS 记录
+ *  isManifest 快照（此后 promotion/GC/recovery 都不得改变语义 —— 同一
+ *  snapshot 物化必须逐字节一致；NONDETERMINISTIC_SNAPSHOT = 0）。 */
+function objectEntry(object: WorldObject, cas: WorldCas): SectionManifestEntry {
+  let representation: "raw" | "file-manifest" | undefined
+  if (object.objectType === "file") {
+    if (object.contentRef === undefined) {
+      throw new Error(`file object ${object.objectId} has no contentRef`)
+    }
+    const record = cas.record(object.contentRef)
+    representation = record?.isManifest === true ? "file-manifest" : "raw"
+  }
   return {
     id: object.objectId,
     kind: object.objectType,
     ...(object.path === undefined ? {} : { path: object.path }),
     ...(object.contentRef === undefined ? {} : { contentRef: object.contentRef }),
+    ...(representation === undefined ? {} : { representation }),
     metadata: object.metadata,
   }
 }
@@ -92,7 +104,7 @@ export class WorldSnapshotManager {
         "filesystem",
         objects
           .filter(object => ["file", "directory", "workspace"].includes(object.objectType))
-          .map(objectEntry),
+          .map(object => objectEntry(object, this.cas)),
       )
       const memory = createSectionManifest(
         this.cas,
@@ -103,17 +115,17 @@ export class WorldSnapshotManager {
               object.objectType,
             ),
           )
-          .map(objectEntry),
+          .map(object => objectEntry(object, this.cas)),
       )
       const task = createSectionManifest(
         this.cas,
         "task-projection-non-authoritative",
-        objects.filter(object => object.objectType === "task_projection").map(objectEntry),
+        objects.filter(object => object.objectType === "task_projection").map(object => objectEntry(object, this.cas)),
       )
       const capability = createSectionManifest(
         this.cas,
         "capability-state",
-        objects.filter(object => object.objectType === "capability_state").map(objectEntry),
+        objects.filter(object => object.objectType === "capability_state").map(object => objectEntry(object, this.cas)),
       )
       const services = createSectionManifest(
         this.cas,

@@ -20,6 +20,11 @@ export interface SectionManifestEntry {
   readonly kind: string
   readonly path?: string
   readonly contentRef?: CasDigest
+  /** R5-07：内容表示类型的**不可变**判别子（raw | file-manifest）。
+   *  由 snapshot 创建时绑定（CAS 的全局 isManifest 可被后续 promotion
+   *  翻转 —— 不得用它推断文件语义；同一 snapshot 必须物化为相同 bytes）。
+   *  kind === "file" 时必填；其它 kind 必须缺省。 */
+  readonly representation?: "raw" | "file-manifest"
   readonly metadata?: Readonly<Record<string, unknown>>
 }
 

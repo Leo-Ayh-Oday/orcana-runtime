@@ -1,9 +1,9 @@
 # AK-2 Projection + World Commit
 
 **Task ID:** `AK2-PROJECTION-001`
-**状态:** `READY_FOR_INDEPENDENT_AUDIT`（AK2-R4 Correction Gate 候选提交链 `7316325..HEAD`；等待独立复审；不等于 PASS/CLOSED，不得进入 AK-3）
+**状态:** `READY_FOR_INDEPENDENT_AUDIT`（AK2-R5 Correction Gate 候选提交链 `b7d15db..HEAD`；等待独立复审；不等于 PASS/CLOSED，不得进入 AK-3）
 **基线 / 回滚点:** `e224ad6bb8aed5cca2d1b8b63f048333cfb88003`
-**专用分支:** `feat/agent-os`
+**专用分支:** `feat/agent-os`（R5 专用：`feat/agent-os-r5` @ `/home/fuqiang/worktrees/orcana-agent-os-r5`）
 
 ## 目标
 
@@ -482,3 +482,166 @@ receipt、重算公开 SHA-256，并被当前 `RuntimeStateReceiptAuthority` 接
 `READY_FOR_INDEPENDENT_AUDIT`（候选提交链 `7316325..HEAD`；未 push、未 merge、
 未建 PR；等待独立只读复审 —— 不复用实现者结论，不写文件、不修复、不提交）。
 不得写 PASS / CLOSED / AK-2 COMPLETE / READY FOR AK-3。
+
+## AK2-R5 Correction Gate 记录（候选提交链，等待独立复审）
+
+**R5 专用分支 / worktree:** `feat/agent-os-r5` @ `/home/fuqiang/worktrees/orcana-agent-os-r5`
+**R5 起点:** `b7d15db`（AK2-R4 候选）
+**R5 文件白名单:** 本阶段文档、`docs/agent-os/evidence/ak2-r5/**`、
+`src/kernel/projection/**`、`src/kernel/world/{contracts,cas,manifests,snapshot,store}.ts`、
+`tests/kernel/projection/**`、`tests/kernel/world/**`、`tests/kernel/authority-graph.test.ts`。
+本轮 `src/runtime/linux/**` 零改动（无需绕不开的公开契约缺口）。
+未触碰：`src/workflow/**`、`src/harness/**`、`src/execd/**`、依赖锁、CI/secrets/billing。
+
+### R5-00 反例冻结（17 反例 + 1 静态门；RED 证据见 evidence/ak2-r5/README.md）
+
+| 反例 | 内容 | RED→GREEN |
+|---|---|---|
+| R5-00-1 | 任意调用方实现 kind:"fixture" + allowTestBackends=true 不得获得 receiptless World commit | ✓ |
+| R5-00-2 | baseProjectionRoot 是 symlink → start 在创建任何 child/物化/CAS 副作用前拒绝 | ✓ |
+| R5-00-3 | base root 在验证与 child 创建之间被替换 → 拒绝；外部 sentinel 不变 | ✓ |
+| R5-00-4 | assertReady() 抛异常 → 先 instance.cleanup()；未证明卸载不得遍历/删除 root；residue/error 保留 | ✓ |
+| R5-00-5 | create 完成 FUSE mount 后被替换为 foreign FUSE → 不得卸载 foreign、不得 rm/chmod upper/work/merged（REAL） | ✓ |
+| R5-00-6 | execute RUNNING 时并发 cancel → 先取消、等待 executor、恰好一个终态、cleanup 后无 writer | ✓ |
+| R5-00-7a-e | seam 抛异常必须 terminalize（merged lstat / getFinalReceipt / isCleanupFinalized / sealForScan / commit preflight） | ✓ |
+| R5-00-8 | 同一 intent 被两个 adapter 实例 / 重建 adapter 使用 → 只允许一个 execution cell | ✓ |
+| R5-00-9 | sealed 后同 UID 直写 writeLayerPath/upper → 不得返回成功 delta、不得 commit | **KNOWN RED**（OWNER-DECISION-REQUIRED；禁止伪造 GREEN） |
+| R5-00-10 | raw bytes 恰为合法 FileManifest JSON → promotion/GC/recovery 后物化逐字节一致 | ✓ |
+| R5-00-11 | invalid final namespace 拒绝后无 CAS/file/staging residue | ✓ |
+| R5-00-12 | maxFileChunks 超限在第二份数组分配/逐项 normalize/打开目标文件前拒绝 | ✓ |
+| R5-01 | 生产导出面不导出任何 fixture/test authority 能力（STATIC 门） | ✓（不变式） |
+| R5-03 | post-commit divergence → 显式 RECONCILING（不得谎报 REJECTED） | ✓（回归） |
+
+### R5-01 彻底删除 production receiptless authority
+
+- `allowTestBackends` 选项整体删除；构造时结构性要求 receiptAuthority
+  （所有 backend 含 kind:"fixture" 的任意结构化实现 / cast）——
+  `WORLD_COMMIT_WITHOUT_RECEIPT = 0`；不存在 receiptless commit 分支。
+- `ProjectionReceiptAuthority.trustLevel`（same-uid-untrusted /
+  test-harness / kernel-authenticated）：RuntimeStateReceiptAuthority 显式
+  声明 same-uid-untrusted；production acceptance 遇到 untrusted authority
+  fail-closed（`PRODUCTION_WORLD_COMMIT_BLOCKED`）。
+- 导出面 inventory：`PUBLIC_FIXTURE_AUTHORITY = 0`。
+
+### R5-02 可信 projection base root
+
+- `ProjectionBaseRootAuthority`：0700 创建、O_DIRECTORY|O_NOFOLLOW 打开、
+  owner === 当前 principal、mode === 0700、dev/ino 身份、retained dirfd；
+  child 创建/打开/删除相对 base fd（/proc/self/fd/N/<child>）；每次操作前
+  path 身份复核（parent swap fail-closed；外部 sentinel 不变）。
+- `PROJECTION_BASE_PATH_AUTHORITY = 0`、`PROJECTION_ROOT_ESCAPE = 0`。
+
+### R5-03 统一 lifecycle terminalizer
+
+- terminalize 幂等 guard（最多一个终态 / 一个 terminal receipt）；
+  execute intent 构建 guard（EXECUTION_INTENT_BUILD_FAILED）；abort 信号；
+  runningExecute 注册；cancel 改 async（先 abort → await executor →
+  唯一终态化；cleanup 后无 writer）；cleanupState 记录 phase/residue/
+  mount truth；post-commit divergence → 显式 RECONCILING（不谎报
+  REJECTED）。
+- `NONTERMINAL_FAILURE_PATH = 0`、`CLEANUP_RESIDUE_SILENT_SUCCESS = 0`、
+  `CANCELLED_WRITER_SURVIVES = 0`、`DUPLICATE_TERMINAL_RECEIPT = 0`。
+
+### R5-04 FUSE mount ownership
+
+- 实证：mount id 卸载后会被内核复用 —— id + upper dev/ino 不足；新增
+  daemon 命令行判别（/proc/<pid>/cmdline 含 upperdir=<ours>）。
+- create 错误路径 / assertMountOwned / cleanup / seal 全部绑定
+  mountId + fsType/source + mountpoint 身份 + upper dev/ino + daemon
+  命令行；foreign/unknown/replaced → 不卸载、不 rm/chmod、保留 residue。
+- `FOREIGN_MOUNT_UNMOUNT = 0`、`MOUNTED_TREE_RECURSIVE_DELETE = 0`、
+  `OWNED_MOUNT_SILENT_LEAK = 0`。
+
+### R5-05 intent 一次性 reservation
+
+- `ProjectionIntentRegistry`（kernel-owned；coordinator 持有；adapter 必填）
+  —— 一个 intent = 恰好一个 cell（跨 adapter 实例 / 重建 / 并发）；
+  不依赖实例内 Set。
+- `MULTI_CELL_INTENT_REUSE = 0`、`EXECUTION_SPEC_SELF_ATTESTATION = 0`。
+
+### R5-06 sealed scan trust boundary —— 选 B（fail-closed）
+
+- 当前 same-UID backend 不具备生产 seal authority（sealed 视图 = RO
+  remount / mode-based，同 UID 可直写 upper）→ production World commit
+  被禁止（PRODUCTION_WORLD_COMMIT_BLOCKED）。未写 SEALED_VIEW_MUTABLE=0。
+- 独立 UID / privileged daemon / MAC key / 新 IPC → OWNER-DECISION-REQUIRED
+  （不自行实现超范围系统服务）。
+
+### R5-07 CAS typed content representation
+
+- SectionManifestEntry 不可变 `representation`（raw | file-manifest），
+  snapshot 创建时绑定；materializer 只服从该判别子（不读全局可变
+  isManifest）；旧格式 fail-closed 拒绝（无静默 reinterpretation）。
+- `NONDETERMINISTIC_SNAPSHOT = 0`、`MUTABLE_CONTENT_INTERPRETATION = 0`。
+
+### R5-08 事务与资源上限
+
+- validateFinalNamespace 移到 delta CAS 物理写入前（invalid commit 零
+  CAS/file/staging residue）；parseFileManifest 的 chunk count 与 logical
+  size 在第二份数组分配与逐项 normalize 前检查。
+
+### 门禁（R5 候选链）
+
+- `bun test tests/kernel/projection/ tests/kernel/world/ tests/kernel/authority-graph.test.ts`
+  **303 tests：302 PASS + 1 KNOWN RED（R5-00-9）**（3 连）；typecheck 0
+  error；build ✓；`git diff --check` ✓。
+- 真实 fuse-overlayfs lane（R5-00-5 foreign swap / R4-00-11d EROFS /
+  R3-00-8 / B lane）PASS / ENV_BLOCKED 如实标注；live/provider NOT_RUN。
+- aggregate 基线外失败逐文件归因（BASE/HEAD 同窗口 A/B 对照；与 R4 相同
+  的 4 类环境/负载类失败，非本 diff）。
+- 测试后环境：0 mount residue、0 残留进程、0 残留 /tmp 目录、worktree
+  tracked+untracked clean；未 push、未 merge、未建 PR。
+
+### FACT
+
+- R4 候选 b7d15db 上 17 个 R5 反例全部 RED（16 fail + 1 静态门），根因
+  逐一确认（见 evidence/ak2-r5/README.md 表格）。
+- 本机实证：mount id 卸载后被内核复用（同路径 foreign 重挂载拿到相同
+  id）—— 这是 R5-04 daemon 命令行判别的直接依据。
+- R5-00-10：raw bytes 恰为合法 FileManifest JSON 时，putManifest 同 digest
+  翻转全局 isManifest → 修复前物化双重解释（0 字节），修复后逐字节一致。
+- R5-00-11：invalid namespace 拒绝后 delta CAS 物理文件残留（cas.put 的
+  rename 无法随 SQLite rollback 撤销）→ 校验前移到物理写入前。
+
+### INFERENCE
+
+- trustLevel 门把认证性从实现剥离：生产部署显式配置
+  RuntimeStateReceiptAuthority → 结构性无法正向提交（fail-closed 由配置
+  承载）。这与 R5-06 option B 同源：same-UID 架构无生产 seal authority。
+- representation 判别子把内容语义绑定到内容寻址的 snapshot —— 全局可变
+  标志无法再改变历史语义（确定性物化）。
+- daemon 命令行判别使 foreign 重挂载（含 mount id 复用）可确定识别。
+
+### PROPOSAL
+
+- Decision Packet（R5-04 真实性）：推荐 B（kernel-owned MAC key + sealed
+  IPC）为长期方向；短期可接受 C 的显式降级声明；实施前必须 Owner 决策
+  （影响文件不在本轮白名单）。
+- production 正向 B lane：本机无 cgroup 委托 → cleanup proof 不可得
+  （ENV_BLOCKED）；即使可得，same-uid-untrusted authority 也会被
+  PRODUCTION_WORLD_COMMIT_BLOCKED 拒绝（结构性 fail-closed）。
+
+### OWNER-DECISION-REQUIRED
+
+- **R5-04：Execution Receipt 真实性**（same-UID 可改 JSON + 重算公开
+  digest；无密钥方案无法区分 cleanup truth 真伪）—— 不写 CLOSED；
+  阻塞时 AK-2 不得 PASS。Gate 状态：`OWNER-DECISION-REQUIRED` +
+  `PRODUCTION_WORLD_COMMIT_BLOCKED`。
+- **R5-00-9 / R5-06：same-UID sealed view 直写 upper 无法阻止**（无
+  kernel-owned immutable snapshot / 独立 UID / MAC 授权）—— KNOWN RED，
+  禁止伪造 GREEN；生产 seal authority 缺失 → production World commit
+  fail-closed。
+- **production 正向 B lane**：无 cgroup 委托 → `ENV_BLOCKED`（不写
+  PASS/CLOSED）。
+
+### RESIDUAL RISK（不掩盖可构造反例）
+
+- R5-00-9 是已确认未闭合反例（KNOWN RED）—— 不是理论风险。
+- daemon 命令行判别依赖 /proc 可见性（同 UID 命名空间）；跨命名空间 /
+  特权场景未验证（如实记录）。
+
+### 最终状态
+
+`READY_FOR_INDEPENDENT_AUDIT`（候选提交链 `b7d15db..HEAD`；未 push、未
+merge、未建 PR；等待独立只读复审 —— 不复用实现者结论，不写文件、不修复、
+不提交）。不得写 PASS / CLOSED / AK-2 COMPLETE / READY FOR AK-3。

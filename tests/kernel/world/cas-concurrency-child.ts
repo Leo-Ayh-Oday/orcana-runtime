@@ -39,6 +39,7 @@ if (scenario === "link") {
         type: "object.put",
         objectId: "file",
         objectType: "file",
+        path: "file",
         contentRef: digest,
       }],
     })

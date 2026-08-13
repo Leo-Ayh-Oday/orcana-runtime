@@ -36,6 +36,7 @@ if (scenario === "world-precommit" || scenario === "world-ledger") {
       type: "object.put",
       objectId: "candidate",
       objectType: "file",
+      path: "candidate",
       contentRef: content.digest,
     }],
   })

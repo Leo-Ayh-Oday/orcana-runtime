@@ -154,7 +154,12 @@ export const PROJECTION_TRANSITION_TABLE: Readonly<Record<ProjectionStateTransit
 
 /** R2-01：Projection Execution Intent —— coordinator 在 start 时生成、
  *  不可复用（session nonce）的期望执行绑定。Expected binding 来自当前
- *  session/plan/command（不是 outcome 自报）。 */
+ *  session/plan/command（不是 outcome 自报）。
+ *
+ *  R4-03：intent 成为「期望执行绑定」的唯一真源 —— coordinator 从
+ *  kernel-owned input（plan + session）独立派生 filesystemScope /
+ *  workspaceIdentity / filesystemPolicyDigest；adapter 必须在 spawn 前
+ *  逐字段验证 spec 与 intent 一致（executor 不得同时提供声明和证明）。 */
 export interface ProjectionExecutionIntent {
   /** 每次 start 唯一（uuid）。 */
   readonly intentId: string
@@ -170,6 +175,16 @@ export interface ProjectionExecutionIntent {
   readonly command: { readonly executable: string; readonly args: readonly string[]; readonly timeoutMs?: number }
   /** canonical(writableRoots + readonlyRoots) 的摘要（filesystem policy）。 */
   readonly scopeDigest: string
+  /** R4-03：plan 声明的 canonical 可写/只读 roots（adapter spawn 前逐字段
+   *  验证；来自 kernel-owned plan，不是 adapter 选项自报）。 */
+  readonly filesystemScope: { readonly writableRoots: readonly string[]; readonly readonlyRoots: readonly string[] }
+  /** R4-03：merged workspace 的 canonical path + dev/ino 身份（adapter
+   *  spawn 前验证；来自 session 创建时 lstat，kernel-owned）。 */
+  readonly workspaceIdentity: { readonly path: string; readonly dev: number; readonly ino: number }
+  /** R4-03：期望 filesystem policy digest —— coordinator 从 plan roots +
+   *  merged hostRoot 按 runtime 的 spec.filesystem canonical 结构独立派生
+   *  （kernel-owned；不能与 receipt/claim 自报值互相比对）。 */
+  readonly filesystemPolicyDigest: string
 }
 
 /** intent 的 canonical 摘要（注入 spec 环境变量 → 进入 cellSpecDigest →

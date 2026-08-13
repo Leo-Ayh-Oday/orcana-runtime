@@ -186,6 +186,7 @@ describe("AK-1 CAS filesystem confinement", () => {
           type: "object.put",
           objectId: "pinned",
           objectType: "file",
+          path: "pinned",
           contentRef: digest,
         }],
       })

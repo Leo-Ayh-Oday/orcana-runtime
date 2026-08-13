@@ -267,21 +267,28 @@ export class SnapshotMaterializer {
       const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
       if (parent.length > 0) this.ensureDirectory(absoluteBase, parent)
       const target = this.joinWithin(absoluteBase, path)
-      // R3-06.6：下一文件读取/写入前预留累计预算（CAS record size 已知
-      // —— 拒绝在读取/分配之前，不是先分配再检查）。
+      // R4-08：累计 tree budget 预留必须使用 logical 大小 —— FileManifest
+      // JSON 可以很小而 logical file 很大。预算超限必须在打开目标文件、
+      // 读取 chunk、写入任何字节之前拒绝（不是先分配再检查）。
       const contentRecord = this.source.getCasRecord(entry.contentRef!)
-      const declaredSize = contentRecord?.size
+      let declaredSize = contentRecord?.size
+      let preParsedManifest: import("../world/contracts").FileManifest | undefined
+      if (contentRecord?.isManifest === true) {
+        // 解析一次（不重复 parse/copy manifest），logical size 进入预算。
+        preParsedManifest = this.parseFileManifest(entry.contentRef!, path)
+        declaredSize = preParsedManifest.size
+      }
       if (declaredSize !== undefined && treeBytes + declaredSize > this.limits.maxTreeBytes) {
         throw new ProjectionError(
           "PROJECTION_RESOURCE_LIMIT",
-          `materialized tree would exceed maxTreeBytes before writing ${path} (${treeBytes} + ${declaredSize} > ${this.limits.maxTreeBytes})`,
+          `materialized tree would exceed maxTreeBytes before opening ${path} (${treeBytes} + ${declaredSize} > ${this.limits.maxTreeBytes})`,
         )
       }
       const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o444)
       try {
         // R2-07-9：有界流式写入（逐 chunk 写目标 fd —— 避免
         // parts[] + Buffer.concat 的近双倍峰值；配额在读取/分配前生效）。
-        const written = this.writeFileStreamed(entry.contentRef!, fd, path)
+        const written = this.writeFileStreamed(entry.contentRef!, fd, path, preParsedManifest)
         if (written > this.limits.maxFileBytes) {
           throw new ProjectionError(
             "PROJECTION_RESOURCE_LIMIT",
@@ -399,11 +406,12 @@ export class SnapshotMaterializer {
    *  FileManifest。**分配前限制**：先查 CAS record.size（字节上限）——
    *  任何超过 maxFileBytes 的对象在读取/UTF-8 转换/JSON parse/chunks
    *  数组分配之前拒绝（malicious huge manifest fail-closed）。 */
-  /** R2-07-8/9：有界流式写入 —— 配额（CAS record size / manifest size /
-   *  chunk count / 剩余预算）在每次读取与分配之前生效；逐 chunk 写目标
-   *  fd（峰值 = 单 chunk，无 parts[] + Buffer.concat 双倍峰值）。返回
-   *  写入总字节。 */
-  private writeFileStreamed(contentRef: CasDigest, fd: number, path: string): number {
+  /** R2-07-8/9 + R4-08：有界流式写入 —— 配额（CAS record size /
+   *  manifest logical size / chunk count / 剩余预算）在每次读取与分配之前
+   *  生效；逐 chunk 写目标 fd（峰值 = 单 chunk，无 parts[] + Buffer.concat
+   *  双倍峰值）。返回写入总字节。preParsedManifest 由调用方预解析（R4-08
+   *  ：不重复 parse/copy manifest —— logical size 预算 + 写入共用一次解析）。 */
+  private writeFileStreamed(contentRef: CasDigest, fd: number, path: string, preParsedManifest?: import("../world/contracts").FileManifest): number {
     const record = this.source.getCasRecord(contentRef)
     if (!record) {
       throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: CAS object ${contentRef} is not registered`)
@@ -420,7 +428,7 @@ export class SnapshotMaterializer {
       writeFileSync(fd, bytes)
       return bytes.byteLength
     }
-    const manifest = this.parseFileManifest(contentRef, path)
+    const manifest = preParsedManifest ?? this.parseFileManifest(contentRef, path)
     if (manifest.size > this.limits.maxFileBytes) {
       throw new ProjectionError(
         "PROJECTION_RESOURCE_LIMIT",

@@ -5,8 +5,8 @@ import { execFileSync } from "node:child_process"
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { CopyProjectionFixtureBackend } from "./test-fixtures"
 import {
-  CopyProjectionFixtureBackend,
   FuseOverlayfsProjectionBackend,
   probeNativeBackends,
 } from "../../../src/kernel/projection/backend"

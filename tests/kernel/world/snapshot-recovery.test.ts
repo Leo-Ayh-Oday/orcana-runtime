@@ -230,6 +230,7 @@ describe("AK-1 recovery", () => {
           type: "object.put",
           objectId: "file",
           objectType: "file",
+          path: "file",
           contentRef: file.digest,
         }],
       })
@@ -261,6 +262,7 @@ describe("AK-1 recovery", () => {
           type: "object.put",
           objectId: "file",
           objectType: "file",
+          path: "file",
           contentRef: file.digest,
         }],
       })
@@ -335,6 +337,7 @@ describe("AK-1 recovery", () => {
           type: "object.put",
           objectId: "file",
           objectType: "file",
+          path: "file",
           contentRef: file.digest,
         }],
       })

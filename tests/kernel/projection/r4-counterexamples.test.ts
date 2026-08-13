@@ -48,7 +48,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { createHash } from "node:crypto"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
-import { ProjectionCoordinator, type ProjectionExecutor, type ProjectionSession } from "../../../src/kernel/projection/coordinator"
+import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type ProjectionExecutor, type ProjectionSession } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
@@ -66,6 +66,7 @@ import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
 import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
 import { compileBwrapArgv, createBubblewrapBackend } from "../../../src/runtime/linux/backends/bubblewrap"
+import { probeNativeBackends } from "../../../src/kernel/projection/backend"
 import { probeLinuxCapabilities } from "../../../src/runtime/linux/capability-probe"
 import { canonicalJson } from "../../../src/kernel/world/canonical"
 
@@ -227,17 +228,20 @@ function fakeFinalReceipt(overrides: Partial<SandboxReceipt> = {}): SandboxRecei
 
 function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionReceiptAuthority & {
   setIntentDigest(digest: string | undefined): void
+  setFilesystemPolicyDigest(digest: string): void
   setCleanupFinalized(finalized: boolean): void
   currentDigest(): string | undefined
 } {
   let intentDigest: string | undefined
+  // R4-03.4：fake receipt 必须携带 coordinator 派生的期望 policy digest。
+  let filesystemPolicyDigest = "d".repeat(64)
   let cleanupFinalized = true
   let latestDigest = fakeFinalReceipt(overrides)
   const { computeReceiptDigest } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
   const inner: ProjectionReceiptAuthority = {
     getFinalReceipt: () => {
       if (intentDigest === undefined) return undefined
-      const base = fakeFinalReceipt(overrides)
+      const base = fakeFinalReceipt({ ...overrides, filesystemPolicyDigest })
       const withIntent = { ...base, projectionIntentDigest: intentDigest }
       latestDigest = { ...withIntent, receiptDigest: computeReceiptDigest(withIntent) }
       return latestDigest as SandboxReceipt
@@ -248,12 +252,15 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionRecei
     setIntentDigest(digest: string | undefined): void {
       intentDigest = digest
     },
+    setFilesystemPolicyDigest(digest: string): void {
+      filesystemPolicyDigest = digest
+    },
     setCleanupFinalized(finalized: boolean): void {
       cleanupFinalized = finalized
     },
     currentDigest(): string | undefined {
       if (intentDigest === undefined) return latestDigest.receiptDigest
-      const base = fakeFinalReceipt(overrides)
+      const base = fakeFinalReceipt({ ...overrides, filesystemPolicyDigest })
       return computeReceiptDigest({ ...base, projectionIntentDigest: intentDigest })
     },
   })
@@ -261,7 +268,9 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionRecei
 
 function bindIntent(auth: ReturnType<typeof fakeAuthority>, session: ProjectionSession): void {
   const { projectionIntentDigest } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
+  const { expectedProjectionFilesystemPolicyDigest } = require("../../../src/kernel/projection/coordinator") as typeof import("../../../src/kernel/projection/coordinator")
   auth.setIntentDigest(projectionIntentDigest(session.intent))
+  auth.setFilesystemPolicyDigest(expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir))
 }
 
 function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAuthority>): void {
@@ -276,7 +285,7 @@ function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAut
       nodeRunId: "run-fake:n1",
       cellId: "cell-fake",
       cellSpecDigest: "c".repeat(64),
-      filesystemPolicyDigest: "d".repeat(64),
+      filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir),
       workspaceHostRoot: session.mergedDir,
     } as ProjectionReceiptBinding,
   }
@@ -684,6 +693,9 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
       const { ctx, snapshotId } = buildWorld()
       const coord = coordinator(ctx, backend, {
         fixtureExecutionToken: Symbol("r4-token"),
+        // R4-01：production backend 构造需要 receipt authority（此处只
+        // 驱动 start/execute + 直接 scanner，不经 coord.scan 的 proof gate）。
+        receiptAuthority: fakeAuthority(),
       })
       let mergedDir = ""
       let writeRejected = false
@@ -771,6 +783,26 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
         throw new Error("R4-00-11c RED: directory deletion during final verification was neither rejected nor detected")
       }
     })
+
+    test("R4-00-11d：真实 FUSE sealed 视图（内核 EROFS）—— final verification 期间写入被内核拒绝", async () => {
+      // 真实 fuse-overlayfs ro remount：seal 后 merged 视图不可写（内核
+      // MS_RDONLY）—— 这是 scanner sealed view 的真实证明（fixture 的
+      // mode-based seal 只是逻辑近似）。不可用 → 显式 ENV_BLOCKED（不算
+      // PASS；本机已验证可用）。
+      const probe = probeNativeBackends()
+      if (!probe.fuseOverlayfs) {
+        console.log("ENV_BLOCKED: fuse-overlayfs unavailable; real sealed-view lane not run")
+        return
+      }
+      const result = await runScanWithFinalWrite(new FuseOverlayfsProjectionBackend(), merged => {
+        writeFileSync(join(merged, "late-write.txt"), "LATE")
+      })
+      // sealed 视图拒绝写入（EROFS）或 seal 失败 fail-closed。
+      expect(result.writeRejected || result.scanFailed).toBe(true)
+      if (!result.writeRejected && !result.scanFailed) {
+        throw new Error("R4-00-11d RED: write succeeded on the sealed real-FUSE view (seal is not kernel-enforced)")
+      }
+    }, 60_000)
   })
 
   test("R4-00-12：FileManifest JSON 很小但 logical file 很大 → 累计 tree budget 必须在 chunk read/write 前拒绝", () => {

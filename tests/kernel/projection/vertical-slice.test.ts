@@ -12,8 +12,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ProjectionCoordinator } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
+import { CopyProjectionFixtureBackend } from "./test-fixtures"
 import {
-  CopyProjectionFixtureBackend,
   FuseOverlayfsProjectionBackend,
   probeNativeBackends,
 } from "../../../src/kernel/projection/backend"
@@ -87,8 +87,6 @@ async function runVerticalSlice(
     projectionRoot: tmpRoot("proj"),
     // A 层 fixture backend 需要显式 test capability（R06.3）。
     allowTestBackends: backend.kind === "fixture" ? true : undefined,
-    // A 层 fixture executor 无真实 receipt —— 仅测试。
-    allowFixtureExecution: backend.kind === "fixture" ? true : undefined,
     ...(receiptAuthority === undefined ? {} : { receiptAuthority }),
   })
   // 4. native projection。
@@ -116,9 +114,25 @@ async function runVerticalSlice(
   expect(outcome.exitCode).toBe(0)
   expect(session.executionState).toBe("COMPLETED")
 
-  // 6. deterministic delta。
-  const delta = coord.scan(session)
-  expect(delta.entries).toContainEqual(expect.objectContaining({ kind: "write", path: "src/main.ts" }))
+  // 6. deterministic delta。production lane（backend.kind !== "fixture"）：
+  // finalized receipt/cleanup proof 缺失 → scan 即 fail-closed（ENV_BLOCKED
+  // 语义前移到 scan —— 执行 writer 未证明终止不得扫描）。
+  let delta: import("../../../src/kernel/projection/scanner").ProjectionDeltaResult | undefined
+  let scanError: unknown
+  void delta
+  try {
+    delta = coord.scan(session)
+  } catch (error) {
+    scanError = error
+  }
+  if (scanError !== undefined) {
+    const code = (scanError as { code?: string }).code ?? ""
+    if (/^EXECUTION_RECEIPT_(NOT_PERSISTED|NOT_FINALIZED|REQUIRED)$/.test(code)) {
+      return { revision: 0n, newContent: "", ctx, commitError: scanError }
+    }
+    throw scanError
+  }
+  expect(delta!.entries).toContainEqual(expect.objectContaining({ kind: "write", path: "src/main.ts" }))
 
   // 7. validator 已内置于 commit（writes/expected output 验证）。
   // 8. World commit → revision 1（新 revision = 2）。
@@ -145,7 +159,7 @@ async function runVerticalSlice(
   expect(ctx.store.getWorld("world-v")!.currentRevision).toBe(2n)
 
   // 9. WorldCommitReceipt。
-  expect(session.receipt!.worldCommitReceipt!.deltaDigest).toBe(delta.deltaDigest)
+  expect(session.receipt!.worldCommitReceipt!.deltaDigest).toBe(delta!.deltaDigest)
   expect(session.receipt!.effectState).toBe("NONE")
   expect(session.receipt!.evidenceState).toBe("PENDING")
   expect(session.receipt!.executionState).toBe("COMPLETED")
@@ -187,7 +201,9 @@ function brokerExecutorFactory(merged: string, stateStore?: RuntimeStateStore) {
     projectId: "ak2-slice",
     hostRoot: merged,
     access: "readwrite",
-    ownerFiles: [merged],
+    // R4-03 投影契约：ownerFiles 必须等于 writable roots（pathguard
+    // owned 范围 + filesystemPolicyDigest 派生前提）。
+    ownerFiles: ["src"],
   })
   const executor = new LinuxBrokerProjectionExecutor({
     broker,
@@ -320,11 +336,28 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
           return outcome
         },
       )
-      coord.scan(session)
-      // 注意：真实 overlay 成功链的 commit 依赖 cleanup proof —— 本机
+      // R4-00-7：production scan 需要 finalized receipt/cleanup proof —— 本机
       // bubblewrap 无 cgroup 委托（cleanupVerified=false）→ ENV_BLOCKED：
-      // commit 必须 fail-closed（拒绝）。真实 unmount 失败无法无副作用注入
-      // —— CLEANUP_FAILED/residue 语义由 fixture 故障矩阵覆盖。
+      // scan 即 fail-closed（执行 writer 未证明终止不得扫描；比 commit 更早
+      // 拒绝）。真实 unmount 失败无法无副作用注入 —— CLEANUP_FAILED/residue
+      // 语义由 fixture 故障矩阵覆盖。
+      let scanBlocked = false
+      try {
+        coord.scan(session)
+      } catch (error) {
+        const code = (error as { code?: string }).code ?? ""
+        if (/^EXECUTION_RECEIPT_(NOT_PERSISTED|NOT_FINALIZED|REQUIRED)$/.test(code)) {
+          scanBlocked = true
+          console.log("ENV_BLOCKED: bubblewrap cleanup proof unavailable on this host (cleanupVerified=false); delta scan refused (fail-closed)")
+        } else {
+          throw error
+        }
+      }
+      if (scanBlocked) {
+        expect(ctx.store.getWorld("world-vf")!.currentRevision).toBe(1n)
+        ctx.cleanup()
+        return
+      }
       try {
         const receipt = coord.commit(session)
         expect(receipt.newRevision).toBe(2n)

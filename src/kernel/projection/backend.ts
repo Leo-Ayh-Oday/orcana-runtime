@@ -27,8 +27,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  rmdirSync,
   statSync,
-  cpSync,
   statfsSync,
 } from "node:fs"
 import { join, resolve, sep } from "node:path"
@@ -63,6 +63,10 @@ export interface ProjectionInstance {
    * 幂等：第二次调用返回 true。
    */
   cleanup(): boolean
+  /** R4-06：seal —— 执行 writer 已终止后，把 merged 视图转为不可写、
+   *  不可替换的稳定 scan 输入。返回 sealed 视图路径；失败 → { error }
+   *  （调用方必须 fail-closed：不生成 delta、不 commit）。幂等。 */
+  readonly sealForScan?: () => { readonly sealedPath: string } | { readonly error: string }
 }
 
 export interface NativeProjectionBackend {
@@ -219,9 +223,10 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 文件保持只读（写永远落在 upper，lower 不可被 merged 写穿透）。
       this.chmodMergedWritable(merged)
     } catch (error) {
-      // R2-06-5：真实挂载中且 unmount 失败时不得递归删除 upper/work/merged
-      //（可能仍在被内核使用 —— residue 保留供诊断）。从未挂载（fake/未
-      // 挂载成功）→ 目录安全可删。
+      // R2-06-5/R4-00-9：真实挂载中且 unmount 失败时不得递归删除
+      // upper/work/merged（可能仍在被内核使用 —— residue 保留供诊断）。
+      // unmount 报告成功 ≠ 已卸载 —— 必须重新确认 mount 已消失；仍挂载
+      // → 禁止 rm/chmod 任何内容（R4-05.7）。
       if (mounted && this.isFuseMount(merged)) {
         const unmounted = this.unmount(merged)
         if (!unmounted) {
@@ -233,11 +238,25 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
                 error instanceof Error ? error.message : String(error),
               )
         }
+        if (this.isFuseMount(merged)) {
+          throw new ProjectionError(
+            "BACKEND_UNAVAILABLE",
+            `fuse-overlayfs mount failed for ${label} (unmount reported success but mount still active; residue retained — no recursive deletion of a mounted directory)`,
+            error instanceof Error ? error.message : String(error),
+          )
+        }
       }
       try {
         rmSync(upper, { recursive: true, force: true })
         rmSync(work, { recursive: true, force: true })
-        rmSync(merged, { recursive: true, force: true })
+        // R4-05.8：merged 只允许在确认非 mount 后删除；非空 → 保留 residue。
+        if (existsSync(merged) && !this.isFuseMount(merged)) {
+          try {
+            if (readdirSync(merged).length === 0) rmdirSync(merged)
+          } catch {
+            // residue 保留
+          }
+        }
       } catch {
         // best-effort
       }
@@ -256,6 +275,11 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     const mountId = afterMountId
     const upperStat = lstatSync(upper)
     const upperIdentity = { dev: upperStat.dev, ino: upperStat.ino }
+    // R4-06：seal 状态 —— RW mount 卸载后以 ro 重挂载同一 lower/upper/work
+    //（内核 MS_RDONLY 强制：写入 EROFS，不可替换）。sealedMountId 是新的
+    // mount identity（ownership 复核两者皆可）。
+    let sealedMountId: string | undefined = undefined
+    let sealed = false
     return {
       backend: "fuse-overlayfs",
       mergedPath: merged,
@@ -268,6 +292,7 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // mountpoint 未被 symlink/rename 替换 + upper 目录身份一致（mount id
       // 会被内核复用，upper dev/ino 绑定本次创建）。execute 前/后、scan
       // 前、cleanup 时调用；mount 消失/被替换 → false（fail-closed）。
+      // R4-06：seal 后接受 sealed mount id（同一 upper 身份的 ro 重挂载）。
       assertMountOwned: () => {
         if (!existsSync(merged)) return false
         try {
@@ -276,7 +301,8 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
         } catch {
           return false
         }
-        if (ownedFuseMountId(merged) !== mountId) return false
+        const current = ownedFuseMountId(merged)
+        if (current !== mountId && current !== sealedMountId) return false
         try {
           const upperNow = lstatSync(upper)
           if (upperNow.dev !== upperIdentity.dev || upperNow.ino !== upperIdentity.ino) return false
@@ -284,6 +310,51 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
           return false
         }
         return true
+      },
+      // R4-06：seal —— 执行 writer 已终止（cleanup proof）后调用：
+      // ownership 复核 → 卸载 RW mount（确认已消失）→ 以 ro 重挂载
+      //（同一 lower/upper/work）→ 确认真实挂载。失败 → { error }（
+      // fail-closed：不生成 delta、不 commit）。幂等。
+      sealForScan: () => {
+        if (sealed) return { sealedPath: merged }
+        if (!existsSync(merged)) return { error: "merged missing before seal" }
+        try {
+          const stat = lstatSync(merged)
+          if (stat.isSymbolicLink()) return { error: "merged replaced by symlink before seal" }
+        } catch (error) {
+          return { error: `merged unreadable before seal: ${error instanceof Error ? error.message : String(error)}` }
+        }
+        if (ownedFuseMountId(merged) !== mountId) {
+          return { error: "mount no longer owned by this session; seal refused" }
+        }
+        try {
+          const upperNow = lstatSync(upper)
+          if (upperNow.dev !== upperIdentity.dev || upperNow.ino !== upperIdentity.ino) {
+            return { error: "upper identity changed; seal refused" }
+          }
+        } catch {
+          return { error: "upper unreadable before seal" }
+        }
+        // 卸载 RW mount 并确认已消失（R4-05.7：unmount 报告成功 ≠ 已卸载）。
+        if (!this.unmount(merged)) {
+          return { error: "unmount failed during seal (writers may remain); seal refused" }
+        }
+        if (this.isFuseMount(merged)) {
+          return { error: "mount still active after unmount during seal; seal refused" }
+        }
+        // ro 重挂载（内核 MS_RDONLY：写入 EROFS —— 不可写、不可替换视图）。
+        try {
+          execFileSyncSafe(this.binaryPath, ["-o", `lowerdir=${lower},upperdir=${upper},workdir=${work},ro`, merged])
+        } catch (error) {
+          return { error: `read-only remount failed: ${error instanceof Error ? error.message : String(error)}` }
+        }
+        const sealedId = ownedFuseMountId(merged)
+        if (sealedId === undefined || !isOwnedFuseMount(merged)) {
+          return { error: "read-only remount did not produce a real FUSE mount; seal refused" }
+        }
+        sealedMountId = sealedId
+        sealed = true
+        return { sealedPath: merged }
       },
       cleanup: () => {
         if (!existsSync(merged) && !existsSync(upper) && !existsSync(work)) return true
@@ -299,7 +370,8 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
         }
         const stillFuse = this.isFuseMount(merged)
         if (stillFuse) {
-          if (ownedFuseMountId(merged) !== mountId || !upperOwned) {
+          const current = ownedFuseMountId(merged)
+          if ((current !== mountId && current !== sealedMountId) || !upperOwned) {
             // R3-03.1：foreign mount / mount identity mismatch → cleanup
             // failure；禁止 unmount、禁止 rm/chmod upper/work/merged。
             return false
@@ -316,12 +388,18 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
             return false
           }
         }
-        // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work/merged。
-        // rmSync 抛错（如挂载点仍被占用）→ 规范化为 cleanup failure（不抛）。
+        // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work。
+        // R4-05.8：merged mountpoint 只允许在确认空且非 mount 后用 rmdir
+        // 删除（禁止递归穿越仍挂载/非空目录）。rmSync 抛错 → cleanup
+        // failure（不抛）。
         try {
           rmSync(upper, { recursive: true, force: true })
           rmSync(work, { recursive: true, force: true })
-          rmSync(merged, { recursive: true, force: true })
+          if (existsSync(merged)) {
+            if (this.isFuseMount(merged)) return false
+            if (readdirSync(merged).length !== 0) return false
+            rmdirSync(merged)
+          }
         } catch {
           return false
         }
@@ -366,62 +444,16 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
   }
 }
 
-function makeTreeWritable(root: string): void {
-  const visit = (dir: string): void => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry)
-      const stat = lstatSync(full)
-      if (stat.isDirectory()) {
-        chmodSync(full, 0o700)
-        visit(full)
-      } else if (stat.isFile()) {
-        chmodSync(full, 0o600)
-      }
-    }
-  }
-  chmodSync(root, 0o700)
-  visit(root)
-}
-
-/**
- * TEST FIXTURE ONLY —— 确定性 copy backend：把 lower 复制为可写 merged。
- * 不创建任何真实 overlay 语义；仅用于 coordinator/delta/commit 逻辑测试。
- * 绝对不作为真实 Linux backend 通过证据。
+/** TEST FIXTURE ONLY —— 确定性 copy backend：把 lower 复制为可写 merged。
+ *  不创建任何真实 overlay 语义；仅用于 coordinator/delta/commit 逻辑测试。
+ *  绝对不作为真实 Linux backend 通过证据。
+ *
+ *  R4-01：fixture backend 移出生产导出面 —— 本类已迁至
+ *  tests/kernel/projection/test-fixtures.ts（test-only factory）。
+ *  生产模块（src/kernel/projection/backend.ts / index.ts）不再导出
+ *  任何 fixture 执行能力（PUBLIC_FIXTURE_AUTHORITY = 0）。
  */
-export class CopyProjectionFixtureBackend implements NativeProjectionBackend {
-  readonly id = "fixture-copy"
-  readonly kind = "fixture" as const
-  readonly testFixtureOnly = true
-
-  create(input: CreateProjectionInput): ProjectionInstance {
-    const label = assertSafeLabel(input.label)
-    const projectionRoot = resolve(input.projectionRoot)
-    const lower = assertSafeMountPath(input.lowerDir, projectionRoot)
-    assertRealDirectory(lower, "lower")
-    assertRealDirectory(projectionRoot, "projectionRoot")
-
-    const merged = assertSafeMountPath(join(projectionRoot, `merged-${label}`), projectionRoot)
-    mkdirSync(merged, { mode: 0o700 })
-    // 复制 lower → merged（可写副本；lower 的只读 mode 不继承 —— upper 语义）。
-    cpSync(lower, merged, { recursive: true })
-    makeTreeWritable(merged)
-
-    return {
-      backend: "fixture",
-      mergedPath: merged,
-      writeLayerPath: merged,
-      assertReady: () => {
-        statSync(merged)
-        readdirSync(merged)
-      },
-      cleanup: () => {
-        if (!existsSync(merged)) return true
-        rmSync(merged, { recursive: true, force: true })
-        return true
-      },
-    }
-  }
-}
+// （实现位于 tests/kernel/projection/test-fixtures.ts）
 
 export interface NativeBackendProbe {
   readonly overlayfs: boolean

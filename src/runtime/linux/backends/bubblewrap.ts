@@ -91,7 +91,62 @@ export function defaultTmpfs(): Array<{ target: string; sizeBytes: number }> {
   ]
 }
 
-/** 编译 bwrap argv（Policy Compiler 唯一来源）。 */
+/** 判断是否为受控视图编译（R4-02）：任何挂载 target 位于 /workspace
+ *  之下 → /workspace 必须是空目录 + 声明的 roots 才可达（unscoped 不可
+ *  读、不可写；readonly root 无更宽 RW ancestor）。无 /workspace 挂载的
+ *  spec（通用 broker 工作区模型 —— 整个 workspace 即授权范围）保持
+ *  整树挂载语义。 */
+export function isControlledWorkspaceView(opts: BwrapCompileOptions): boolean {
+  const rules = [
+    ...(opts.extraReadonly ?? []),
+    ...(opts.extraWritable ?? []),
+    ...(opts.cacheMounts ?? []),
+    ...(opts.cacheMountsRw ?? []),
+  ]
+  return rules.some(rule => rule.target === "/workspace" || rule.target.startsWith("/workspace/"))
+}
+
+/** 挂载 dominance 检查（R4-02.7/9）：对最终 bwrap argv 的挂载集合断言 ——
+ *  1) RW 挂载不得覆盖任何 RO 挂载 target（含祖先关系）；
+ *  2) 受控视图下 /workspace 本身不得被 RW bind（整个 merged root 暴露）；
+ *  3) 无重复 target。违反任一 → LinuxExecutionError（fail-closed）。 */
+export function assertMountDominance(
+  mounts: ReadonlyArray<{ readonly flag: string; readonly source: string; readonly target: string }>,
+  controlled: boolean,
+): void {
+  const rw = mounts.filter(m => m.flag === "--bind")
+  const ro = mounts.filter(m => m.flag === "--ro-bind")
+  for (const r of rw) {
+    if (controlled && r.target === "/workspace") {
+      throw new LinuxExecutionError(
+        "MOUNT_POLICY_INVALID",
+        `bwrap controlled view refuses RW bind of the whole workspace root at /workspace (${r.source})`,
+      )
+    }
+    for (const o of ro) {
+      if (o.target === r.target || o.target.startsWith(r.target.replace(/\/$/, "") + "/")) {
+        throw new LinuxExecutionError(
+          "MOUNT_POLICY_INVALID",
+          `bwrap mount dominance violation: RW mount ${r.target} covers readonly mount ${o.target} (readonly root writable via alias)`,
+        )
+      }
+    }
+  }
+  const targets = new Set<string>()
+  for (const mount of mounts) {
+    if (targets.has(mount.target)) {
+      throw new LinuxExecutionError(
+        "MOUNT_POLICY_INVALID",
+        `bwrap duplicate mount target: ${mount.target}`,
+      )
+    }
+    targets.add(mount.target)
+  }
+}
+
+/** 编译 bwrap argv（Policy Compiler 唯一来源）。
+ *  R4-02：受控视图下 /workspace 是空目录（--dir），只挂载声明的
+ *  /workspace/<root> 目标；通用模式（无 /workspace 挂载）保持整树绑定。 */
 export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilities, opts: BwrapCompileOptions = {}): string[] {
   const argv: string[] = [
     "--unshare-user",
@@ -120,9 +175,14 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
   // 空 Home。
   argv.push("--dir", "/home/orcana")
 
-  // Worktree rw 挂载（PR-4：/workspace 必须存在 —— 编译期已强制 worktreeRoot）。
+  // R4-02：/workspace 布局。
   const worktree = opts.worktreeRoot ?? spec.filesystem.worktreeRoot
-  if (worktree) {
+  const controlled = isControlledWorkspaceView(opts)
+  if (controlled) {
+    // 受控视图：/workspace 是空目录；只有声明的 /workspace/<root> 挂载可达。
+    argv.push("--dir", "/workspace")
+  } else if (worktree) {
+    // 通用工作区模型：整个 workspace 即授权范围（无 /workspace 声明挂载）。
     argv.push("--bind", worktree, "/workspace")
   }
 
@@ -157,6 +217,16 @@ export function compileBwrapArgv(spec: ExecutionCellSpec, caps: LinuxCapabilitie
     throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `bubblewrap cwd is outside worktree: ${spec.command.cwd}`)
   }
   argv.push("--chdir", guestCwd)
+
+  // R4-02.9：最终 argv 的 mount dominance 检查（fail-closed）。
+  const mounts: Array<{ flag: string; source: string; target: string }> = []
+  for (let index = 0; index < argv.length - 2; index++) {
+    const flag = argv[index]
+    if (flag === "--bind" || flag === "--ro-bind") {
+      mounts.push({ flag, source: argv[index + 1]!, target: argv[index + 2]! })
+    }
+  }
+  assertMountDominance(mounts, controlled)
 
   return argv
 }
@@ -222,8 +292,37 @@ export function createBubblewrapBackend(): ExecutionBackend {
         throw new LinuxExecutionError("PROCESS_START_FAILED", `host cwd does not exist: ${spec.command.cwd}`)
       }
       const worktreeRoot = spec.filesystem.worktreeRoot
-      if (!worktreeRoot || !guestWorkspacePath(spec.command.cwd, worktreeRoot)) {
+      const guestCwd = worktreeRoot ? guestWorkspacePath(spec.command.cwd, worktreeRoot) : undefined
+      if (!worktreeRoot || !guestCwd) {
         throw new LinuxExecutionError("WORKSPACE_PATH_ESCAPE", `bubblewrap cwd is outside worktree: ${spec.command.cwd}`)
+      }
+      // R4-02.8：受控视图（存在 /workspace 声明挂载）下，cwd 与 workspace
+      // executable 必须在该受控视图内解析 —— unscoped 路径在沙盒内不存在
+      // （不再整树暴露），compile 期拒绝（fail-closed，非 spawn 期 ENOENT）。
+      const controlled = [
+        ...spec.filesystem.readonlyMounts,
+        ...spec.filesystem.writableMounts,
+      ].some(rule => rule.target === "/workspace" || rule.target.startsWith("/workspace/"))
+      if (controlled) {
+        const declaredTargets = [
+          ...spec.filesystem.readonlyMounts.map(rule => rule.target),
+          ...spec.filesystem.writableMounts.map(rule => rule.target),
+        ]
+        const withinView = (guestPath: string): boolean =>
+          guestPath === "/workspace" || declaredTargets.some(target => guestPath === target || guestPath.startsWith(target.replace(/\/$/, "") + "/"))
+        if (!withinView(guestCwd)) {
+          throw new LinuxExecutionError(
+            "WORKSPACE_PATH_ESCAPE",
+            `bubblewrap cwd ${guestCwd} is outside the declared controlled view (declared: ${declaredTargets.join(", ") || "/workspace"})`,
+          )
+        }
+        const guestExec = worktreeRoot ? guestWorkspacePath(spec.command.executable, worktreeRoot) : undefined
+        if (guestExec !== undefined && guestExec !== "/workspace" && !withinView(guestExec)) {
+          throw new LinuxExecutionError(
+            "WORKSPACE_PATH_ESCAPE",
+            `bubblewrap executable ${guestExec} is outside the declared controlled view (declared: ${declaredTargets.join(", ") || "/workspace"})`,
+          )
+        }
       }
       const env = buildExplicitEnvironment({
         policy: {

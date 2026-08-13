@@ -128,15 +128,16 @@ export class RuntimeStateReceiptAuthority implements ProjectionReceiptAuthority 
   }
 }
 
-/** 校验 outcome 声称的 receipt 是否可信且绑定本 session（P0-2/R2-01）。
+/** 校验 outcome 声称的 receipt 是否可信且绑定本 session（P0-2/R2-01/R4-03）。
  *  expected binding 来自 coordinator 生成的 Execution Intent（非 outcome
  *  自报）：receipt.projectionIntentDigest（broker 从 spec 注入）必须等于
- *  intent digest —— 历史 receipt 无法跨 World/snapshot/session 重放。 */
+ *  intent digest —— 历史 receipt 无法跨 World/snapshot/session 重放。
+ *  scope/filesystem 绑定由 coordinator 的 expected filesystemPolicyDigest
+ *  校验承担（R4-03.4：从 kernel-owned input 派生，不依赖本函数）。 */
 export function assertTrustedExecutionReceipt(
   authority: ProjectionReceiptAuthority,
   intent: import("./contracts").ProjectionExecutionIntent,
   intentDigest: string,
-  scopeDigest: string,
   claimedBinding: ProjectionReceiptBinding,
   claimedReceiptDigest: string,
 ): SandboxReceipt {

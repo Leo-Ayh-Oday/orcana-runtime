@@ -19,9 +19,11 @@
  *   保持，adapter 不复制第二套清理。
  */
 
+import { lstatSync } from "node:fs"
 import { resolve } from "node:path"
 import type { LinuxExecutionBroker } from "../../runtime/linux/broker"
 import { profileDefaults as profileDefaultsOf } from "../../runtime/linux/profiles"
+import { digestOf } from "../../runtime/linux/receipt"
 import type {
   ExecutionProfile,
   NetworkMode,
@@ -59,7 +61,84 @@ export interface BrokerProjectionExecution {
 export class LinuxBrokerProjectionExecutor {
   readonly id = "linux-broker"
 
+  /** R4-03.8：一个 intent 只能对应一个授权 cell —— 同一 intentId 第二次
+   *  execute 拒绝（防止一次 intent 派生多个执行 cell）。 */
+  private readonly usedIntents = new Set<string>()
+
   constructor(private readonly options: ProjectionBrokerAdapterOptions) {}
+
+  /** R4-03.2：spawn 前逐字段验证 —— adapter 不得同时提供「声明」和
+   *  「证明」：expected binding 来自 coordinator 生成的 intent
+   *  （kernel-owned），不是 adapter 选项自报。任何字段不一致 → 在
+   *  broker.execute 之前拒绝（command 从未 spawn）。 */
+  private assertIntentBinding(
+    cwd: string,
+    intent: import("./contracts").ProjectionExecutionIntent,
+    command: { executable: string; args: readonly string[]; timeoutMs?: number },
+  ): void {
+    const mismatch = (detail: string): never => {
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        `intent binding mismatch before spawn: ${detail}`,
+      )
+    }
+    // workspace identity：canonical path + dev/ino。
+    const hostRoot = resolve(cwd)
+    if (intent.workspaceIdentity.path !== hostRoot) {
+      mismatch(`workspace path ${hostRoot} != intent ${intent.workspaceIdentity.path}`)
+    }
+    let stat: ReturnType<typeof lstatSync> | undefined
+    try {
+      stat = lstatSync(hostRoot)
+    } catch {
+      mismatch(`workspace ${hostRoot} is not accessible`)
+    }
+    if (stat === undefined || stat.dev !== intent.workspaceIdentity.dev || stat.ino !== intent.workspaceIdentity.ino) {
+      mismatch(`workspace identity (dev/ino) does not match intent`)
+    }
+    // command：executable/args/timeoutMs 必须与 intent.command 逐字段一致。
+    if (intent.command.executable !== command.executable) {
+      mismatch(`executable ${command.executable} != intent ${intent.command.executable}`)
+    }
+    const intentArgs = [...intent.command.args]
+    const actualArgs = [...command.args]
+    if (intentArgs.length !== actualArgs.length || intentArgs.some((arg, index) => arg !== actualArgs[index])) {
+      mismatch(`args ${JSON.stringify(actualArgs)} != intent ${JSON.stringify(intentArgs)}`)
+    }
+    if ((intent.command.timeoutMs ?? undefined) !== (command.timeoutMs ?? undefined)) {
+      mismatch(`timeoutMs ${String(command.timeoutMs)} != intent ${String(intent.command.timeoutMs)}`)
+    }
+    // filesystem scope：canonical roots 必须与 intent.filesystemScope 完全一致
+    // （顺序即 canonical 顺序 —— plan 校验器已规范化）。
+    const sameList = (actual: readonly string[], expected: readonly string[]): boolean =>
+      actual.length === expected.length && actual.every((value, index) => value === expected[index])
+    if (!sameList(this.options.writableRoots, intent.filesystemScope.writableRoots)) {
+      mismatch(`writable roots ${JSON.stringify(this.options.writableRoots)} != intent ${JSON.stringify(intent.filesystemScope.writableRoots)}`)
+    }
+    if (!sameList(this.options.readonlyRoots, intent.filesystemScope.readonlyRoots)) {
+      mismatch(`readonly roots ${JSON.stringify(this.options.readonlyRoots)} != intent ${JSON.stringify(intent.filesystemScope.readonlyRoots)}`)
+    }
+    // 投影契约：ownerFiles === writable roots（pathguard 的 owned 范围），
+    // profile 必须 emptyHome=true（filesystemPolicyDigest 派生前提）。
+    const ownerFiles = this.options.authority.workspace.ownerFiles ?? []
+    if (!sameList(ownerFiles, intent.filesystemScope.writableRoots)) {
+      mismatch(`workspace ownerFiles must equal writable roots (pathguard contract)`)
+    }
+    if (profileDefaultsOf(this.options.profile).emptyHome !== true) {
+      mismatch(`profile ${this.options.profile} must have emptyHome=true (projection contract)`)
+    }
+    // identity 字段：intentId/worldId/branchId/snapshotId/projectionId 必须
+    // 非空（kernel-owned；经 intent digest 链绑定）。
+    for (const [name, value] of Object.entries({
+      intentId: intent.intentId,
+      worldId: intent.worldId,
+      branchId: intent.branchId,
+      snapshotId: intent.snapshotId,
+      projectionId: intent.projectionId,
+    })) {
+      if (typeof value !== "string" || value.length === 0) mismatch(`${name} must be non-empty`)
+    }
+  }
 
   /** 执行一个命令；返回 Execution 事实（receipt id 仅记录 Execution）。 */
   async execute(
@@ -71,6 +150,19 @@ export class LinuxBrokerProjectionExecutor {
     // 复用 nonce）；intent digest 注入 spec 环境变量 → broker 填入 final
     // receipt.projectionIntentDigest（打破 outcome 自报 binding 循环）。
     const intent = command.intent
+    if (intent !== undefined) {
+      // R4-03.8：一个 intent 只能对应一个授权 cell。
+      if (this.usedIntents.has(intent.intentId)) {
+        throw new ProjectionError(
+          "EXECUTION_RECEIPT_BINDING_MISMATCH",
+          `intent ${intent.intentId} already authorized an execution cell (one intent = one cell)`,
+        )
+      }
+      // R4-03.2：spawn 前逐字段验证（executable/args/timeout/roots/workspace
+      // identity/intent ids）。任何不一致 → 拒绝，command 从未执行。
+      this.assertIntentBinding(cwd, intent, command)
+      this.usedIntents.add(intent.intentId)
+    }
     const authority = intent === undefined
       ? this.options.authority
       : {
@@ -101,14 +193,17 @@ export class LinuxBrokerProjectionExecutor {
       )
     }
 
+    // R4-02：投影受控视图 —— 只把 plan 声明的 roots 挂到 /workspace/<root>
+    // （target 必须是 /workspace 前缀；runtime 的 ALLOWED_MOUNT_TARGET_PREFIXES
+    // 已批准）。unscoped 路径不可达；readonly root 无更宽 RW ancestor。
     const writableMounts: RequestedMount[] = this.options.writableRoots.map(path => ({
       source: { type: "workspace-relative", path },
-      target: `/${path}`,
+      target: `/workspace/${path}`,
       mode: "rw",
     }))
     const readonlyMounts: RequestedMount[] = this.options.readonlyRoots.map(path => ({
       source: { type: "workspace-relative", path },
-      target: `/${path}`,
+      target: `/workspace/${path}`,
       mode: "ro",
     }))
 
@@ -131,6 +226,16 @@ export class LinuxBrokerProjectionExecutor {
         : { env: { ORCANA_PROJECTION_INTENT: projectionIntentDigest(intent) } }),
     }
     const spec = broker.compileRequest(request, authority)
+
+    // R4-03.4（belt）：编译后的 spec.filesystem digest 必须等于 intent 的
+    // 期望 filesystemPolicyDigest（coordinator 从 kernel-owned input 派生）
+    // —— 即使逐字段验证被绕过，digest 层仍拒绝与计划不一致的 spec。
+    if (intent !== undefined && digestOf(spec.filesystem) !== intent.filesystemPolicyDigest) {
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        `compiled spec filesystem policy digest does not match the coordinator-derived expected policy digest (plan scope binding)`,
+      )
+    }
 
     // P0-1：Host Audit 必须 pre-spawn fail-closed —— 在目标 command spawn
     // 之前，用 broker 的真实后端选择（当前 capabilities 下编译出的 spec

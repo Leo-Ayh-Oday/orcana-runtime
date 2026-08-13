@@ -1,15 +1,16 @@
 /** AK2-T06 — Linux Broker Projection Executor Adapter（真实 broker 执行）。 */
 
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
 import { RuntimeStateStore } from "../../../src/runtime/linux/recovery/state-store"
 import { RuntimeStateReceiptAuthority } from "../../../src/kernel/projection/receipt-authority"
 import { HOST_AUDIT_TEST_CAPABILITIES } from "../../helpers/linux-process-test-broker"
 import { WorkspaceAuthorityRegistry } from "../../../src/runtime/linux/workspace/workspace-authority"
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
+import { expectedProjectionFilesystemPolicyDigest } from "../../../src/kernel/projection/coordinator"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
 import type { TrustedExecutionAuthority } from "../../../src/runtime/linux/contracts"
 
@@ -33,7 +34,7 @@ function authorityFor(merged: string): TrustedExecutionAuthority {
     projectId: "ak2-proj",
     hostRoot: merged,
     access: "readwrite",
-    ownerFiles: [merged],
+    ownerFiles: ["src"],
   })
   return {
     identity: { runId: `run-${process.pid}`, nodeRunId: `run-${process.pid}:n1`, attempt: 1 },
@@ -210,6 +211,7 @@ describe("AK2-T06 真实 broker 执行", () => {
       captured = request
       return originalCompile(request, auth)
     }
+    const mergedStat = lstatSync(merged)
     const intent = {
       intentId: "intent-r3-1",
       worldId: "w",
@@ -217,9 +219,17 @@ describe("AK2-T06 真实 broker 执行", () => {
       snapshotId: "s",
       projectionId: "p",
       sessionNonce: "n",
-      mergedRootIdentity: { dev: 1, ino: 2 },
+      mergedRootIdentity: { dev: mergedStat.dev, ino: mergedStat.ino },
       command: { executable: "/bin/echo", args: ["hello", "world"] },
       scopeDigest: "scope-digest-r3",
+      // R4-03：intent 携带 kernel-owned filesystem scope + workspace identity
+      // + 期望 policy digest —— adapter 在 spawn 前逐字段验证。
+      filesystemScope: { writableRoots: ["src"], readonlyRoots: ["docs"] },
+      workspaceIdentity: { path: resolve(merged), dev: mergedStat.dev, ino: mergedStat.ino },
+      filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(
+        { writableRoots: ["src"], readonlyRoots: ["docs"] } as never,
+        resolve(merged),
+      ),
     }
     await executor.execute(merged, {
       executable: "/bin/echo",
@@ -230,9 +240,10 @@ describe("AK2-T06 真实 broker 执行", () => {
     expect(captured!.command.executable).toBe("/bin/echo")
     expect(captured!.command.args).toEqual(["hello", "world"])
     expect(captured!.command.relativeCwd).toBe(".")
-    // workspace/scope：writable/readonly mounts 必须与 plan scope 精确一致。
-    expect(captured!.writableMounts).toContainEqual({ source: { type: "workspace-relative", path: "src" }, target: "/src", mode: "rw" })
-    expect(captured!.readonlyMounts).toContainEqual({ source: { type: "workspace-relative", path: "docs" }, target: "/docs", mode: "ro" })
+    // workspace/scope：writable/readonly mounts 必须与 plan scope 精确一致
+    // （R4-02：受控视图 target 为 /workspace/<root>）。
+    expect(captured!.writableMounts).toContainEqual({ source: { type: "workspace-relative", path: "src" }, target: "/workspace/src", mode: "rw" })
+    expect(captured!.readonlyMounts).toContainEqual({ source: { type: "workspace-relative", path: "docs" }, target: "/workspace/docs", mode: "ro" })
     // intent digest 注入 spec 环境变量（→ cellSpecDigest → final receipt）。
     expect(captured!.env?.ORCANA_PROJECTION_INTENT).toBe(
       (await import("../../../src/kernel/projection/contracts")).projectionIntentDigest(intent as never),

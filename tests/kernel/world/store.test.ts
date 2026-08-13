@@ -165,6 +165,7 @@ describe("AK-1 WorldStore", () => {
           type: "object.put",
           objectId: "a",
           objectType: "file",
+          path: "a",
           contentRef: first.digest,
         }],
       })
@@ -179,6 +180,7 @@ describe("AK-1 WorldStore", () => {
             type: "object.put",
             objectId: "b",
             objectType: "file",
+            path: "b",
             contentRef: second.digest,
           }],
         }),
@@ -340,6 +342,7 @@ describe("AK-1 WorldStore", () => {
             type: "object.put",
             objectId: "d",
             objectType: "file",
+            path: "d",
             contentRef: content.digest,
           }],
         })
@@ -675,6 +678,10 @@ describe("AK-1 WorldStore", () => {
           type: "object.put" as const,
           objectId: `valid-${objectType}`,
           objectType,
+          // R4-07：file/directory 必须有 path；workspace 必须无 path。
+          ...(objectType === "file" || objectType === "directory"
+            ? { path: `valid-${objectType}` }
+            : {}),
           ...(objectType === "file" ? { contentRef: content.digest } : {}),
           metadata: { objectType },
         })),
@@ -702,6 +709,7 @@ describe("AK-1 WorldStore", () => {
           type: "object.put",
           objectId: "file",
           objectType: "file",
+          path: "file",
           contentRef: content.digest,
           metadata: { version: 1 },
         }],
@@ -717,6 +725,7 @@ describe("AK-1 WorldStore", () => {
           type: "object.put",
           objectId: "file",
           objectType: "file",
+          path: "file",
           contentRef: content.digest,
           metadata: { version: 2 },
         }],
@@ -748,6 +757,7 @@ describe("AK-1 WorldStore", () => {
             type: "object.put",
             objectId: "candidate",
             objectType: "file",
+            path: "candidate",
             contentRef: content.digest,
           }],
         }),

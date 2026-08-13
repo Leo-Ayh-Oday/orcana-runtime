@@ -32,6 +32,7 @@ import {
   rmdirSync,
 } from "node:fs"
 import { canonicalJson, sha256Digest } from "../world/canonical"
+import { digestOf } from "../../runtime/linux/receipt"
 import { tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
 import { WorldConflictError } from "../world/contracts"
@@ -58,12 +59,12 @@ import { assertTrustedExecutionReceipt, type ProjectionReceiptAuthority } from "
 import { removeTreeAnchored } from "./anchored-fs"
 import { randomUUID } from "node:crypto"
 
-/** R3-01.1：fixture 执行放行 token —— 公开 API 不再接受 allowFixtureExecution
- *  boolean；fixture（无 receipt）执行必须同时满足：
- *  1) 显式传入 FIXTURE_EXECUTION_TOKEN（test-only 能力）；
- *  2) backend.kind === "fixture"（production backend 永远不满足）。
- *  production 调用方（broker adapter / vertical slice）不 import 本 token。 */
-export const FIXTURE_EXECUTION_TOKEN: unique symbol = Symbol("orcana.ak2.fixture-execution")
+/** R4-01：fixture 执行放行不再需要 token —— 结构性双重门：
+ *  1) backend.kind === "fixture"（production backend 永远不满足）；
+ *  2) 显式 test capability allowTestBackends === true。
+ *  production coordinator 构造时结构性要求 receiptAuthority；production
+ *  backend 无 receipt 永远拒绝（WORLD_COMMIT_WITHOUT_RECEIPT = 0）。
+ *  生产模块不再导出任何 fixture 执行能力（PUBLIC_FIXTURE_AUTHORITY = 0）。 */
 
 export type SessionWorldState =
   | "UNPROJECTED"
@@ -91,6 +92,9 @@ export interface ProjectionSession {
   readonly instance: ProjectionInstance
   /** session 创建时的 projection root 身份（P2-1：cleanup 前重新验证）。 */
   readonly rootIdentity: { readonly dev: number; readonly ino: number }
+  /** R4-06：seal 后的 scan 输入视图（seal 成功后设置；commit 的
+   *  expected-output 验证与 cleanup 都基于它）。 */
+  sealedPath?: string
   worldState: SessionWorldState
   executionState: SessionExecutionState
   delta?: ProjectionDeltaResult
@@ -129,14 +133,9 @@ export interface ProjectionCoordinatorOptions {
   readonly allowTestBackends?: boolean
   /** 最终 execution receipt 权威（P0-2/P1-6）。production commit 必须
    *  经它证明 receipt 已持久化、cleanup-finalized、绑定本 session。
-   *  缺省时 production（非 fixture）commit 拒绝。 */
+   *  R4-01：production backend（kind !== "fixture"）构造时结构性要求 ——
+   *  缺失即拒绝构造（不是运行时降级）。 */
   readonly receiptAuthority?: ProjectionReceiptAuthority
-  /** 显式 test capability：允许无 receipt 的 fixture executor 提交
-   *  （仅测试；production 必须缺省拒绝）。R3-01.1：以 token 替代 ——
-   *  与 backend.kind === "fixture" 双重门。 */
-  readonly allowFixtureExecution?: boolean
-  /** R3-01.1：fixture 执行放行 token（test-only；与 backend.kind 双重门）。 */
-  readonly fixtureExecutionToken?: symbol
   /** 测试注入窗口（test-only；生产不传）：projection root 在外层 lstat
    *  验证后、fd open 前调用（R4-00-8 反例的确定性窗口）。
    *  无此选项时零开销（undefined 短路）。 */
@@ -168,8 +167,7 @@ export class ProjectionCoordinator {
   private readonly backend: NativeProjectionBackend
   private readonly baseProjectionRoot: string
   private readonly receiptAuthority?: ProjectionReceiptAuthority
-  private readonly allowFixtureExecution: boolean
-  private readonly fixtureExecutionToken?: symbol
+  private readonly allowTestBackends: boolean
   private readonly onBeforeProjectionRootOpen?: (root: string) => void
 
   constructor(options: ProjectionCoordinatorOptions) {
@@ -183,9 +181,17 @@ export class ProjectionCoordinator {
         "test fixture backend requires explicit allowTestBackends (test-only capability); production coordinator refuses it",
       )
     }
+    // R4-01：production coordinator 结构性要求 receipt authority ——
+    // production backend（kind !== "fixture"）缺 authority 拒绝构造
+    // （fail-closed；不是延迟到 commit 才失败）。
+    if (options.backend.kind !== "fixture" && options.receiptAuthority === undefined) {
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_REQUIRED",
+        "production coordinator requires a receipt authority (receipt-producing executor); refusing construction",
+      )
+    }
     this.receiptAuthority = options.receiptAuthority
-    this.allowFixtureExecution = options.allowFixtureExecution === true
-    this.fixtureExecutionToken = options.fixtureExecutionToken
+    this.allowTestBackends = options.allowTestBackends === true
     this.onBeforeProjectionRootOpen = options.onBeforeProjectionRootOpen
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
   }
@@ -246,8 +252,10 @@ export class ProjectionCoordinator {
       }
       const instance = this.backend.create({ lowerDir: baseDir, projectionRoot, label: "m" })
       instance.assertReady()
-      // R2-01：Execution Intent —— 期望 binding 真源（world/branch/snapshot/
-      // projection/session nonce/merged root identity/command/scope）。
+      // R2-01/R4-03：Execution Intent —— 期望 binding 真源（world/branch/
+      // snapshot/projection/session nonce/merged root identity/command/scope/
+      // filesystemScope/workspaceIdentity/filesystemPolicyDigest 全部来自
+      // kernel-owned plan + session，不是 outcome/executor 自报）。
       const mergedStat = lstatSync(instance.mergedPath)
       const intent: ProjectionExecutionIntent = {
         intentId: randomUUID(),
@@ -259,6 +267,16 @@ export class ProjectionCoordinator {
         mergedRootIdentity: { dev: mergedStat.dev, ino: mergedStat.ino },
         command: { executable: "", args: [] },
         scopeDigest: "",
+        filesystemScope: {
+          writableRoots: Object.freeze([...plan.writableRoots]),
+          readonlyRoots: Object.freeze([...plan.readonlyRoots]),
+        },
+        workspaceIdentity: {
+          path: resolve(instance.mergedPath),
+          dev: mergedStat.dev,
+          ino: mergedStat.ino,
+        },
+        filesystemPolicyDigest: "",
       }
       return {
         plan,
@@ -277,7 +295,7 @@ export class ProjectionCoordinator {
       try {
         const stat = lstatSync(projectionRoot)
         if (!stat.isSymbolicLink() && stat.dev === rootIdentity.dev && stat.ino === rootIdentity.ino) {
-          this.removeProjectionRoot(projectionRoot)
+          this.removeProjectionRoot(projectionRoot, rootIdentity)
         }
       } catch {
         // root 已不存在或身份不符 —— 不删除（residue 保留）。
@@ -302,21 +320,41 @@ export class ProjectionCoordinator {
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", `execute requires PROJECTED, got ${session.worldState}`)
     }
     // R2-06-2：execute 前复核 mount 仍是本 session 创建（替换/消失 → 拒绝）。
+    // R4-00-6/R4-05：ownership 丢失是 terminal 故障 —— 必须进入终态 +
+    // cleanup + terminal receipt（不是裸 throw）。
     if (session.instance.assertMountOwned?.() === false) {
+      this.terminalize(
+        session,
+        "rejected",
+        "projection mount no longer owned by this session; execute refused",
+      )
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount no longer owned by this session; execute refused")
     }
     this.transition(session, { kind: "execute-start" })
     this.transition(session, { kind: "execute-running" })
-    // R2-01：command 绑定 intent（executable/args/scope 快照进 intent）。
+    // R2-01/R4-03：command 绑定 intent（executable/args/scope 快照进 intent）；
+    // filesystemScope/workspaceIdentity/filesystemPolicyDigest 从 kernel-owned
+    // plan + session 派生（adapter spawn 前逐字段验证）。
     const intentCommand = {
       executable: command.executable,
       args: [...command.args],
       ...(command.timeoutMs === undefined ? {} : { timeoutMs: command.timeoutMs }),
     }
+    const mergedStat = lstatSync(session.mergedDir)
     const intent: ProjectionExecutionIntent = {
       ...session.intent,
       command: intentCommand,
       scopeDigest: this.scopeDigestOf(session.plan),
+      filesystemScope: {
+        writableRoots: Object.freeze([...session.plan.writableRoots]),
+        readonlyRoots: Object.freeze([...session.plan.readonlyRoots]),
+      },
+      workspaceIdentity: {
+        path: resolve(session.mergedDir),
+        dev: mergedStat.dev,
+        ino: mergedStat.ino,
+      },
+      filesystemPolicyDigest: this.expectedFilesystemPolicyDigest(session),
     }
     session.intent = intent
     const boundCommand: ProjectionCommand = { ...command, intent }
@@ -389,23 +427,60 @@ export class ProjectionCoordinator {
       )
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount no longer owned by this session; scan refused")
     }
-    // R2-05-5：production 路径 —— receipt 的 cleanup 必须已证明
-    // （processesRemaining===0 等）；未证明（后台进程可能存活）→ 拒绝 scan。
+    // R2-05-5/R4-00-7：production 路径（backend.kind !== "fixture"）——
+    // scan 必须拥有 finalized receipt/cleanup proof（执行 writer 已终止）。
+    // 缺失（含 receiptless outcome、无 authority、无 binding）→ 拒绝，
+    // 不能跳过（不是条件性检查）。
     const outcome = session.outcome
-    if (outcome !== undefined && outcome.executionReceiptId !== undefined && this.receiptAuthority !== undefined && outcome.receiptBinding !== undefined) {
+    if (this.backend.kind !== "fixture") {
+      if (outcome === undefined || outcome.executionReceiptId === undefined || this.receiptAuthority === undefined || outcome.receiptBinding === undefined) {
+        this.terminalize(
+          session,
+          "rejected",
+          "production scan requires finalized execution receipt/cleanup proof (execution writers may still run)",
+        )
+        throw new ProjectionError(
+          "EXECUTION_RECEIPT_REQUIRED",
+          "production scan requires finalized receipt/cleanup proof; delta scan refused",
+        )
+      }
       const finalReceipt = this.receiptAuthority.getFinalReceipt(session.intent.intentId, outcome.receiptBinding.cellId)
       if (finalReceipt === undefined || !this.receiptAuthority.isCleanupFinalized(finalReceipt)) {
+        this.terminalize(
+          session,
+          "rejected",
+          "execution cleanup not proven (processes may remain); delta scan refused",
+        )
         throw new ProjectionError(
-          "PROJECTION_NOT_PROJECTED",
+          "EXECUTION_RECEIPT_NOT_FINALIZED",
           "execution cleanup not proven (processes may remain); delta scan refused",
         )
       }
     }
+    // R4-06：seal —— 执行 writer 已终止（cleanup proof）后，把 merged 视图
+    // 转为不可写、不可替换的稳定 scan 输入。seal 失败 → 不生成 delta、不写
+    // CAS delta content、不 commit World（fail-closed）。
+    const sealed = session.instance.sealForScan?.()
+    if (sealed === undefined) {
+      this.terminalize(session, "rejected", "backend cannot seal the scan view (sealForScan unavailable)")
+      throw new ProjectionError(
+        "DELTA_SCAN_FAILED",
+        "backend cannot seal the scan view; delta scan refused",
+      )
+    }
+    if ("error" in sealed) {
+      this.terminalize(session, "rejected", `seal failed: ${sealed.error}`)
+      throw new ProjectionError(
+        "DELTA_SCAN_FAILED",
+        `seal failed: ${sealed.error}; delta scan refused`,
+      )
+    }
+    session.sealedPath = sealed.sealedPath
     try {
       const baseIndex = this.buildBaseIndex(session)
       const delta = scanProjectionDelta({
         baseDir: session.baseDir,
-        mergedDir: session.mergedDir,
+        mergedDir: session.sealedPath,
         baseIndex,
         cas: this.store.cas,
         worldId: session.plan.worldId,
@@ -451,12 +526,14 @@ export class ProjectionCoordinator {
 
     this.transition(session, { kind: "commit-pending" })
     try {
-      // 1. 可信 execution receipt 校验（P0-2/R2-01）：expected binding 来自
-      //    coordinator 当前 session 的 Execution Intent（world/branch/snapshot/
-      //    projection/nonce/merged root/command/scope），不是 outcome 自报。
-      //    receipt.projectionIntentDigest 由 broker 从 spec 注入 —— 历史
-      //    receipt 无法跨 World/session 重放。fixture executor 只在显式
-      //    test-only capability 下放行。
+      // 1. 可信 execution receipt 校验（P0-2/R2-01/R4-03）：expected binding
+      //    来自 coordinator 当前 session 的 Execution Intent（world/branch/
+      //    snapshot/projection/nonce/merged root/command/scope/workspace
+      //    identity/filesystem policy），不是 outcome 自报。receipt 的
+      //    filesystemPolicyDigest 与 coordinator 从 kernel-owned input 独立
+      //    派生的期望值比对（不能与 receipt/claim 自报值互相比对）。
+      //    fixture executor 只在结构门（backend.kind === "fixture" &&
+      //    allowTestBackends）下放行 —— production backend 无 receipt 永远拒绝。
       if (outcome.executionReceiptId !== undefined) {
         if (this.receiptAuthority === undefined || outcome.receiptBinding === undefined) {
           throw new ProjectionError(
@@ -468,22 +545,40 @@ export class ProjectionCoordinator {
           this.receiptAuthority,
           session.intent,
           projectionIntentDigest(session.intent),
-          this.scopeDigestOf(session.plan),
           outcome.receiptBinding,
           outcome.executionReceiptId,
         )
-        // R3-01.5：final receipt 与 coordinator outcome 对账 —— exitCode /
-        // timedOut / cancelled / violations / unexpectedWrites 必须一致。
-        const receiptViolation = (verifiedReceipt.violations?.length ?? 0) > 0
-        if (
-          verifiedReceipt.exitCode !== outcome.exitCode ||
-          verifiedReceipt.timedOut !== outcome.timedOut ||
-          verifiedReceipt.cancelled !== outcome.cancelled ||
-          receiptViolation !== outcome.violation
-        ) {
+        // R4-03.4：expected filesystemPolicyDigest 从 kernel-owned input
+        // （plan roots + merged hostRoot）独立派生 —— receipt 自报值与
+        // claim 互相比对不构成验证；必须与 kernel 派生期望值一致。
+        const expectedPolicy = this.expectedFilesystemPolicyDigest(session)
+        if (verifiedReceipt.filesystemPolicyDigest !== expectedPolicy) {
           throw new ProjectionError(
             "EXECUTION_RECEIPT_BINDING_MISMATCH",
-            `final receipt outcome (exitCode=${verifiedReceipt.exitCode}, timedOut=${verifiedReceipt.timedOut}, cancelled=${verifiedReceipt.cancelled}, violation=${receiptViolation}) conflicts with coordinator outcome (exitCode=${outcome.exitCode}, timedOut=${outcome.timedOut}, cancelled=${outcome.cancelled}, violation=${outcome.violation})`,
+            `final receipt filesystemPolicyDigest ${verifiedReceipt.filesystemPolicyDigest} does not match the coordinator-derived expected policy digest ${expectedPolicy} (plan scope binding enforced from kernel-owned input)`,
+          )
+        }
+        const receiptViolation = (verifiedReceipt.violations?.length ?? 0) > 0
+        // R4-03.6/7：执行结论优先从 verified final receipt 派生 —— 成功
+        // 必须是 exitCode===0 且无 signal/oomKilled/pidLimitHit/
+        // outputLimitHit/tempLimitHit/timedOut/cancelled/violations/
+        // unexpectedWrites。receipt 与 coordinator outcome 冲突 → 拒绝。
+        const receiptSuccess =
+          verifiedReceipt.exitCode === 0 &&
+          verifiedReceipt.signal === null &&
+          !verifiedReceipt.timedOut &&
+          !verifiedReceipt.cancelled &&
+          !verifiedReceipt.oomKilled &&
+          !verifiedReceipt.pidLimitHit &&
+          !verifiedReceipt.outputLimitHit &&
+          !verifiedReceipt.tempLimitHit &&
+          (verifiedReceipt.violations?.length ?? 0) === 0 &&
+          (verifiedReceipt.unexpectedWrites?.length ?? 0) === 0
+        const outcomeSuccess = outcome.exitCode === 0 && !outcome.timedOut && !outcome.cancelled && !outcome.violation
+        if (receiptSuccess !== outcomeSuccess) {
+          throw new ProjectionError(
+            "EXECUTION_RECEIPT_BINDING_MISMATCH",
+            `final receipt outcome (exitCode=${verifiedReceipt.exitCode}, signal=${String(verifiedReceipt.signal)}, timedOut=${verifiedReceipt.timedOut}, cancelled=${verifiedReceipt.cancelled}, oomKilled=${verifiedReceipt.oomKilled}, pidLimitHit=${verifiedReceipt.pidLimitHit}, outputLimitHit=${verifiedReceipt.outputLimitHit}, tempLimitHit=${verifiedReceipt.tempLimitHit}, violation=${receiptViolation}) conflicts with coordinator outcome (exitCode=${outcome.exitCode}, timedOut=${outcome.timedOut}, cancelled=${outcome.cancelled}, violation=${outcome.violation})`,
           )
         }
         // R2-02：canonical final receipt 进入 World CAS —— 由 World commit
@@ -492,19 +587,17 @@ export class ProjectionCoordinator {
         // receiptDigest（authority 已做自洽校验）。
         const { receiptDigest: _rd, ...receiptContent } = verifiedReceipt
         this.store.cas.put(Buffer.from(canonicalJson(receiptContent), "utf8"))
-      } else if (
-        !this.allowFixtureExecution &&
-        !(this.fixtureExecutionToken === FIXTURE_EXECUTION_TOKEN && this.backend.kind === "fixture")
-      ) {
-        // R3-01.1：无 receipt（fixture executor 路径）必须同时满足
-        // test-only token + backend.kind === "fixture" 双重门 —— production
-        // backend 永远不满足（token 不能越过 backend.kind 门）。
+      } else if (this.backend.kind !== "fixture" || !this.allowTestBackends) {
+        // R4-01：无 receipt（fixture executor 路径）必须满足结构门 ——
+        // backend.kind === "fixture"（production backend 永远不满足）&&
+        // 显式 test capability。production backend 无 receipt 永远拒绝
+        // （WORLD_COMMIT_WITHOUT_RECEIPT = 0）。
         throw new ProjectionError(
           "EXECUTION_RECEIPT_REQUIRED",
           "execution receipt required before world commit (fixture execution is not a production authority)",
         )
       }
-      // 2. 验证（merged 仍挂载：expected outputs 存在性/类型；不接收
+      // 2. 验证（sealed 视图仍挂载：expected outputs 存在性/类型；不接收
       //    cleanupOk —— cleanup 的真实结果由下面的卸载步骤决定）。
       try {
         validateProjectionCommit({
@@ -514,7 +607,7 @@ export class ProjectionCoordinator {
           branch,
           currentRevision: world.currentRevision,
           delta,
-          mergedDir: session.mergedDir,
+          mergedDir: session.sealedPath ?? session.mergedDir,
           outcome,
         })
       } catch (error) {
@@ -729,7 +822,7 @@ export class ProjectionCoordinator {
         `cleanup refuses root whose identity (dev/ino) does not match session-owned root`,
       )
     }
-    this.removeProjectionRoot(actual)
+    this.removeProjectionRoot(actual, session.rootIdentity)
   }
 
   /** R2-01：plan scope 的 canonical 摘要（filesystem policy binding）。 */
@@ -800,11 +893,14 @@ export class ProjectionCoordinator {
     return index
   }
 
-  /** R3-03.4/5 + R3-00-13：fd 锚定、no-follow、identity-fenced 的删除。
-   *  禁止「lstat 后再用可交换 pathname 递归删除」—— root 以
-   *  O_NOFOLLOW|O_DIRECTORY 打开后全程 fd 相对（/proc/self/fd）递归删除，
-   *  fchmod 不跟随 symlink（外部 sentinel 不被 chmod/删除）。 */
-  private removeProjectionRoot(root: string): void {
+  /** R3-03.4/5 + R3-00-13 + R4-00-8/R4-05.5：fd 锚定、no-follow、
+   *  identity-fenced 的删除。禁止「lstat 后再用可交换 pathname 递归删除」
+   *  —— root 以 O_NOFOLLOW|O_DIRECTORY 打开后，**fd 身份必须立即与
+   *  session 创建时的 rootIdentity 复核**（不是与删除后的路径 lstat 比对
+   *  —— 替换目录会同时骗过 open 与 lstat）；身份不符 → 拒绝删除且不修改
+   *  任何内容（替换目录原样保留）。通过后才 fd 相对（/proc/self/fd）递归
+   *  删除，fchmod 不跟随 symlink；删除后路径身份再验证 + rmdir。 */
+  private removeProjectionRoot(root: string, rootIdentity: { readonly dev: number; readonly ino: number }): void {
     // 测试注入窗口（test-only）：外层 lstat 验证后、fd open 前 ——
     // R4-00-8 反例的确定性替换点。
     this.onBeforeProjectionRootOpen?.(root)
@@ -817,6 +913,15 @@ export class ProjectionCoordinator {
       if (!fdStat.isDirectory()) {
         throw new ProjectionError("PROJECTION_ROOT_ESCAPE", `cleanup refuses non-directory root: ${root}`)
       }
+      // R4-05.5/R4-00-8：打开的 fd 必须再次与 session.rootIdentity 比较
+      // （lstat→open 窗口内的替换 → fd 指向替换目录 → 身份不符 → 拒绝，
+      // 替换目录不被 chmod/删除）。
+      if (fdStat.dev !== rootIdentity.dev || fdStat.ino !== rootIdentity.ino) {
+        throw new ProjectionError(
+          "PROJECTION_ROOT_ESCAPE",
+          `cleanup refuses root whose fd identity does not match session-owned root (replaced between lstat and open)`,
+        )
+      }
       fchmodSync(fd, 0o700)
       removeTreeAnchored(fd)
       // 删除 root 目录项本身：删除前路径身份再验证（swap 后不删）。
@@ -824,8 +929,8 @@ export class ProjectionCoordinator {
       if (
         !pathStat.isDirectory() ||
         pathStat.isSymbolicLink() ||
-        pathStat.dev !== fdStat.dev ||
-        pathStat.ino !== fdStat.ino
+        pathStat.dev !== rootIdentity.dev ||
+        pathStat.ino !== rootIdentity.ino
       ) {
         throw new ProjectionError(
           "PROJECTION_ROOT_ESCAPE",
@@ -838,4 +943,43 @@ export class ProjectionCoordinator {
       closeSync(fd)
     }
   }
+
+  /** R4-03.4：期望 filesystem policy digest —— 从 kernel-owned input
+   *  （plan roots + merged hostRoot）按 runtime 的 spec.filesystem canonical
+   *  结构独立派生（与 adapter 编译出的 spec.filesystem 完全同构；投影契约
+   *  ：emptyHome=true、ownerFiles=writableRoots、target=/workspace/<root>）。
+   *  receipt.filesystemPolicyDigest 必须等于该期望值 —— 不能与 receipt/
+   *  claim 自报值互相比对。 */
+  private expectedFilesystemPolicyDigest(session: ProjectionSession): string {
+    return expectedProjectionFilesystemPolicyDigest(session.plan, resolve(session.mergedDir))
+  }
+}
+
+/** R4-03.4：从 kernel-owned input（plan roots + merged hostRoot）独立派生
+ *  期望 filesystem policy digest（导出供测试 fake authority 使用 ——
+ *  fake receipt 必须携带与 coordinator 相同的期望值才构成合法证明）。 */
+export function expectedProjectionFilesystemPolicyDigest(plan: WorldProjectionPlan, hostRoot: string): string {
+  const writableMounts = plan.writableRoots.map(path => ({
+    source: resolve(hostRoot, path),
+    target: `/workspace/${path}`,
+    mode: "rw" as const,
+    required: true,
+    recursive: true,
+  }))
+  const readonlyMounts = plan.readonlyRoots.map(path => ({
+    source: resolve(hostRoot, path),
+    target: `/workspace/${path}`,
+    mode: "ro" as const,
+    required: true,
+    recursive: true,
+  }))
+  return digestOf({
+    readonlyMounts,
+    writableMounts,
+    tmpfsMounts: [],
+    hiddenPaths: [],
+    emptyHome: true,
+    worktreeRoot: hostRoot,
+    ownerFiles: [...plan.writableRoots],
+  })
 }

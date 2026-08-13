@@ -36,6 +36,7 @@ import type {
   WorldIntegrityIssue,
   WorldMutation,
   WorldObject,
+  WorldObjectType,
   WorldServiceState,
   WorldSnapshot,
 } from "./contracts"
@@ -2054,60 +2055,101 @@ export class WorldStore {
    *  world_objects 快照 + 内存应用全部 mutations（顺序无关：先 delete
    *  后 put）→ 校验最终状态：path 全局唯一、类型稳定（dir↔file 冲突）、
    *  file 的祖先必须存在且为 directory（file 永远不能是其他对象的祖先）。 */
+  /** R4-07：最终 namespace 校验（事务内、写库前）—— 真正 final-state 模型：
+   *  1) 按 objectId 加载 current state；
+   *  2) 按 mutation 应用 delete/put（put 同一 objectId 时先移除旧 state/path）；
+   *  3) 从最终 byId 重建 byPath；
+   *  4) 全局验证：canonical relative path、path 全局唯一、objectId 唯一身份、
+   *     file/directory 必须有 path、workspace 必须无 path（materializer
+   *     契约）、file 必须有 contentRef、每个对象的所有显式祖先必须是
+   *     directory、file 不得成为任意对象的祖先。
+   *  顺序无关（delete 先于 put 的旧实现缺陷由 byId 覆盖消除 —— put 覆盖
+   *  旧 state 时旧 path 自动消失）。 */
   private validateFinalNamespace(worldId: string, branchId: string, mutations: readonly WorldMutation[]): void {
-    const rows = dbAll<{ path: string | null; objectId: string; objectType: string }>(
+    const rows = dbAll<{ path: string | null; objectId: string; objectType: string; contentRef: string | null }>(
       this.db,
-      `SELECT path, object_id AS objectId, object_type AS objectType
+      `SELECT path, object_id AS objectId, object_type AS objectType, content_ref AS contentRef
        FROM world_objects WHERE world_id = ? AND branch_id = ?`,
       worldId,
       branchId,
     )
-    const byPath = new Map<string, { objectId: string; objectType: string }>()
-    const idToPath = new Map<string, string>()
+    // 1) 按 objectId 加载 current state（含 pathless 对象）。
+    const byId = new Map<string, { path?: string; objectType: WorldObjectType; contentRef?: CasDigest }>()
     for (const row of rows) {
-      if (row.path === null) continue
-      byPath.set(row.path, { objectId: row.objectId, objectType: row.objectType })
-      idToPath.set(row.objectId, row.path)
+      byId.set(row.objectId, {
+        ...(row.path === null ? {} : { path: row.path }),
+        objectType: row.objectType as WorldObjectType,
+        ...(row.contentRef === null ? {} : { contentRef: row.contentRef as CasDigest }),
+      })
     }
-    // 1) 全部 delete 先应用（delete+put 同 path 替换允许 → 顺序无关）。
+    // 2) 按 mutation 应用 delete/put（put 同一 objectId 覆盖旧 state ——
+    //    旧 path 随之移除；delete 移除对象）。
     for (const mutation of mutations) {
-      if (mutation.type !== "object.delete") continue
-      const path = idToPath.get(mutation.objectId)
-      if (path !== undefined) {
-        byPath.delete(path)
-        idToPath.delete(mutation.objectId)
+      if (mutation.type === "object.delete") {
+        byId.delete(mutation.objectId)
+        continue
       }
+      if (mutation.type !== "object.put") continue
+      const existing = byId.get(mutation.objectId)
+      if (existing !== undefined && existing.objectType !== mutation.objectType) {
+        throw new Error(
+          `World commit type conflict: ${mutation.objectId} is ${existing.objectType}, mutation declares ${mutation.objectType}`,
+        )
+      }
+      byId.set(mutation.objectId, {
+        ...(mutation.path === undefined ? {} : { path: mutation.path }),
+        objectType: mutation.objectType,
+        ...(mutation.contentRef === undefined ? {} : { contentRef: mutation.contentRef }),
+      })
     }
-    // 2) 全部 put 应用（跨 commit 的 path 全局唯一 + 类型稳定）。
-    for (const mutation of mutations) {
-      if (mutation.type !== "object.put" || mutation.path === undefined) continue
-      const existing = byPath.get(mutation.path)
-      if (existing !== undefined) {
-        if (existing.objectId !== mutation.objectId) {
+    // 3) 从最终 byId 重建 byPath（path 全局唯一 + objectId 唯一身份）。
+    const byPath = new Map<string, string>()
+    for (const [objectId, object] of byId) {
+      if (object.path === undefined) continue
+      const existing = byPath.get(object.path)
+      if (existing !== undefined && existing !== objectId) {
+        throw new Error(
+          `World namespace invalid: path ${object.path} mapped by both ${existing} and ${objectId}`,
+        )
+      }
+      byPath.set(object.path, objectId)
+    }
+    // 4) 全局验证。
+    for (const [objectId, object] of byId) {
+      if (object.path === undefined) {
+        // file/directory 必须有 path；workspace 必须无 path（materializer
+        // 契约：workspace 无 path 跳过、带 path 拒绝）。
+        if (object.objectType === "file" || object.objectType === "directory") {
           throw new Error(
-            `World commit path collision: ${mutation.path} mapped by both ${existing.objectId} and ${mutation.objectId}`,
+            `World namespace invalid: ${object.objectType} object ${objectId} has no path`,
           )
         }
-        if (existing.objectType !== mutation.objectType) {
-          throw new Error(
-            `World commit type conflict: ${mutation.path} is ${existing.objectType}, mutation declares ${mutation.objectType}`,
-          )
-        }
+        continue
       }
-      byPath.set(mutation.path, { objectId: mutation.objectId, objectType: mutation.objectType })
-      idToPath.set(mutation.objectId, mutation.path)
-    }
-    // 3) 最终状态校验：file 的祖先必须存在且为 directory。
-    for (const [path, entry] of byPath) {
-      if (entry.objectType !== "file") continue
-      let parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : undefined
+      if (object.objectType === "workspace") {
+        throw new Error(
+          `World namespace invalid: workspace object ${objectId} has a path (materializer contract: workspace is pathless)`,
+        )
+      }
+      if (object.objectType === "file" && object.contentRef === undefined) {
+        throw new Error(
+          `World namespace invalid: file object ${objectId} has no contentRef`,
+        )
+      }
+      // 每个对象的所有显式祖先必须是 directory（file 不得成为祖先）。
+      let parent = object.path.includes("/") ? object.path.slice(0, object.path.lastIndexOf("/")) : undefined
       while (parent !== undefined && parent.length > 0) {
-        const ancestor = byPath.get(parent)
-        if (ancestor === undefined) {
-          throw new Error(`World namespace invalid: file ${path} has missing ancestor ${parent}`)
+        const parentId = byPath.get(parent)
+        if (parentId === undefined) {
+          throw new Error(
+            `World namespace invalid: ${object.path} has missing ancestor ${parent}`,
+          )
         }
-        if (ancestor.objectType !== "directory") {
-          throw new Error(`World namespace invalid: file ${path} has file ancestor ${parent}`)
+        const parentObject = byId.get(parentId)
+        if (parentObject === undefined || parentObject.objectType !== "directory") {
+          throw new Error(
+            `World namespace invalid: ${object.path} has non-directory ancestor ${parent} (${parentObject?.objectType ?? "missing"})`,
+          )
         }
         parent = parent.includes("/") ? parent.slice(0, parent.lastIndexOf("/")) : undefined
       }

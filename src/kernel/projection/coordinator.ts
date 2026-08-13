@@ -137,6 +137,10 @@ export interface ProjectionCoordinatorOptions {
   readonly allowFixtureExecution?: boolean
   /** R3-01.1：fixture 执行放行 token（test-only；与 backend.kind 双重门）。 */
   readonly fixtureExecutionToken?: symbol
+  /** 测试注入窗口（test-only；生产不传）：projection root 在外层 lstat
+   *  验证后、fd open 前调用（R4-00-8 反例的确定性窗口）。
+   *  无此选项时零开销（undefined 短路）。 */
+  readonly onBeforeProjectionRootOpen?: (root: string) => void
 }
 
 /** 单一 cleanup 状态机结果。 */
@@ -166,6 +170,7 @@ export class ProjectionCoordinator {
   private readonly receiptAuthority?: ProjectionReceiptAuthority
   private readonly allowFixtureExecution: boolean
   private readonly fixtureExecutionToken?: symbol
+  private readonly onBeforeProjectionRootOpen?: (root: string) => void
 
   constructor(options: ProjectionCoordinatorOptions) {
     this.store = options.store
@@ -181,6 +186,7 @@ export class ProjectionCoordinator {
     this.receiptAuthority = options.receiptAuthority
     this.allowFixtureExecution = options.allowFixtureExecution === true
     this.fixtureExecutionToken = options.fixtureExecutionToken
+    this.onBeforeProjectionRootOpen = options.onBeforeProjectionRootOpen
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
   }
 
@@ -799,6 +805,9 @@ export class ProjectionCoordinator {
    *  O_NOFOLLOW|O_DIRECTORY 打开后全程 fd 相对（/proc/self/fd）递归删除，
    *  fchmod 不跟随 symlink（外部 sentinel 不被 chmod/删除）。 */
   private removeProjectionRoot(root: string): void {
+    // 测试注入窗口（test-only）：外层 lstat 验证后、fd open 前 ——
+    // R4-00-8 反例的确定性替换点。
+    this.onBeforeProjectionRootOpen?.(root)
     const fd = openSync(
       root,
       fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,

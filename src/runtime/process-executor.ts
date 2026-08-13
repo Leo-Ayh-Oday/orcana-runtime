@@ -196,8 +196,29 @@ export function setLinuxProcessBrokerForTests(value: LinuxExecutionBroker | null
 }
 
 function broker(): LinuxExecutionBroker {
-  if (!linuxBroker) linuxBroker = createLinuxBroker({ mode: "enabled" })
+  if (!linuxBroker) linuxBroker = createLinuxBroker({ mode: "enabled", capacityAuthority: defaultCapacityClient() })
   return linuxBroker
+}
+
+/** IC06：external production Broker 的 CapacityAuthority —— 探测 execd
+ *  authority socket；存在 → CapacityClient（hard authority）；不存在 →
+ *  undefined（特性未启用，local ledger 为 legacy advisory 路径）。
+ *  authority 配置存在但连接失败 → reserve fail closed（R72/R84）。 */
+let capacityClient: import("./linux/scheduler/host-capacity").CapacityAuthority | undefined | null = null
+
+function defaultCapacityClient(): import("./linux/scheduler/host-capacity").CapacityAuthority | undefined {
+  if (capacityClient !== null) return capacityClient
+  const { existsSync } = require("node:fs") as typeof import("node:fs")
+  const sockPath = process.env.XDG_RUNTIME_DIR
+    ? require("node:path").join(process.env.XDG_RUNTIME_DIR, "orcana", "execd.sock")
+    : ""
+  if (!sockPath || !existsSync(sockPath)) {
+    capacityClient = undefined
+    return undefined
+  }
+  const { CapacityClient } = require("./linux/scheduler/host-capacity") as typeof import("./linux/scheduler/host-capacity")
+  capacityClient = new CapacityClient({ sockPath })
+  return capacityClient
 }
 
 /** Run-end cleanup for consumers that execute through the process facade. */

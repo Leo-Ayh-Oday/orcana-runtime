@@ -45,8 +45,9 @@ export interface ExecutionBackend {
   /** [] = 可执行；非空 = 拒绝原因（错误码前缀）。 */
   validateSpec(spec: ExecutionCellSpec): string[]
 
-  /** 编译后端专属启动参数（Policy Compiler 唯一来源 + 运行期物化材料）。 */
-  compile(spec: ExecutionCellSpec, caps: LinuxCapabilities, materialization?: ExecutionMaterialization): CompiledExecution
+  /** 编译后端专属启动参数（Policy Compiler 唯一来源 + 运行期物化材料）。
+   *  IC06：claimId 可选（沙盒内 --setenv 传输；无 claim 路径不变）。 */
+  compile(spec: ExecutionCellSpec, caps: LinuxCapabilities, materialization?: ExecutionMaterialization, claimId?: string): CompiledExecution
 
   run(spec: ExecutionCellSpec, ctx: BackendRunContext): AsyncIterable<ExecutionCellEvent>
 
@@ -100,11 +101,14 @@ export async function* streamBackendRun(
   const startedAt = Date.now()
   yield { type: "cell.status", cellId: spec.identity.cellId, state: "running", at: startedAt }
   const compiled = compile()
+  // IC06：claimId 同时注入沙盒内 env（bwrap --clearenv 会清掉外层 env；
+  // 外层 override 由 spawnSupervised 负责，这里保证沙盒内部可见）。
+  const runtimeEnv = ctx.claimId ? { ...compiled.env, ORCANA_CLAIM_ID: ctx.claimId } : compiled.env
   for await (const event of streamSupervised({
     executable: compiled.argv[0]!,
     args: compiled.argv.slice(1),
     cwd: compiled.cwd,
-    env: compiled.env,
+    env: runtimeEnv,
     claimId: ctx.claimId,
     limits: { stdoutMaxBytes: spec.resources.stdoutMaxBytes, stderrMaxBytes: spec.resources.stderrMaxBytes },
     wallTimeMs: spec.resources.wallTimeMs,

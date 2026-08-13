@@ -311,6 +311,13 @@ export class HostCapacityAuthority implements CapacityAuthority {
   async reserve(req: CapacityReserveRequest, idempotencyKey: string, principal: ClientPrincipal): Promise<ReserveOutcome> {
     const pkey = this.principalKey(principal)
     const digest = HostCapacityAuthority.digestOf(req.request)
+    // RESOURCE_DOUBLE_ACQUIRE=0：同 (run_id, cell_id) 已有 active claim →
+    // 拒绝（scheduler claim + broker second claim 双记账场景由 authority 端
+    // 去重保证，不依赖调用方正确性）。
+    const existing = this.db.query(`SELECT claim_id FROM claims WHERE run_id=? AND cell_id=? AND phase NOT IN ('RELEASED')`).get(req.runId, req.cellId) as { claim_id: string } | null
+    if (existing && existing.claim_id !== (this.db.query(`SELECT claim_id FROM authority_idempotency WHERE method='reserve' AND principal=? AND idempotency_key=?`).get(pkey, idempotencyKey) as { claim_id?: string } | null)?.claim_id) {
+      return { ok: false, reason: "RESOURCE_DOUBLE_ACQUIRE: active claim already exists for this run/cell" }
+    }
     const hit = this.db.query(`SELECT claim_id, request_digest FROM authority_idempotency WHERE method='reserve' AND principal=? AND idempotency_key=?`).get(pkey, idempotencyKey) as { claim_id: string; request_digest: string } | null
     if (hit) {
       if (hit.request_digest !== digest) {

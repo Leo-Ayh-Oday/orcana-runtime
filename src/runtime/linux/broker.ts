@@ -862,17 +862,22 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         if (hardAuthority && capacityAuthority) {
           // IC06: authority reserve —— ACK 后立即写入 acquired（单 acquisition
           // truth）。authority 不可达 → FAIL CLOSED（无 local-ledger fallback）。
-          const outcome = await capacityAuthority.reserve(
-            {
-              request: requested,
-              runId,
-              cellId,
-              agentId,
-              backendId: selection.backend,
-            },
-            `reserve-${runId}-${cellId}`,
-            inProcessPrincipal(),
-          )
+          let outcome: import("./scheduler/host-capacity").ReserveOutcome
+          try {
+            outcome = await capacityAuthority.reserve(
+              {
+                request: requested,
+                runId,
+                cellId,
+                agentId,
+                backendId: selection.backend,
+              },
+              `reserve-${runId}-${cellId}`,
+              inProcessPrincipal(),
+            )
+          } catch (error) {
+            throw new LinuxExecutionError("RESOURCE_AUTHORITY_UNAVAILABLE", `capacity authority unreachable: ${error instanceof Error ? error.message : String(error)}`, {})
+          }
           if (!outcome.ok) {
             throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${outcome.reason}`, {})
           }

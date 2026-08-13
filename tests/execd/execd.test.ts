@@ -7,16 +7,22 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecd, type Execd } from "../../src/execd/execd"
+import { createLinuxBroker } from "../../src/runtime/linux/broker"
 import { fixedApprovalTokenProvider } from "../../src/execd/approval"
 import { FrameCodec, encodeFrame } from "../../src/execd/protocol/frame"
 import { PROTOCOL_VERSION } from "../../src/execd/protocol/messages"
+
+/** execd 状态机测试注入 legacy broker（无 IC06 capacityAuthority —— 该语义
+ *  由 tests/ic06_resource_authority.test.ts 与 tests/execd/server.test.ts
+ *  capacity.* 路由覆盖；此处隔离状态机关注点）。 */
+const legacyBroker = () => createLinuxBroker({ mode: "enabled" })
 
 async function setupExecd(): Promise<{ execd: Execd; sockPath: string; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), "execd-e2e-"))
   const sockPath = join(dir, "execd.sock")
   // M8：独立 workspace 目录（共享 cwd 触发跨进程文件锁冲突）。
   const ws = mkdtempSync(join(tmpdir(), "execd-e2e-ws-"))
-  const execd = createExecd({ sockPath, statePath: join(dir, "execd.db"), workspaceHostRoot: ws, approval: fixedApprovalTokenProvider([E2E_TOKEN]) })
+  const execd = createExecd({ sockPath, statePath: join(dir, "execd.db"), workspaceHostRoot: ws, approval: fixedApprovalTokenProvider([E2E_TOKEN]), broker: legacyBroker() })
   await execd.start()
   return { execd, sockPath, dir }
 }
@@ -141,7 +147,7 @@ describe("execd end-to-end (L1-G)", () => {
       // workspace 根必须存在（编译校验 cwd 在 workspace 内）。
       mkdirSync(join(dir, "ws"), { recursive: true })
       const ws = join(dir, "ws")
-      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: ws, approval: fixedApprovalTokenProvider([E2E_TOKEN]) })
+      const execd1 = createExecd({ sockPath, statePath, workspaceHostRoot: ws, approval: fixedApprovalTokenProvider([E2E_TOKEN]), broker: legacyBroker() })
       await execd1.start()
       const c = connect(sockPath)
       c.send(req("SubmitCell", { capabilityId: "run_process", executable: "/bin/sh", args: ["-c", "sleep 20"], workloadKind: "build", readonly: false }))
@@ -153,7 +159,7 @@ describe("execd end-to-end (L1-G)", () => {
 
       // 第二次运行（同 boot 内）：stop 是优雅关闭（M2：在途 cell 被取消
       // → CANCELLED，无崩溃残留）—— 重启后无非终态残留、新客户端可用。
-      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: ws, approval: fixedApprovalTokenProvider([E2E_TOKEN]) })
+      const execd2 = createExecd({ sockPath, statePath, workspaceHostRoot: ws, approval: fixedApprovalTokenProvider([E2E_TOKEN]), broker: legacyBroker() })
       await execd2.start()
       try {
         expect(execd2.state.getCell(cellId)!.currentState).toBe("CANCELLED")

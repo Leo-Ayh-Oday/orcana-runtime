@@ -216,7 +216,7 @@ export function createBubblewrapBackend(): ExecutionBackend {
       return errors
     },
 
-    compile(spec, caps, materialization) {
+    compile(spec, caps, materialization, claimId?: string) {
       // PR-4：宿主 spawn cwd 与沙盒内部 cwd 分离 —— 宿主侧必须是真实存在的目录。
       if (!existsSync(spec.command.cwd)) {
         throw new LinuxExecutionError("PROCESS_START_FAILED", `host cwd does not exist: ${spec.command.cwd}`)
@@ -238,6 +238,9 @@ export function createBubblewrapBackend(): ExecutionBackend {
         pathEntries: ["/usr/local/bin"],
         secrets: materialization?.secretEnv,
       })
+      // IC06：claimId 沙盒内传输（--clearenv 后 --setenv 逐项注入 ——
+      // runtime metadata，不参与策略请求 env）。
+      const sandboxEnv = claimId ? { ...env.env, ORCANA_CLAIM_ID: claimId } : env.env
       const tmpfs = [
         ...defaultTmpfs(),
         ...spec.filesystem.tmpfsMounts.map(t => ({ target: t.target, sizeBytes: t.sizeBytes })),
@@ -257,7 +260,7 @@ export function createBubblewrapBackend(): ExecutionBackend {
         loopbackOnly: spec.network.mode === "loopback",
         cacheMounts: spec.cache.filter(c => c.mode === "ro").map(c => ({ target: c.target, source: cacheSource(c) })),
         cacheMountsRw: spec.cache.filter(c => c.mode === "rw-locked").map(c => ({ target: c.target, source: cacheSource(c) })),
-        setenv: env.env,
+        setenv: sandboxEnv,
         seccompFile: materialization?.seccompFile,
       })
       // 编译不依赖 binary 存在（执行时由 run 层校验）；PATH 解析兜底。
@@ -283,7 +286,7 @@ export function createBubblewrapBackend(): ExecutionBackend {
       const worktreeRoot = spec.filesystem.worktreeRoot
       const before = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
       yield* streamBackendRun("bubblewrap", spec, ctx,
-        () => this.compile(spec, ctx.capabilities, ctx.materialization),
+        () => this.compile(spec, ctx.capabilities, ctx.materialization, ctx.claimId),
         (result, evidence) => {
           const after = worktreeRoot ? snapshotWorkspace(worktreeRoot) : undefined
           const diff = before && after ? pathGuardDiff(before, after) : undefined

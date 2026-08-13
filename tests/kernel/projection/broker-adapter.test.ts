@@ -210,6 +210,11 @@ describe("AK2-T06 真实 broker 执行", () => {
       captured = request
       return originalCompile(request, auth)
     }
+    // R4-03：intent 必须携带真实 workspace 身份与 scope digest（adapter
+    // spawn 前逐字段验证）。
+    const { lstatSync } = require("node:fs") as typeof import("node:fs")
+    const mergedStat = lstatSync(merged)
+    const { canonicalJson, sha256Digest } = require("../../../src/kernel/world/canonical") as typeof import("../../../src/kernel/world/canonical")
     const intent = {
       intentId: "intent-r3-1",
       worldId: "w",
@@ -217,9 +222,9 @@ describe("AK2-T06 真实 broker 执行", () => {
       snapshotId: "s",
       projectionId: "p",
       sessionNonce: "n",
-      mergedRootIdentity: { dev: 1, ino: 2 },
+      mergedRootIdentity: { dev: mergedStat.dev, ino: mergedStat.ino },
       command: { executable: "/bin/echo", args: ["hello", "world"] },
-      scopeDigest: "scope-digest-r3",
+      scopeDigest: sha256Digest(Buffer.from(canonicalJson({ writableRoots: ["src"], readonlyRoots: ["docs"] }), "utf8")),
     }
     await executor.execute(merged, {
       executable: "/bin/echo",

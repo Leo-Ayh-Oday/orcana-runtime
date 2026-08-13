@@ -14,8 +14,8 @@
  * - cleanup 只卸载/删除本 projection 自己创建的资源，幂等；
  * - 任何路径必须落在 projectionRoot 内。
  *
- * CopyProjectionFixtureBackend 仅为确定性测试 fixture，**TEST FIXTURE ONLY**，
- * 不能作为真实 overlay 通过证据。
+ * R4-01：fixture backend 已移出生产导出面 —— 只经
+ * tests/kernel/projection/test-fixtures.ts（test-only factory）使用。
  */
 
 import { execFileSync, execFile } from "node:child_process"
@@ -27,8 +27,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  rmdirSync,
   statSync,
-  cpSync,
   statfsSync,
 } from "node:fs"
 import { join, resolve, sep } from "node:path"
@@ -172,6 +172,7 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     if (!existsSync(merged)) mkdirSync(merged, { mode: 0o700 })
 
     let mounted = false
+    void mounted
     let afterMountId: string | undefined
     try {
       // P2-3：invocation 之前不允许存在对应 owned mount —— 挂载前快照
@@ -219,27 +220,34 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 文件保持只读（写永远落在 upper，lower 不可被 merged 写穿透）。
       this.chmodMergedWritable(merged)
     } catch (error) {
-      // R2-06-5：真实挂载中且 unmount 失败时不得递归删除 upper/work/merged
-      //（可能仍在被内核使用 —— residue 保留供诊断）。从未挂载（fake/未
-      // 挂载成功）→ 目录安全可删。
-      if (mounted && this.isFuseMount(merged)) {
+      // R2-06-5/R4-00-9：真实挂载中且 unmount 失败（或 unmount 报告成功但
+      // mount 仍在）时，不得递归删除 upper/work/merged —— 不得递归进入仍
+      // 挂载的目录，也不得删除挂载的 backing store（residue 保留供诊断）。
+      // merged 只允许在确认非 mount 后用 rmdir 删除（禁止递归穿越）。
+      if (this.isFuseMount(merged)) {
         const unmounted = this.unmount(merged)
-        if (!unmounted) {
+        // R3-03.2：unmount 报告成功 ≠ 已卸载 —— 重新确认 mount 已消失；
+        // 仍挂载 → 保留全部 residue（含 upper/work backing store）。
+        if (!unmounted || this.isFuseMount(merged)) {
           throw error instanceof ProjectionError
             ? error
             : new ProjectionError(
                 "BACKEND_UNAVAILABLE",
-                `fuse-overlayfs mount failed for ${label} (unmount failed; residue retained)`,
+                `fuse-overlayfs mount failed for ${label} (unmount failed or mount still present; residue retained)`,
                 error instanceof Error ? error.message : String(error),
               )
         }
       }
       try {
+        // upper/work 是本 invocation 创建的普通目录（从未挂载）→ 可删。
         rmSync(upper, { recursive: true, force: true })
         rmSync(work, { recursive: true, force: true })
-        rmSync(merged, { recursive: true, force: true })
+        // merged：仅当确认非 mount 且为空时 rmdir（禁止递归 rm）。
+        if (!this.isFuseMount(merged)) {
+          rmdirSync(merged)
+        }
       } catch {
-        // best-effort
+        // best-effort（rmdir 失败 → residue 保留）
       }
       throw error instanceof ProjectionError
         ? error
@@ -316,12 +324,15 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
             return false
           }
         }
-        // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work/merged。
-        // rmSync 抛错（如挂载点仍被占用）→ 规范化为 cleanup failure（不抛）。
+        // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work。
+        // R4-05.8：merged 只允许在确认空且非 mount 后用 rmdir 删除 ——
+        // 禁止递归穿越（rmSync 抛错 → 规范化为 cleanup failure，不抛）。
         try {
           rmSync(upper, { recursive: true, force: true })
           rmSync(work, { recursive: true, force: true })
-          rmSync(merged, { recursive: true, force: true })
+          if (!this.isFuseMount(merged)) {
+            rmdirSync(merged)
+          }
         } catch {
           return false
         }
@@ -383,45 +394,6 @@ function makeTreeWritable(root: string): void {
   visit(root)
 }
 
-/**
- * TEST FIXTURE ONLY —— 确定性 copy backend：把 lower 复制为可写 merged。
- * 不创建任何真实 overlay 语义；仅用于 coordinator/delta/commit 逻辑测试。
- * 绝对不作为真实 Linux backend 通过证据。
- */
-export class CopyProjectionFixtureBackend implements NativeProjectionBackend {
-  readonly id = "fixture-copy"
-  readonly kind = "fixture" as const
-  readonly testFixtureOnly = true
-
-  create(input: CreateProjectionInput): ProjectionInstance {
-    const label = assertSafeLabel(input.label)
-    const projectionRoot = resolve(input.projectionRoot)
-    const lower = assertSafeMountPath(input.lowerDir, projectionRoot)
-    assertRealDirectory(lower, "lower")
-    assertRealDirectory(projectionRoot, "projectionRoot")
-
-    const merged = assertSafeMountPath(join(projectionRoot, `merged-${label}`), projectionRoot)
-    mkdirSync(merged, { mode: 0o700 })
-    // 复制 lower → merged（可写副本；lower 的只读 mode 不继承 —— upper 语义）。
-    cpSync(lower, merged, { recursive: true })
-    makeTreeWritable(merged)
-
-    return {
-      backend: "fixture",
-      mergedPath: merged,
-      writeLayerPath: merged,
-      assertReady: () => {
-        statSync(merged)
-        readdirSync(merged)
-      },
-      cleanup: () => {
-        if (!existsSync(merged)) return true
-        rmSync(merged, { recursive: true, force: true })
-        return true
-      },
-    }
-  }
-}
 
 export interface NativeBackendProbe {
   readonly overlayfs: boolean

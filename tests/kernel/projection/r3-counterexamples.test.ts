@@ -27,11 +27,11 @@ import { ProjectionError } from "../../../src/kernel/projection/contracts"
 import { ProjectionCoordinator, type ProjectionExecutor, type ProjectionSession } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
-  CopyProjectionFixtureBackend,
   FuseOverlayfsProjectionBackend,
   type NativeProjectionBackend,
   type ProjectionInstance,
 } from "../../../src/kernel/projection/backend"
+const CopyProjectionFixtureBackend = FixtureBackendAlias
 import { validateWorldProjectionPlan, type WorldProjectionPlanInput } from "../../../src/kernel/projection/plan"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
@@ -116,8 +116,8 @@ function makePlan(snapshotId: string, overrides: Partial<WorldProjectionPlanInpu
   })
 }
 
-/** R3-01.1：fixture 执行放行 token（从测试 helper 导入的 test-only token）。 */
-import { FIXTURE_EXECUTION_TOKEN } from "../../../src/kernel/projection/coordinator"
+/** R4-01：fixture 执行放行 token —— 只经 test-only factory（生产模块不可导入）。 */
+import { CopyProjectionFixtureBackend as FixtureBackendAlias, FIXTURE_EXECUTION_TOKEN } from "./test-fixtures"
 
 function coordinator(
   ctx: TestWorldStore,
@@ -191,19 +191,23 @@ function fakeFinalReceipt(overrides: Partial<SandboxReceipt> = {}): SandboxRecei
 
 function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean } = {}): ProjectionReceiptAuthority & {
   setIntentDigest(digest: string | undefined): void
+  setIntentId(id: string | undefined): void
   setCleanupFinalized(finalized: boolean): void
   currentDigest(): string | undefined
 } {
   const { hidden, ...receiptOverrides } = overrides
   let intentDigest: string | undefined
+  let intentId: string | undefined
   let cleanupFinalized = true
   const seedReceipt = fakeFinalReceipt(receiptOverrides)
   let latestDigest: string | undefined = seedReceipt.receiptDigest
   const inner: ProjectionReceiptAuthority = {
-    getFinalReceipt: () => {
+    getFinalReceipt: (_runId: string, _cellId: string) => {
       if (hidden === true) return undefined
       if (intentDigest === undefined) return undefined
-      const receipt = fakeFinalReceipt(receiptOverrides)
+      // R4-03：fake receipt 的 run/node 身份由 bindIntent 绑定的 intent
+      // 派生（重放时内容身份不变 —— 查询键只决定「是否存在」）。
+      const receipt = fakeFinalReceipt({ runId: intentId ?? "run-fake", nodeRunId: `${intentId ?? "run-fake"}:n1`, ...receiptOverrides })
       const { receiptDigest: _rd, ...content } = receipt
       const withIntent = { ...content, projectionIntentDigest: intentDigest }
       const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
@@ -216,13 +220,17 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean }
     setIntentDigest(digest: string | undefined): void {
       intentDigest = digest
     },
+    setIntentId(id: string | undefined): void {
+      intentId = id
+    },
     setCleanupFinalized(finalized: boolean): void {
       cleanupFinalized = finalized
     },
     currentDigest(): string | undefined {
       if (intentDigest === undefined) return latestDigest
+      const runId = intentId ?? "run-fake"
       const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
-      const { receiptDigest: _rd, ...content } = fakeFinalReceipt(receiptOverrides)
+      const { receiptDigest: _rd, ...content } = fakeFinalReceipt({ runId, nodeRunId: `${runId}:n1`, ...receiptOverrides })
       return crd({ ...content, projectionIntentDigest: intentDigest })
     },
   })
@@ -231,6 +239,7 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean }
 function bindIntent(auth: ReturnType<typeof fakeAuthority>, session: ProjectionSession): void {
   const { projectionIntentDigest } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
   auth.setIntentDigest(projectionIntentDigest(session.intent))
+  auth.setIntentId(session.intent.intentId)
 }
 
 async function sessionAtDeltaReady(
@@ -253,12 +262,17 @@ function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAut
     violation: false,
     executionReceiptId: auth.currentDigest()!,
     receiptBinding: {
-      runId: "run-fake",
-      nodeRunId: "run-fake:n1",
+      // R4-03：binding 的 run/node 由 intent 派生（kernel-owned）；scopeDigest
+      // 与 intent 一致；workspace 含 canonical path + dev/ino。
+      runId: session.intent.intentId,
+      nodeRunId: `${session.intent.intentId}:n1`,
       cellId: "cell-fake",
       cellSpecDigest: "c".repeat(64),
       filesystemPolicyDigest: "d".repeat(64),
+      scopeDigest: session.intent.scopeDigest,
       workspaceHostRoot: session.mergedDir,
+      workspaceDev: 0,
+      workspaceIno: 0,
     },
   }
 }
@@ -294,15 +308,28 @@ function productionKindBackend(instanceOverrides: Partial<ProjectionInstance> = 
 describe("AK2-R3 反例（R3-00 先红冻结）", () => {
   test("R3-00-1：production backend + fixture token + receiptless executor 必须拒绝（token 不能越过 backend.kind 门）", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, productionKindBackend(), FIXTURE_EXECUTION_TOKEN)
-    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    // R4-01：production coordinator 结构性要求 receipt authority（构造时）。
+    const coord = coordinator(ctx, productionKindBackend(), FIXTURE_EXECUTION_TOKEN, fakeAuthority())
+    const session = coord.start(makePlan(snapshotId))
+    await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(() => {}))
     // receiptless（fixture executor）→ 即使 token 在手，production-kind backend
-    // 也绝不能放行 —— R3-01.1 双重门（backend.kind === "fixture" && token）。
+    // 也绝不能放行 —— R4-00-7（production scan 需要 finalized receipt）或
+    // R3-01.1/R4-01 双重门（backend.kind === "fixture" && token）至少一层拒绝。
+    let code = ""
     try {
-      coord.commit(session)
-      throw new Error("R3-00-1 RED: production backend accepted receiptless fixture execution")
+      coord.scan(session)
     } catch (error) {
-      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REQUIRED")
+      code = (error as ProjectionError).code
+    }
+    if (code === "") {
+      try {
+        coord.commit(session)
+        throw new Error("R3-00-1 RED: production backend accepted receiptless fixture execution")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REQUIRED")
+      }
+    } else {
+      expect(code).toMatch(/PROJECTION_NOT_PROJECTED|EXECUTION_RECEIPT/)
     }
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
     ctx.cleanup()
@@ -395,7 +422,7 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     const backend = productionKindBackend({
       assertMountOwned: () => owned,
     })
-    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN)
+    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN, fakeAuthority())
     const session = coord.start(makePlan(snapshotId))
     owned = true
     try {
@@ -427,7 +454,7 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     const { ctx, snapshotId } = buildWorld()
     let owned = true
     const backend = productionKindBackend({ assertMountOwned: () => owned })
-    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN)
+    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN, fakeAuthority())
     const session = coord.start(makePlan(snapshotId))
     await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(() => {}))
     owned = false
@@ -451,7 +478,7 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
         throw new Error("R3-00-6 cleanup exploded")
       },
     })
-    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN)
+    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN, fakeAuthority())
     const session = coord.start(makePlan(snapshotId))
     await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(merged => {
       // symlink 条目使 scan 必然失败（DELTA_SCAN_FAILED）→ 触发 cleanup。
@@ -482,9 +509,13 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
       },
     })
     const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN, auth)
-    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
+    const session = coord.start(makePlan(snapshotId))
+    await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(() => {}))
+    // R4-00-7：production scan 需要 finalized receipt —— 绑定 fake receipt
+    // 后再 scan（cleanup 抛异常的目标是 commit 路径）。
     bindIntent(auth, session)
     bindOutcome(session, auth)
+    coord.scan(session)
     try {
       coord.commit(session)
     } catch {
@@ -506,7 +537,7 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
         throw new Error("R3-00-6c cleanup exploded")
       },
     })
-    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN)
+    const coord = coordinator(ctx, backend, FIXTURE_EXECUTION_TOKEN, fakeAuthority())
     const session = coord.start(makePlan(snapshotId))
     coord.cancel(session)
     expect(session.worldState).toBe("REJECTED")

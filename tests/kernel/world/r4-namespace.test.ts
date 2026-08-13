@@ -20,7 +20,7 @@ function mkStore(worldId: string): ReturnType<typeof createTestWorldStore> {
   return c
 }
 
-function fileDigest(c: ReturnType<typeof createTestWorldStore>, content = "x\n"): string {
+function fileDigest(c: ReturnType<typeof createTestWorldStore>, content = "x\n"): import("../../../src/kernel/world/contracts").CasDigest {
   return c.store.cas.put(Buffer.from(content, "utf8"), "text/plain").digest
 }
 

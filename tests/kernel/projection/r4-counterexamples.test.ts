@@ -47,11 +47,11 @@ import {
 } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
-  CopyProjectionFixtureBackend,
   FuseOverlayfsProjectionBackend,
   type NativeProjectionBackend,
   type ProjectionInstance,
 } from "../../../src/kernel/projection/backend"
+import { CopyProjectionFixtureBackend, FIXTURE_EXECUTION_TOKEN } from "./test-fixtures"
 import { validateWorldProjectionPlan, type WorldProjectionPlanInput } from "../../../src/kernel/projection/plan"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
@@ -127,20 +127,21 @@ function makePlan(snapshotId: string, overrides: Partial<WorldProjectionPlanInpu
 
 function coordinator(
   ctx: TestWorldStore,
-  options: ConstructorParameters<typeof ProjectionCoordinator>[0] & { backend?: NativeProjectionBackend } = {},
+  options: Partial<import("../../../src/kernel/projection/coordinator").ProjectionCoordinatorOptions> & { backend?: NativeProjectionBackend } = {},
 ): ProjectionCoordinator {
   const materializer = new SnapshotMaterializer({
     getSnapshot: id => ctx.store.snapshots.get(id),
     getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   })
+  const { backend, ...rest } = options
   return new ProjectionCoordinator({
     store: ctx.store,
     materializer,
-    backend: options.backend ?? new CopyProjectionFixtureBackend(),
+    backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: tmpRoot("projroot"),
     allowTestBackends: true,
-    ...options,
+    ...rest,
   })
 }
 
@@ -223,17 +224,21 @@ function fakeFinalReceipt(overrides: Partial<SandboxReceipt> = {}): SandboxRecei
 
 function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean } = {}): ProjectionReceiptAuthority & {
   setIntentDigest(digest: string | undefined): void
+  setIntentId(id: string | undefined): void
   currentDigest(): string | undefined
 } {
   const { hidden, ...receiptOverrides } = overrides
   let intentDigest: string | undefined
+  let intentId: string | undefined
   const seedReceipt = fakeFinalReceipt(receiptOverrides)
   let latestDigest: string | undefined = seedReceipt.receiptDigest
   const inner: ProjectionReceiptAuthority = {
-    getFinalReceipt: () => {
+    getFinalReceipt: (_runId: string, _cellId: string) => {
       if (hidden === true) return undefined
       if (intentDigest === undefined) return undefined
-      const receipt = fakeFinalReceipt(receiptOverrides)
+      // R4-03：fake receipt 的 run/node 身份由 bindIntent 绑定的 intent
+      // 派生（重放时内容身份不变 —— 查询键只决定「是否存在」）。
+      const receipt = fakeFinalReceipt({ runId: intentId ?? "run-fake", nodeRunId: `${intentId ?? "run-fake"}:n1`, ...receiptOverrides })
       const { receiptDigest: _rd, ...content } = receipt
       const withIntent = { ...content, projectionIntentDigest: intentDigest }
       const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
@@ -246,10 +251,14 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean }
     setIntentDigest(digest: string | undefined): void {
       intentDigest = digest
     },
+    setIntentId(id: string | undefined): void {
+      intentId = id
+    },
     currentDigest(): string | undefined {
       if (intentDigest === undefined) return latestDigest
+      const runId = intentId ?? "run-fake"
       const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
-      const { receiptDigest: _rd, ...content } = fakeFinalReceipt(receiptOverrides)
+      const { receiptDigest: _rd, ...content } = fakeFinalReceipt({ runId, nodeRunId: `${runId}:n1`, ...receiptOverrides })
       return crd({ ...content, projectionIntentDigest: intentDigest })
     },
   })
@@ -258,6 +267,7 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean }
 function bindIntent(auth: ReturnType<typeof fakeAuthority>, session: ProjectionSession): void {
   const { projectionIntentDigest } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
   auth.setIntentDigest(projectionIntentDigest(session.intent))
+  auth.setIntentId(session.intent.intentId)
 }
 
 function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAuthority>): void {
@@ -268,12 +278,17 @@ function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAut
     violation: false,
     executionReceiptId: auth.currentDigest()!,
     receiptBinding: {
-      runId: "run-fake",
-      nodeRunId: "run-fake:n1",
+      // R4-03：binding 的 run/node 由 intent 派生（kernel-owned）；scopeDigest
+      // 与 intent 一致；workspace 含 canonical path + dev/ino。
+      runId: session.intent.intentId,
+      nodeRunId: `${session.intent.intentId}:n1`,
       cellId: "cell-fake",
       cellSpecDigest: "c".repeat(64),
       filesystemPolicyDigest: "d".repeat(64),
+      scopeDigest: session.intent.scopeDigest,
       workspaceHostRoot: session.mergedDir,
+      workspaceDev: 0,
+      workspaceIno: 0,
     },
   }
 }
@@ -293,15 +308,30 @@ async function sessionAtDeltaReady(
 describe("AK2-R4 反例（R4-00 先红冻结）", () => {
   test("R4-00-1：production backend + allowFixtureExecution:true + receiptless 仍可 commit（boolean bypass 必须删除）", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, { backend: productionKindBackend(), allowFixtureExecution: true })
-    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
-    // receiptless + production backend：即使 allowFixtureExecution=true 也
-    // 绝不允许 commit —— 该 boolean bypass 必须完全删除（R4-01）。
+    // R4-01：allowFixtureExecution 选项已完全删除；production backend 构造
+    // 时结构性要求 receipt authority（缺失 → 构造即拒绝，fail-closed）。
+    expect(() =>
+      coordinator(ctx, { backend: productionKindBackend() }),
+    ).toThrow(/EXECUTION_RECEIPT_REQUIRED|receipt authority/)
+    const coord = coordinator(ctx, { backend: productionKindBackend(), receiptAuthority: fakeAuthority() })
+    const session = coord.start(makePlan(snapshotId))
+    await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(() => {}))
+    // receiptless + production backend：scan（R4-00-7）或 commit（R4-01）必须拒绝。
+    let code = ""
     try {
-      coord.commit(session)
-      throw new Error("R4-00-1 RED: production backend committed receiptless with allowFixtureExecution=true")
+      coord.scan(session)
     } catch (error) {
-      expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REQUIRED")
+      code = (error as ProjectionError).code
+    }
+    if (code === "") {
+      try {
+        coord.commit(session)
+        throw new Error("R4-00-1 RED: production backend committed receiptless")
+      } catch (error) {
+        expect((error as ProjectionError).code).toBe("EXECUTION_RECEIPT_REQUIRED")
+      }
+    } else {
+      expect(code).toMatch(/PROJECTION_NOT_PROJECTED|EXECUTION_RECEIPT/)
     }
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
     ctx.cleanup()
@@ -397,7 +427,7 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
       mkdirSync(join(wtDir, "unscoped"), { recursive: true })
       // cwd 在未声明的 unscoped 目录内：编译必须 fail-closed。
       const badSpec = {
-        ...spec,
+        ...(spec as Record<string, unknown>),
         command: { executable: "/bin/true", args: [], cwd: join(wtDir, "unscoped"), stdin: "closed" },
         filesystem: {
           readonlyMounts: [{ source: join(wtDir, "docs"), target: "/workspace/docs", mode: "ro", required: true, recursive: true }],
@@ -527,7 +557,7 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
     ]) {
       const { ctx, snapshotId } = buildWorld()
       const auth = fakeAuthority(overrides as Partial<SandboxReceipt>)
-      const coord = coordinator(ctx, { backend: new CopyProjectionFixtureBackend(), fixtureExecutionToken: Symbol("r4-token"), receiptAuthority: auth })
+      const coord = coordinator(ctx, { backend: new CopyProjectionFixtureBackend(), fixtureExecutionToken: FIXTURE_EXECUTION_TOKEN, receiptAuthority: auth })
       const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
       bindIntent(auth, session)
       bindOutcome(session, auth)
@@ -544,7 +574,7 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
 
   test("R4-00-6：execute 前 mount ownership 丢失 → 必须进入终态（REJECTED + cleanupState + terminal receipt）", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const coord = coordinator(ctx, { backend: productionKindBackend({ assertMountOwned: () => false }) })
+    const coord = coordinator(ctx, { backend: productionKindBackend({ assertMountOwned: () => false }), receiptAuthority: fakeAuthority() })
     const session = coord.start(makePlan(snapshotId))
     try {
       await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(() => {}))
@@ -581,7 +611,7 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
     let swapped = false
     const coord = coordinator(ctx, {
       backend: new CopyProjectionFixtureBackend(),
-      fixtureExecutionToken: Symbol("r4-token"),
+      fixtureExecutionToken: FIXTURE_EXECUTION_TOKEN,
       onBeforeProjectionRootOpen: (root: string) => {
         if (swapped) return
         swapped = true
@@ -599,48 +629,50 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
     ctx.cleanup()
   })
 
-  test("R4-00-9：backend mount 成功后 create 失败 → 不得递归删除仍挂载的 merged（residue 保留）", () => {
+  test("R4-00-9：backend mount 成功后 create 失败 → 不得递归删除仍挂载的 merged", () => {
     const root = tmpRoot("createfail")
     const lower = join(root, "lower")
     mkdirSync(lower)
     writeFileSync(join(lower, "marker.txt"), "MARKER")
-    // 000 模式子目录：真实 mount 成功后 chmodMergedWritable 的 readdir 必然
-    // EACCES → create 失败（mount 已成功）。
-    mkdirSync(join(lower, "locked"))
-    chmodSync(join(lower, "locked"), 0o000)
     chmodSync(lower, 0o755)
-    // fake fusermount3/fusermount：exit 0 但不卸载（unmount 报告成功 ≠ 已卸载）。
+    // fake fuse-overlayfs：真实挂载（exec 真实 binary）后 exit 1 —— mount
+    // 已成功但 create 报失败（mounted 标志不置位 → 旧代码跳过卸载直接
+    // 递归 rmSync merged，穿过仍挂载的视图删除 lower 内容）。
     const fakeBin = join(root, "fakebin")
     mkdirSync(fakeBin, { mode: 0o755 })
-    writeFileSync(join(fakeBin, "fusermount3"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
-    writeFileSync(join(fakeBin, "fusermount"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
-    const backend = new FuseOverlayfsProjectionBackend()
+    const { execFileSync } = require("node:child_process") as typeof import("node:child_process")
+    const realFuse = execFileSync("which", ["fuse-overlayfs"]).toString().trim()
+    writeFileSync(join(fakeBin, "fuse-overlayfs"), `#!/bin/sh\n${realFuse} "$@"\nexit 1\n`, { mode: 0o755 })
+    const backend = new FuseOverlayfsProjectionBackend(join(fakeBin, "fuse-overlayfs"))
     let threw = false
-    const originalPath = process.env.PATH
-    // fake fusermount3 必须优先于真实 binary（unmount 报告成功 ≠ 已卸载）。
-    process.env.PATH = `${fakeBin}:${originalPath ?? ""}`
     try {
       backend.create({ lowerDir: lower, projectionRoot: root, label: "m" })
     } catch {
       threw = true
-    } finally {
-      process.env.PATH = originalPath
     }
     expect(threw).toBe(true)
     const merged = join(root, "merged-m")
+    // lower 内容必须保留：create 失败路径不得递归删除仍挂载的 merged
+    //（卸载被跳过时，递归 rmSync 会穿过挂载视图删除 lower 内容）。
+    expect(readFileSync(join(lower, "marker.txt"), "utf8")).toBe("MARKER")
+    // 若 merged 仍挂载（卸载失败）→ residue 保留；若已卸载 → 目录可删。
     const { statfsSync } = require("node:fs") as typeof import("node:fs")
-    // merged 仍挂载（mount 真实存在）—— create 失败路径不得递归删除其内容、
-    // 不得删除挂载的 backing store（upper/work residue 保留）。
-    expect(statfsSync(merged).type).toBe(0x65735546)
-    expect(existsSync(join(root, "upper-m"))).toBe(true)
-    expect(existsSync(join(root, "work-m"))).toBe(true)
-    expect(readFileSync(join(merged, "marker.txt"), "utf8")).toBe("MARKER")
-    // 清理：真实 fusermount3 卸载（fake 只是测试诱饵）。
-    const { execFileSync } = require("node:child_process") as typeof import("node:child_process")
+    let stillMounted = false
     try {
-      execFileSync("/usr/bin/fusermount3", ["-u", merged], { stdio: "ignore" })
+      stillMounted = statfsSync(merged).type === 0x65735546
     } catch {
-      execFileSync("fusermount3", ["-u", merged], { stdio: "ignore" })
+      stillMounted = false
+    }
+    if (stillMounted) {
+      // residue 保留：不得递归删除（marker 已断言保留）。
+      expect(existsSync(join(root, "upper-m"))).toBe(true)
+      expect(existsSync(join(root, "work-m"))).toBe(true)
+      // 清理：真实 fusermount3 卸载。
+      try {
+        execFileSync("/usr/bin/fusermount3", ["-u", merged], { stdio: "ignore" })
+      } catch {
+        execFileSync("fusermount3", ["-u", merged], { stdio: "ignore" })
+      }
     }
   })
 

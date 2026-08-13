@@ -20,8 +20,11 @@
  */
 
 import { resolve } from "node:path"
+import { lstatSync } from "node:fs"
 import type { LinuxExecutionBroker } from "../../runtime/linux/broker"
 import { profileDefaults as profileDefaultsOf } from "../../runtime/linux/profiles"
+import { cellSpecDigest, digestOf } from "../../runtime/linux/receipt"
+import { canonicalJson, sha256Digest } from "../world/canonical"
 import type {
   ExecutionProfile,
   NetworkMode,
@@ -61,7 +64,11 @@ export class LinuxBrokerProjectionExecutor {
 
   constructor(private readonly options: ProjectionBrokerAdapterOptions) {}
 
-  /** 执行一个命令；返回 Execution 事实（receipt id 仅记录 Execution）。 */
+  /** 执行一个命令；返回 Execution 事实（receipt id 仅记录 Execution）。
+   *  R4-03：intent 存在时 spawn 前逐字段验证（executable/args/timeout/
+   *  canonical roots/workspace identity/intent 身份字段）—— 禁止 executor
+   *  同时提供「声明」和「证明」；binding 的 spec digest 从 kernel-owned
+   *  input 编译派生（不是 receipt 自报值）。 */
   async execute(
     cwd: string,
     command: { executable: string; args: readonly string[]; timeoutMs?: number; signal?: AbortSignal; intent?: import("./contracts").ProjectionExecutionIntent },
@@ -71,6 +78,11 @@ export class LinuxBrokerProjectionExecutor {
     // 复用 nonce）；intent digest 注入 spec 环境变量 → broker 填入 final
     // receipt.projectionIntentDigest（打破 outcome 自报 binding 循环）。
     const intent = command.intent
+    // R4-03.2：intent 存在时 spawn 前逐字段验证 —— 实际请求的命令/超时/
+    // scope/workspace 必须与 intent（kernel-owned 期望绑定）完全一致。
+    if (intent !== undefined) {
+      this.assertIntentBinding(cwd, intent, command)
+    }
     const authority = intent === undefined
       ? this.options.authority
       : {
@@ -187,6 +199,22 @@ export class LinuxBrokerProjectionExecutor {
       }
     }
 
+    // R4-03.4：binding 的 spec digest 从 kernel-owned input 编译出的 spec
+    // 独立派生（plan roots + command + intent 是唯一输入）—— 不是 receipt
+    // 自报值的副本。workspace 绑定含 canonical path + dev/ino。
+    const scopeDigest = sha256Digest(
+      Buffer.from(canonicalJson({ writableRoots: this.options.writableRoots, readonlyRoots: this.options.readonlyRoots }), "utf8"),
+    )
+    let workspaceIdentity: { dev: number; ino: number } | undefined
+    try {
+      const stat = lstatSync(resolve(cwd))
+      workspaceIdentity = { dev: stat.dev, ino: stat.ino }
+    } catch {
+      workspaceIdentity = undefined
+    }
+    const expectedCellSpecDigest = cellSpecDigest(spec)
+    const expectedFilesystemPolicyDigest = digestOf(spec.filesystem)
+
     const outcome: ProjectionExecutionOutcome = {
       // abort 取消时 cell.exit 的 exitCode 为 null → 记为失败退出。
       exitCode: exitCode ?? (sawExit ? 1 : -1),
@@ -196,16 +224,21 @@ export class LinuxBrokerProjectionExecutor {
       // 只有确认最终持久化 receipt（cleanup-finalized + final digest）才
       // 携带 executionReceiptId；否则缺省（coordinator 拒绝 production commit）。
       ...(finalDigest === undefined ? {} : { executionReceiptId: finalDigest }),
-      ...(finalReceipt === undefined || finalDigest === undefined
+      ...(finalReceipt === undefined || finalDigest === undefined || workspaceIdentity === undefined
         ? {}
         : {
             receiptBinding: {
-              runId: finalReceipt.runId,
-              nodeRunId: finalReceipt.nodeRunId,
+              // R4-03：run/node 由 intent 派生（kernel-owned），cellId 来自
+              // 最终 receipt（运行时生成，无法预先预测）。
+              runId: intent?.intentId ?? finalReceipt.runId,
+              nodeRunId: intent === undefined ? finalReceipt.nodeRunId : `${intent.intentId}:n1`,
               cellId: finalReceipt.cellId,
-              cellSpecDigest: finalReceipt.cellSpecDigest,
-              filesystemPolicyDigest: finalReceipt.filesystemPolicyDigest,
+              cellSpecDigest: expectedCellSpecDigest,
+              filesystemPolicyDigest: expectedFilesystemPolicyDigest,
+              scopeDigest,
               workspaceHostRoot: resolve(authority.workspace.hostRoot),
+              workspaceDev: workspaceIdentity.dev,
+              workspaceIno: workspaceIdentity.ino,
             } as ProjectionReceiptBinding,
           }),
     }
@@ -218,5 +251,74 @@ export class LinuxBrokerProjectionExecutor {
       )
     }
     return { outcome, receipt: finalReceipt ?? receipt }
+  }
+
+  /** R4-03.2：spawn 前逐字段验证 —— intent（kernel-owned 期望绑定）与
+   *  实际请求必须完全一致：executable、args、timeout、canonical roots
+   *  （scopeDigest）、workspace identity（dev/ino）、intent 身份字段。
+   *  任何不一致 → EXECUTION_RECEIPT_BINDING_MISMATCH（command 从未 spawn）。
+   *  intent 身份字段（intentId/worldId/branchId/snapshotId/projectionId）
+   *  必须非空 —— malformed intent 拒绝。 */
+  private assertIntentBinding(
+    cwd: string,
+    intent: import("./contracts").ProjectionExecutionIntent,
+    command: { executable: string; args: readonly string[]; timeoutMs?: number },
+  ): void {
+    const mismatch = (detail: string): never => {
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        `intent binding mismatch before spawn: ${detail}`,
+      )
+    }
+    // 1. intent 身份字段必须存在（kernel-owned 绑定完整性）。
+    for (const [field, value] of Object.entries({
+      intentId: intent.intentId,
+      worldId: intent.worldId,
+      branchId: intent.branchId,
+      snapshotId: intent.snapshotId,
+      projectionId: intent.projectionId,
+    })) {
+      if (typeof value !== "string" || value.length === 0) mismatch(`${field} is missing in intent`)
+    }
+    // 2. executable / args / timeout 逐字段一致。
+    if (command.executable !== intent.command.executable) {
+      mismatch(`executable ${command.executable} != intent ${intent.command.executable}`)
+    }
+    if (command.args.length !== intent.command.args.length) {
+      mismatch(`args length ${command.args.length} != intent ${intent.command.args.length}`)
+    }
+    for (let index = 0; index < command.args.length; index++) {
+      if (command.args[index] !== intent.command.args[index]) {
+        mismatch(`args[${index}] ${command.args[index]} != intent ${intent.command.args[index]}`)
+      }
+    }
+    if ((command.timeoutMs ?? undefined) !== intent.command.timeoutMs) {
+      mismatch(`timeoutMs ${String(command.timeoutMs)} != intent ${String(intent.command.timeoutMs)}`)
+    }
+    // 3. canonical roots：本 adapter 的 roots 摘要必须等于 intent.scopeDigest
+    //   （scopeDigest 真正参与验证）。
+    const scopeDigest = sha256Digest(
+      Buffer.from(canonicalJson({ writableRoots: this.options.writableRoots, readonlyRoots: this.options.readonlyRoots }), "utf8"),
+    )
+    if (scopeDigest !== intent.scopeDigest) {
+      mismatch(`scopeDigest ${scopeDigest} != intent ${intent.scopeDigest}`)
+    }
+    // 4. workspace identity：cwd 的 dev/ino 必须等于 intent 记录的 merged
+    //   root 身份（canonical path 由调用方 resolved 保证；identity 防 swap）。
+    let stat: import("node:fs").Stats | undefined
+    try {
+      stat = lstatSync(resolve(cwd))
+    } catch {
+      // fallthrough → identity mismatch 拒绝（不可读 = 绑定失败）。
+    }
+    if (
+      stat === undefined ||
+      stat.dev !== intent.mergedRootIdentity.dev ||
+      stat.ino !== intent.mergedRootIdentity.ino
+    ) {
+      mismatch(
+        `workspace identity (dev=${stat?.dev},ino=${stat?.ino}) != intent (dev=${intent.mergedRootIdentity.dev},ino=${intent.mergedRootIdentity.ino})`,
+      )
+    }
   }
 }

@@ -25,17 +25,27 @@ import { RuntimeStateStore } from "../../runtime/linux/recovery/state-store"
 import { ProjectionError } from "./contracts"
 import { openAtNoFollow, openRootAnchored } from "./anchored-fs"
 
-/** Execution receipt 对当前 projection session 的绑定事实。 */
+/** Execution receipt 对当前 projection session 的绑定事实。
+ *  R4-03：cellSpecDigest/filesystemPolicyDigest 必须从 kernel-owned input
+ *  （plan + command + intent 编译出的 spec）独立派生 —— 不是 receipt 自报
+ *  值的副本；scopeDigest 必须与 intent 一致；workspace 绑定包含 canonical
+ *  path 与 dev/ino 身份。 */
 export interface ProjectionReceiptBinding {
   readonly runId: string
   readonly nodeRunId: string
   readonly cellId: string
-  /** adapter 编译出的 spec digest（command/spec 绑定）。 */
+  /** adapter 从 kernel-owned input 编译出的 spec digest（command/spec 绑定）。 */
   readonly cellSpecDigest: string
-  /** filesystem policy digest（writable/readonly scope 绑定）。 */
+  /** adapter 从 kernel-owned input 编译出的 filesystem policy digest。 */
   readonly filesystemPolicyDigest: string
-  /** merged workspace 物理根（workspace/merged identity 绑定）。 */
+  /** plan scope（writable+readonly roots）的 canonical 摘要 —— 必须等于
+   *  session.intent.scopeDigest（scopeDigest 真正参与验证）。 */
+  readonly scopeDigest: string
+  /** merged workspace 物理根（canonical path 绑定）。 */
   readonly workspaceHostRoot: string
+  /** merged workspace 物理根 dev/ino 身份（workspace identity 绑定）。 */
+  readonly workspaceDev: number
+  readonly workspaceIno: number
 }
 
 /** 读取最终权威 receipt 的边界。 */
@@ -131,7 +141,11 @@ export class RuntimeStateReceiptAuthority implements ProjectionReceiptAuthority 
 /** 校验 outcome 声称的 receipt 是否可信且绑定本 session（P0-2/R2-01）。
  *  expected binding 来自 coordinator 生成的 Execution Intent（非 outcome
  *  自报）：receipt.projectionIntentDigest（broker 从 spec 注入）必须等于
- *  intent digest —— 历史 receipt 无法跨 World/snapshot/session 重放。 */
+ *  intent digest —— 历史 receipt 无法跨 World/snapshot/session 重放。
+ *  R4-03：runId/nodeRunId 由 intent 独立派生（kernel-owned）；
+ *  cellSpecDigest/filesystemPolicyDigest 由 adapter 从 kernel-owned input
+ *  编译（binding 不是 receipt 自报值的副本）；scopeDigest 必须等于
+ *  intent.scopeDigest；workspace 绑定含 canonical path + dev/ino。 */
 export function assertTrustedExecutionReceipt(
   authority: ProjectionReceiptAuthority,
   intent: import("./contracts").ProjectionExecutionIntent,
@@ -172,23 +186,51 @@ export function assertTrustedExecutionReceipt(
       `receipt ${receipt.receiptDigest} intent digest ${receipt.projectionIntentDigest ?? "<none>"} does not match session intent ${intentDigest} (cross-world/session replay refused)`,
     )
   }
-  // binding：run/node/cell + spec digest（receipt 是权威，claim 必须一致）。
-  if (receipt.runId !== claimedBinding.runId || receipt.nodeRunId !== claimedBinding.nodeRunId || receipt.cellId !== claimedBinding.cellId) {
+  // R4-03：receipt 的 run/node 身份必须由 intent 独立派生（不是 claim 自报
+  // 值）—— intent.intentId 即 runId；nodeRunId 固定 intentId:n1。
+  if (receipt.runId !== intent.intentId) {
     throw new ProjectionError(
       "EXECUTION_RECEIPT_BINDING_MISMATCH",
-      `receipt identity (${receipt.runId}/${receipt.nodeRunId}/${receipt.cellId}) does not match claimed binding (${claimedBinding.runId}/${claimedBinding.nodeRunId}/${claimedBinding.cellId})`,
+      `receipt runId ${receipt.runId} does not match session intent ${intent.intentId}`,
     )
   }
+  if (receipt.nodeRunId !== `${intent.intentId}:n1`) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_BINDING_MISMATCH",
+      `receipt nodeRunId ${receipt.nodeRunId} does not match intent-derived ${intent.intentId}:n1`,
+    )
+  }
+  if (receipt.cellId !== claimedBinding.cellId) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_BINDING_MISMATCH",
+      `receipt cellId ${receipt.cellId} does not match claimed binding ${claimedBinding.cellId}`,
+    )
+  }
+  // R4-03：binding 的 digest 必须从 kernel-owned input 派生 —— claim 与
+  // receipt 自报值一致只是必要条件；binding 本身必须等于 intent 的 scope。
+  if (claimedBinding.scopeDigest !== scopeDigest) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_BINDING_MISMATCH",
+      `binding scopeDigest does not match session intent scope (kernel-owned input)`,
+    )
+  }
+  if (claimedBinding.runId !== intent.intentId || claimedBinding.nodeRunId !== `${intent.intentId}:n1`) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_BINDING_MISMATCH",
+      `binding run/node identity does not match intent-derived identity`,
+    )
+  }
+  // receipt 自报 digest vs kernel-derived binding digest（不是自比对）。
   if (receipt.cellSpecDigest !== claimedBinding.cellSpecDigest) {
     throw new ProjectionError(
       "EXECUTION_RECEIPT_BINDING_MISMATCH",
-      `receipt cellSpecDigest does not match claimed binding`,
+      `receipt cellSpecDigest does not match kernel-derived binding`,
     )
   }
   if (receipt.filesystemPolicyDigest !== claimedBinding.filesystemPolicyDigest) {
     throw new ProjectionError(
       "EXECUTION_RECEIPT_BINDING_MISMATCH",
-      `receipt filesystemPolicyDigest does not match claimed binding`,
+      `receipt filesystemPolicyDigest does not match kernel-derived binding`,
     )
   }
   // R2-01-6：receipt 的 outcome truth 必须与 coordinator 使用的 execution

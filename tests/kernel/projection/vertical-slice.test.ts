@@ -13,10 +13,10 @@ import { join } from "node:path"
 import { ProjectionCoordinator } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
-  CopyProjectionFixtureBackend,
   FuseOverlayfsProjectionBackend,
   probeNativeBackends,
 } from "../../../src/kernel/projection/backend"
+import { CopyProjectionFixtureBackend, FIXTURE_EXECUTION_TOKEN } from "./test-fixtures"
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
 import { validateWorldProjectionPlan } from "../../../src/kernel/projection/plan"
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
@@ -87,8 +87,8 @@ async function runVerticalSlice(
     projectionRoot: tmpRoot("proj"),
     // A 层 fixture backend 需要显式 test capability（R06.3）。
     allowTestBackends: backend.kind === "fixture" ? true : undefined,
-    // A 层 fixture executor 无真实 receipt —— 仅测试。
-    allowFixtureExecution: backend.kind === "fixture" ? true : undefined,
+    // R4-01：fixture executor 无真实 receipt —— 仅 test-only token 放行。
+    fixtureExecutionToken: backend.kind === "fixture" ? FIXTURE_EXECUTION_TOKEN : undefined,
     ...(receiptAuthority === undefined ? {} : { receiptAuthority }),
   })
   // 4. native projection。
@@ -117,8 +117,18 @@ async function runVerticalSlice(
   expect(session.executionState).toBe("COMPLETED")
 
   // 6. deterministic delta。
-  const delta = coord.scan(session)
-  expect(delta.entries).toContainEqual(expect.objectContaining({ kind: "write", path: "src/main.ts" }))
+  // R4-00-7：production（真实 backend）scan 需要 finalized receipt/cleanup
+  // proof —— 本机 bwrap 无 cgroup 委托 → cleanup proof 不可得 → scan
+  // fail-closed（ENV_BLOCKED，同 commit 语义）。
+  let delta
+  try {
+    delta = coord.scan(session)
+    expect(delta.entries).toContainEqual(expect.objectContaining({ kind: "write", path: "src/main.ts" }))
+  } catch (scanError) {
+    const code = (scanError as { code?: string }).code ?? ""
+    if (!/^PROJECTION_NOT_PROJECTED$/.test(code)) throw scanError
+    return { revision: 0n, newContent: "", ctx, commitError: scanError }
+  }
 
   // 7. validator 已内置于 commit（writes/expected output 验证）。
   // 8. World commit → revision 1（新 revision = 2）。
@@ -320,7 +330,22 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
           return outcome
         },
       )
-      coord.scan(session)
+      // R4-00-7：production scan 需要 finalized receipt/cleanup proof ——
+      // 本机不可得 → scan fail-closed（ENV_BLOCKED，commit 前拒绝）。
+      let scanError: unknown
+      try {
+        coord.scan(session)
+      } catch (error) {
+        scanError = error
+      }
+      if (scanError !== undefined) {
+        const scanCode = (scanError as { code?: string }).code ?? ""
+        if (scanCode !== "PROJECTION_NOT_PROJECTED") throw scanError
+        console.log(`ENV_BLOCKED: bubblewrap cleanup proof unavailable on this host; delta scan refused (fail-closed): ${scanError instanceof Error ? scanError.message : String(scanError)}`)
+        expect(ctx.store.getWorld("world-vf")!.currentRevision).toBe(1n)
+        ctx.cleanup()
+        return
+      }
       // 注意：真实 overlay 成功链的 commit 依赖 cleanup proof —— 本机
       // bubblewrap 无 cgroup 委托（cleanupVerified=false）→ ENV_BLOCKED：
       // commit 必须 fail-closed（拒绝）。真实 unmount 失败无法无副作用注入

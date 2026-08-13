@@ -6,10 +6,10 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
-  CopyProjectionFixtureBackend,
   FuseOverlayfsProjectionBackend,
   probeNativeBackends,
 } from "../../../src/kernel/projection/backend"
+import { CopyProjectionFixtureBackend } from "./test-fixtures"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
 
 const cleanups: Array<() => void> = []

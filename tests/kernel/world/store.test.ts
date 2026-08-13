@@ -74,6 +74,12 @@ describe("AK-1 WorldStore", () => {
         mutations: [
           {
             type: "object.put",
+            objectId: "src",
+            objectType: "directory",
+            path: "src",
+          },
+          {
+            type: "object.put",
             objectId: "src/index.ts",
             objectType: "file",
             path: "src/index.ts",
@@ -89,6 +95,12 @@ describe("AK-1 WorldStore", () => {
       expect(fixture.store.getBranch("w1", "main")?.headRevision).toBe(1n)
       expect(fixture.store.listObjects("w1", "main")).toEqual([
         expect.objectContaining({
+          objectId: "src",
+          objectType: "directory",
+          path: "src",
+          updatedRevision: 1n,
+        }),
+        expect.objectContaining({
           objectId: "src/index.ts",
           contentRef: content.digest,
           updatedRevision: 1n,
@@ -96,6 +108,7 @@ describe("AK-1 WorldStore", () => {
       ])
       expect(fixture.store.cas.record(content.digest)?.refCount).toBe(1)
       expect(fixture.store.ledger.eventsForCommit("commit-1").map(event => event.eventType)).toEqual([
+        "world.object.updated",
         "world.object.updated",
         "world.commit",
       ])
@@ -106,14 +119,22 @@ describe("AK-1 WorldStore", () => {
         worldId: "w1",
         branchId: "main",
         baseRevision: "0",
-        mutations: [{
-          type: "object.put",
-          objectId: "src/index.ts",
-          objectType: "file",
-          path: "src/index.ts",
-          contentRef: content.digest,
-          metadata: { language: "typescript" },
-        }],
+        mutations: [
+          {
+            type: "object.put",
+            objectId: "src",
+            objectType: "directory",
+            path: "src",
+          },
+          {
+            type: "object.put",
+            objectId: "src/index.ts",
+            objectType: "file",
+            path: "src/index.ts",
+            contentRef: content.digest,
+            metadata: { language: "typescript" },
+          },
+        ],
       }
       expect(fixture.store.cas.get(receipt.deltaDigest).toString("utf8")).toBe(
         canonicalJson(deltaManifest),

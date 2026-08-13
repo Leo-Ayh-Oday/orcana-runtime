@@ -61,6 +61,12 @@ describe("AK-1 deterministic World snapshot", () => {
         mutations: [
           {
             type: "object.put",
+            objectId: "src",
+            objectType: "directory",
+            path: "src",
+          },
+          {
+            type: "object.put",
             objectId: "src/stable.ts",
             objectType: "file",
             path: "src/stable.ts",

@@ -130,7 +130,14 @@ async function runVerticalSlice(
     commitError = error
   }
   if (commitError !== undefined) {
-    // R2-03：cleanup proof 不可得（ENV_BLOCKED）→ commit 拒绝（fail-closed）。
+    // R2-03/R3-15：只有明确「cleanup proof 不可得」类错误（receipt 未持久化
+    // /未 finalized —— 本机 bwrap 无 cgroup 委托）才归类 ENV_BLOCKED
+    // （fail-closed 拒绝）。任意未知 commit error 必须失败（重新抛出），
+    // 不得宽泛归类 ENV_BLOCKED。
+    const code = (commitError as { code?: string }).code ?? ""
+    if (!/^EXECUTION_RECEIPT_(NOT_PERSISTED|NOT_FINALIZED|REQUIRED)$/.test(code)) {
+      throw commitError
+    }
     return { revision: 0n, newContent: "", ctx, commitError }
   }
   expect(session.worldState).toBe("COMMITTED")
@@ -276,6 +283,7 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
       ctx.store.compareAndCommit({
         worldId: "world-vf", branchId: "b", baseRevision: 0n, actor: "a",
         mutations: [
+          { type: "object.put", objectId: "d-src", objectType: "directory", path: "src" },
           { type: "object.put", objectId: "f1", objectType: "file", path: "src/a.ts", contentRef: digest },
           { type: "object.put", objectId: "d1", objectType: "directory", path: "docs" },
         ],
@@ -321,8 +329,13 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
         const receipt = coord.commit(session)
         expect(receipt.newRevision).toBe(2n)
       } catch (error) {
+        // R3-15：只有明确 cleanup-proof 不可得类错误归类 ENV_BLOCKED；
+        // 未知错误必须失败。
+        const code = (error as { code?: string }).code ?? ""
+        if (!/^EXECUTION_RECEIPT_(NOT_PERSISTED|NOT_FINALIZED|REQUIRED)$/.test(code)) {
+          throw error
+        }
         console.log(`ENV_BLOCKED: bubblewrap cleanup proof unavailable on this host; commit refused: ${error instanceof Error ? error.message : String(error)}`)
-        expect((error as { code?: string }).code).toMatch(/EXECUTION_RECEIPT|NOT_FINALIZED/)
         expect(ctx.store.getWorld("world-vf")!.currentRevision).toBe(1n)
       }
       ctx.cleanup()

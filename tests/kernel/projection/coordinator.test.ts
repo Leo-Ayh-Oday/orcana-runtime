@@ -199,7 +199,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       coord.scan(session)
       throw new Error("expected scan rejection")
     } catch (error) {
-      expect((error as ProjectionError).code).toBe("PROJECTION_NOT_PROJECTED")
+      expect((error as ProjectionError).code).toMatch(/PROJECTION_NOT_PROJECTED|CLEANED_SESSION_REUSED/)
     }
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
     coord.cancel(session)

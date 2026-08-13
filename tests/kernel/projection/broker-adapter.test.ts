@@ -187,6 +187,58 @@ describe("AK2-T06 真实 broker 执行", () => {
   }, 45_000)
 
 
+  test("R3-01.4：adapter 实际执行 command/workspace/scope 与 intent 完全一致（spec 编译断言）", async () => {
+    const merged = tmpMerged("intent")
+    const broker = createLinuxBroker({ mode: "enabled" })
+    const authority = authorityFor(merged)
+    const executor = new LinuxBrokerProjectionExecutor({
+      broker,
+      authority,
+      writableRoots: ["src"],
+      readonlyRoots: ["docs"],
+      profile: "build",
+    })
+    // 捕获 broker.compileRequest 的 spec —— 证明 adapter 用 intent.command
+    // 精确编译（executable/args/cwd 与 intent 一致；writable/readonly mounts
+    // 来自 plan scope）。
+    let captured: import("../../../src/runtime/linux/contracts").UntrustedCapabilityRequest | undefined
+    const originalCompile = broker.compileRequest.bind(broker)
+    ;(broker as { compileRequest: (...args: Parameters<typeof originalCompile>) => ReturnType<typeof originalCompile> }).compileRequest = (
+      request: import("../../../src/runtime/linux/contracts").UntrustedCapabilityRequest,
+      auth?: import("../../../src/runtime/linux/contracts").TrustedExecutionAuthority,
+    ) => {
+      captured = request
+      return originalCompile(request, auth)
+    }
+    const intent = {
+      intentId: "intent-r3-1",
+      worldId: "w",
+      branchId: "b",
+      snapshotId: "s",
+      projectionId: "p",
+      sessionNonce: "n",
+      mergedRootIdentity: { dev: 1, ino: 2 },
+      command: { executable: "/bin/echo", args: ["hello", "world"] },
+      scopeDigest: "scope-digest-r3",
+    }
+    await executor.execute(merged, {
+      executable: "/bin/echo",
+      args: ["hello", "world"],
+      intent: intent as never,
+    })
+    expect(captured).toBeDefined()
+    expect(captured!.command.executable).toBe("/bin/echo")
+    expect(captured!.command.args).toEqual(["hello", "world"])
+    expect(captured!.command.relativeCwd).toBe(".")
+    // workspace/scope：writable/readonly mounts 必须与 plan scope 精确一致。
+    expect(captured!.writableMounts).toContainEqual({ source: { type: "workspace-relative", path: "src" }, target: "/src", mode: "rw" })
+    expect(captured!.readonlyMounts).toContainEqual({ source: { type: "workspace-relative", path: "docs" }, target: "/docs", mode: "ro" })
+    // intent digest 注入 spec 环境变量（→ cellSpecDigest → final receipt）。
+    expect(captured!.env?.ORCANA_PROJECTION_INTENT).toBe(
+      (await import("../../../src/kernel/projection/contracts")).projectionIntentDigest(intent as never),
+    )
+  }, 45_000)
+
   test("P0-1：namespace/container backend 不可用 → pre-spawn 拒绝；command 从未执行（marker 不存在/lower 未变）", async () => {
     const merged = tmpMerged("prespawn")
     // 执行域若运行：创建宿主 marker + 修改 projection lower（../base 不可达

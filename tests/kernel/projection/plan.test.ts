@@ -297,7 +297,7 @@ describe("AK2-T01 plan 冻结与归属", () => {
 
   test("P2-4：ProjectionLimits 运行时验证（NaN/Infinity/0/负/unsafe/跨字段）", () => {
     const { validateProjectionLimits } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
-    const base = { maxDepth: 64, maxEntries: 100, maxFileBytes: 1024, maxTreeBytes: 4096, maxFileChunks: 8 }
+    const base = { maxDepth: 64, maxEntries: 100, maxFileBytes: 1024, maxTreeBytes: 4096, maxFileChunks: 8, maxManifestBytes: 4096, maxMetadataBytes: 1024 }
     // 合法。
     expect(validateProjectionLimits({ ...base })).toBeDefined()
     const bad: Array<[Partial<typeof base>, string]> = [

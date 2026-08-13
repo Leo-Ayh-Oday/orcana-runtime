@@ -496,19 +496,36 @@ describe("AK2-T02 物化根防护", () => {
     ctx.cleanup()
   })
 
-  test("多层嵌套文件（未声明中间目录）正确物化", () => {
+  test("多层嵌套文件（声明全部祖先）正确物化；store 拒绝祖先缺失（R3-05）", () => {
     const ctx = createTestWorldStore()
     ctx.store.createWorld({ worldId: "w2", branchId: "b", rootObjectId: "r", owner: "o", purpose: "p" })
     const bytes = Buffer.from("deep\n", "utf8")
     const digest = ctx.store.cas.put(bytes, "text/plain").digest
+    // R3-05：file 的祖先必须全部存在 —— store 拒绝祖先缺失的 commit。
+    expect(() =>
+      ctx.store.compareAndCommit({
+        worldId: "w2",
+        branchId: "b",
+        baseRevision: 0n,
+        actor: "a",
+        mutations: [
+          { type: "object.put", objectId: "f1", objectType: "file", path: "a/b/c/deep.txt", contentRef: digest },
+          { type: "object.put", objectId: "d1", objectType: "directory", path: "a/b" },
+        ],
+      }),
+    ).toThrow(/missing ancestor/)
+    expect(ctx.store.getWorld("w2")!.currentRevision).toBe(0n)
+    // 完整祖先声明 → 物化成功。
     ctx.store.compareAndCommit({
       worldId: "w2",
       branchId: "b",
       baseRevision: 0n,
       actor: "a",
       mutations: [
+        { type: "object.put", objectId: "d-a", objectType: "directory", path: "a" },
+        { type: "object.put", objectId: "d-b", objectType: "directory", path: "a/b" },
+        { type: "object.put", objectId: "d-c", objectType: "directory", path: "a/b/c" },
         { type: "object.put", objectId: "f1", objectType: "file", path: "a/b/c/deep.txt", contentRef: digest },
-        { type: "object.put", objectId: "d1", objectType: "directory", path: "a/b" },
       ],
     })
     ctx.store.createSnapshot("w2", "b")
@@ -518,8 +535,6 @@ describe("AK2-T02 物化根防护", () => {
     const materialized = materializerOf(ctx).materialize(snapshot.snapshotId, base)
     expect(materialized.fileCount).toBe(1)
     expect(readFileSync(join(base, "a/b/c/deep.txt"), "utf8")).toBe("deep\n")
-    // 未声明目录也可写（物化后 chmod 只读作用于声明的目录；隐式目录保持可写
-    // 由 backend lower 层以只读方式暴露 —— 此处仅验证内容）。
     expect(existsSync(join(base, "a/b/c"))).toBe(true)
     ctx.cleanup()
   })

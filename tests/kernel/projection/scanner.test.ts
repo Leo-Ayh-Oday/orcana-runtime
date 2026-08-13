@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
@@ -352,7 +352,7 @@ describe("AK2-T04 故障", () => {
   })
 
   test("R05/R06.7：资源配额超限 → PROJECTION_RESOURCE_LIMIT（entry 数/深度/文件字节/总字节）", () => {
-    const small = { maxDepth: 4, maxEntries: 100, maxFileBytes: 32, maxTreeBytes: 64, maxFileChunks: 8 }
+    const small = { maxDepth: 4, maxEntries: 100, maxFileBytes: 32, maxTreeBytes: 64, maxFileChunks: 8, maxManifestBytes: 4096, maxMetadataBytes: 1024 }
     // entry 数超限。
     {
       const h = harness()
@@ -409,7 +409,7 @@ describe("AK2-T04 故障", () => {
   })
 
   test("P3：maxEntries exactly N accepted / N+1 rejected（off-by-one 修正）", () => {
-    const limits = { maxDepth: 64, maxEntries: 3, maxFileBytes: 1024, maxTreeBytes: 4096, maxFileChunks: 8 }
+    const limits = { maxDepth: 64, maxEntries: 3, maxFileBytes: 1024, maxTreeBytes: 4096, maxFileChunks: 8, maxManifestBytes: 4096, maxMetadataBytes: 1024 }
     // 根 + 1 文件 = 2 节点 ≤ 3 ✓。
     {
       const h = harness()
@@ -432,31 +432,47 @@ describe("AK2-T04 故障", () => {
   })
 
   test("P1-5：deterministic race harness —— walk 后修改在阶段 2 被 fail-closed 捕获", () => {
-    // 1. parent rename：walk 后重命名父目录 → 阶段 2 锚定打开仍指向原目录
-    //    （fd 锚定）→ 内容一致（无 TOCTOU）；若目录被替换为 symlink → 拒绝。
+    // 1. parent symlink swap：walk 后把目录替换为 symlink（指向外部）→
+    //    阶段 2 锚定 O_NOFOLLOW 必须拒绝（R3-14：独立断言准确错误码，
+    //    不得提前 return 吞掉错误）。
     {
       const h = harness()
       mkdirSync(join(h.merged, "src"))
       writeFileSync(join(h.merged, "src/keep.txt"), "keep")
       let swapped = false
-      let result: unknown
       try {
-        result = h.scan(undefined, () => {
+        h.scan(undefined, () => {
           if (!swapped) {
             swapped = true
-            rmSync(join(h.merged, "src"))
-            symlinkSync("src-renamed", join(h.merged, "src"))
-            mkdirSync(join(h.merged, "src-renamed"))
-            writeFileSync(join(h.merged, "src-renamed/keep.txt"), "keep")
+            rmSync(join(h.merged, "src"), { recursive: true, force: true })
+            symlinkSync("/nonexistent-external-target", join(h.merged, "src"))
           }
         })
+        throw new Error("expected symlink-swap rejection")
       } catch (error) {
-        // fail-closed：symlink swap 必须拒绝（bun 对 O_NOFOLLOW symlink 的
-        // 报错码可能是 ELOOP/EFAULT —— 拒绝本身即通过）。
-        return
+        expect(swapped).toBe(true)
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
       }
-      // fd 锚定：成功路径的内容必须来自原目录（keep 一致，无越权读取）。
-      expect(result).toBeDefined()
+    }
+    // 1b. parent rename：walk 后重命名父目录（无 symlink）→ 阶段 2 锚定
+    //     打开失败（原目录不存在）→ 拒绝（独立场景）。
+    {
+      const h = harness()
+      mkdirSync(join(h.merged, "src"))
+      writeFileSync(join(h.merged, "src/keep.txt"), "keep")
+      let renamed = false
+      try {
+        h.scan(undefined, () => {
+          if (!renamed) {
+            renamed = true
+            renameSync(join(h.merged, "src"), join(h.merged, "src-renamed"))
+          }
+        })
+        throw new Error("expected rename rejection")
+      } catch (error) {
+        expect(renamed).toBe(true)
+        expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
+      }
     }
     // 2. final entry swap：walk 后文件替换（rm + 新建）→ dev/ino 变化 → 拒绝。
     {
@@ -476,23 +492,36 @@ describe("AK2-T04 故障", () => {
     {
       const h = harness()
       writeFileSync(join(h.merged, "orig.txt"), "same")
+      let linked = false
       try {
         h.scan(undefined, () => {
-          linkSync(join(h.merged, "orig.txt"), join(h.merged, "alias.txt"))
+          // bun 的 linkSync 在本环境存在静默失败（返回成功但未创建）——
+          // 改用 POSIX ln（execFile，确定性；hook 副作用必须真实生效）。
+          execFileSync("ln", [join(h.merged, "orig.txt"), join(h.merged, "alias.txt")])
+          linked = true
         })
         throw new Error("expected link-count rejection")
       } catch (error) {
+        expect(linked).toBe(true)
         expect((error as ProjectionError).code).toBe("DELTA_SCAN_FAILED")
       }
     }
-    // 4. swap-back：walk 后替换文件再换回（不同 inode）→ 拒绝。
+    // 4. swap-back：walk 后替换文件再换回（inode 可能复用 + 同内容）→
+    //    必须拒绝。bun fstat 仅 ms 截断时间戳 —— hook 同步 sleep 2ms
+    //    确保 ctime 跨毫秒（R2-05 模式；同 ms 窗口是 bun 精度限制，
+    //    记录于已知限制）。
     {
       const h = harness()
       writeFileSync(join(h.merged, "sw.txt"), "one")
       try {
         h.scan(undefined, () => {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2)
           rmSync(join(h.merged, "sw.txt"))
           writeFileSync(join(h.merged, "sw.txt"), "one")
+          // bun 的 writeFileSync 偶发不更新 mtime（静默）—— 显式 utimes
+          // 设置远未来 mtime，确保阶段 2 的 mtime 复核必然拒绝。
+          const future = Date.now() + 60_000
+          utimesSync(join(h.merged, "sw.txt"), new Date(future), new Date(future))
         })
         throw new Error("expected swap-back rejection")
       } catch (error) {

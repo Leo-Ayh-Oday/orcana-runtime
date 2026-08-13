@@ -140,6 +140,10 @@ export interface ProjectionCoordinatorOptions {
    *  验证后、fd open 前调用（R4-00-8 反例的确定性窗口）。
    *  无此选项时零开销（undefined 短路）。 */
   readonly onBeforeProjectionRootOpen?: (root: string) => void
+  /** 测试注入窗口（test-only；生产不传）：base root 验证后、projection
+   *  child 创建前调用（R5-00-3 反例的确定性 base-swap 窗口）。
+   *  无此选项时零开销（undefined 短路）。 */
+  readonly onBeforeChildCreate?: (baseRoot: string) => void
 }
 
 /** 单一 cleanup 状态机结果。 */
@@ -150,6 +154,25 @@ export interface ProjectionCleanupResult {
   readonly rootRemoved: boolean
   /** cleanup 异常消息（R2-00-6：异常规范化记录，不逃逸）。 */
   readonly error?: string
+}
+
+/** R5-05：kernel-owned 一次性 intent reservation —— 一个 intent 只能对应
+ *  一个 execution cell（跨 adapter 实例 / 重建；不依赖 adapter 实例内 Set）。
+ *  coordinator 持有唯一 registry 并传给 adapter；reserve 原子（单线程
+ *  JS 同步）。R5 修复前为 inert（无调用方）—— 先红冻结用。 */
+export class ProjectionIntentRegistry {
+  private readonly reserved = new Set<string>()
+
+  /** 原子保留：已保留 → false（拒绝第二次 cell）；否则标记并返回 true。 */
+  reserve(intentId: string): boolean {
+    if (this.reserved.has(intentId)) return false
+    this.reserved.add(intentId)
+    return true
+  }
+
+  isReserved(intentId: string): boolean {
+    return this.reserved.has(intentId)
+  }
 }
 
 /** 所有退出路径（executor throw / FAILED / CANCELLED / scan failure /
@@ -169,6 +192,7 @@ export class ProjectionCoordinator {
   private readonly receiptAuthority?: ProjectionReceiptAuthority
   private readonly allowTestBackends: boolean
   private readonly onBeforeProjectionRootOpen?: (root: string) => void
+  private readonly onBeforeChildCreate?: (baseRoot: string) => void
 
   constructor(options: ProjectionCoordinatorOptions) {
     this.store = options.store
@@ -193,6 +217,7 @@ export class ProjectionCoordinator {
     this.receiptAuthority = options.receiptAuthority
     this.allowTestBackends = options.allowTestBackends === true
     this.onBeforeProjectionRootOpen = options.onBeforeProjectionRootOpen
+    this.onBeforeChildCreate = options.onBeforeChildCreate
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
   }
 
@@ -234,6 +259,8 @@ export class ProjectionCoordinator {
     if (existsSync(projectionRoot)) {
       throw new ProjectionError("PROJECTION_ALREADY_CLOSED", `projection root exists: ${projectionRoot}`)
     }
+    // 测试注入窗口（test-only）：base 验证后、child 创建前（R5-00-3）。
+    this.onBeforeChildCreate?.(resolvedBase)
     mkdirSync(projectionRoot, { mode: 0o700 })
     // P2-1：记录 session 创建的 root 身份（dev/ino）供 cleanup 前验证。
     const rootStat = lstatSync(projectionRoot)

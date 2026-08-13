@@ -148,17 +148,24 @@ function ownedFuseMountId(merged: string): string | undefined {
   return undefined
 }
 
-/**
- * 生产 backend —— fuse-overlayfs（无特权 mount 时真实可用；探测确认）。
+/** 生产 backend —— fuse-overlayfs（无特权 mount 时真实可用；探测确认）。
  * overlayfs 由探测函数报告（有 CAP_SYS_ADMIN 时）但本实现统一走
- * fuse-overlayfs 二进制；若环境只有 native overlayfs，create 会明确失败。
- */
+ * fuse-overlayfs 二进制；若环境只有 native overlayfs，create 会明确失败。 */
 export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
   readonly id = "fuse-overlayfs"
   readonly kind = "fuse-overlayfs" as const
 
-  /** binary 路径（默认 "fuse-overlayfs" 查 PATH；测试注入 fake 绝对路径）。 */
-  constructor(private readonly binaryPath = "fuse-overlayfs") {}
+  private readonly binaryPath: string
+  /** 测试注入窗口（test-only；生产不传）：mount attestation 成功后、
+   *  readiness/chmod 前调用（R5-00-5 反例的确定性替换窗口）。
+   *  无此选项时零开销（undefined 短路）。 */
+  private readonly onAfterMountAttested?: (merged: string) => void
+
+  constructor(options: string | { readonly binaryPath?: string; readonly onAfterMountAttested?: (merged: string) => void } = "fuse-overlayfs") {
+    const resolved = typeof options === "string" ? { binaryPath: options } : options
+    this.binaryPath = resolved.binaryPath ?? "fuse-overlayfs"
+    this.onAfterMountAttested = resolved.onAfterMountAttested
+  }
 
   create(input: CreateProjectionInput): ProjectionInstance {
     const label = assertSafeLabel(input.label)
@@ -206,6 +213,9 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
           `fuse-overlayfs exited 0 but ${merged} is not a real FUSE mount created by this invocation (statfs/mountinfo attestation failed)`,
         )
       }
+      // 测试注入窗口（test-only）：attestation 成功后、readiness/chmod 前
+      // （R5-00-5 反例的确定性 foreign-swap 窗口）。
+      this.onAfterMountAttested?.(merged)
       // mount ready 确认。
       try {
         statSync(merged)

@@ -989,9 +989,22 @@ export class ProjectionCoordinator {
           })
           const actualRequestDigest = this.store.getCommitRequestDigest(commitId)
           if (actualRequestDigest !== expectedRequestDigest) {
+            // R5-03：post-commit divergence —— commitId 已 durable 但 request
+            // digest 与本 session 不一致。**不得谎报 REJECTED**（World 可能
+            // 已被不可知 commit 修改）—— 显式 RECONCILING 终态 + 人工对账
+            // 证据（terminalized 防 terminalize 覆盖）。
+            this.transition(session, { kind: "reconciling" })
+            session.terminalized = true
+            session.receipt = this.buildReceipt(
+              session,
+              "RECONCILING",
+              `commit id ${commitId} is durable but its request digest diverged from this session's canonical request; manual reconciliation required`,
+              delta,
+            )
+            session.cleanupState = { cleanupOk: true, rootRemoved: true }
             throw new ProjectionError(
               "EXECUTION_RECEIPT_BINDING_MISMATCH",
-              `commit id ${commitId} exists but request digest ${actualRequestDigest} does not match this session's canonical request ${expectedRequestDigest}`,
+              `commit id ${commitId} exists but request digest ${actualRequestDigest} does not match this session's canonical request ${expectedRequestDigest}; session state is RECONCILING (manual reconciliation required)`,
             )
           }
           this.transition(session, { kind: "committed" })

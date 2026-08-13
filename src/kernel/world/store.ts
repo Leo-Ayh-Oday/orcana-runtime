@@ -1423,17 +1423,20 @@ export class WorldStore {
         )
       }
 
+      const newRevision = request.baseRevision + 1n
+      const committedAt = this.now()
+      // R3-05/R5-08：最终 namespace 校验（事务内、**delta CAS 物理写入
+      // 前**）—— 顺序无关（先 delete 后 put + 最终状态校验）：canonical
+      // path、全局唯一、类型稳定、file 祖先必须存在且为 directory。
+      // R5-00-11：invalid final namespace 不得留下 CAS file-only residue
+      // （cas.put 的物理 rename 无法随 SQLite rollback 撤销 —— 校验必须
+      // 在物理写入之前完成）。
+      this.validateFinalNamespace(request.worldId, request.branchId, mutations)
+
       const deltaRecord = this.cas.put(deltaBytes, WORLD_DELTA_MEDIA_TYPE)
       if (deltaRecord.digest !== deltaDigest) {
         throw new Error(`World delta CAS digest mismatch: ${commitId}`)
       }
-
-      const newRevision = request.baseRevision + 1n
-      const committedAt = this.now()
-      // R3-05：最终 namespace 校验（事务内、写库前）—— 顺序无关（先
-      // delete 后 put + 最终状态校验）：canonical path、全局唯一、类型
-      // 稳定、file 祖先必须存在且为 directory。
-      this.validateFinalNamespace(request.worldId, request.branchId, mutations)
       for (const mutation of mutations) {
         const eventType = this.applyMutation(
           request.worldId,

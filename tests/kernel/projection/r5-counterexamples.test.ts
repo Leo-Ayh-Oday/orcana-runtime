@@ -759,6 +759,49 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     ctx.cleanup()
   }, 60_000)
 
+  test("R5-03：post-commit divergence → 显式 RECONCILING（不得谎报 REJECTED）", async () => {
+    const { ctx, snapshotId } = buildWorld()
+    const harness = createHarness(merged => writeFileSync(join(merged, "src/main.ts"), "changed\n"))
+    // wrapped store：commit 已 durable（compareAndCommit 成功）但响应丢失
+    // （after-commit-before-response fault），且 commit 记录的 request digest
+    // 与本 session 不一致（corruption/巧合复用）→ 必须 RECONCILING。
+    const wrapped = Object.create(ctx.store) as WorldStore
+    const originalCompareAndCommit = ctx.store.compareAndCommit.bind(ctx.store)
+    wrapped.compareAndCommit = ((input: Parameters<WorldStore["compareAndCommit"]>[0]) => {
+      const result = originalCompareAndCommit(input)
+      throw new Error("after-commit-before-response fault")
+    }) as WorldStore["compareAndCommit"]
+    wrapped.getCommitRequestDigest = () => "sha256:" + "0".repeat(64)
+    const commitCoord = new ProjectionCoordinator({
+      store: wrapped,
+      materializer: new SnapshotMaterializer({
+        getSnapshot: id => ctx.store.snapshots.get(id),
+        getCasRecord: digest => ctx.store.cas.record(digest),
+        readCasObject: digest => ctx.store.cas.get(digest),
+      }),
+      backend: harness.backend,
+      projectionRoot: tmpRoot("projroot3"),
+      receiptAuthority: harness.authority,
+    } as never)
+    const session = commitCoord.start(makePlan(snapshotId))
+    await commitCoord.execute(session, { executable: "noop", args: [] }, harness.executor)
+    commitCoord.scan(session)
+    let commitError: unknown
+    try {
+      commitCoord.commit(session)
+    } catch (error) {
+      commitError = error
+    }
+    expect(commitError).toBeDefined()
+    expect((commitError as ProjectionError).code).toBe("EXECUTION_RECEIPT_BINDING_MISMATCH")
+    // World 已 durable 但 request digest 不一致 → 显式 RECONCILING
+    //（不是 REJECTED —— 不谎报本地失败；等待人工对账）。
+    expect(session.worldState).toBe("RECONCILING")
+    expect(session.receipt!.worldState).toBe("RECONCILING")
+    expect(session.receipt!.reason).toContain("reconciliation")
+    ctx.cleanup()
+  })
+
   test("R5-00-9（KNOWN RED / OWNER-DECISION-REQUIRED）：sealed 后同 UID 直写 writeLayerPath/upper → 不得返回成功 delta、不得 commit", async () => {
     const { ctx, snapshotId } = buildWorld()
     const harness = createHarness()

@@ -561,6 +561,21 @@ export class SnapshotMaterializer {
     if (!Array.isArray(manifest.chunks)) {
       throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} chunks must be an array`)
     }
+    // R5-08：manifest byte（record.size，parse 前 ✓）/ chunk count /
+    // logical file size 都必须在第二份数组分配与逐项 normalize 之前检查 ——
+    // 超限输入不得触发逐项 normalize、chunk read/write/CAS put。
+    if (manifest.chunks.length > this.limits.maxFileChunks) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `file ${path}: FileManifest chunk count ${manifest.chunks.length} exceeds maxFileChunks ${this.limits.maxFileChunks} (refused before per-item normalize/read)`,
+      )
+    }
+    if (manifest.size > this.limits.maxFileBytes) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `file ${path}: FileManifest logical size ${manifest.size} exceeds maxFileBytes ${this.limits.maxFileBytes} (refused before per-item normalize/read)`,
+      )
+    }
     if (manifest.size === 0 && manifest.chunks.length !== 0) {
       throw new ProjectionError("MATERIALIZATION_FAILED", `file ${path}: FileManifest ${digest} empty size with chunks`)
     }

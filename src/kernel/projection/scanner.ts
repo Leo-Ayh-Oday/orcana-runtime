@@ -75,6 +75,10 @@ export interface ProjectionScanInput {
   /** R2-05：测试注入窗口 —— merged 文件读取后、复核前（确定性 same-size
    *  in-place mutation 检测）。生产调用不传。 */
   readonly onFileReadAfter?: (relative: string) => void
+  /** R4-00-11：测试注入窗口 —— final verification 全部完成后的确定性
+   *  写入尝试点（sealed-view 验证：此处的写入必须被拒绝或扫描 fail-closed）。
+   *  生产调用不传。 */
+  readonly onFinalVerifyAfter?: (rootPath: string) => void
 }
 
 export type ProjectionDeltaEntry =
@@ -326,6 +330,7 @@ function digestAnchored(
   cas: ProjectionDeltaCas,
   limits: ProjectionLimits,
   onFileReadAfter?: (relative: string) => void,
+  onFinalVerifyAfter?: (rootPath: string) => void,
 ): Map<string, ScannedNode> {
   const { nodes, dirs, dirChildren } = walked
   const resolved = new Map<string, ScannedNode>()
@@ -457,6 +462,8 @@ function digestAnchored(
     // 执行最终 dev/ino 复核 + 完整成员集合复核 + 每文件身份/size/nlink/
     // mtime/ctime 复核 + 内容重读对比（对已处理 sibling 的改写也检测）。
     finalVerify(rootPath, { nodes, dirs, dirChildren }, resolved, resolvedBytes)
+    // R4-00-11：final verification 完成后的写入尝试窗口（sealed view 验证）。
+    onFinalVerifyAfter?.(rootPath)
   } finally {
     closeSync(root.fd)
   }
@@ -590,7 +597,7 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
   const mergedWalked = walkAnchored(input.mergedDir, limits)
   input.onWalkComplete?.()
   const baseDigested = digestAnchored(input.baseDir, baseWalked, input.cas, limits)
-  const mergedDigested = digestAnchored(input.mergedDir, mergedWalked, input.cas, limits, input.onFileReadAfter)
+  const mergedDigested = digestAnchored(input.mergedDir, mergedWalked, input.cas, limits, input.onFileReadAfter, input.onFinalVerifyAfter)
 
   const baseFiles = new Map<string, ScannedNode>()
   const baseDirs = new Set<string>()

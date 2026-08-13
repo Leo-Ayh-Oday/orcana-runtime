@@ -89,6 +89,8 @@ export function createExecd(opts: ExecdOptions): Execd {
   const recovery = new Recovery({
     state,
     publish: (event, sequence) => server.publishEvent({ ...event, cellId: event.cellId ?? "" }, sequence),
+    // IC06（P0-7）：RECOVERED live cell 记账（recovery 内 charge，admission 前）。
+    capacity: authority,
   })
 
   const deps: ExecdServerDeps = {
@@ -118,19 +120,20 @@ export function createExecd(opts: ExecdOptions): Execd {
   let leaseSweepTimer: ReturnType<typeof setInterval> | undefined
 
   const start = async (): Promise<void> => {
-    // IC06：authority 启动 reconcile（SUSPECT/QUARANTINED claims 由 server
-    // 独立 reality 收敛）→ 再启动恢复与监听 —— EXECD_ADMISSION_BEFORE_
-    // RECOVERY_CHARGE=0（外部 admission 只在恢复记账完成后开放）。
+    // IC06（P0-7）：authority reconcile → Recovery（含 RECOVERED live cell
+    // 记账）→ 全部 recovered occupancy charged → 才开放外部 admission
+    // （EXECD_ADMISSION_BEFORE_RECOVERY_CHARGE=0 / RECOVERED_LIVE_CELL_
+    // ADMISSION_BYPASS=0）。recovery.publish 在 server 未监听时安全（无连接）。
     await authority.reconcile({
       uid: process.getuid?.() ?? -1,
       pid: process.pid,
       startticks: readProcessStartticks(process.pid) ?? 0,
       clientInstanceId: `execd-${process.pid}`,
     })
-    await server.start()
     // 启动恢复：收敛崩溃残留（SAME_BOOT_CRASH_UNRECOVERED = 0）。
     // M15：recovery.run 内部已按分支广播（不再此处重播）。
     recovery.run()
+    await server.start()
     // M3 修复：租约过期扫描常驻定时器（daemon 运行期间租约必须真实过期）。
     leaseSweepTimer = setInterval(() => {
       try {

@@ -25,8 +25,9 @@ export interface BackendRunContext {
   cgroupPath?: string
   /** spawn 后立即 attach（cgroup 绑定真实进程，P0-4 修复）。 */
   /** LR2-0F：attach 回调；返回 false 表示未确认（launcher handshake
-   *  保持阻塞，目标程序不 exec）。 */
-  attachCell?: (pid: number) => boolean | void
+   *  保持阻塞，目标程序不 exec）。IC06（P0-3）：可返回 Promise ——
+   *  durable spawn identity commit 完成后才 resolve true。 */
+  attachCell?: (pid: number) => boolean | void | Promise<boolean | void>
   /** 执行结束后读取 cgroup 指标（真实 metrics，P0-6 修复）。 */
   readCellMetrics?: () => SandboxReceipt["metrics"] | undefined
   /** 清理验证：真实执行后报告（默认不假设安全值）。 */

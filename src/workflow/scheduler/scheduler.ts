@@ -107,9 +107,22 @@ async function awaitReservation(
   runId: string,
   cellId: string,
   agentId?: string,
+  signal?: AbortSignal,
+  deadlineMs?: number,
 ): Promise<{ reservationId?: string; capacityClaim?: { claimId: string; ownerToken: string } }> {
+  const deadline = deadlineMs !== undefined && deadlineMs > 0 ? Date.now() + deadlineMs : undefined
+  const waitUntil = (ms: number) => new Promise<void>(resolve => {
+    const t = setTimeout(resolve, ms)
+    t.unref?.()
+    signal?.addEventListener("abort", () => { clearTimeout(t); resolve() }, { once: true })
+  })
+  const throwIfCancelled = () => {
+    if (signal?.aborted) throw new Error("RESOURCE_WAIT_CANCELLED")
+    if (deadline !== undefined && Date.now() >= deadline) throw new Error("RESOURCE_WAIT_TIMEOUT")
+  }
   if (capacityAuthority) {
     for (;;) {
+      throwIfCancelled()
       const outcome = await capacityAuthority.reserve(
         { request, runId, cellId, agentId },
         `sched-reserve-${runId}-${cellId}`,
@@ -121,14 +134,15 @@ async function awaitReservation(
         },
       )
       if (outcome.ok) return { capacityClaim: { claimId: outcome.claimId, ownerToken: outcome.ownerToken } }
-      await new Promise(r => setTimeout(r, 100))
+      await waitUntil(100)
     }
   }
   if (!ledger) return {}
   for (;;) {
+    throwIfCancelled()
     const result = ledger.reserve(request, runId, cellId, agentId)
     if (result.ok) return { reservationId: result.reservation.reservationId }
-    await new Promise(r => setTimeout(r, 100))
+    await waitUntil(100)
   }
 }
 
@@ -423,19 +437,38 @@ export async function runScheduler(
           return replayed
         }
       }
-      const lock = isWrite ? await cc.acquireWrite() : null
-      // R4: 资源预留（不足时等待；释放与锁同 finally）。
+      // IC06（P0-5）：bounded resource reservation 先于 write lock（资源
+      // 等待期间不得持 write lock —— WRITE_LOCK_HELD_DURING_RESOURCE_WAIT=0）；
+      // 锁在 finally 统一释放；acquisition 失败 rollback 已取得资源。
       let reservationId: string | null = null
       let capacityClaim: { claimId: string; ownerToken: string } | null = null
+      let reserved = false
       if (options.ledger || options.capacityAuthority) {
         const request = options.resourceRequestFor
           ? options.resourceRequestFor(node)
           : { cpuQuota: 1, memoryBytes: 256 * 1024 * 1024, pids: 32, ioWeight: 0, networkSlots: 0, tempBytes: 512 * 1024 * 1024 }
-        const acquired = await awaitReservation(options.ledger, options.capacityAuthority, request, spec.specId, node.id, agentId ?? undefined)
+        const acquired = await awaitReservation(options.ledger, options.capacityAuthority, request, spec.specId, node.id, agentId ?? undefined, scopeSignalOf(harnessRuntime?.scope.cancellation), 60_000)
         reservationId = acquired.reservationId ?? null
         capacityClaim = acquired.capacityClaim ?? null
+        reserved = reservationId !== null || capacityClaim !== null
       }
+      let lock: import("./concurrency-controller").WriteLockHandle | null = null
       try {
+        if (isWrite) {
+          try {
+            lock = await cc.acquireWrite({ signal: scopeSignalOf(harnessRuntime?.scope.cancellation), deadlineMs: 60_000 })
+          } catch (error) {
+            // 锁获取失败（取消/deadline）→ rollback 已取得资源。
+            if (reserved) {
+              if (capacityClaim && options.capacityAuthority) {
+                try { await options.capacityAuthority.releaseRequested(capacityClaim.claimId, capacityClaim.ownerToken) } catch { /* best-effort */ }
+              } else if (reservationId && options.ledger) {
+                options.ledger.release(reservationId)
+              }
+            }
+            throw error
+          }
+        }
         // MACP-M4: pass the interrupt runtime into the harness execution so
         // human nodes can pause (persisted record) or resume (answer).
         const interruptRuntime = options.interrupts
@@ -771,6 +804,11 @@ export async function runScheduler(
     }
   }
   return base
+}
+
+/** IC06（P0-5）：run-scope cancellation signal（资源等待/写锁有界可取消）。 */
+function scopeSignalOf(scope: import("../../harness/contracts/scope").RunCancellation | undefined): AbortSignal | undefined {
+  return scope?.signal
 }
 
 /** M5: compose the run-scope cancellation with an agent-local one — a

@@ -26,6 +26,9 @@ export interface RecoveryOptions {
   /** cgroup 探活 fs（测试注入；默认真实）。 */
   probeFs?: CgroupProbeFs
   now?: () => number
+  /** IC06（P0-7）：CapacityAuthority —— RECOVERED live cell 必须记账
+   *  （无 claim → 保守 QUARANTINED charge；admission 前完成）。 */
+  capacity?: import("../runtime/linux/scheduler/host-capacity").HostCapacityAuthority
 }
 
 export interface RecoveryReport {
@@ -99,7 +102,20 @@ export class Recovery {
             state.withTransaction(() => {
               state.transition(cell.cellId, attemptId, "RUNNING", { from: "RUNNING", reasonCode: "execd-restart-takeover", actor: "recovery", at })
             })
-            this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "RUNNING", takeover: "RECOVERED" } }, state.latestEventSequence())
+            // IC06（P0-7）：RECOVERED live cell 记账 —— 无 capacity claim →
+            // 保守 QUARANTINED charge（admission 前完成；RECOVERED_LIVE_CELL_
+            // UNACCOUNTED=0）。有 claim → adopt/保持（chargeRecoveredCell 幂等）。
+            let capacityState: string | undefined
+            if (this.opts.capacity) {
+              const charge = this.opts.capacity.chargeRecoveredCell({
+                runId: cell.runId,
+                cellId: cell.cellId,
+                agentId: cell.agentId ?? undefined,
+                cgroupPath: handle.cgroupPath,
+              })
+              capacityState = charge.state
+            }
+            this.opts.publish({ kind: "recovery", cellId: cell.cellId, runId: cell.runId, payload: { from: "RUNNING", to: "RUNNING", takeover: "RECOVERED", capacity: capacityState } }, state.latestEventSequence())
             return { to: "RUNNING", reason: `recovered via cgroup: ${handle.cgroupPath}` }
           }
           case "EXITED": {

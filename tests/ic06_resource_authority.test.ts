@@ -229,10 +229,16 @@ describe("IC06 resource authority integration", () => {
     expect(calls.phase).toContain("SPAWN_ATTEMPTING")
   })
 
-  test("legacy: no capacity injected → local ledger path unchanged (feature disabled)", async () => {
-    const broker = createLinuxBroker({ mode: "enabled", cgroup: mockCgroup() })
-    const events = await collect(cellSpec(), broker)
-    expect(events.some(e => e.type === "cell.exit")).toBe(true)
+  test("legacy no-capacity execution requires explicit developer flag (unsupported mode)", async () => {
+    // P0-2：production 无 authority → FAIL CLOSED；legacy 仅显式 dev flag。
+    process.env.ORCANA_DISABLE_RESOURCE_AUTHORITY = "1"
+    try {
+      const broker = createLinuxBroker({ mode: "enabled", cgroup: mockCgroup() })
+      const events = await collect(cellSpec(), broker)
+      expect(events.some(e => e.type === "cell.exit")).toBe(true)
+    } finally {
+      delete process.env.ORCANA_DISABLE_RESOURCE_AUTHORITY
+    }
   })
 
   test("R75 integration: REVERSE GHOST — live reality → release leaves claim charged", async () => {

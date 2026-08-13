@@ -304,8 +304,10 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
     clientInstanceId: `broker-${process.pid}`,
   })
 
-  /** IC06: claim phase 上报（best-effort —— 上报失败不中断执行；容量已在
-   *  reserve 时 charge，release 才由 authority reality 决定）。 */
+  /** IC06: claim phase 上报 —— durable crash-boundary facts（P0-3）：
+   *  PRE_SPAWN/SPAWN_ATTEMPTING/SPAWN_IDENTITY_COMMITTED/EXECUTING 必须
+   *  commit 成功才能跨越执行边界；失败 → 抛错（调用点 fail closed，
+   *  不 best-effort）。release 路径（finally 后半段）不经过此函数。 */
   const reportPhase = async (
     acquired: BrokerAcquiredResources,
     phase: import("./scheduler/host-capacity").ClaimPhase,
@@ -313,16 +315,12 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   ): Promise<void> => {
     if (!acquired.capacityClaim || !capacityAuthority) return
     if (phase === "TERMINATION_PROVEN" || phase === "RELEASED") return
-    try {
-      await capacityAuthority.updatePhase(
-        acquired.capacityClaim.claimId,
-        acquired.capacityClaim.ownerToken,
-        phase as "PRE_SPAWN" | "SPAWN_ATTEMPTING" | "SPAWN_IDENTITY_COMMITTED" | "EXECUTING",
-        spawn,
-      )
-    } catch {
-      // best-effort：claim 保持 charged（不 undercount）；release 路径决定终态。
-    }
+    await capacityAuthority.updatePhase(
+      acquired.capacityClaim.claimId,
+      acquired.capacityClaim.ownerToken,
+      phase as "PRE_SPAWN" | "SPAWN_ATTEMPTING" | "SPAWN_IDENTITY_COMMITTED" | "EXECUTING",
+      spawn,
+    )
   }
 
   /** IC06: finally 后半段 bounded release request（REMOTE_RELEASE_WAIT_UNBOUNDED=0；
@@ -1005,17 +1003,29 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
             materialization: acquired.materialization,
             // IC06：claimId 运行时传输（→ env ORCANA_CLAIM_ID）。
             claimId: acquired.capacityClaim?.claimId,
-            attachCell: pid => {
+            attachCell: async (pid) => {
               acquired.spawnedPid = pid
-              // IC06：spawn identity 提交（durable claim 记录 pid/startticks）
-              // —— 同步发起（best-effort：若 IPC 失败，release 时该 claim 无
-              // identity → 保守 SUSPECT，容量不 undercount）。
-              void reportPhase(acquired, "SPAWN_IDENTITY_COMMITTED", {
-                pid,
-                startticks: readProcessStartticks(pid) ?? 0,
-                cgroupPath: acquired.cgroupCellPath,
-              })
-              void reportPhase(acquired, "EXECUTING")
+              // IC06（P0-3）：spawn identity 必须在 go token 之前 durable
+              // commit —— await reportPhase（非 fire-and-forget）。commit
+              // 失败 → return false（launcher 不释放，目标不 exec）。
+              // PRE_SPAWN/SPAWN_ATTEMPTING 也是 durable crash-boundary facts：
+              // 由 reportPhase 抛错 fail closed（见 P0-3 strictPhase）。
+              let identityCommitted = true
+              if (acquired.capacityClaim) {
+                try {
+                  await reportPhase(acquired, "SPAWN_IDENTITY_COMMITTED", {
+                    pid,
+                    startticks: readProcessStartticks(pid) ?? 0,
+                    cgroupPath: acquired.cgroupCellPath,
+                  })
+                } catch {
+                  identityCommitted = false
+                }
+              }
+              if (!identityCommitted) {
+                acquired.controller.abort()
+                return false // go token 不发（REGISTRY_COMMIT_FAILURE_EXEC_BYPASS=0）
+              }
               if (cgroup && acquired.cgroupCellPath) {
                 try {
                   cgroup.attach(pid, acquired.cgroupCellPath)
@@ -1048,6 +1058,15 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               // 是既有正常路径，不记 degradation）；Receipt 必须如实声明
               // cleanupVerified=false，不得假装有强保证。
               attachVerified = false
+              // IC06：身份 commit 后进入 EXECUTING（严格 await，无并发 fire）。
+              if (acquired.capacityClaim) {
+                try {
+                  await reportPhase(acquired, "EXECUTING")
+                } catch {
+                  acquired.controller.abort()
+                  return false
+                }
+              }
               return true // 无 attach 需求 → 立即释放（不阻塞执行）
             },
             readCellMetrics: () => readCellMetrics(acquired.cgroupCellPath ?? ""),

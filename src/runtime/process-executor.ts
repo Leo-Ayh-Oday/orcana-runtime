@@ -15,6 +15,7 @@ import { isAbsolute, relative } from "node:path"
 import type { LinuxExecutionBroker } from "./linux/broker"
 import { createLinuxBroker } from "./linux/broker"
 import type { ExecutionProfile, NetworkMode, SandboxReceipt, TrustedExecutionAuthority, UntrustedCapabilityRequest } from "./linux/contracts"
+import { LinuxExecutionError } from "./linux/errors"
 import { requireExecutionAuthority } from "./execution-context"
 
 export type ProcessEvent =
@@ -196,14 +197,24 @@ export function setLinuxProcessBrokerForTests(value: LinuxExecutionBroker | null
 }
 
 function broker(): LinuxExecutionBroker {
-  if (!linuxBroker) linuxBroker = createLinuxBroker({ mode: "enabled", capacityAuthority: defaultCapacityClient() })
+  if (!linuxBroker) {
+    const capacity = defaultCapacityClient()
+    // IC06（P0-2）：production 正常 Linux process execution 必须经
+    // CapacityAuthority —— 无 authority → FAIL CLOSED（RESOURCE_AUTHORITY_
+    // UNAVAILABLE_EXECUTION_BYPASS=0）。legacy 无 capacity 仅允许显式
+    // 非 production 模式（NODE_ENV=test / 显式 unsupported flag）。
+    const productionBypassAllowed = process.env.NODE_ENV === "test" || process.env.ORCANA_DISABLE_RESOURCE_AUTHORITY === "1"
+    if (!capacity && !productionBypassAllowed) {
+      throw new LinuxExecutionError("RESOURCE_AUTHORITY_UNAVAILABLE", "production Linux execution requires execd CapacityAuthority (socket not present); legacy local-ledger execution is unsupported outside test/developer mode", {})
+    }
+    linuxBroker = createLinuxBroker({ mode: "enabled", capacityAuthority: capacity })
+  }
   return linuxBroker
 }
 
 /** IC06：external production Broker 的 CapacityAuthority —— 探测 execd
  *  authority socket；存在 → CapacityClient（hard authority）；不存在 →
- *  undefined（特性未启用，local ledger 为 legacy advisory 路径）。
- *  authority 配置存在但连接失败 → reserve fail closed（R72/R84）。 */
+ *  undefined（fail closed by broker()；仅 test/unsupported 模式可 legacy）。 */
 let capacityClient: import("./linux/scheduler/host-capacity").CapacityAuthority | undefined | null = null
 
 function defaultCapacityClient(): import("./linux/scheduler/host-capacity").CapacityAuthority | undefined {

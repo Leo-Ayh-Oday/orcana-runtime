@@ -3,12 +3,18 @@
  *  capacity.* 是 Hard Authority 通道：server 端对 capacity.* 消息强制
  *  SO_PEERCRED 可用（FAIL CLOSED / UNAUTHENTICATED），不允许降级为
  *  仅文件权限。ownerToken 明文只经本通道传输（进程内内存，不落盘）。
+ *
+ *  P0-11：connect deadline + request deadline（CAPACITY_RPC_WAIT_UNBOUNDED=0；
+ *  server 不回应 → 有界超时 → fail closed）。
  */
 
 import net from "node:net"
 import { FrameCodec, encodeFrame } from "../../../execd/protocol/frame"
 import { PROTOCOL_VERSION } from "../../../execd/protocol/messages"
 import type { CapacityRpcTransport } from "./host-capacity"
+
+export const CAPACITY_CONNECT_TIMEOUT_MS = 5_000
+export const CAPACITY_REQUEST_TIMEOUT_MS = 5_000
 
 export async function connectCapacitySocket(sockPath: string): Promise<CapacityRpcTransport> {
   const socket = net.createConnection(sockPath)
@@ -18,9 +24,24 @@ export async function connectCapacitySocket(sockPath: string): Promise<CapacityR
   let nextSequence = 0
 
   await new Promise<void>((resolve, reject) => {
-    const onError = (e: Error) => reject(e)
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      reject(new Error("CAPACITY_CONNECT_TIMEOUT"))
+    }, CAPACITY_CONNECT_TIMEOUT_MS)
+    const onError = (e: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(e)
+    }
     socket.once("error", onError)
     socket.once("connect", () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
       socket.off("error", onError)
       resolve()
     })
@@ -58,7 +79,14 @@ export async function connectCapacitySocket(sockPath: string): Promise<CapacityR
     request(method: string, payload: unknown, idempotencyKey: string): Promise<unknown> {
       const requestId = `r${nextSequence++}`
       return new Promise((resolve, reject) => {
-        pending.set(requestId, { resolve, reject })
+        const timer = setTimeout(() => {
+          pending.delete(requestId)
+          reject(new Error("CAPACITY_REQUEST_TIMEOUT"))
+        }, CAPACITY_REQUEST_TIMEOUT_MS)
+        pending.set(requestId, {
+          resolve: (v) => { clearTimeout(timer); resolve(v) },
+          reject: (e) => { clearTimeout(timer); reject(e) },
+        })
         socket.write(encodeFrame(JSON.stringify({
           protocolVersion: PROTOCOL_VERSION,
           requestId,

@@ -17,6 +17,7 @@ import { cpus, totalmem } from "node:os"
 import { readdirSync, statSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ResourceRequest } from "../contracts"
+import { countProcessGroup } from "../process/termination"
 
 // ── claim phases（TERMINATION_PROVEN/RELEASED 只能由 server 独立 reality 设置）──
 
@@ -148,27 +149,69 @@ export function readProcessStartticks(pid: number): number | undefined {
   }
 }
 
-/** 真实 reality provider：pid+startticks 主判据；cgroup 声明额外校验。 */
-export function createProcessRealityProvider(): RealityProvider {
+/** 真实 reality provider：pid+startticks 主判据；cgroup/podman 按声明检查。
+ *
+ *  P0-9：PID 仍活着时，cgroup 缺失**绝不**判 termination proven（live PID
+ *  + cgroup missing → LIVE/UNKNOWN，容量保持 charged）；cgroup delegated
+ *  proof 必须基于 pids.current/populated + removal proof；no-cgroup 必须
+ *  验证进程组后代 = 0 或等价完整 process-tree proof。 */
+export function createProcessRealityProvider(options: {
+  /** 进程组后代计数（默认：countProcessGroup；测试可注入）。 */
+  descendantsOf?: (pid: number) => number
+  /** podman 容器存在性（默认：不可用 → unknown 保守；测试可注入）。 */
+  containerAlive?: (label: string) => boolean | undefined
+} = {}): RealityProvider {
+  const descendantsOf = options.descendantsOf ?? ((pid) => countProcessGroup(pid))
+  const containerAlive = options.containerAlive ?? (() => undefined)
   return async (claim) => {
     if (claim.spawnedPid && claim.spawnedPid > 0) {
       const nowTicks = readProcessStartticks(claim.spawnedPid)
       if (nowTicks === undefined) {
+        // 进程不存在 → 已终止。
         return { state: "proven", evidence: `pid ${claim.spawnedPid} not present in /proc` }
       }
       if (claim.spawnStartticks !== undefined && nowTicks !== claim.spawnStartticks) {
         return { state: "proven", evidence: `pid ${claim.spawnedPid} startticks changed (PID reuse or replaced)` }
       }
+      // PID 明确存活（LIVE_PID_CGROUP_MISSING_FREE_BYPASS=0）：
+      // cgroup missing 绝不判 proven。
       if (claim.cgroupPath) {
         try {
           if (!statSync(claim.cgroupPath).isDirectory()) {
-            return { state: "proven", evidence: `cgroup ${claim.cgroupPath} removed while pid present (cgroup killed)` }
+            // cgroup 已移除：若直接 PID 仍活着 → 不能 free（保守 live）。
+            return { state: "live", evidence: `pid ${claim.spawnedPid} alive but cgroup removed (conservative)` }
+          }
+          // cgroup delegated proof：pids.current/populated == 0 才 proven。
+          try {
+            const pidsCurrent = readFileSync(`${claim.cgroupPath}/pids.current`, "utf8").trim()
+            const n = Number.parseInt(pidsCurrent, 10)
+            if (n > 0) return { state: "live", evidence: `cgroup pids.current=${n}` }
+            // pids.current=0：再确认进程不在 cgroup.procs（双证据）。
+            const procs = readFileSync(`${claim.cgroupPath}/cgroup.procs`, "utf8").trim()
+            if (procs.length > 0) return { state: "live", evidence: `cgroup.procs non-empty` }
+            return { state: "proven", evidence: `cgroup empty (pids.current=0 + cgroup.procs empty)` }
+          } catch {
+            return { state: "unknown", evidence: `cgroup unreadable: ${claim.cgroupPath}` }
           }
         } catch {
-          return { state: "proven", evidence: `cgroup ${claim.cgroupPath} removed (killed)` }
+          return { state: "live", evidence: `pid ${claim.spawnedPid} alive, cgroup stat failed (conservative)` }
         }
       }
-      return { state: "live", evidence: `pid ${claim.spawnedPid} alive` }
+      if (claim.backendId === "rootless-podman") {
+        // podman：server-side container existence proof（label/cid reality）。
+        const label = `orcana.cell=${claim.cellId}`
+        const alive = containerAlive(label)
+        if (alive === true) return { state: "live", evidence: `podman container alive (${label})` }
+        if (alive === false) return { state: "proven", evidence: `podman container gone (${label})` }
+        return { state: "unknown", evidence: `podman container state unreadable` }
+      }
+      // no-cgroup：直接 PID 存活 ≠ proven —— 必须进程组后代 = 0
+      // （NO_CGROUP_DESCENDANT_GHOST_FREE=0）。
+      const descendants = descendantsOf(claim.spawnedPid)
+      if (descendants > 0) {
+        return { state: "live", evidence: `process group descendants=${descendants}` }
+      }
+      return { state: "proven", evidence: `pid ${claim.spawnedPid} alive with 0 group descendants` }
     }
     return { state: "unknown", evidence: "no spawn identity recorded" }
   }
@@ -260,6 +303,32 @@ export class HostCapacityAuthority implements CapacityAuthority {
     return createHash("sha256").update(JSON.stringify(request)).digest("hex")
   }
 
+  /** IC06（P0-10）：authority boundary 输入校验 —— 所有数值字段必须
+   *  finite / 整数（contract 要求）/ >= 0；否则 fail closed（在 digest /
+   *  store / capacity arithmetic 之前拒绝，防负值/NaN/±Infinity 污染记账）。 */
+  static validateRequest(request: ResourceRequest): string | null {
+    const fields: Array<[string, number, "nonnegative" | "positive"]> = [
+      ["cpuQuota", request.cpuQuota, "nonnegative"],
+      ["memoryBytes", request.memoryBytes, "nonnegative"],
+      ["pids", request.pids, "nonnegative"],
+      ["ioWeight", request.ioWeight, "nonnegative"],
+      ["networkSlots", request.networkSlots, "nonnegative"],
+      ["tempBytes", request.tempBytes, "nonnegative"],
+    ]
+    for (const [name, value, mode] of fields) {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return `INVALID_RESOURCE_REQUEST: ${name} must be finite`
+      }
+      if (!Number.isInteger(value)) {
+        return `INVALID_RESOURCE_REQUEST: ${name} must be an integer`
+      }
+      if (mode === "nonnegative" && value < 0) {
+        return `INVALID_RESOURCE_REQUEST: ${name} must be >= 0`
+      }
+    }
+    return null
+  }
+
   private principalKey(p: ClientPrincipal): string {
     return `${p.uid}:${p.pid}:${p.startticks}:${p.clientInstanceId}`
   }
@@ -309,6 +378,9 @@ export class HostCapacityAuthority implements CapacityAuthority {
 
   /** reserve：幂等（same principal + key + digest → same claim + token rekey）。 */
   async reserve(req: CapacityReserveRequest, idempotencyKey: string, principal: ClientPrincipal): Promise<ReserveOutcome> {
+    // P0-10：输入校验先于一切（digest/store/arithmetic）。
+    const invalid = HostCapacityAuthority.validateRequest(req.request)
+    if (invalid) return { ok: false, reason: invalid }
     const pkey = this.principalKey(principal)
     const digest = HostCapacityAuthority.digestOf(req.request)
     // RESOURCE_DOUBLE_ACQUIRE=0：同 (run_id, cell_id) 已有 active claim →
@@ -420,6 +492,48 @@ export class HostCapacityAuthority implements CapacityAuthority {
   /** 内部 transfer/adopt（server/recovery 内部；不经 IPC —— CLIENT_FORGED_CLAIM_TRANSFER=0）。 */
   adopt(claimId: string, targetRunId: string, targetCellId: string): void {
     this.db.query(`UPDATE claims SET run_id=?, cell_id=?, updated_at=? WHERE claim_id=?`).run(targetRunId, targetCellId, Date.now(), claimId)
+  }
+
+  /** P0-7：RECOVERED live cell 记账 —— 无 claim 时创建保守 QUARANTINED
+   *  claim（cgroup 已知维度读取；未知维度保守）；有 claim 则保持。
+   *  server/recovery 内部调用（RECOVERED_LIVE_CELL_UNACCOUNTED=0）。 */
+  chargeRecoveredCell(input: {
+    runId: string
+    cellId: string
+    agentId?: string
+    cgroupPath?: string
+  }): { claimId: string; state: "recovered-charged" | "already-charged" } {
+    const existing = this.db.query(`SELECT claim_id FROM claims WHERE run_id=? AND cell_id=? AND phase NOT IN ('RELEASED')`).get(input.runId, input.cellId) as { claim_id: string } | null
+    if (existing) return { claimId: existing.claim_id, state: "already-charged" }
+    // cgroup 已知维度读取（conservative charge）。
+    let memoryBytes = 1024 * 1024 * 1024
+    let pids = 256
+    if (input.cgroupPath) {
+      try {
+        const memRaw = readFileSync(`${input.cgroupPath}/memory.max`, "utf8").trim()
+        if (memRaw !== "max") {
+          const mem = Number.parseInt(memRaw, 10)
+          if (Number.isFinite(mem) && mem > 0) memoryBytes = Math.min(mem, this.capacity.memoryBytes)
+        }
+      } catch { /* 保守默认 */ }
+      try {
+        const pidsRaw = readFileSync(`${input.cgroupPath}/pids.max`, "utf8").trim()
+        if (pidsRaw !== "max") {
+          const p = Number.parseInt(pidsRaw, 10)
+          if (Number.isFinite(p) && p > 0) pids = Math.min(p, this.capacity.pids)
+        }
+      } catch { /* 保守默认 */ }
+    }
+    const claimId = `claim_rec_${randomUUID().replace(/-/g, "").slice(0, 16)}`
+    const now = Date.now()
+    const request: ResourceRequest = { cpuQuota: 1, memoryBytes, pids, ioWeight: 0, networkSlots: 0, tempBytes: 0 }
+    this.db.query(`INSERT INTO claims (claim_id, run_id, cell_id, agent_id, backend_id, phase, requested_json, owner_token_hash, principal, client_instance_id, idempotency_key, request_digest, created_at, updated_at, cgroup_path)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      claimId, input.runId, input.cellId, input.agentId ?? null, null, "QUARANTINED",
+      JSON.stringify(request), HostCapacityAuthority.tokenHash(randomUUID()), "recovery", "recovery",
+      `recovered-${input.runId}-${input.cellId}`, HostCapacityAuthority.digestOf(request), now, now, input.cgroupPath ?? null,
+    )
+    return { claimId, state: "recovered-charged" }
   }
 
   /** reconcile：server 自读 OS reality（client 仅 trigger）。 */

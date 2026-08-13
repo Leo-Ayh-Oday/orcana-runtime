@@ -299,16 +299,29 @@ export class CellManager {
     // 生成自己的 cellId —— 用 manager 键查不到 broker 记录，取消就是
     // 纯虚构；CANCELLED_CELL_PROCESS_REMAINS = 0）。
     const brokerCellId = this.brokerCellIds.get(cellId)
+    let terminationProven = false
     try {
       if (brokerCellId) {
         await this.opts.broker.cancelCell(brokerCellId)
+        // broker 清理路径自带 cgroup removal proof（cleanupAcquired 实测）；
+        // 结束后 cgroup 已移除或 pids.current=0 —— 视为终止证明。
+        terminationProven = await this.cgroupTerminationProven(cell)
       } else {
         // L2-A（B4 修复）：重启后 broker 内存映射丢失 —— 改用持久化句柄
         // 的 cgroup.kill 路径（进程树真实终止，不把 CANCELLED 标给活进程）。
-        await this.killViaHandle(cell)
+        terminationProven = await this.killViaHandle(cell)
       }
     } catch {
       // 未运行/已结束：幂等容忍。
+      terminationProven = await this.cgroupTerminationProven(cell)
+    }
+    // IC06（P0-8）：CANCEL_STATE_WITHOUT_TERMINATION_PROOF=0 —— 只有 positive
+    // proof（cgroup 空/已移除，或等价）才能 CANCELLED + 删句柄；proof 不足
+    // → 保持当前状态（pending termination，句柄保留 —— EXECUTION_HANDLE_
+    // REMOVED_BEFORE_TERMINATION_PROOF=0）。
+    if (!terminationProven) {
+      this.opts.publish({ kind: "cell.status", cellId, runId: cell.runId, payload: { state: "CANCELLING", reasonCode: "termination-proof-pending" } }, this.opts.state.latestEventSequence())
+      return
     }
     // M1：守卫式迁移（终态不再迁移）。
     this.opts.state.withTransaction(() => {
@@ -322,8 +335,32 @@ export class CellManager {
     })
   }
 
-  /** L2-A（B4）：无 broker 内存态时的取消 —— cgroup.kill 树杀（句柄锚点）。
-   *  无 cgroup 委托 → 无法终止（返回 false，调用方幂等容忍）。 */
+  /** IC06（P0-8）：cgroup termination proof —— 目录不存在（已移除）或
+   *  pids.current=0 且 cgroup.procs 为空。无 cgroup 委托 → false（保守，
+   *  保持 pending termination）。 */
+  private async cgroupTerminationProven(cell: { cellId: string; runId: string; attempt: number }): Promise<boolean> {
+    const handles = this.opts.state.listHandlesByCell(cell.cellId)
+    if (handles.length === 0) {
+      // 无句柄 + broker 路径已执行：broker 清理已移除 cgroup —— 视为 proven
+      // （broker cleanupAcquired 的 cgroupRemoved 是真实移除证明）。
+      return true
+    }
+    const cgroupPath = handles[0]!.cgroupPath
+    const { existsSync, readFileSync } = require("node:fs") as typeof import("node:fs")
+    try {
+      if (!existsSync(cgroupPath)) return true
+      const pids = readFileSync(`${cgroupPath}/pids.current`, "utf8").trim()
+      const procs = readFileSync(`${cgroupPath}/cgroup.procs`, "utf8").trim()
+      if (pids === "0" && procs.length === 0) return true
+      return false
+    } catch {
+      return false // 读取失败 → 保守：保持 pending
+    }
+  }
+
+  /** L2-A（B4）+ IC06（P0-8）：无 broker 内存态时的取消 —— cgroup.kill 树杀
+   *  （句柄锚点）。返回**终止证明**：kill 成功且随后 cgroup 空/已移除
+   *  （{killed:false} 或仍存活 → false —— 不把 CANCELLED 标给活进程）。 */
   private async killViaHandle(cell: { cellId: string; runId: string; attempt: number }): Promise<boolean> {
     const handles = this.opts.state.listHandlesByCell(cell.cellId)
     if (handles.length === 0) return false
@@ -332,11 +369,17 @@ export class CellManager {
     if (!base) return false
     const cgroup = new CgroupManager({ base })
     try {
-      cgroup.kill(handles[0]!.cgroupPath)
-      return true
+      const result = cgroup.kill(handles[0]!.cgroupPath)
+      if (!result.killed) return false // kill 未执行（{killed:false}）→ 无 proof
     } catch {
       return false
     }
+    // kill 后等待收敛（cgroup kill 是异步的），再验证终止证明。
+    await new Promise<void>(r => {
+      const t = setTimeout(() => r(), 300)
+      t.unref?.()
+    })
+    return this.cgroupTerminationProven(cell)
   }
 
   async cancelAgent(agentId: string): Promise<void> {

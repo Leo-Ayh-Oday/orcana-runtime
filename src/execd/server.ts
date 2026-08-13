@@ -14,6 +14,7 @@ import { FrameCodec, encodeFrame } from "./protocol/frame"
 import type { Request, Response } from "./protocol/messages"
 import { EXECD_ERROR_CODES, PROTOCOL_VERSION } from "./protocol/messages"
 import { peerCredentialsOf } from "./protocol/peercred"
+import { readProcessStartticks } from "../runtime/linux/scheduler/host-capacity"
 import { SessionManager } from "./session-manager"
 import { EventStream } from "./event-stream"
 import type { StateStore } from "./state/store"
@@ -45,6 +46,10 @@ interface Connection {
   codec: FrameCodec
   sessionId?: string
   peerUid?: number
+  /** IC06：SO_PEERCRED pid（capacity.* principal 用）。 */
+  peerPid?: number
+  /** IC06：SO_PEERCRED gid（完整凭据保留）。 */
+  peerGid?: number
   /** WatchCell 订阅（cellId + 服务端已送达断点 + L2-C 落后标记）。 */
   watchingCell?: { cellId: string; lastAcknowledged: number; lagged?: boolean }
 }
@@ -126,7 +131,10 @@ export class ExecdServer {
   private handleConnection(socket: net.Socket): void {
     const conn: Connection = { socket, codec: new FrameCodec() }
     // SO_PEERCRED：连接建立时的对端凭据（不信任自报身份）。
-    conn.peerUid = this.peerCredentialFn(socket)?.uid
+    const creds = this.peerCredentialFn(socket)
+    conn.peerUid = creds?.uid
+    conn.peerPid = creds?.pid
+    conn.peerGid = creds?.gid
     this.connections.add(conn)
     socket.on("data", chunk => {
       try {
@@ -288,6 +296,49 @@ export class ExecdServer {
         const offset = request.payload.offset ?? 0
         const chunk = this.deps.attachLogs(request.payload.cellId, kind, offset)
         return { type: "ok", requestId: request.requestId, result: chunk }
+      }
+      case "CapacityReserve":
+      case "CapacityReleaseRequest":
+      case "CapacityPhase":
+      case "CapacityReconcile":
+      case "CapacityStatus": {
+        // IC06 Hard Authority：capacity.* 必须 SO_PEERCRED 可用（FAIL CLOSED）——
+        // 绝不沿普通 RPC 的"ffi 不可用 → 仅文件权限"降级。
+        if (conn.peerUid === undefined || conn.peerPid === undefined || conn.peerUid !== (process.getuid?.() ?? -1)) {
+          return { type: "error", requestId: request.requestId, error: { code: EXECD_ERROR_CODES.UNAUTHENTICATED, message: "capacity authority requires authenticated peer (SO_PEERCRED unavailable)" } }
+        }
+        // server principal 由内核 SO_PEERCRED（uid/pid）+ server 自读
+        // /proc/<pid> startticks + payload.clientInstanceId 构造 —— 绝不
+        // 信任 client 自报 uid/pid/startticks。
+        const principal = {
+          uid: conn.peerUid,
+          pid: conn.peerPid,
+          startticks: readProcessStartticks(conn.peerPid) ?? 0,
+          clientInstanceId: request.payload.clientInstanceId ?? "anon",
+        }
+        if (request.method === "CapacityReserve") {
+          const outcome = await this.deps.capacity.reserve(request.payload, request.idempotencyKey, principal)
+          return { type: "ok", requestId: request.requestId, result: outcome }
+        }
+        if (request.method === "CapacityReleaseRequest") {
+          const result = await this.deps.capacity.releaseRequested(request.payload.claimId, request.payload.ownerToken)
+          return { type: "ok", requestId: request.requestId, result }
+        }
+        if (request.method === "CapacityPhase") {
+          const { claimId, ownerToken, phase, spawn } = request.payload
+          const allowed = new Set(["RESERVED", "PRE_SPAWN", "SPAWN_ATTEMPTING", "SPAWN_IDENTITY_COMMITTED", "EXECUTING"])
+          if (!allowed.has(phase)) {
+            return { type: "error", requestId: request.requestId, error: { code: "INVALID_CLAIM_PHASE", message: `phase ${phase} not client-reportable` } }
+          }
+          await this.deps.capacity.updatePhase(claimId, ownerToken, phase as "PRE_SPAWN", spawn)
+          return { type: "ok", requestId: request.requestId, result: { claimId } }
+        }
+        if (request.method === "CapacityReconcile") {
+          const result = await this.deps.capacity.reconcile(principal)
+          return { type: "ok", requestId: request.requestId, result }
+        }
+        const result = await this.deps.capacity.status(principal)
+        return { type: "ok", requestId: request.requestId, result }
       }
       default: {
         // 所有已知方法已覆盖 —— 防御未知（类型层面 never，运行时兜底）。

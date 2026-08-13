@@ -1,7 +1,7 @@
 # AK-2 Projection + World Commit
 
 **Task ID:** `AK2-PROJECTION-001`
-**状态:** `READY_FOR_INDEPENDENT_REVIEW`（候选提交 `ddaed17` 等待独立复审；不等于 PASS/CLOSED）
+**状态:** `READY_FOR_INDEPENDENT_AUDIT`（AK2-R3 Correction Gate 候选提交；等待独立复审；不等于 PASS/CLOSED）
 **基线 / 回滚点:** `e224ad6bb8aed5cca2d1b8b63f048333cfb88003`
 **专用分支:** `feat/agent-os`
 
@@ -92,7 +92,106 @@ AK-2 的阶段提交可整体回退到 `e224ad6bb8aed5cca2d1b8b63f048333cfb88003
 
 ### OWNER-DECISION-REQUIRED
 
-- 无。
+- **R3-01.6：Execution Receipt 真实性**。当前 authority 基于「公开 SHA-256
+  digest + 文件系统权限」—— 同 UID 攻击者可修改 receipt JSON 并重算公开
+  digest（R3-00-3 证据测试证明伪造被接受）。R3 已关闭大部分篡改面
+  （receipt 与 coordinator outcome 的 exitCode/timedOut/cancelled/violations
+  对账；intent binding 打破跨 World/session 重放），但 **cleanup truth 字段
+  的篡改**（mountsReleased/cleanupVerified 等）仍无法在无密钥方案下区分
+  真伪。可靠修复需要独立 UID / 受保护 daemon / MAC key / 可信 IPC ——
+  该子项标记 **OWNER-DECISION-REQUIRED**；production 路径保持 fail-closed
+  （cleanup proof 不可得 → World commit 拒绝），不得用权限位或公开 hash
+  冒充真实性。
+
+## AK2-R3 Correction Gate 记录（候选提交链，等待独立复审）
+
+### R3-00 反例冻结（17 红 → 17 绿 + 2 证据测试）
+
+| 反例 | 内容 | RED→GREEN |
+|---|---|---|
+| R3-00-1 | production backend + token + receiptless 拒绝（token 不越过 backend.kind 门） | ✓ |
+| R3-00-2 | final receipt exitCode/timedOut/cancelled/violations 与 outcome 冲突拒绝 | ✓ |
+| R3-00-3 | 同 UID 篡改+重算公开 digest 被接受 —— **OWNER-DECISION-REQUIRED 证据** | 证据 |
+| R3-00-4/5 | execute 后 / scan 前 ownership 丢失 → 终态 + cleanup + receipt | ✓ |
+| R3-00-6/6b/6c | scan/commit/cancel 中 cleanup() 抛异常 → 确定终态 + receipt | ✓ |
+| R3-00-7 | start→cancel→execute/scan/commit 全拒绝复用（CLEANED_SESSION_REUSED） | ✓ |
+| R3-00-8 | foreign mount 替换 → cleanup 拒绝卸载/删除 foreign（真实 FUSE） | ✓ |
+| R3-00-9 | commit 后 runtime receipt 删除 + verifyIntegrity/gc → CAS receipt 保留 | ✓ |
+| R3-00-10/10b | stale/idempotency conflict 无虚假 world_commit link | ✓ |
+| R3-00-11 | namespace：../x、a//b、跨 commit file-parent、祖先缺失全拒绝 | ✓ |
+| R3-00-12/12b | onFileReadAfter 期间改/增 sibling → terminal barrier 拒绝 | ✓ |
+| R3-00-13 | root 内 symlink swap → 外部 sentinel 不被 chmod/delete（fd 锚定删除） | ✓ |
+| R3-00-14 | scanner race 测试提前 return 修复（独立场景 + 精确错误码） | ✓ |
+| R3-00-15 | B lane：未知 commit error 必须失败，只有 cleanup-proof 类归类 ENV_BLOCKED | ✓ |
+
+### R3-01 Execution Receipt 信任边界
+
+- 移除公开 `allowFixtureExecution` 绕过（保留为内部兼容字段）：fixture
+  执行必须 `FIXTURE_EXECUTION_TOKEN`（test-only 导出）+ `backend.kind ===
+  "fixture"` 双重门；production backend 永不满足。
+- coordinator 独立派生 expected binding（worldId/branchId/snapshotId/
+  projectionId/sessionNonce/mergedRootIdentity/command/scopeDigest ——
+  intent 真源）；adapter 测试证明 spec 编译与 intent.command/scope 完全一致。
+- final receipt 与 outcome 对账（exitCode/timedOut/cancelled/violations/
+  unexpectedWrites）—— 冲突拒绝（EXECUTION_RECEIPT_BINDING_MISMATCH）。
+- 真实性缺口（cleanup truth 篡改）→ OWNER-DECISION-REQUIRED（见上）。
+
+### R3-02 统一 lifecycle terminalizer
+
+- `terminalize()`：唯一终态化路径（永不抛）—— execute throw/failure/
+  cancel、ownership 丢失（execute 后/scan 前）、scan 失败、validation
+  失败、WORLD_HEAD_MOVED、compareAndCommit 失败、explicit cancel、
+  cleanup 抛异常 —— 全部产生确定终态 + cleanupState（结构化错误）+ 
+  terminal receipt。
+- post-commit reconciliation 比较**完整 canonical commit request**
+  （store.computeCommitRequestDigest 对账），不只凭 commitId 存在。
+
+### R3-03 mount / projection root ownership
+
+- foreign mount / mount identity mismatch → cleanup 立即 return failure，
+  禁止 unmount、禁止 rm/chmod upper/work/merged（真实 FUSE 验证）。
+- 删除前复核 mount 已消失（fusermount exit 0 ≠ 已卸载）。
+- projection root 删除改为 fd 锚定（open O_NOFOLLOW|O_DIRECTORY → 递归
+  fd 相对 unlink/rmdir + fchmod）—— lstat 后 pathname 递归删除禁止；
+  symlink 子项不跟随（外部 sentinel 不被 chmod/delete）。
+
+### R3-04 receipt CAS durability
+
+- execution_receipt_ids 进入 authoritativeReferences/reachability（gc 保护）。
+- owner link 只在 compareAndCommit 事务成功路径建立（stale/idempotency
+  失败无虚假 link）；事务前只做存在性 fail-fast。
+- verifyIntegrity 检查 commit row / CAS object / world_commit link 三者一致。
+
+### R3-05 World 最终 namespace 校验
+
+- 事务内、写库前：current world_objects → 内存应用全部 mutations（先
+  delete 后 put，顺序无关）→ 最终状态校验：canonical relative path（拒绝
+  ../、a//b、尾斜杠、反斜杠、CR/LF/NUL）、path 全局唯一、类型稳定、
+  file 祖先必须存在且为 directory。
+- 既有测试 fixture 修正（file 无祖先的 commit 数据补 dir）。
+
+### R3-06 scanner terminal barrier 与资源上限
+
+- 最终 barrier：全部 digest 后每目录 dev/ino 复核 + 完整成员集合复核 +
+  每文件 identity/size/nlink/mtime/ctime 复核 + 内容重读对比（sibling
+  改写/新增/删除 fail-closed；bun stat 缓存盲窗由内容级对比封闭）。
+- maxManifestBytes / maxMetadataBytes 新限额（读取/JSON parse 前检查）。
+- 累计 tree budget 在下一文件读取/写入前预留（不先分配再检查）。
+- bun 环境限制（如实记录）：fstat 仅 ms 截断 + writeFileSync 偶发不更新
+  mtime → 同 ms / inode 复用窗口的 swap-back 检测依赖内容/identity；
+  测试用占位+utimes 保证确定性。
+
+### 门禁
+
+- projection+world+authority-graph **259/259**（3 连全绿）；typecheck 0
+  error；build ✓；git diff --check ✓；worktree clean（tracked）。
+- B lane：真实 fuse-overlayfs + 真实 bwrap broker 执行成功；cleanup proof
+  不可得（本机 bwrap 无 cgroup 委托）→ `ENV_BLOCKED: EXECUTION_RECEIPT_
+  NOT_PERSISTED/NOT_FINALIZED`（fail-closed 拒绝，未伪装正向通过）。
+- aggregate 全量 `bun run test` 白名单外负载类失败与本 diff 无关（同窗口
+  BASE 对照）；不做 timeout 扩大的隐藏（12 步全链 5s 墙钟为负载放大，
+  低负载窗口通过）。
+- 未 push、未 merge、未建 PR。
 
 ## AK2-R2 修复记录（候选提交 `ddaed17`，等待独立复审）
 

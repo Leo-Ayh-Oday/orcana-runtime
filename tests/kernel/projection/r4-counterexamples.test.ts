@@ -750,6 +750,13 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
       } catch {
         scanFailed = true
       }
+      // 清理 projection 实例（含 sealed ro mount —— R4-05/06 cleanup 契约：
+      // 真实卸载 + 确认消失 + rmdir；测试残留必须为 0）。
+      try {
+        coord.cancel(session)
+      } catch {
+        // 已终态等 —— cleanup 由 cancel 的幂等路径覆盖
+      }
       ctx.cleanup()
       return { writeRejected, scanFailed }
     }

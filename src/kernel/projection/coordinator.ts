@@ -603,14 +603,10 @@ export class ProjectionCoordinator {
       )
     }
     session.intent = intent
-    // R5-05：kernel-owned 一次性 intent reservation —— 一个 intent 只能
-    // 对应一个 execution cell（不依赖 adapter 实例内 Set）。
-    if (!this.intentRegistry.reserve(intent.intentId)) {
-      throw new ProjectionError(
-        "EXECUTION_RECEIPT_BINDING_MISMATCH",
-        `intent ${intent.intentId} already authorized an execution cell (kernel-owned one-time reservation)`,
-      )
-    }
+    // R5-05：一次性 reservation 由 adapter 经 kernel-owned registry 执行
+    // （coordinator 不预占 —— 否则 adapter 对同一 intent 的 reserve 会
+    // 误拒绝本 session 的合法执行）。intent 执行必须携带 registry；
+    // 无 adapter 的 fixture 路径由 session 状态机保证 one-cell-per-session。
     // R5-03：取消信号 —— cancel 先 abort，executor 观察 command.signal。
     const boundCommand: ProjectionCommand = {
       ...command,

@@ -109,17 +109,9 @@ function execFileSyncSafe(binary: string, args: readonly string[]): void {
   execFileSync(binary, [...args], { stdio: "ignore", timeout: 60_000 })
 }
 
-/** 证明 merged 是本次真实 FUSE 挂载（R06.2）：
- *  1) statfs 类型必须是 FUSE_SUPER_MAGIC（fake binary 返回 0 但未挂载 → false）；
- *  2) /proc/self/mountinfo 必须存在该挂载点且 fs type 为 fuse/fuse.overlayfs
- *     （owned session identity：本进程挂载命名空间内的真实条目）。 */
-function isOwnedFuseMount(merged: string): boolean {
-  return ownedFuseMountId(merged) !== undefined
-}
-
-/** 返回 mountinfo 中该挂载点的 mount id（无 → undefined）。
- *  mountinfo 行：<mount-id> <parent> <major:minor> <root> <mount-point> ... */
-function ownedFuseMountId(merged: string): string | undefined {
+/** 返回该挂载点的 FUSE mount 信息（id/fsType/source；无 → undefined）。
+ *  mountinfo 行：<mount-id> <parent> <major:minor> <root> <mount-point> ... - <fs-type> <source> ... */
+function fuseMountInfo(merged: string): { readonly id: string; readonly fsType: string; readonly source: string } | undefined {
   try {
     if (statfsSync(merged).type !== 0x65735546) return undefined
   } catch {
@@ -136,16 +128,55 @@ function ownedFuseMountId(merged: string): string | undefined {
       // fuse-overlayfs 挂载点显示为 fuse.fuse-overlayfs（也接受 fuse /
       // fuse.overlayfs）；宿主 ext4/overlay/tmpfs 等一律不匹配。
       if (fsType === "fuse" || fsType.startsWith("fuse.")) {
-        // 同时验证 mount source 是本进程的 fuse-overlayfs（不是其它 FUSE）。
-        const source = fields.slice(separator + 2).join(" ").split(" ")[0]
-        if (source !== "fuse-overlayfs") return undefined
-        return fields[0]
+        const source = fields.slice(separator + 2).join(" ").split(" ")[0] ?? ""
+        return { id: fields[0]!, fsType, source }
       }
     }
   } catch {
     return undefined
   }
   return undefined
+}
+
+/** 证明 merged 是本次真实 FUSE 挂载（R06.2）：
+ *  1) statfs 类型必须是 FUSE_SUPER_MAGIC（fake binary 返回 0 但未挂载 → false）；
+ *  2) /proc/self/mountinfo 必须存在该挂载点且 fs type 为 fuse/fuse.overlayfs
+ *     且 source 是本进程的 fuse-overlayfs（不是其它 FUSE）。 */
+function isOwnedFuseMount(merged: string): boolean {
+  return ownedFuseMountId(merged) !== undefined
+}
+
+/** 返回 mountinfo 中该挂载点的 mount id（无/非 fuse-overlayfs → undefined）。 */
+function ownedFuseMountId(merged: string): string | undefined {
+  const info = fuseMountInfo(merged)
+  return info !== undefined && info.source === "fuse-overlayfs" ? info.id : undefined
+}
+
+/**
+ * R5-04：mount id 在卸载后会被内核**复用**（同路径重挂载可拿到相同 id）——
+ * id + upper dev/ino 都不足以区分「我们的挂载」与「同路径 foreign 重挂载」。
+ * 真实判别依据：fuse-overlayfs daemon 的命令行（/proc/<pid>/cmdline）必须
+ * 同时包含我们的 upperdir 与挂载点路径（daemon 选项不进入 mountinfo）。
+ */
+function fuseDaemonUsesUpper(merged: string, upper: string): boolean {
+  try {
+    for (const pidDir of readdirSync("/proc")) {
+      if (!/^[0-9]+$/.test(pidDir)) continue
+      let cmdline: string
+      try {
+        cmdline = readFileSync(`/proc/${pidDir}/cmdline`, "utf8")
+      } catch {
+        continue
+      }
+      if (!cmdline.includes("fuse-overlayfs")) continue
+      if (!cmdline.includes(merged)) continue
+      if (!cmdline.includes(`upperdir=${upper}`)) continue
+      return true
+    }
+  } catch {
+    return false
+  }
+  return false
 }
 
 /** 生产 backend —— fuse-overlayfs（无特权 mount 时真实可用；探测确认）。
@@ -181,6 +212,13 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     mkdirSync(work, { mode: 0o700 })
     // 已存在（可能含外部/错误挂载）→ 不覆盖，交给 P2-3 beforeMounted 检查。
     if (!existsSync(merged)) mkdirSync(merged, { mode: 0o700 })
+    // R5-04：本次 create 的 mountpoint 身份（merged 目录 dev/ino ——
+    // 挂载点被替换/rename → 身份不匹配 → fail-closed）。
+    const mergedStatAtCreate = lstatSync(merged)
+    const mergedIdentity = { dev: mergedStatAtCreate.dev, ino: mergedStatAtCreate.ino }
+    // upper 身份（mount/unmount/rm 的更强绑定 —— mount id 会被内核复用）。
+    const upperStatAtCreate = lstatSync(upper)
+    const upperIdentity = { dev: upperStatAtCreate.dev, ino: upperStatAtCreate.ino }
 
     let mounted = false
     let afterMountId: string | undefined
@@ -233,11 +271,21 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 文件保持只读（写永远落在 upper，lower 不可被 merged 写穿透）。
       this.chmodMergedWritable(merged)
     } catch (error) {
-      // R2-06-5/R4-00-9：真实挂载中且 unmount 失败时不得递归删除
-      // upper/work/merged（可能仍在被内核使用 —— residue 保留供诊断）。
+      // R5-00-5/R5-04：只卸载**本次创建**的 mount —— mountId 必须仍匹配
+      // 且 upper/mountpoint 身份一致。foreign/unknown/replaced mount →
+      // 不卸载、不 rm/chmod upper/work/merged（可能正在被 foreign mount
+      // 使用 —— mounted-tree recursive delete 禁止），保留 residue。
       // unmount 报告成功 ≠ 已卸载 —— 必须重新确认 mount 已消失；仍挂载
       // → 禁止 rm/chmod 任何内容（R4-05.7）。
-      if (mounted && this.isFuseMount(merged)) {
+      const stillOwned =
+        mounted &&
+        afterMountId !== undefined &&
+        ownedFuseMountId(merged) === afterMountId &&
+        this.upperMatches(upper, upperIdentity) &&
+        // R5-00-5/R5-04：mount id 会被内核复用 —— daemon 命令行必须仍指向
+        // 我们的 upperdir（foreign 同路径重挂载 → false → 不卸载/不删除）。
+        this.fuseDaemonUsesUpper(merged, upper)
+      if (stillOwned) {
         const unmounted = this.unmount(merged)
         if (!unmounted) {
           throw error instanceof ProjectionError
@@ -255,20 +303,43 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
             error instanceof Error ? error.message : String(error),
           )
         }
-      }
-      try {
-        rmSync(upper, { recursive: true, force: true })
-        rmSync(work, { recursive: true, force: true })
-        // R4-05.8：merged 只允许在确认非 mount 后删除；非空 → 保留 residue。
-        if (existsSync(merged) && !this.isFuseMount(merged)) {
-          try {
-            if (readdirSync(merged).length === 0) rmdirSync(merged)
-          } catch {
-            // residue 保留
+        try {
+          rmSync(upper, { recursive: true, force: true })
+          rmSync(work, { recursive: true, force: true })
+          // R4-05.8：merged 只允许在确认非 mount 后删除；非空 → 保留 residue。
+          if (existsSync(merged) && !this.isFuseMount(merged)) {
+            try {
+              if (readdirSync(merged).length === 0) rmdirSync(merged)
+            } catch {
+              // residue 保留
+            }
           }
+        } catch {
+          // best-effort
         }
-      } catch {
-        // best-effort
+      } else if (mounted && this.isFuseMount(merged)) {
+        // foreign/unknown mount 出现在 merged —— 什么都不卸载/删除。
+        throw new ProjectionError(
+          "BACKEND_UNAVAILABLE",
+          `fuse-overlayfs create failed for ${label}: a foreign/unknown FUSE mount is present at ${merged}; nothing unmounted or removed (residue retained for diagnosis)`,
+          error instanceof Error ? error.message : String(error),
+        )
+      } else if (mounted) {
+        // 无挂载（fake binary 返回 0 但未挂载 / 已被外部卸载）—— 无
+        // mounted-tree 风险 → 清理本 create 创建的 upper/work/merged。
+        try {
+          rmSync(upper, { recursive: true, force: true })
+          rmSync(work, { recursive: true, force: true })
+          if (existsSync(merged) && !this.isFuseMount(merged)) {
+            try {
+              if (readdirSync(merged).length === 0) rmdirSync(merged)
+            } catch {
+              // residue 保留
+            }
+          }
+        } catch {
+          // best-effort
+        }
       }
       throw error instanceof ProjectionError
         ? error
@@ -283,11 +354,9 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     // mount id 在卸载重挂载时会被内核复用，upper dev/ino 是更强的绑定：
     // 攻击者替换 upper 重挂载 → 身份不匹配 → fail-closed）。
     const mountId = afterMountId
-    const upperStat = lstatSync(upper)
-    const upperIdentity = { dev: upperStat.dev, ino: upperStat.ino }
-    // R4-06：seal 状态 —— RW mount 卸载后以 ro 重挂载同一 lower/upper/work
-    //（内核 MS_RDONLY 强制：写入 EROFS，不可替换）。sealedMountId 是新的
-    // mount identity（ownership 复核两者皆可）。
+    // R2-06：upper 身份（mount id 卸载后会被内核复用 —— upper dev/ino 是
+    // 更强绑定：攻击者替换 upper 重挂载 → 身份不匹配 → fail-closed）。
+    // R5-04：mountpoint 身份（merged dev/ino）+ fsType/source 一并绑定。
     let sealedMountId: string | undefined = undefined
     let sealed = false
     return {
@@ -303,6 +372,7 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 会被内核复用，upper dev/ino 绑定本次创建）。execute 前/后、scan
       // 前、cleanup 时调用；mount 消失/被替换 → false（fail-closed）。
       // R4-06：seal 后接受 sealed mount id（同一 upper 身份的 ro 重挂载）。
+      // R5-04：mountpoint 身份（dev/ino）+ fsType/source 一并复核。
       assertMountOwned: () => {
         if (!existsSync(merged)) return false
         try {
@@ -311,11 +381,21 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
         } catch {
           return false
         }
-        const current = ownedFuseMountId(merged)
-        if (current !== mountId && current !== sealedMountId) return false
+        const info = fuseMountInfo(merged)
+        if (info !== undefined) {
+          // 挂载中：挂载点的 lstat 反映 FUSE 视图（dev/ino 与底层目录不同）——
+          // 身份判别用 mount id + source + upper 身份 + daemon 命令行。
+          if (info.source !== "fuse-overlayfs") return false
+          if (info.id !== mountId && info.id !== sealedMountId) return false
+          if (!this.upperMatches(upper, upperIdentity)) return false
+          // R5-04：mount id 会被内核复用 —— daemon 必须仍使用我们的 upper。
+          if (!this.fuseDaemonUsesUpper(merged, upper)) return false
+          return true
+        }
+        // 未挂载：mountpoint 必须是原目录（身份匹配；替换 → false）。
         try {
-          const upperNow = lstatSync(upper)
-          if (upperNow.dev !== upperIdentity.dev || upperNow.ino !== upperIdentity.ino) return false
+          const stat = lstatSync(merged)
+          if (stat.dev !== mergedIdentity.dev || stat.ino !== mergedIdentity.ino) return false
         } catch {
           return false
         }
@@ -359,7 +439,19 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
           return { error: `read-only remount failed: ${error instanceof Error ? error.message : String(error)}` }
         }
         const sealedId = ownedFuseMountId(merged)
-        if (sealedId === undefined || !isOwnedFuseMount(merged)) {
+        if (sealedId === undefined) {
+          // R5-04：RO remount 成功但 attestation 失败 —— 若 merged 仍是
+          // FUSE mount 且 upper 身份未变（我们的 ro remount），**不得遗失
+          // owned mount 的清理依据**：记录 lenient mount id → cleanup 仍
+          // 能卸载（OWNED_MOUNT_SILENT_LEAK = 0）；seal 本身 fail-closed。
+          if (this.isFuseMount(merged)) {
+            const lenient = fuseMountInfo(merged)
+            if (lenient !== undefined && this.upperMatches(upper, upperIdentity)) {
+              sealedMountId = lenient.id
+              return { error: "read-only remount attestation failed (mount retained for cleanup; seal refused)" }
+            }
+            return { error: "read-only remount produced an unowned/foreign FUSE mount; seal refused" }
+          }
           return { error: "read-only remount did not produce a real FUSE mount; seal refused" }
         }
         sealedMountId = sealedId
@@ -381,7 +473,15 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
         const stillFuse = this.isFuseMount(merged)
         if (stillFuse) {
           const current = ownedFuseMountId(merged)
-          if ((current !== mountId && current !== sealedMountId) || !upperOwned) {
+          // R2-06-4/R3-00-8/R5-04：只卸载本 projection 创建的 mount ——
+          // mountId 匹配 + upper 身份一致 + daemon 命令行使用我们的 upper
+          // （mount id 会被内核复用；foreign/unknown/replaced 一律拒绝卸载、
+          // 拒绝 rm/chmod 任何内容）。
+          if (
+            (current !== mountId && current !== sealedMountId) ||
+            !upperOwned ||
+            !this.fuseDaemonUsesUpper(merged, upper)
+          ) {
             // R3-03.1：foreign mount / mount identity mismatch → cleanup
             // failure；禁止 unmount、禁止 rm/chmod upper/work/merged。
             return false
@@ -424,6 +524,21 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     } catch {
       return false
     }
+  }
+
+  /** R5-04：upper 目录身份复核（mount/unmount/rm 的更强绑定）。 */
+  private upperMatches(upper: string, upperIdentity: { readonly dev: number; readonly ino: number }): boolean {
+    try {
+      const upperNow = lstatSync(upper)
+      return upperNow.dev === upperIdentity.dev && upperNow.ino === upperIdentity.ino
+    } catch {
+      return false
+    }
+  }
+
+  /** R5-04：daemon 命令行必须仍使用我们的 upper（mount id 复用判别）。 */
+  private fuseDaemonUsesUpper(merged: string, upper: string): boolean {
+    return fuseDaemonUsesUpper(merged, upper)
   }
 
   /** 递归 chmod merged 内的文件（触发文件 copy-up；目录保持 0755 ——

@@ -48,7 +48,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { createHash } from "node:crypto"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
-import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type ProjectionExecutor, type ProjectionSession } from "../../../src/kernel/projection/coordinator"
+import { ProjectionCoordinator, ProjectionIntentRegistry, expectedProjectionFilesystemPolicyDigest, type ProjectionExecutor, type ProjectionSession } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
@@ -500,6 +500,7 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
       return new LinuxBrokerProjectionExecutor({
         broker,
         authority: { identity: { runId: "run-r4", nodeRunId: "run-r4:n1", attempt: 1 }, workspace },
+        intentRegistry: new ProjectionIntentRegistry(),
         writableRoots: ["src"],
         readonlyRoots: ["docs"],
         profile: "build",

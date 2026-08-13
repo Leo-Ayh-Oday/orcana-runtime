@@ -10,7 +10,7 @@ import { RuntimeStateReceiptAuthority } from "../../../src/kernel/projection/rec
 import { HOST_AUDIT_TEST_CAPABILITIES } from "../../helpers/linux-process-test-broker"
 import { WorkspaceAuthorityRegistry } from "../../../src/runtime/linux/workspace/workspace-authority"
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
-import { expectedProjectionFilesystemPolicyDigest } from "../../../src/kernel/projection/coordinator"
+import { ProjectionIntentRegistry, expectedProjectionFilesystemPolicyDigest } from "../../../src/kernel/projection/coordinator"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
 import type { TrustedExecutionAuthority } from "../../../src/runtime/linux/contracts"
 
@@ -42,6 +42,18 @@ function authorityFor(merged: string): TrustedExecutionAuthority {
   }
 }
 
+/** 每个测试自己的 registry（同一测试内共享 → 一个 intent 一个 cell）。 */
+const testRegistries = new WeakMap<object, ProjectionIntentRegistry>()
+
+function registryFor(key: object): ProjectionIntentRegistry {
+  let registry = testRegistries.get(key)
+  if (registry === undefined) {
+    registry = new ProjectionIntentRegistry()
+    testRegistries.set(key, registry)
+  }
+  return registry
+}
+
 function adapter(merged: string, overrides: Partial<ConstructorParameters<typeof LinuxBrokerProjectionExecutor>[0]> = {}) {
   // 真实 broker（无 testCapabilities）：真实能力探测 + bubblewrap strict
   // lane —— receipt.backend 必须是 bubblewrap/podman（R01.4：host-audit
@@ -57,6 +69,7 @@ function adapter(merged: string, overrides: Partial<ConstructorParameters<typeof
     readonlyRoots: ["docs"],
     profile: "build",
     receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
+    intentRegistry: registryFor(broker),
     ...overrides,
   })
 }
@@ -73,6 +86,7 @@ describe("AK2-T06 adapter 边界", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
+      intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, { executable: "/bin/true", args: [] }),
@@ -96,6 +110,7 @@ describe("AK2-T06 adapter 边界", () => {
       writableRoots: ["src"],
       readonlyRoots: [],
       profile: "build",
+      intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, { executable: "/bin/true", args: [] }),
@@ -170,6 +185,7 @@ describe("AK2-T06 真实 broker 执行", () => {
     const executor = new LinuxBrokerProjectionExecutor({
       broker,
       authority,
+      intentRegistry: new ProjectionIntentRegistry(),
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
@@ -195,6 +211,7 @@ describe("AK2-T06 真实 broker 执行", () => {
     const executor = new LinuxBrokerProjectionExecutor({
       broker,
       authority,
+      intentRegistry: new ProjectionIntentRegistry(),
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
@@ -268,6 +285,7 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
+          intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, {
@@ -296,6 +314,7 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
+      intentRegistry: new ProjectionIntentRegistry(),
       receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
     })
     const { outcome } = await executor.execute(merged, { executable: "/bin/true", args: [] })
@@ -338,6 +357,7 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
+      intentRegistry: new ProjectionIntentRegistry(),
       receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
     })
     const { outcome } = await executor.execute(merged, { executable: "/bin/true", args: [] })
@@ -358,6 +378,7 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
+          intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, { executable: "/bin/true", args: [] }),

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ProjectionCoordinator } from "../../../src/kernel/projection/coordinator"
+import { ProjectionCoordinator, ProjectionIntentRegistry } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import { CopyProjectionFixtureBackend, TestReceiptAuthority } from "./test-fixtures"
 import {
@@ -214,6 +214,7 @@ function brokerExecutorFactory(merged: string, stateStore?: RuntimeStateStore) {
   const executor = new LinuxBrokerProjectionExecutor({
     broker,
     authority: { identity: { runId: `run-${process.pid}`, nodeRunId: `run-${process.pid}:n1`, attempt: 1 }, workspace },
+    intentRegistry: new ProjectionIntentRegistry(),
     writableRoots: ["src"],
     readonlyRoots: ["docs"],
     profile: "build",

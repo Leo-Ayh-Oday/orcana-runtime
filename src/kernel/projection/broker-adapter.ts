@@ -32,6 +32,7 @@ import type {
   UntrustedCapabilityRequest,
 } from "../../runtime/linux/contracts"
 import { ProjectionError, projectionIntentDigest } from "./contracts"
+import type { ProjectionIntentRegistry } from "./coordinator"
 import type { ProjectionExecutionOutcome } from "./validator"
 import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "./receipt-authority"
 
@@ -50,6 +51,10 @@ export interface ProjectionBrokerAdapterOptions {
    *  receipt。缺失时 adapter 无法证明 final truth —— outcome 不携带
    *  executionReceiptId（coordinator 将拒绝 production commit）。 */
   readonly receiptAuthority?: ProjectionReceiptAuthority
+  /** R5-05：kernel-owned 一次性 intent reservation（coordinator 持有；
+   *  intent 执行必须经它 —— 一个 intent = 恰好一个 cell；跨 adapter
+   *  实例 / 重建 / 并发均不能重用；不依赖 adapter 实例内 Set）。 */
+  readonly intentRegistry: ProjectionIntentRegistry
 }
 
 export interface BrokerProjectionExecution {
@@ -60,10 +65,6 @@ export interface BrokerProjectionExecution {
 
 export class LinuxBrokerProjectionExecutor {
   readonly id = "linux-broker"
-
-  /** R4-03.8：一个 intent 只能对应一个授权 cell —— 同一 intentId 第二次
-   *  execute 拒绝（防止一次 intent 派生多个执行 cell）。 */
-  private readonly usedIntents = new Set<string>()
 
   constructor(private readonly options: ProjectionBrokerAdapterOptions) {}
 
@@ -151,17 +152,18 @@ export class LinuxBrokerProjectionExecutor {
     // receipt.projectionIntentDigest（打破 outcome 自报 binding 循环）。
     const intent = command.intent
     if (intent !== undefined) {
-      // R4-03.8：一个 intent 只能对应一个授权 cell。
-      if (this.usedIntents.has(intent.intentId)) {
+      // R5-05：kernel-owned 一次性 reservation —— 同一 intentId 第二次
+      // execute（任意 adapter 实例 / 重建后的 adapter / 并发）拒绝。
+      // 保留失败也消耗该 intent（fail-closed：不允许重试放大 cell）。
+      if (!this.options.intentRegistry.reserve(intent.intentId)) {
         throw new ProjectionError(
           "EXECUTION_RECEIPT_BINDING_MISMATCH",
-          `intent ${intent.intentId} already authorized an execution cell (one intent = one cell)`,
+          `intent ${intent.intentId} already authorized an execution cell (kernel-owned one-time reservation; one intent = one cell)`,
         )
       }
       // R4-03.2：spawn 前逐字段验证（executable/args/timeout/roots/workspace
       // identity/intent ids）。任何不一致 → 拒绝，command 从未执行。
       this.assertIntentBinding(cwd, intent, command)
-      this.usedIntents.add(intent.intentId)
     }
     const authority = intent === undefined
       ? this.options.authority

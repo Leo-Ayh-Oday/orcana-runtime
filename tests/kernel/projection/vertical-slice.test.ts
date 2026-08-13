@@ -12,7 +12,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ProjectionCoordinator } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
-import { CopyProjectionFixtureBackend } from "./test-fixtures"
+import { CopyProjectionFixtureBackend, TestReceiptAuthority } from "./test-fixtures"
 import {
   FuseOverlayfsProjectionBackend,
   probeNativeBackends,
@@ -46,9 +46,14 @@ function tmpRoot(label: string): string {
 /** 完整纵向链（共享给 A/B 两层）。 */
 async function runVerticalSlice(
   backend: CopyProjectionFixtureBackend | FuseOverlayfsProjectionBackend,
-  executor: import("../../../src/kernel/projection/coordinator").ProjectionExecutor,
+  executor: import("../../../src/kernel/projection/coordinator").ProjectionExecutor | ((authority: TestReceiptAuthority) => import("../../../src/kernel/projection/coordinator").ProjectionExecutor),
   receiptAuthority?: import("../../../src/kernel/projection/receipt-authority").ProjectionReceiptAuthority,
 ): Promise<{ ctx: TestWorldStore; revision: bigint; newContent: string; commitError?: unknown }> {
+  // R5-01：A 层 executor 与 coordinator 必须共享同一 test authority。
+  const testAuthority = receiptAuthority === undefined ? new TestReceiptAuthority() : undefined
+  const effectiveExecutor = typeof executor === "function" && testAuthority !== undefined
+    ? (executor as (a: TestReceiptAuthority) => import("../../../src/kernel/projection/coordinator").ProjectionExecutor)(testAuthority)
+    : executor as import("../../../src/kernel/projection/coordinator").ProjectionExecutor
   const ctx = createTestWorldStore()
   ctx.store.createWorld({
     worldId: "world-v",
@@ -85,9 +90,9 @@ async function runVerticalSlice(
     materializer,
     backend,
     projectionRoot: tmpRoot("proj"),
-    // A 层 fixture backend 需要显式 test capability（R06.3）。
-    allowTestBackends: backend.kind === "fixture" ? true : undefined,
-    ...(receiptAuthority === undefined ? {} : { receiptAuthority }),
+    // R5-01：所有 backend 都要求 receipt authority —— A 层 fixture 用
+    // TestReceiptAuthority（test-only）；B 层用 RuntimeStateReceiptAuthority。
+    receiptAuthority: receiptAuthority ?? testAuthority!,
   })
   // 4. native projection。
   const plan = validateWorldProjectionPlan({
@@ -110,7 +115,7 @@ async function runVerticalSlice(
 
   // 5. Linux execution 修改文件（executor 注入：B 层为真实 broker）。
   const newContent = "export const answer = 42\n"
-  const outcome = await coord.execute(session, { executable: "noop", args: [] }, executor)
+  const outcome = await coord.execute(session, { executable: "noop", args: [] }, effectiveExecutor)
   expect(outcome.exitCode).toBe(0)
   expect(session.executionState).toBe("COMPLETED")
 
@@ -184,10 +189,11 @@ async function runVerticalSlice(
   return { ctx, revision: receipt!.newRevision, newContent }
 }
 
-/** A 层 executor：直接写 merged（deterministic fixture 逻辑验证）。 */
-async function fixtureExecutor(cwd: string): Promise<import("../../../src/kernel/projection/validator").ProjectionExecutionOutcome> {
-  writeFileSync(join(cwd, "src/main.ts"), "export const answer = 42\n")
-  return { exitCode: 0, timedOut: false, cancelled: false, violation: false }
+/** A 层 executor factory：直接写 merged（deterministic fixture 逻辑验证）。
+ *  R5-01：fixture 执行也必须产出 receipt —— 与 coordinator 共享 authority。 */
+function aLayerExecutor(mutate: (cwd: string) => void) {
+  return (authority: TestReceiptAuthority) =>
+    (require("./test-fixtures") as typeof import("./test-fixtures")).fixtureExecutor(authority, mutate)
 }
 
 /** B 层 executor：真实 Linux Broker —— 真实能力探测 + bubblewrap strict
@@ -218,7 +224,10 @@ function brokerExecutorFactory(merged: string, stateStore?: RuntimeStateStore) {
 
 describe("AK2-T07 A 层：deterministic backend 纵向链", () => {
   test("12 步全链（fixture backend）", async () => {
-    const result = await runVerticalSlice(new CopyProjectionFixtureBackend(), fixtureExecutor)
+    const result = await runVerticalSlice(
+      new CopyProjectionFixtureBackend(),
+      aLayerExecutor(cwd => writeFileSync(join(cwd, "src/main.ts"), "export const answer = 42\n")),
+    )
     expect(result.revision).toBe(2n)
     expect(result.newContent).toBe("export const answer = 42\n")
     result.ctx.cleanup()
@@ -246,7 +255,7 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
       // 物化/执行/隔离仍全部真实执行并断言。
       const result = await runVerticalSlice(
         new FuseOverlayfsProjectionBackend(),
-        async cwd => {
+        async (cwd: string) => {
         // 真实 broker：在 fused merged 视图上执行 /bin/sh 修改文件。
         const executor = brokerExecutorFactory(cwd, stateStore)
         // R01.5：执行域（bwrap 隔离视图）无法寻址 ../base（projection root

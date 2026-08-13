@@ -38,8 +38,26 @@ export interface ProjectionReceiptBinding {
   readonly workspaceHostRoot: string
 }
 
+/**
+ * R5-01/R5-06：Execution receipt authority 的显式 trust level。
+ *
+ * - "kernel-authenticated"：MAC/signature 认证（key 由 kernel 持有；
+ *   写入经 sealed IPC）—— 未来实现（OWNER-DECISION-REQUIRED）。
+ * - "test-harness"：test-only（tests/ 内构造；仅可配对 test-only fixture
+ *   backend，不进入生产导出面）。
+ * - "same-uid-untrusted"：普通 JSON + 公开 SHA-256 —— 同 UID 进程可改写
+ *   receipt 并重算 digest；**不是 authenticated authority**。production
+ *   acceptance 遇到该 level 必须 fail-closed（PRODUCTION_WORLD_COMMIT_BLOCKED）。
+ */
+export type ProjectionReceiptTrustLevel =
+  | "kernel-authenticated"
+  | "test-harness"
+  | "same-uid-untrusted"
+
 /** 读取最终权威 receipt 的边界。 */
 export interface ProjectionReceiptAuthority {
+  /** 显式 trust level（R5-01：production acceptance 依赖它 fail-closed）。 */
+  readonly trustLevel: ProjectionReceiptTrustLevel
   /**
    * 按 run+cell 读取最终持久化 receipt（final cleanup truth）。
    * 返回的 receipt 必须已 cleanup-finalized 且 digest 自洽；
@@ -50,8 +68,16 @@ export interface ProjectionReceiptAuthority {
   isCleanupFinalized(receipt: SandboxReceipt): boolean
 }
 
-/** 基于 runtime 持久化布局的 production 实现（只读）。 */
+/** 基于 runtime 持久化布局的 production 实现（只读）。
+ *
+ *  R5-01/R5-04：普通 JSON + 公开 SHA-256 不是 authenticated authority ——
+ *  同 UID 进程可以修改 receipt JSON、重算公开 digest 并被本实现接受
+ *  （R3-00-3 证据测试）。本实现显式声明 trustLevel = "same-uid-untrusted"；
+ *  production World commit 遇到该 level 必须 fail-closed
+ *  （PRODUCTION_WORLD_COMMIT_BLOCKED；真实认证方案 → OWNER-DECISION-REQUIRED）。 */
 export class RuntimeStateReceiptAuthority implements ProjectionReceiptAuthority {
+  readonly trustLevel = "same-uid-untrusted" as const
+
   private readonly store: RuntimeStateStore
 
   constructor(store?: RuntimeStateStore) {

@@ -48,6 +48,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statfsSync,
@@ -516,7 +517,7 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     expect(ctx.store.getWorld("world-c")!.currentRevision).toBe(1n)
     // cancel 幂等：重复 cancel 返回同一 cleanupState（无第二终态）。
     const again = await coord.cancel(session)
-    expect(again).toBe(session.cleanupState)
+    expect(again).toBe(session.cleanupState!)
     ctx.cleanup()
   })
 
@@ -704,10 +705,11 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       command: { executable: "/bin/sh", args: ["-c", "true"] },
       filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir),
     }
-    const stateStore = new RuntimeStateStore({ root: join(tmpdir(), `ak2-r5-intent-${process.pid}-${Math.random().toString(36).slice(2, 8)}`) })
+    const stateDir = join(tmpdir(), `ak2-r5-intent-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
+    const stateStore = new RuntimeStateStore({ root: stateDir })
     cleanups.push(() => {
       try {
-        rmSync(stateStore.root, { recursive: true, force: true })
+        rmSync(stateDir, { recursive: true, force: true })
       } catch {
         // 已删
       }
@@ -755,10 +757,11 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     // 直接 seal（执行 writer 已终止后）。
     const sealed = session.instance.sealForScan!()
     expect("error" in sealed).toBe(false)
-    session.sealedPath = sealed.sealedPath
+    const sealedPath = (sealed as { sealedPath: string }).sealedPath
+    session.sealedPath = sealedPath
     // 同 UID 直接写 sealed 视图的 writeLayer（fixture：merged === writeLayer）。
-    chmodSync(session.sealedPath!, 0o755)
-    writeFileSync(join(session.sealedPath!, "src/tampered.txt"), "tampered\n")
+    chmodSync(sealedPath, 0o755)
+    writeFileSync(join(sealedPath, "src/tampered.txt"), "tampered\n")
     let delta: unknown
     let scanError: unknown
     try {

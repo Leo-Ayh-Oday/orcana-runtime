@@ -162,7 +162,7 @@ describe("AK2-R5 World/CAS 反例（R5-00 先红冻结）", () => {
     })
     ctx.store.createSnapshot("w12", "b")
     const snapshot = ctx.store.snapshots.getForRevision("w12", "b", 1n)!
-    const chunkDigests = new Set(fm.manifest.chunks.map(chunk => chunk.digest))
+    const chunkDigests = new Set<string>(fm.manifest.chunks.map(chunk => chunk.digest))
     const reads: string[] = []
     const materializer = new SnapshotMaterializer({
       getSnapshot: id => ctx.store.snapshots.get(id),

@@ -59,12 +59,12 @@ import { assertTrustedExecutionReceipt, type ProjectionReceiptAuthority } from "
 import { removeTreeAnchored } from "./anchored-fs"
 import { randomUUID } from "node:crypto"
 
-/** R4-01：fixture 执行放行不再需要 token —— 结构性双重门：
- *  1) backend.kind === "fixture"（production backend 永远不满足）；
- *  2) 显式 test capability allowTestBackends === true。
- *  production coordinator 构造时结构性要求 receiptAuthority；production
- *  backend 无 receipt 永远拒绝（WORLD_COMMIT_WITHOUT_RECEIPT = 0）。
- *  生产模块不再导出任何 fixture 执行能力（PUBLIC_FIXTURE_AUTHORITY = 0）。 */
+/** R5-01：production coordinator 不存在任何 receiptless commit 分支。
+ *  - 构造时结构性要求 receiptAuthority（所有 backend —— 含 fixture）；
+ *  - "fixture" 字符串、结构化 backend 或 TypeScript cast 均不能放大
+ *    authority（fixture 执行也必须产出 receipt —— test authority）；
+ *  - 生产模块不再导出任何 fixture 执行能力（PUBLIC_FIXTURE_AUTHORITY = 0）、
+ *    不再存在 allowTestBackends 选项（WORLD_COMMIT_WITHOUT_RECEIPT = 0）。 */
 
 export type SessionWorldState =
   | "UNPROJECTED"
@@ -129,13 +129,13 @@ export interface ProjectionCoordinatorOptions {
   readonly backend: NativeProjectionBackend
   /** 投影根（默认 os.tmpdir()/orcana-ak2）。 */
   readonly projectionRoot?: string
-  /** 显式 test capability：允许 kind="fixture" backend（生产必须缺省拒绝）。 */
-  readonly allowTestBackends?: boolean
-  /** 最终 execution receipt 权威（P0-2/P1-6）。production commit 必须
-   *  经它证明 receipt 已持久化、cleanup-finalized、绑定本 session。
-   *  R4-01：production backend（kind !== "fixture"）构造时结构性要求 ——
-   *  缺失即拒绝构造（不是运行时降级）。 */
-  readonly receiptAuthority?: ProjectionReceiptAuthority
+  /** 最终 execution receipt 权威（P0-2/P1-6）。commit 必须经它证明
+   *  receipt 已持久化、cleanup-finalized、绑定本 session。
+   *  R5-01：**所有** backend（含 fixture）构造时结构性要求 —— 缺失即
+   *  拒绝构造（不存在 receiptless commit 分支；allowTestBackends 已删除）。
+   *  R5-01/R5-06：authority.trustLevel 决定 production acceptance ——
+   *  same-uid-untrusted → production World commit fail-closed。 */
+  readonly receiptAuthority: ProjectionReceiptAuthority
   /** 测试注入窗口（test-only；生产不传）：projection root 在外层 lstat
    *  验证后、fd open 前调用（R4-00-8 反例的确定性窗口）。
    *  无此选项时零开销（undefined 短路）。 */
@@ -189,8 +189,7 @@ export class ProjectionCoordinator {
   private readonly materializer: SnapshotMaterializer
   private readonly backend: NativeProjectionBackend
   private readonly baseProjectionRoot: string
-  private readonly receiptAuthority?: ProjectionReceiptAuthority
-  private readonly allowTestBackends: boolean
+  private readonly receiptAuthority: ProjectionReceiptAuthority
   private readonly onBeforeProjectionRootOpen?: (root: string) => void
   private readonly onBeforeChildCreate?: (baseRoot: string) => void
 
@@ -198,24 +197,17 @@ export class ProjectionCoordinator {
     this.store = options.store
     this.materializer = options.materializer
     this.backend = options.backend
-    // 生产 gate：fixture backend 必须显式 test capability 才可经 coordinator 使用。
-    if (options.backend.kind === "fixture" && options.allowTestBackends !== true) {
-      throw new ProjectionError(
-        "BACKEND_UNAVAILABLE",
-        "test fixture backend requires explicit allowTestBackends (test-only capability); production coordinator refuses it",
-      )
-    }
-    // R4-01：production coordinator 结构性要求 receipt authority ——
-    // production backend（kind !== "fixture"）缺 authority 拒绝构造
-    // （fail-closed；不是延迟到 commit 才失败）。
-    if (options.backend.kind !== "fixture" && options.receiptAuthority === undefined) {
+    // R5-01：所有 backend（含 kind==="fixture" 的任意结构化实现 / cast）
+    // 构造时结构性要求 receipt authority —— 不存在 receiptless 分支；
+    // allowTestBackends 选项已整体删除（production 模块不再导出任何
+    // fixture 执行能力）。
+    if (options.receiptAuthority === undefined) {
       throw new ProjectionError(
         "EXECUTION_RECEIPT_REQUIRED",
-        "production coordinator requires a receipt authority (receipt-producing executor); refusing construction",
+        "production coordinator requires a receipt authority (receipt-producing executor); refusing construction — receiptless world commit does not exist",
       )
     }
     this.receiptAuthority = options.receiptAuthority
-    this.allowTestBackends = options.allowTestBackends === true
     this.onBeforeProjectionRootOpen = options.onBeforeProjectionRootOpen
     this.onBeforeChildCreate = options.onBeforeChildCreate
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
@@ -454,24 +446,25 @@ export class ProjectionCoordinator {
       )
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount no longer owned by this session; scan refused")
     }
-    // R2-05-5/R4-00-7：production 路径（backend.kind !== "fixture"）——
-    // scan 必须拥有 finalized receipt/cleanup proof（执行 writer 已终止）。
+    // R2-05-5/R4-00-7/R5-01：**所有** backend（含 fixture）—— scan 必须
+    // 拥有 finalized receipt/cleanup proof（执行 writer 已终止）。
     // 缺失（含 receiptless outcome、无 authority、无 binding）→ 拒绝，
-    // 不能跳过（不是条件性检查）。
+    // 不能跳过（不是条件性检查）；"fixture" 字符串/cast 不能放大 authority。
     const outcome = session.outcome
-    if (this.backend.kind !== "fixture") {
-      if (outcome === undefined || outcome.executionReceiptId === undefined || this.receiptAuthority === undefined || outcome.receiptBinding === undefined) {
-        this.terminalize(
-          session,
-          "rejected",
-          "production scan requires finalized execution receipt/cleanup proof (execution writers may still run)",
-        )
-        throw new ProjectionError(
-          "EXECUTION_RECEIPT_REQUIRED",
-          "production scan requires finalized receipt/cleanup proof; delta scan refused",
-        )
-      }
-      const finalReceipt = this.receiptAuthority.getFinalReceipt(session.intent.intentId, outcome.receiptBinding.cellId)
+    if (outcome === undefined || outcome.executionReceiptId === undefined || outcome.receiptBinding === undefined) {
+      this.terminalize(
+        session,
+        "rejected",
+        "delta scan requires finalized execution receipt/cleanup proof (execution writers may still run)",
+      )
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_REQUIRED",
+        "delta scan requires finalized receipt/cleanup proof; delta scan refused",
+      )
+    }
+    let finalReceipt
+    try {
+      finalReceipt = this.receiptAuthority.getFinalReceipt(session.intent.intentId, outcome.receiptBinding.cellId)
       if (finalReceipt === undefined || !this.receiptAuthority.isCleanupFinalized(finalReceipt)) {
         this.terminalize(
           session,
@@ -483,11 +476,43 @@ export class ProjectionCoordinator {
           "execution cleanup not proven (processes may remain); delta scan refused",
         )
       }
+    } catch (error) {
+      if (error instanceof ProjectionError && error.code === "EXECUTION_RECEIPT_NOT_FINALIZED") {
+        throw error
+      }
+      // R5-00-7b/c：receipt authority 抛异常（不是返回 undefined）也是
+      // terminal 故障 —— 统一 terminalize + 精确错误码。
+      this.terminalize(
+        session,
+        "rejected",
+        `execution receipt authority error: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_AUTHORITY_ERROR",
+        "execution receipt authority raised an unexpected error; delta scan refused",
+        error,
+      )
     }
     // R4-06：seal —— 执行 writer 已终止（cleanup proof）后，把 merged 视图
     // 转为不可写、不可替换的稳定 scan 输入。seal 失败 → 不生成 delta、不写
     // CAS delta content、不 commit World（fail-closed）。
-    const sealed = session.instance.sealForScan?.()
+    // R5-00-7d：sealForScan **抛异常**（不是返回 { error }）同样是 terminal
+    // 故障 —— 统一 terminalize + DELTA_SCAN_FAILED。
+    let sealed
+    try {
+      sealed = session.instance.sealForScan?.()
+    } catch (error) {
+      this.terminalize(
+        session,
+        "rejected",
+        `sealForScan raised an unexpected error: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      throw new ProjectionError(
+        "DELTA_SCAN_FAILED",
+        `sealForScan raised an unexpected error; delta scan refused`,
+        error,
+      )
+    }
     if (sealed === undefined) {
       this.terminalize(session, "rejected", "backend cannot seal the scan view (sealForScan unavailable)")
       throw new ProjectionError(
@@ -544,37 +569,60 @@ export class ProjectionCoordinator {
     }
     const delta = session.delta!
     const outcome = session.outcome!
-    const world = this.store.getWorld(session.plan.worldId)
-    const branch = this.store.getBranch(session.plan.worldId, session.plan.branchId)
-    if (!world || !branch) {
-      throw new ProjectionError("SNAPSHOT_MISMATCH", "world/branch vanished")
-    }
-    const snapshot = this.store.snapshots.get(session.plan.snapshotId)!
 
     this.transition(session, { kind: "commit-pending" })
     try {
-      // 1. 可信 execution receipt 校验（P0-2/R2-01/R4-03）：expected binding
-      //    来自 coordinator 当前 session 的 Execution Intent（world/branch/
-      //    snapshot/projection/nonce/merged root/command/scope/workspace
-      //    identity/filesystem policy），不是 outcome 自报。receipt 的
-      //    filesystemPolicyDigest 与 coordinator 从 kernel-owned input 独立
-      //    派生的期望值比对（不能与 receipt/claim 自报值互相比对）。
-      //    fixture executor 只在结构门（backend.kind === "fixture" &&
-      //    allowTestBackends）下放行 —— production backend 无 receipt 永远拒绝。
-      if (outcome.executionReceiptId !== undefined) {
-        if (this.receiptAuthority === undefined || outcome.receiptBinding === undefined) {
-          throw new ProjectionError(
-            "EXECUTION_RECEIPT_REQUIRED",
-            "execution receipt presented without receipt authority/binding; world commit refused",
-          )
-        }
-        const verifiedReceipt = assertTrustedExecutionReceipt(
-          this.receiptAuthority,
-          session.intent,
-          projectionIntentDigest(session.intent),
-          outcome.receiptBinding,
-          outcome.executionReceiptId,
+      // 0. R5-01/R5-06：trust level 门 —— production acceptance 遇到
+      //    untrusted authority 必须 fail-closed（不写 CLOSED；
+      //    PRODUCTION_WORLD_COMMIT_BLOCKED）。
+      //    - "same-uid-untrusted"：普通 JSON + 公开 SHA-256 不是
+      //      authenticated authority（同 UID 可改写并重算）→ 拒绝。
+      //    - "test-harness"：test-only authority 只可配对 test-only
+      //      fixture backend（生产模块不导出 fixture 执行能力）。
+      //    - "kernel-authenticated"：未来 MAC/signature 方案（
+      //      OWNER-DECISION-REQUIRED）。
+      const trustLevel = this.receiptAuthority.trustLevel
+      if (trustLevel === "same-uid-untrusted") {
+        throw new ProjectionError(
+          "PRODUCTION_WORLD_COMMIT_BLOCKED",
+          "same-uid-untrusted receipt authority is not an authenticated authority (same-UID processes can rewrite the JSON receipt and recompute its public digest); production world commit blocked — authenticated authority is OWNER-DECISION-REQUIRED",
         )
+      }
+      if (trustLevel === "test-harness" && this.backend.kind !== "fixture") {
+        throw new ProjectionError(
+          "PRODUCTION_WORLD_COMMIT_BLOCKED",
+          "test-harness receipt authority may only pair with the test-only fixture backend; production world commit blocked",
+        )
+      }
+      // 1. commit preflight（R5-00-7e：getWorld/getBranch/snapshot 抛异常
+      //    也是 terminal 故障 —— 必须在 try 内，统一 terminalize）。
+      const world = this.store.getWorld(session.plan.worldId)
+      const branch = this.store.getBranch(session.plan.worldId, session.plan.branchId)
+      if (!world || !branch) {
+        throw new ProjectionError("SNAPSHOT_MISMATCH", "world/branch vanished")
+      }
+      const snapshot = this.store.snapshots.get(session.plan.snapshotId)!
+      // 2. 可信 execution receipt 校验（P0-2/R2-01/R4-03/R5-01）：expected
+      //    binding 来自 coordinator 当前 session 的 Execution Intent
+      //    （world/branch/snapshot/projection/nonce/merged root/command/
+      //    scope/workspace identity/filesystem policy），不是 outcome 自报。
+      //    receipt 的 filesystemPolicyDigest 与 coordinator 从 kernel-owned
+      //    input 独立派生的期望值比对。**不存在 receiptless 分支** —— 所有
+      //    backend（含 fixture）都必须产出 receipt（fixture 用 test
+      //    authority；production 用 authenticated authority）。
+      if (outcome.executionReceiptId === undefined || outcome.receiptBinding === undefined) {
+        throw new ProjectionError(
+          "EXECUTION_RECEIPT_REQUIRED",
+          "execution receipt required before world commit (receiptless world commit does not exist)",
+        )
+      }
+      const verifiedReceipt = assertTrustedExecutionReceipt(
+        this.receiptAuthority,
+        session.intent,
+        projectionIntentDigest(session.intent),
+        outcome.receiptBinding,
+        outcome.executionReceiptId,
+      )
         // R4-03.4：expected filesystemPolicyDigest 从 kernel-owned input
         // （plan roots + merged hostRoot）独立派生 —— receipt 自报值与
         // claim 互相比对不构成验证；必须与 kernel 派生期望值一致。
@@ -614,17 +662,7 @@ export class ProjectionCoordinator {
         // receiptDigest（authority 已做自洽校验）。
         const { receiptDigest: _rd, ...receiptContent } = verifiedReceipt
         this.store.cas.put(Buffer.from(canonicalJson(receiptContent), "utf8"))
-      } else if (this.backend.kind !== "fixture" || !this.allowTestBackends) {
-        // R4-01：无 receipt（fixture executor 路径）必须满足结构门 ——
-        // backend.kind === "fixture"（production backend 永远不满足）&&
-        // 显式 test capability。production backend 无 receipt 永远拒绝
-        // （WORLD_COMMIT_WITHOUT_RECEIPT = 0）。
-        throw new ProjectionError(
-          "EXECUTION_RECEIPT_REQUIRED",
-          "execution receipt required before world commit (fixture execution is not a production authority)",
-        )
-      }
-      // 2. 验证（sealed 视图仍挂载：expected outputs 存在性/类型；不接收
+      // 3. 验证（sealed 视图仍挂载：expected outputs 存在性/类型；不接收
       //    cleanupOk —— cleanup 的真实结果由下面的卸载步骤决定）。
       try {
         validateProjectionCommit({

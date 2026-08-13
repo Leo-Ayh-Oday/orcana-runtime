@@ -28,6 +28,8 @@ import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type P
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
+  TestReceiptAuthority,
+  fixtureExecutor,
 } from "./test-fixtures"
 import {
   FuseOverlayfsProjectionBackend,
@@ -118,34 +120,36 @@ function makePlan(snapshotId: string, overrides: Partial<WorldProjectionPlanInpu
   })
 }
 
-/** R4-01：fixture 执行不再有 token —— 结构门 = backend.kind === "fixture"
- *  && allowTestBackends（test-only factory 在 ./test-fixtures）。 */
+/** R5-01：不存在 receiptless 分支 —— fixture 执行也必须产出 receipt
+ *  （TestReceiptAuthority；test-only）。activeAuthority 由 coordinator 工厂
+ *  设置，mutateExecutor 注册到同一 authority。 */
+let activeAuthority: TestReceiptAuthority
+
 function coordinator(
   ctx: TestWorldStore,
   backend?: NativeProjectionBackend,
   receiptAuthority?: ProjectionReceiptAuthority,
-  options: { allowTestBackends?: boolean } = {},
 ): ProjectionCoordinator {
   const materializer = new SnapshotMaterializer({
     getSnapshot: id => ctx.store.snapshots.get(id),
     getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   })
+  const effective = receiptAuthority ?? new TestReceiptAuthority()
+  if (effective instanceof TestReceiptAuthority) activeAuthority = effective
   return new ProjectionCoordinator({
     store: ctx.store,
     materializer,
     backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: tmpRoot("projroot"),
-    allowTestBackends: options.allowTestBackends ?? true,
-    ...(receiptAuthority === undefined ? {} : { receiptAuthority }),
+    receiptAuthority: effective,
   })
 }
 
 function mutateExecutor(actions: (merged: string) => void): ProjectionExecutor {
-  return async cwd => {
-    actions(cwd)
-    return { exitCode: 0, timedOut: false, cancelled: false, violation: false }
-  }
+  // fakeAuthority 流程中注册的 receipt 会被 bindOutcome 覆盖（仅 scan 门需要）；
+  // 缺省流程用 coordinator 的 TestReceiptAuthority。
+  return fixtureExecutor(activeAuthority ?? new TestReceiptAuthority(), actions)
 }
 
 /** fake final receipt（digest 自洽；与 coordinator.test.ts 同构）。 */
@@ -203,6 +207,8 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean }
   const seedReceipt = fakeFinalReceipt(receiptOverrides)
   let latestDigest: string | undefined = seedReceipt.receiptDigest
   const inner: ProjectionReceiptAuthority = {
+    // R5-01：显式 trust level（test-harness —— 只可配对 test-only fixture）。
+    trustLevel: "test-harness" as const,
     getFinalReceipt: () => {
       if (hidden === true) return undefined
       if (intentDigest === undefined) return undefined
@@ -310,13 +316,22 @@ function productionKindBackend(instanceOverrides: Partial<ProjectionInstance> = 
 }
 
 describe("AK2-R3 反例（R3-00 先红冻结）", () => {
-  test("R3-00-1：production backend + receiptless 必须结构性拒绝（R4-01：构造即要求 receipt authority）", () => {
+  test("R3-00-1：production backend + receiptless 必须结构性拒绝（构造即要求 receipt authority）", () => {
     const { ctx } = buildWorld()
-    // R4-01：production coordinator 结构性要求 production backend +
-    // receipt authority + receipt-producing executor —— 缺 authority 拒绝构造。
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: digest => ctx.store.cas.record(digest),
+      readCasObject: digest => ctx.store.cas.get(digest),
+    })
+    // R5-01：所有 backend（含 fixture）构造时结构性要求 receipt authority。
     let refused = false
     try {
-      coordinator(ctx, productionKindBackend())
+      new ProjectionCoordinator({
+        store: ctx.store,
+        materializer,
+        backend: productionKindBackend(),
+        projectionRoot: tmpRoot("prod"),
+      } as never)
     } catch (error) {
       refused = (error as ProjectionError).code === "EXECUTION_RECEIPT_REQUIRED"
     }
@@ -324,13 +339,23 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     ctx.cleanup()
   })
 
-  test("R3-00-1b：fixture backend 无显式 test capability 必须拒绝（allowTestBackends=false）", () => {
+  test("R5-01：fixture backend 无 receipt authority 必须拒绝构造（receiptless 分支不存在）", () => {
     const { ctx } = buildWorld()
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: digest => ctx.store.cas.record(digest),
+      readCasObject: digest => ctx.store.cas.get(digest),
+    })
     let refused = false
     try {
-      coordinator(ctx, undefined, undefined, { allowTestBackends: false })
+      new ProjectionCoordinator({
+        store: ctx.store,
+        materializer,
+        backend: new CopyProjectionFixtureBackend(),
+        projectionRoot: tmpRoot("nofix"),
+      } as never)
     } catch (error) {
-      refused = (error as ProjectionError).code === "BACKEND_UNAVAILABLE"
+      refused = (error as ProjectionError).code === "EXECUTION_RECEIPT_REQUIRED"
     }
     expect(refused).toBe(true)
     ctx.cleanup()
@@ -341,9 +366,7 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     // receipt 声称 exitCode=1（失败）但 outcome 是 success → 冲突必须拒绝。
     const auth = fakeAuthority({ exitCode: 1 })
     const coord = coordinator(ctx, undefined, auth)
-    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
-    bindIntent(auth, session)
-    bindOutcome(session, auth)
+    const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx, undefined, auth)
     try {
       coord.commit(session)
       throw new Error("R3-00-2 RED: receipt exitCode=1 accepted with success outcome")
@@ -359,9 +382,7 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
       const { ctx, snapshotId } = buildWorld()
       const auth = fakeAuthority(overrides as Partial<SandboxReceipt>)
       const coord = coordinator(ctx, undefined, auth)
-      const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
-      bindIntent(auth, session)
-      bindOutcome(session, auth)
+      const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx, undefined, auth)
       try {
         coord.commit(session)
         throw new Error("R3-00-2b RED: conflicting receipt accepted")

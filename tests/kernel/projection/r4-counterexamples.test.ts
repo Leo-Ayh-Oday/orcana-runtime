@@ -52,6 +52,8 @@ import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type P
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
+  TestReceiptAuthority,
+  fixtureExecutor,
 } from "./test-fixtures"
 import {
   FuseOverlayfsProjectionBackend,
@@ -129,6 +131,11 @@ function makePlan(snapshotId: string, overrides: Partial<WorldProjectionPlanInpu
   })
 }
 
+/** R5-01：不存在 receiptless 分支 —— coordinator 一律要求 receipt
+ *  authority（fixture 用 TestReceiptAuthority）。activeAuthority 由工厂
+ *  设置，fixture 执行注册到同一 authority。 */
+let activeAuthority: TestReceiptAuthority
+
 function coordinator(
   ctx: TestWorldStore,
   backend?: NativeProjectionBackend,
@@ -139,21 +146,22 @@ function coordinator(
     getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   })
+  const effective = (options.receiptAuthority as ProjectionReceiptAuthority | undefined) ?? new TestReceiptAuthority()
+  if (effective instanceof TestReceiptAuthority) activeAuthority = effective
   return new ProjectionCoordinator({
     store: ctx.store,
     materializer,
     backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: tmpRoot("projroot"),
-    allowTestBackends: true,
+    receiptAuthority: effective,
     ...options,
-  })
+  } as never)
 }
 
 function mutateExecutor(actions: (merged: string) => void): ProjectionExecutor {
-  return async cwd => {
-    actions(cwd)
-    return { exitCode: 0, timedOut: false, cancelled: false, violation: false }
-  }
+  // fakeAuthority 流程中注册的 receipt 会被 bindOutcome 覆盖（仅 scan 门需要）；
+  // 缺省流程用 coordinator 的 TestReceiptAuthority。
+  return fixtureExecutor(activeAuthority ?? new TestReceiptAuthority(), actions)
 }
 
 /** production-kind backend stub：kind !== "fixture"，但提供最小 instance。 */
@@ -239,6 +247,8 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionRecei
   let latestDigest = fakeFinalReceipt(overrides)
   const { computeReceiptDigest } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
   const inner: ProjectionReceiptAuthority = {
+    // R5-01：显式 trust level（test-harness —— 只可配对 test-only fixture）。
+    trustLevel: "test-harness" as const,
     getFinalReceipt: () => {
       if (intentDigest === undefined) return undefined
       const base = fakeFinalReceipt({ ...overrides, filesystemPolicyDigest })
@@ -296,9 +306,15 @@ async function sessionAtDeltaReady(
   plan: WorldProjectionPlan,
   ctx: TestWorldStore,
   actions: (merged: string) => void = merged => writeFileSync(join(merged, "src/main.ts"), "changed\n"),
+  auth?: ReturnType<typeof fakeAuthority>,
 ): Promise<ProjectionSession> {
   const session = coord.start(plan)
   await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(actions))
+  // R5-01：scan 门对 fixture 也生效 —— fake authority 流程在 scan 前绑定 intent。
+  if (auth !== undefined) {
+    bindIntent(auth, session)
+    bindOutcome(session, auth)
+  }
   coord.scan(session)
   return session
 }
@@ -329,12 +345,22 @@ function projectionMountRules(worktree: string, writable: string[], readonly: st
 describe("AK2-R4 反例（R4-00 先红冻结）", () => {
   test("R4-00-1：production backend + allowFixtureExecution:true + receiptless 不得 commit（boolean bypass 必须删除）", () => {
     const { ctx } = buildWorld()
-    // allowFixtureExecution 是已删除的 bypass —— 用 never 断言它不再存在
-    // 于选项面：production backend 缺 receipt authority → 构造即拒绝
-    //（WORLD_COMMIT_WITHOUT_RECEIPT = 0；比 commit 更早 fail-closed）。
+    const materializer = new SnapshotMaterializer({
+      getSnapshot: id => ctx.store.snapshots.get(id),
+      getCasRecord: digest => ctx.store.cas.record(digest),
+      readCasObject: digest => ctx.store.cas.get(digest),
+    })
+    // allowFixtureExecution 是已删除的 bypass —— 缺 receipt authority 的
+    // production backend 构造即拒绝（WORLD_COMMIT_WITHOUT_RECEIPT = 0）。
     let refused = false
     try {
-      coordinator(ctx, productionKindBackend(), { allowFixtureExecution: true as never })
+      new ProjectionCoordinator({
+        store: ctx.store,
+        materializer,
+        backend: productionKindBackend(),
+        projectionRoot: tmpRoot("r4-1"),
+        allowFixtureExecution: true as never,
+      } as never)
     } catch (error) {
       refused = (error as ProjectionError).code === "EXECUTION_RECEIPT_REQUIRED"
     }
@@ -547,10 +573,8 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
     for (const overrides of cases) {
       const { ctx, snapshotId } = buildWorld()
       const auth = fakeAuthority(overrides)
-      const coord = coordinator(ctx, undefined, { fixtureExecutionToken: Symbol("r4-token"), receiptAuthority: auth })
-      const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx)
-      bindIntent(auth, session)
-      bindOutcome(session, auth)
+      const coord = coordinator(ctx, undefined, { receiptAuthority: auth })
+      const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx, undefined, auth)
       try {
         coord.commit(session)
         throw new Error(`R4-00-5 RED: receipt ${JSON.stringify(overrides)} committed as success`)

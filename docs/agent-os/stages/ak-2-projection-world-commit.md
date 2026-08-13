@@ -1,7 +1,7 @@
 # AK-2 Projection + World Commit
 
 **Task ID:** `AK2-PROJECTION-001`
-**状态:** `READY_FOR_INDEPENDENT_AUDIT`（AK2-R3 Correction Gate 候选提交；等待独立复审；不等于 PASS/CLOSED）
+**状态:** `READY_FOR_INDEPENDENT_AUDIT`（AK2-R4 Correction Gate 候选提交链 `7316325..HEAD`；等待独立复审；不等于 PASS/CLOSED，不得进入 AK-3）
 **基线 / 回滚点:** `e224ad6bb8aed5cca2d1b8b63f048333cfb88003`
 **专用分支:** `feat/agent-os`
 
@@ -141,7 +141,7 @@ AK-2 的阶段提交可整体回退到 `e224ad6bb8aed5cca2d1b8b63f048333cfb88003
 - `terminalize()`：唯一终态化路径（永不抛）—— execute throw/failure/
   cancel、ownership 丢失（execute 后/scan 前）、scan 失败、validation
   失败、WORLD_HEAD_MOVED、compareAndCommit 失败、explicit cancel、
-  cleanup 抛异常 —— 全部产生确定终态 + cleanupState（结构化错误）+ 
+  cleanup 抛异常 —— 全部产生确定终态 + cleanupState（结构化错误）+
   terminal receipt。
 - post-commit reconciliation 比较**完整 canonical commit request**
   （store.computeCommitRequestDigest 对账），不只凭 commitId 存在。
@@ -264,3 +264,221 @@ AK-2 的阶段提交可整体回退到 `e224ad6bb8aed5cca2d1b8b63f048333cfb88003
 - `src/runtime/linux/{contracts,broker,receipt}.ts` 最小改动（intent 字段 +
   digest 剥离），无 authority 放宽。
 - 未 push、未 merge、未建 PR；等待独立复审员对 `ddaed17` 复核。
+
+## AK2-R4 Correction Gate 记录（候选提交链，等待独立复审）
+
+**R4 专用分支 / worktree:** `feat/agent-os-r4` @ `/home/fuqiang/worktrees/orcana-agent-os-r4`
+**R4 起点:** `7316325`（AK2-R3 候选；parent 链 `477fe5f → cf4e57d → 589dfc2 → 7316325`）
+**R4 文件白名单:** `src/kernel/projection/**`、`src/kernel/world/{cas,store}.ts`、
+`src/runtime/linux/backends/bubblewrap.ts`、`src/runtime/linux/contracts.ts`（仅
+receipt/outcome 最小字段）、`src/runtime/linux/receipt.ts`（仅 receipt canonical
+binding）、`tests/kernel/projection/**`、`tests/kernel/world/**`、本阶段文档。
+未触碰：`src/workflow/**`、`src/harness/**`、`src/execd/**`、依赖锁、CI/secrets/billing。
+
+### R4-00 反例冻结（25 反例：先红后绿 + 1 正对照）
+
+| 反例 | 内容 | RED→GREEN |
+|---|---|---|
+| R4-00-1 | production backend + `allowFixtureExecution:true` + receiptless 仍可 commit（boolean bypass） | ✓ |
+| R4-00-2a | 整个 merged root RW bind 到 `/workspace`（unscoped 可读可写） | ✓ |
+| R4-00-2b | 覆盖 readonly root 的更宽 RW ancestor mount | ✓ |
+| R4-00-2c | unscoped workspace 路径被 mount target 覆盖 | ✓ |
+| R4-00-2d | unscoped cwd/executable 仍可编译（受控视图外解析） | ✓ |
+| R4-00-3a/b/c | adapter 未绑定 intent command / scope roots / workspace identity（spawn 前必须逐字段拒绝） | ✓ |
+| R4-00-5 | receipt 存在 signal/oomKilled/pidLimitHit/outputLimitHit/tempLimitHit 仍作为成功提交 | ✓ |
+| R4-00-6 | execute 前 mount ownership 丢失 → 裸 throw，未 terminalize | ✓ |
+| R4-00-7 | production scan 缺少 finalized receipt/cleanup proof 仍继续（不能跳过） | ✓ |
+| R4-00-8 | projection root 在 lstat 后、fd open 前被替换 → cleanup 删除替换目录内容 | ✓ |
+| R4-00-9 | backend mount 成功后 create 失败 → 递归删除仍挂载的 merged（unmount 报告成功 ≠ 已卸载；fake fusermount 经子进程注入） | ✓ |
+| R4-00-10a | dir 从 a 移到 b 后留下 a/x orphan（directory 孤儿不检查） | ✓ |
+| R4-00-10b | directory a/b + file a 的反序 mutation（file 祖先不检查） | ✓ |
+| R4-00-10c | pathless file（无 path 对象不检查） | ✓ |
+| R4-00-10d | pathful workspace（workspace 允许 path —— materializer 契约违反） | ✓ |
+| R4-00-10e | object move 后由其他 object 复用旧 path（孤儿悬挂在 file 下） | ✓ |
+| R4-00-11a/b/c | final verification 期间新增 sibling / 修改已验证文件 / 删除目录 → 未拒绝未检测 | ✓ |
+| R4-00-11d | 真实 FUSE sealed 视图（内核 EROFS）—— seal 后写入被内核拒绝 | ✓ |
+| R4-00-12 | FileManifest JSON 很小但 logical file 很大 → tree budget 在文件创建后才拒绝 | ✓ |
+| R4-00-13 | 阶段文档第 144 行 trailing whitespace（`git diff --check` 基线） | ✓ |
+| R4-01 | `FIXTURE_EXECUTION_TOKEN` 仍从生产模块公开导出（PUBLIC_FIXTURE_AUTHORITY ≠ 0） | ✓ |
+
+RED 证据（提交 `98dfdd6`）：`bun test tests/kernel/projection/r4-counterexamples.test.ts
+tests/kernel/world/r4-namespace.test.ts` → 24 fail / 1 pass（正对照），全部因目标
+缺陷失败（bypass 生效 / mount 布局错误 / 无绑定验证 / 无终态化 / 无 sealed 视图 /
+budget 事后拒绝 / namespace 漏检 / 导出面残留），无 setup/timeout/无关异常。
+RED 提交含两个 inert test-only 注入窗口（生产不传、零行为变化）：
+`coordinator.onBeforeProjectionRootOpen`（R4-00-8 确定性替换窗口）、
+`scanner.onFinalVerifyAfter`（R4-00-11 确定性 final-verify race 窗口）。
+
+### R4-01 删除 fixture authority 旁路
+
+- 完全删除 `allowFixtureExecution` option/property/commit bypass 与
+  `FIXTURE_EXECUTION_TOKEN`（生产模块不再导出任何 fixture 执行能力）。
+- 结构门：receiptless commit 只允许 `backend.kind === "fixture"`（test-only
+  factory `tests/kernel/projection/test-fixtures.ts`）&& 显式 `allowTestBackends`；
+  production backend 无 receipt 永远拒绝（`WORLD_COMMIT_WITHOUT_RECEIPT = 0`）。
+- production coordinator 构造时结构性要求 `receiptAuthority`（缺省拒绝构造）。
+- fixture backend（`CopyProjectionFixtureBackend`）移出 `src/kernel/projection/
+  backend.ts`（生产导出面 `PUBLIC_FIXTURE_AUTHORITY = 0`）。
+
+### R4-02 Bubblewrap 有效权限
+
+- 受控视图（存在 `/workspace` 声明挂载）：`/workspace` 为空目录（`--dir`），
+  只把 plan 声明的 roots 挂到 `/workspace/<root>`（adapter target 从 `/<root>`
+  改为 `/workspace/<root>`）；writable → rw、readonly → ro；unscoped 不可读、
+  不可写；无覆盖 readonly root 的更宽 RW ancestor。
+- 通用模式（无 `/workspace` 声明挂载 —— 通用 broker 工作区模型，整个 workspace
+  即授权范围）保持整树绑定语义；两模式都做最终 argv mount dominance 检查
+  （RW 不得覆盖 RO target、受控视图下 `/workspace` 不得 RW bind、无重复 target）。
+- cwd/executable 必须在受控视图内解析（unscoped → compile 期 `WORKSPACE_PATH_ESCAPE`，
+  非 spawn 期 ENOENT）。验收：`UNSCOPED_PATH_VISIBLE = 0`、
+  `READONLY_ROOT_WRITABLE_ALIAS = 0`、`BROADER_RW_ANCESTOR = 0`（argv 断言测试）。
+
+### R4-03 独立绑定 Intent / Spec / Scope / Outcome
+
+- intent 增加 kernel-owned 字段：`filesystemScope`（plan roots）、
+  `workspaceIdentity`（canonical path + dev/ino）、`filesystemPolicyDigest`
+  （coordinator 从 plan roots + merged hostRoot 按 runtime `spec.filesystem`
+  canonical 结构独立派生 —— 不依赖 receipt/claim 自报值）。
+- adapter spawn 前逐字段验证：executable/args/timeoutMs、canonical
+  writable/readonly roots、workspace identity（path + dev/ino）、intent ids、
+  `ownerFiles === writableRoots`（pathguard 契约）、`emptyHome === true`（投影
+  契约）；编译后 digest 复核（belt）。任何不一致 → `EXECUTION_RECEIPT_BINDING_MISMATCH`
+  （command 从未 spawn）。一个 intent 只能对应一个授权 cell（usedIntents 集合）。
+- coordinator commit：receipt `filesystemPolicyDigest` 必须等于 kernel 派生期望值；
+  执行结论优先从 verified final receipt 派生 —— 成功要求 exitCode===0 且无
+  signal/oomKilled/pidLimitHit/outputLimitHit/tempLimitHit/timedOut/cancelled/
+  violations/unexpectedWrites；与本地 outcome 冲突 → 拒绝。
+- `scopeDigest` 真正参与验证（经 filesystemPolicyDigest 派生链）；死参数已删除。
+
+### R4-04 Execution Receipt 真实性 —— OWNER-DECISION-REQUIRED（不写 CLOSED）
+
+已确认事实（R3-00-3 证据测试，R4 保留并强化）：同 UID 进程可以修改普通 JSON
+receipt、重算公开 SHA-256，并被当前 `RuntimeStateReceiptAuthority` 接受。
+当前 authority 不是 authenticated authority —— 本记录不再声称其为真实性证明。
+
+**Decision Packet（等待 Owner 决策；本轮未自行发明任何密钥/daemon/IPC 方案）：**
+
+| 方案 | 机制 | 优点 | 代价 / 风险 |
+|---|---|---|---|
+| A：独立 UID + 受保护 daemon | receipt 由低权限 UID 进程写、高权限 daemon 读（受限 IPC） | 同 UID 攻击面缩小；无密钥管理 | 需要新 daemon/UID/IPC 协议；进程生命周期管理；部署复杂度 |
+| B：kernel-owned MAC/signature key + sealed IPC | coordinator 持有 MAC key，receipt 带 keyed digest；写入经 sealed channel | 可检测任意篡改（含 cleanup truth 字段） | 密钥管理/轮换；密钥泄漏即全失效；需可信信道分发 |
+| C：明确排除 same-UID adversary + 记录安全降级 | 信任边界声明为「同 UID 进程不在对抗模型内」 | 零新基础设施 | 安全模型降级必须显式记录并被 Owner 接受 |
+
+**推荐：** B（kernel-owned MAC key + sealed IPC）为长期方案；短期可接受 C 的
+显式降级声明，但 production 正向承诺（authenticated receipt）必须保持 fail-closed。
+**影响文件（若实施）：** `src/runtime/linux/recovery/state-store.ts`、
+`src/kernel/projection/receipt-authority.ts`、新 daemon/密钥模块（均不在本轮
+白名单 —— 未经 Owner 决策不写入）。**迁移成本：** 高（新 IPC + 密钥分发 +
+轮换）。**恢复语义：** 旧无密钥 receipt 停止被接受（fail-closed 升级）。**密钥
+轮换要求：** 支持 key version + 多 key 验证窗口；轮换时旧 key 只验证不签发。
+
+**本子项状态：** `OWNER-DECISION-REQUIRED`（不得写 CLOSED）。阻塞期间其余 R4
+任务继续；**AK-2 不得 PASS**。production 正向 World Commit 依赖该未认证 authority
+时保持 fail-closed / `ENV_BLOCKED`（本机 B lane 即此状态）。
+
+### R4-05 生命周期、可信 root 与 cleanup
+
+- 单一不抛异常 terminalize 覆盖：start/create/assertReady 失败、execute 前/后
+  ownership 丢失、missing/unfinalized receipt、scan/validation 失败、stale head、
+  compareAndCommit 失败、cancel、unmount 失败、root 删除失败 —— 全部产生
+  deterministic terminal state + `cleanupState` + terminal receipt + residue 信息。
+- production scan 必须有 finalized cleanup proof（`EXECUTION_RECEIPT_REQUIRED /
+  NOT_FINALIZED`，缺失拒绝，不跳过）。
+- projection base：0700、owner 验证、`O_NOFOLLOW`、retained dirfd、dev/ino
+  fencing（子 root 创建/打开/删除相对 base dirfd；打开的 root fd 再次与
+  `session.rootIdentity` 比较 —— R4-00-8：lstat→open 窗口替换目录不被修改）。
+- foreign/unknown mount：不卸载、不 chmod、不递归删除、保留 residue。
+- unmount 成功后重新确认 mount 已消失；merged mountpoint 只在确认空且非 mount
+  后用 rmdir 删除（禁止递归穿越仍挂载目录 —— R4-00-9 真实 FUSE 反例）。
+
+### R4-06 Sealed Scan View
+
+- 不再用「增加一次 final pass」宣称消除 TOCTOU —— backend-level `sealForScan()`：
+  执行 writer 已终止（cleanup proof）后，merged 视图转为不可写、不可替换的
+  scan 输入；scanner 只读 sealed 视图；seal 失败 → 不生成 delta、不写 CAS
+  delta content、不 commit World。
+- 生产实现：fuse-overlayfs 卸载 RW mount（确认已消失）→ 同一 lower/upper/work
+  以 `ro` 重挂载 —— 内核 `MS_RDONLY`（写返回 EROFS，已用 R4-00-11d 真实 FUSE
+  验证）。这是 kernel-enforced 的 sealed view 证明（非有限扫描冒充闭合）。
+- fixture（test-only）seal 为 mode-based（0555/0444）—— 同 UID 可还原，只作
+  逻辑近似，不冒充不可变证明（如实记录）。
+- 残余风险（如实记录）：seal 保护 guest 视图与扫描输入；同 UID 进程直接写
+  upper 目录不在本方案对抗模型内（→ R4-04 OWNER-DECISION-REQUIRED）。
+
+### R4-07 World 最终 namespace
+
+- validator 重写为真正 final-state 模型：按 objectId 加载 current state →
+  应用 delete/put（put 同一 objectId 先移除旧 state/path）→ 从最终 byId 重建
+  byPath → 全局验证：canonical relative path、path 唯一、objectId 唯一身份、
+  file/directory 必须有 path、workspace 必须无 path（materializer 契约）、
+  file 必须有 contentRef、每个对象的所有显式祖先必须是 directory、file 不得
+  成为任意对象的祖先。顺序无关（byId 覆盖消除 delete/put 顺序缺陷）。
+- 每个成功 commit 测试继续执行 createSnapshot → materialize（正对照）。
+- 任一失败：revision 不推进、ledger 不追加、CAS owner links 不残留（断言覆盖）。
+- AK-1 既有测试的 pathless file/directory 对象按新契约补 path（filesystem
+  对象必须可寻址；非 filesystem 类型保持 pathless 合法）。
+
+### R4-08 Resource Budget 与文档真实性
+
+- FileManifest 使用 logical `manifest.size` 做累计 tree budget 预留（不再用
+  manifest JSON 的 CAS record size —— JSON 可很小而 logical file 很大）；预算
+  超限在打开目标文件、读取 chunk、写入任何字节之前拒绝（R4-00-12：文件未被
+  创建）；manifest 只解析一次（parse 结果复用，不重复 parse/copy）。
+- 如实记录 pre-parse 边界：`maxManifestBytes` 是 CAS-record byte ceiling
+  （读取/JSON parse 前检查）；entry 数/单条目 metadata 只能在 JSON parse 后
+  限制 —— 本文档不声称 pre-parse 全覆盖，只陈述真实的 aggregate manifest
+  byte ceiling。
+- 修复全部 trailing whitespace（R4-00-13；`git diff --check` 通过）。
+
+### 门禁（R4 候选链）
+
+- `bun test tests/kernel/projection/ tests/kernel/world/ tests/kernel/authority-graph.test.ts`
+  **285/285**（3 连全绿，每次 24~29s）；typecheck 0 error；build ✓；
+  `git diff --check 7316325 HEAD` ✓。
+- 分层报告（本机 Ubuntu/WSL，bwrap + fuse-overlayfs 可用）：
+  - 真实 bwrap broker 执行（vertical slice B lane）：PASS（隔离/隐藏断言全过）；
+    World commit 因 cleanup proof 不可得（无 cgroup 委托）→ `ENV_BLOCKED`
+    （fail-closed，未伪装正向通过）。
+  - 真实 fuse-overlayfs（挂载/所有权/foreign/swap/seal/EROFS）：PASS。
+  - live/provider：NOT_RUN（无 live key lane；与 R3 一致，QUARANTINED 清单未变）。
+- 未 push、未 merge、未建 PR；worktree 无 mount residue（测试后确认）。
+
+### FACT
+
+- R3 候选 `7316325` 上 25 个 R4 反例全部 RED（24 fail + 1 正对照），缺陷根因
+  逐一确认（见 R4-00 表）。
+- 本机 `fuse-overlayfs -o ...,ro` 重挂载真实生效（内核 EROFS，R4-00-11d）。
+- bun `execFileSync` 使用进程启动时 PATH 解析二进制（运行时改 `process.env.PATH`
+  无效）—— R4-00-9 经子进程注入 fake fusermount（unmount 报告成功 ≠ 已卸载）。
+- AK-1 既有测试大量使用 pathless file/directory 对象 —— R4-07 契约下已补 path。
+
+### INFERENCE
+
+- intent 携带 coordinator 派生期望值（filesystemScope/workspaceIdentity/
+  filesystemPolicyDigest）后，adapter 的 pre-spawn 逐字段验证与 commit 的
+  receipt-vs-期望比对构成闭环；executor 无法再同时提供「声明」和「证明」。
+- 受控视图（/workspace 声明挂载）与通用模式（无声明挂载）的语义差异由
+  ALLOWED_MOUNT_TARGET_PREFIXES 的既有设计自然承载。
+
+### PROPOSAL
+
+- R4-04 Decision Packet 方案 B（kernel-owned MAC key + sealed IPC）为长期方向；
+  实施前必须 Owner 决策（影响文件不在本轮白名单）。
+- production B lane 的 cleanup proof 依赖宿主 cgroup 委托；无委托环境保持
+  ENV_BLOCKED，不改变代码以「伪造成功」。
+
+### OWNER-DECISION-REQUIRED
+
+- **R4-04：Execution Receipt 真实性**（同 UID 可改 JSON + 重算公开 digest 被
+  接受；无密钥方案无法区分 cleanup truth 真伪）。状态 `OWNER-DECISION-REQUIRED`
+  （不写 CLOSED）；阻塞时 AK-2 不得 PASS。方案 A/B/C 见 Decision Packet。
+- **production 正向 B lane**：本机无 cgroup 委托 → 真实执行成功但 World commit
+  被 fail-closed 拒绝 —— `ENV_BLOCKED`（不写 PASS/CLOSED）。
+- **sealed scan**：kernel-enforced ro remount 已实现并验证（EROFS）；残余
+  same-UID 直写 upper 风险归属 R4-04 对抗模型决策，不单独写 CLOSED。
+
+### 最终状态
+
+`READY_FOR_INDEPENDENT_AUDIT`（候选提交链 `7316325..HEAD`；未 push、未 merge、
+未建 PR；等待独立只读复审 —— 不复用实现者结论，不写文件、不修复、不提交）。
+不得写 PASS / CLOSED / AK-2 COMPLETE / READY FOR AK-3。

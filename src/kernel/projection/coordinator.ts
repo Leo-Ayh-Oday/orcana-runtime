@@ -17,7 +17,20 @@
  *   CONFLICTED（WORLD_HEAD_MOVED）。
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from "node:fs"
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  rmSync,
+  rmdirSync,
+} from "node:fs"
 import { canonicalJson, sha256Digest } from "../world/canonical"
 import { tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
@@ -25,7 +38,13 @@ import { WorldConflictError } from "../world/contracts"
 import type { WorldStore } from "../world/store"
 import type { NativeProjectionBackend, ProjectionInstance } from "./backend"
 import type { WorldProjectionPlan, WorldProjectionReceipt } from "./contracts"
-import { ProjectionError, applyProjectionStateTransition, projectionIntentDigest, type ProjectionExecutionIntent } from "./contracts"
+import {
+  DEFAULT_PROJECTION_LIMITS,
+  ProjectionError,
+  applyProjectionStateTransition,
+  projectionIntentDigest,
+  type ProjectionExecutionIntent,
+} from "./contracts"
 import {
   parseFilesystemSection,
   type MaterializedSectionEntry,
@@ -36,7 +55,15 @@ import { scanProjectionDelta } from "./scanner"
 import type { ProjectionExecutionOutcome } from "./validator"
 import { validateProjectionCommit } from "./validator"
 import { assertTrustedExecutionReceipt, type ProjectionReceiptAuthority } from "./receipt-authority"
+import { removeTreeAnchored } from "./anchored-fs"
 import { randomUUID } from "node:crypto"
+
+/** R3-01.1：fixture 执行放行 token —— 公开 API 不再接受 allowFixtureExecution
+ *  boolean；fixture（无 receipt）执行必须同时满足：
+ *  1) 显式传入 FIXTURE_EXECUTION_TOKEN（test-only 能力）；
+ *  2) backend.kind === "fixture"（production backend 永远不满足）。
+ *  production 调用方（broker adapter / vertical slice）不 import 本 token。 */
+export const FIXTURE_EXECUTION_TOKEN: unique symbol = Symbol("orcana.ak2.fixture-execution")
 
 export type SessionWorldState =
   | "UNPROJECTED"
@@ -105,8 +132,11 @@ export interface ProjectionCoordinatorOptions {
    *  缺省时 production（非 fixture）commit 拒绝。 */
   readonly receiptAuthority?: ProjectionReceiptAuthority
   /** 显式 test capability：允许无 receipt 的 fixture executor 提交
-   *  （仅测试；production 必须缺省拒绝）。 */
+   *  （仅测试；production 必须缺省拒绝）。R3-01.1：以 token 替代 ——
+   *  与 backend.kind === "fixture" 双重门。 */
   readonly allowFixtureExecution?: boolean
+  /** R3-01.1：fixture 执行放行 token（test-only；与 backend.kind 双重门）。 */
+  readonly fixtureExecutionToken?: symbol
 }
 
 /** 单一 cleanup 状态机结果。 */
@@ -135,6 +165,7 @@ export class ProjectionCoordinator {
   private readonly baseProjectionRoot: string
   private readonly receiptAuthority?: ProjectionReceiptAuthority
   private readonly allowFixtureExecution: boolean
+  private readonly fixtureExecutionToken?: symbol
 
   constructor(options: ProjectionCoordinatorOptions) {
     this.store = options.store
@@ -149,6 +180,7 @@ export class ProjectionCoordinator {
     }
     this.receiptAuthority = options.receiptAuthority
     this.allowFixtureExecution = options.allowFixtureExecution === true
+    this.fixtureExecutionToken = options.fixtureExecutionToken
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
   }
 
@@ -300,18 +332,23 @@ export class ProjectionCoordinator {
         this.transition(session, { kind: "execute-completed" })
       }
     }
-    // R2-06-2：execute 后复核（COMPLETED 时 mount 必须仍是本 session 的）。
+    // R2-06-2/R3-00-4：execute 后复核（COMPLETED 时 mount 必须仍是本
+    // session 的）。ownership 丢失是 terminal 故障：必须进入终态 + cleanup
+    // + terminal receipt（不是裸 throw）。
     if (session.executionState === "COMPLETED" && session.instance.assertMountOwned?.() === false) {
+      this.terminalize(
+        session,
+        "rejected",
+        "projection mount replaced during execution (ownership lost)",
+      )
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount replaced during execution; scan refused")
     }
-    // FAILED / CANCELLED / executor throw 是 terminal：world→REJECTED +
-    // 统一 cleanup（异常规范化）+ terminal receipt。
+    // FAILED / CANCELLED / executor throw 是 terminal：统一 terminalize
+    // （cleanup 异常规范化 + 永不抛）+ terminal receipt。
     if (session.executionState === "FAILED" || session.executionState === "CANCELLED") {
-      this.transition(session, { kind: "rejected" })
-      session.cleanupState = this.cleanupSessionSafe(session)
-      session.receipt = this.buildReceipt(
+      this.terminalize(
         session,
-        "REJECTED",
+        "rejected",
         terminalFailure === undefined ? undefined : terminalFailure instanceof Error ? terminalFailure.message : String(terminalFailure),
       )
       if (terminalFailure !== undefined) throw terminalFailure
@@ -324,14 +361,26 @@ export class ProjectionCoordinator {
    *  扫描失败（TOCTOU/资源上限/非法条目）→ 同一 cleanup 状态机 + REJECTED。
    *  R2-05-5：后台进程未证明终止（cleanup 未 finalized）不得进入 scan。 */
   scan(session: ProjectionSession): ProjectionDeltaResult {
+    if (session.worldState === "REJECTED" && session.cleanupState !== undefined) {
+      throw new ProjectionError(
+        "CLEANED_SESSION_REUSED",
+        `session is terminal (${session.worldState}); cleaned projection cannot be reused for scan`,
+      )
+    }
     if (session.executionState !== "COMPLETED") {
       throw new ProjectionError(
         "PROJECTION_NOT_PROJECTED",
         `delta scan requires COMPLETED execution, got ${session.executionState}`,
       )
     }
-    // R2-06-2：scan 前复核 mount 仍属本 session。
+    // R2-06-2/R3-00-5：scan 前复核 mount 仍属本 session。ownership 丢失是
+    // terminal 故障：进入终态 + cleanup + terminal receipt。
     if (session.instance.assertMountOwned?.() === false) {
+      this.terminalize(
+        session,
+        "rejected",
+        "projection mount no longer owned by this session; scan refused",
+      )
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", "projection mount no longer owned by this session; scan refused")
     }
     // R2-05-5：production 路径 —— receipt 的 cleanup 必须已证明
@@ -361,9 +410,9 @@ export class ProjectionCoordinator {
       this.transition(session, { kind: "scan-completed" })
       return delta
     } catch (error) {
-      session.cleanupState = this.cleanupSession(session)
-      this.transition(session, { kind: "rejected" })
-      session.receipt = this.buildReceipt(session, "REJECTED", (error as Error).message, session.delta)
+      // R3-00-6：scan 失败路径走统一 terminalize —— cleanup 抛异常被
+      // 规范化（cleanupState.error），状态机仍产生确定终态和 receipt。
+      this.terminalize(session, "rejected", (error as Error).message, session.delta)
       throw error
     }
   }
@@ -376,6 +425,12 @@ export class ProjectionCoordinator {
    *  projection root → compareAndCommit（P1-3：commitId 预生成；响应不
    *  确定时以权威 commit 记录为准）。 */
   commit(session: ProjectionSession): import("../world/contracts").WorldCommitReceipt {
+    if (session.worldState === "REJECTED" && session.cleanupState !== undefined) {
+      throw new ProjectionError(
+        "CLEANED_SESSION_REUSED",
+        `session is terminal (${session.worldState}); cleaned projection cannot be reused for commit`,
+      )
+    }
     if (session.worldState !== "DELTA_READY") {
       throw new ProjectionError("PROJECTION_NOT_PROJECTED", `commit requires DELTA_READY, got ${session.worldState}`)
     }
@@ -411,14 +466,33 @@ export class ProjectionCoordinator {
           outcome.receiptBinding,
           outcome.executionReceiptId,
         )
+        // R3-01.5：final receipt 与 coordinator outcome 对账 —— exitCode /
+        // timedOut / cancelled / violations / unexpectedWrites 必须一致。
+        const receiptViolation = (verifiedReceipt.violations?.length ?? 0) > 0
+        if (
+          verifiedReceipt.exitCode !== outcome.exitCode ||
+          verifiedReceipt.timedOut !== outcome.timedOut ||
+          verifiedReceipt.cancelled !== outcome.cancelled ||
+          receiptViolation !== outcome.violation
+        ) {
+          throw new ProjectionError(
+            "EXECUTION_RECEIPT_BINDING_MISMATCH",
+            `final receipt outcome (exitCode=${verifiedReceipt.exitCode}, timedOut=${verifiedReceipt.timedOut}, cancelled=${verifiedReceipt.cancelled}, violation=${receiptViolation}) conflicts with coordinator outcome (exitCode=${outcome.exitCode}, timedOut=${outcome.timedOut}, cancelled=${outcome.cancelled}, violation=${outcome.violation})`,
+          )
+        }
         // R2-02：canonical final receipt 进入 World CAS —— 由 World commit
         // 建立 world_commit owner reference（durable provenance；runtime
         // receipt store 删除后仍可恢复）。content 的 canonical 摘要 ==
         // receiptDigest（authority 已做自洽校验）。
         const { receiptDigest: _rd, ...receiptContent } = verifiedReceipt
         this.store.cas.put(Buffer.from(canonicalJson(receiptContent), "utf8"))
-      } else if (!this.allowFixtureExecution) {
-        // 无 receipt（fixture executor 路径）且未显式授权 → production bypass。
+      } else if (
+        !this.allowFixtureExecution &&
+        !(this.fixtureExecutionToken === FIXTURE_EXECUTION_TOKEN && this.backend.kind === "fixture")
+      ) {
+        // R3-01.1：无 receipt（fixture executor 路径）必须同时满足
+        // test-only token + backend.kind === "fixture" 双重门 —— production
+        // backend 永远不满足（token 不能越过 backend.kind 门）。
         throw new ProjectionError(
           "EXECUTION_RECEIPT_REQUIRED",
           "execution receipt required before world commit (fixture execution is not a production authority)",
@@ -492,6 +566,28 @@ export class ProjectionCoordinator {
         // 本地 delta divergence）→ COMMITTED（绝不 REJECTED）。
         const committed = this.store.getCommit(commitId)
         if (committed !== undefined) {
+          // R3-02：post-commit reconciliation 必须比较完整 canonical commit
+          // request（不能只凭 commitId 存在就认定成功 —— commitId 是
+          // 预生成 uuid，但防御巧合复用/篡改仍要对账）。
+          const expectedRequestDigest = this.store.computeCommitRequestDigest({
+            worldId: session.plan.worldId,
+            branchId: session.plan.branchId,
+            baseRevision: snapshot.revision,
+            actor: session.plan.actor,
+            commitId,
+            mutations: delta.mutations,
+            executionReceiptIds: outcome.executionReceiptId === undefined
+              ? []
+              : [`sha256:${outcome.executionReceiptId}`],
+            effectReceiptIds: [],
+          })
+          const actualRequestDigest = this.store.getCommitRequestDigest(commitId)
+          if (actualRequestDigest !== expectedRequestDigest) {
+            throw new ProjectionError(
+              "EXECUTION_RECEIPT_BINDING_MISMATCH",
+              `commit id ${commitId} exists but request digest ${actualRequestDigest} does not match this session's canonical request ${expectedRequestDigest}`,
+            )
+          }
           this.transition(session, { kind: "committed" })
           session.receipt = this.buildReceipt(session, "COMMITTED", undefined, delta, committed)
           session.cleanupState = { cleanupOk: true, rootRemoved: true }
@@ -505,23 +601,61 @@ export class ProjectionCoordinator {
       session.cleanupState = { cleanupOk: true, rootRemoved: true }
       return receipt
     } catch (error) {
-      // 所有失败路径：同一 cleanup 状态机（幂等；unmount 失败保留 residue）。
-      session.cleanupState = this.cleanupSession(session)
+      // R3-00-6b：所有失败路径走统一 terminalize（cleanup 异常规范化）。
       if (error instanceof ProjectionError && error.code === "WORLD_HEAD_MOVED") {
-        this.transition(session, { kind: "conflicted" })
-        session.receipt = this.buildReceipt(session, "CONFLICTED", "WORLD_HEAD_MOVED", delta)
-        throw error
+        this.terminalize(session, "conflicted", "WORLD_HEAD_MOVED", delta)
+      } else {
+        this.terminalize(session, "rejected", (error as Error).message, delta)
       }
-      this.transition(session, { kind: "rejected" })
-      session.receipt = this.buildReceipt(session, "REJECTED", (error as Error).message, delta)
       throw error
     }
   }
 
-  /** 取消/失败路径：同一 cleanup 状态机（幂等）。 */
+  /** 取消/失败路径：同一 terminalize 状态机（R3-00-6c/7）—— cancel 后
+   *  session 进入终态（CANCELLED + REJECTED），永不复用；cleanup 异常
+   *  被规范化记录。已终态（COMMITTED/CONFLICTED/REJECTED）幂等返回。 */
   cancel(session: ProjectionSession): ProjectionCleanupResult {
-    session.cleanupState = this.cleanupSession(session)
-    return session.cleanupState
+    if (
+      session.worldState === "COMMITTED" ||
+      session.worldState === "CONFLICTED" ||
+      session.worldState === "REJECTED"
+    ) {
+      return session.cleanupState ?? Object.freeze({ cleanupOk: false, rootRemoved: false, error: "session already terminal" })
+    }
+    if (session.worldState === "UNPROJECTED") {
+      throw new ProjectionError("PROJECTION_NOT_PROJECTED", "cannot cancel an unprojected session")
+    }
+    this.terminalize(session, "rejected", "cancelled by caller")
+    return session.cleanupState!
+  }
+
+  /** R3-02：统一 terminalizer —— 唯一终态化路径（永不抛）。任何
+   *  terminal 原因（execute throw/failure/cancel、ownership 丢失、
+   *  scan/validation 失败、WORLD_HEAD_MOVED、commit 失败、explicit
+   *  cancel、cleanup 失败）都经此：状态经显式 transition 表进入终态 +
+   *  cleanup 异常规范化（cleanupState.error）+ terminal receipt。 */
+  private terminalize(
+    session: ProjectionSession,
+    worldState: "rejected" | "conflicted",
+    reason?: string,
+    delta?: ProjectionDeltaResult,
+  ): void {
+    // 状态演进（显式表；非法边 → INVALID_STATE，绝不静默）。
+    if (
+      session.worldState === "PROJECTED" &&
+      (session.executionState === "PENDING" || session.executionState === "STARTING" || session.executionState === "RUNNING")
+    ) {
+      this.transition(session, { kind: "execute-cancelled" })
+    }
+    this.transition(session, { kind: worldState })
+    // cleanup 异常永不逃逸（R3-00-6/6b/6c）。
+    session.cleanupState = this.cleanupSessionSafe(session)
+    session.receipt = this.buildReceipt(
+      session,
+      worldState === "conflicted" ? "CONFLICTED" : "REJECTED",
+      reason,
+      delta,
+    )
   }
 
   /** 单一 cleanup 状态机：真实卸载 → 成功才删 upper/work/root；
@@ -643,6 +777,14 @@ export class ProjectionCoordinator {
   private buildBaseIndex(session: ProjectionSession): Map<string, MaterializedSectionEntry> {
     const snapshot = this.store.snapshots.get(session.plan.snapshotId)
     if (!snapshot) throw new ProjectionError("SNAPSHOT_NOT_FOUND", `snapshot ${session.plan.snapshotId} not found`)
+    // R3-06.4：section manifest 在读取/JSON parse 前检查 CAS record size。
+    const record = this.store.cas.record(snapshot.filesystemDigest)
+    if (record !== undefined && record.size > DEFAULT_PROJECTION_LIMITS.maxManifestBytes) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `filesystem section manifest ${snapshot.filesystemDigest} size ${record.size} exceeds maxManifestBytes ${DEFAULT_PROJECTION_LIMITS.maxManifestBytes} (refused before read/parse)`,
+      )
+    }
     const bytes = this.store.cas.get(snapshot.filesystemDigest)
     const manifest = parseFilesystemSection(bytes)
     const index = new Map<string, MaterializedSectionEntry>()
@@ -652,18 +794,39 @@ export class ProjectionCoordinator {
     return index
   }
 
+  /** R3-03.4/5 + R3-00-13：fd 锚定、no-follow、identity-fenced 的删除。
+   *  禁止「lstat 后再用可交换 pathname 递归删除」—— root 以
+   *  O_NOFOLLOW|O_DIRECTORY 打开后全程 fd 相对（/proc/self/fd）递归删除，
+   *  fchmod 不跟随 symlink（外部 sentinel 不被 chmod/删除）。 */
   private removeProjectionRoot(root: string): void {
-    this.chmodTreeWritable(root)
-    rmSync(root, { recursive: true, force: true })
-  }
-
-  private chmodTreeWritable(dir: string): void {
-    if (!existsSync(dir)) return
-    chmodSync(dir, 0o700)
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry)
-      const stat = lstatSync(full)
-      if (stat.isDirectory()) this.chmodTreeWritable(full)
+    const fd = openSync(
+      root,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+    )
+    try {
+      const fdStat = fstatSync(fd)
+      if (!fdStat.isDirectory()) {
+        throw new ProjectionError("PROJECTION_ROOT_ESCAPE", `cleanup refuses non-directory root: ${root}`)
+      }
+      fchmodSync(fd, 0o700)
+      removeTreeAnchored(fd)
+      // 删除 root 目录项本身：删除前路径身份再验证（swap 后不删）。
+      const pathStat = lstatSync(root)
+      if (
+        !pathStat.isDirectory() ||
+        pathStat.isSymbolicLink() ||
+        pathStat.dev !== fdStat.dev ||
+        pathStat.ino !== fdStat.ino
+      ) {
+        throw new ProjectionError(
+          "PROJECTION_ROOT_ESCAPE",
+          `cleanup refuses root whose path identity changed during removal: ${root}`,
+        )
+      }
+      // bun 的 rmSync(force) 对空目录偶发 EFAULT —— 用 rmdir（语义一致）。
+      rmdirSync(root)
+    } finally {
+      closeSync(fd)
     }
   }
 }

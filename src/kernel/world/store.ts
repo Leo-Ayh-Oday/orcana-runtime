@@ -295,6 +295,26 @@ function assertNoReservedMetadata(
   }
 }
 
+/** R3-05：World object path 必须是 canonical relative path。 */
+function assertCanonicalWorldPath(path: string, name: string): void {
+  if (
+    path.length === 0 ||
+    path.startsWith("/") ||
+    path.endsWith("/") ||
+    path.includes("\\") ||
+    path.includes("\0") ||
+    path.includes("\r") ||
+    path.includes("\n")
+  ) {
+    throw new Error(`${name} is not a canonical relative path: ${JSON.stringify(path)}`)
+  }
+  for (const segment of path.split("/")) {
+    if (segment.length === 0 || segment === "." || segment === "..") {
+      throw new Error(`${name} is not a canonical relative path: ${JSON.stringify(path)}`)
+    }
+  }
+}
+
 function assertNonEmptyString(value: unknown, name: string): asserts value is string {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${name} must be a non-empty string`)
@@ -328,6 +348,9 @@ function validateWorldMutation(mutation: WorldMutation, index: number): void {
       assertWorldObjectType(mutation.objectType, `${prefix} objectType`)
       if (mutation.path !== undefined) {
         assertNonEmptyString(mutation.path, `${prefix} path`)
+        // R3-05：World 路径必须是 canonical relative path（拒绝绝对路径、
+        // 尾斜杠、空段 //、. / .. 段、反斜杠、CR/LF/NUL）。
+        assertCanonicalWorldPath(mutation.path, `${prefix} path`)
       }
       // R2-07-3：file object 必须携带 contentRef（缺少 → 拒绝）。
       if (mutation.objectType === "file" && mutation.contentRef === undefined) {
@@ -1003,6 +1026,46 @@ export class WorldStore {
     return row ? receiptFromRow(row) : undefined
   }
 
+  /** R3-02：post-commit reconciliation 用 —— 返回 commit 的 canonical
+   *  request digest（完整 commit request 的绑定，不只看 commitId 存在）。 */
+  getCommitRequestDigest(commitId: string): string | undefined {
+    return this.getCommitRow(commitId)?.requestDigest
+  }
+
+  /** R3-02：与 compareAndCommit 内部完全一致的 canonical request digest
+   *  计算（parse 规范化 + canonicalDigest）—— coordinator 用它证明
+   *  「本 session 的完整 commit request 已 durable」，不依赖 commitId
+   *  巧合复用。 */
+  computeCommitRequestDigest(request: {
+    readonly worldId: string
+    readonly branchId: string
+    readonly baseRevision: bigint
+    readonly actor: string
+    readonly commitId: string
+    readonly mutations: readonly WorldMutation[]
+    readonly executionReceiptIds: readonly string[]
+    readonly effectReceiptIds: readonly string[]
+  }): string {
+    const mutations = parseCanonicalJson<WorldMutation[]>(canonicalJson(request.mutations))
+    mutations.forEach(validateWorldMutation)
+    const executionReceiptIds = parseCanonicalJson<string[]>(
+      canonicalJson(request.executionReceiptIds ?? []),
+    )
+    const effectReceiptIds = parseCanonicalJson<string[]>(
+      canonicalJson(request.effectReceiptIds ?? []),
+    )
+    return canonicalDigest({
+      worldId: request.worldId,
+      branchId: request.branchId,
+      mutations,
+      baseRevision: request.baseRevision.toString(),
+      actor: request.actor,
+      commitId: request.commitId,
+      executionReceiptIds,
+      effectReceiptIds,
+    })
+  }
+
   listObjects(worldId: string, branchId: string): WorldObject[] {
     return dbAll<WorldObjectRow>(
       this.db,
@@ -1277,19 +1340,15 @@ export class WorldStore {
       assertNonEmptyString(receiptId, `World commit executionReceiptIds[${index}]`))
     effectReceiptIds.forEach((receiptId, index) =>
       assertNonEmptyString(receiptId, `World commit effectReceiptIds[${index}]`))
-    // R2-02：execution receipt 的 canonical 内容必须在 World CAS 中（durable
-    // provenance —— runtime receipt store 删除后仍可恢复），并在此 commit
-    // 建立 world_commit owner reference。receiptId 必须可解析为 CAS 对象。
+    // R2-02/R3-04.2：execution receipt 的 canonical 内容必须在 World CAS 中
+    // （durable provenance）。存在性校验在事务前（fail-fast），owner link
+    // 只允许在事务成功路径建立（R3-04.4/R3-00-10：stale/idempotency 失败
+    // 不得留下虚假 world_commit link）。
     for (const receiptId of executionReceiptIds) {
-      // R2-02：CAS digest 形式的 receipt id（sha256: 前缀）必须已在 World
-      // CAS 中（durable provenance）并建立 world_commit owner reference。
-      // 非 CAS digest 形式的任意 id（AK-1 通用语义）不强制。
       if (typeof receiptId !== "string" || !receiptId.startsWith("sha256:")) continue
-      const receiptCasDigest = receiptId as CasDigest
-      if (!this.cas.has(receiptCasDigest)) {
+      if (!this.cas.has(receiptId as CasDigest)) {
         throw new Error(`World commit execution receipt is not in CAS: ${receiptId}`)
       }
-      this.cas.link("world_commit", commitId, receiptCasDigest)
     }
     const request = Object.freeze({
       worldId: input.worldId,
@@ -1308,13 +1367,13 @@ export class WorldStore {
       mutations,
     )), "utf8")
     const deltaDigest = sha256Digest(deltaBytes)
-    const requestDigest = canonicalDigest({
+    const requestDigest = this.computeCommitRequestDigest({
       worldId: request.worldId,
       branchId: request.branchId,
-      mutations,
-      baseRevision: request.baseRevision.toString(),
+      baseRevision: request.baseRevision,
       actor: request.actor,
       commitId,
+      mutations,
       executionReceiptIds,
       effectReceiptIds,
     })
@@ -1334,6 +1393,11 @@ export class WorldStore {
           throw new Error(`World delta CAS digest mismatch: ${commitId}`)
         }
         this.cas.link("world_commit", commitId, deltaDigest)
+        for (const receiptId of executionReceiptIds) {
+          if (typeof receiptId === "string" && receiptId.startsWith("sha256:")) {
+            this.cas.link("world_commit", commitId, receiptId as CasDigest)
+          }
+        }
         return receiptFromRow(existing)
       }
 
@@ -1365,6 +1429,10 @@ export class WorldStore {
 
       const newRevision = request.baseRevision + 1n
       const committedAt = this.now()
+      // R3-05：最终 namespace 校验（事务内、写库前）—— 顺序无关（先
+      // delete 后 put + 最终状态校验）：canonical path、全局唯一、类型
+      // 稳定、file 祖先必须存在且为 directory。
+      this.validateFinalNamespace(request.worldId, request.branchId, mutations)
       for (const mutation of mutations) {
         const eventType = this.applyMutation(
           request.worldId,
@@ -1447,6 +1515,12 @@ export class WorldStore {
         committedAt,
       )
       this.cas.link("world_commit", commitId, deltaDigest)
+      // R3-04.4：execution receipt owner link 与 commit 同一事务成功路径。
+      for (const receiptId of executionReceiptIds) {
+        if (typeof receiptId === "string" && receiptId.startsWith("sha256:")) {
+          this.cas.link("world_commit", commitId, receiptId as CasDigest)
+        }
+      }
       this.ledger.appendWithinTransaction({
         eventId: this.idFactory("event"),
         worldId: request.worldId,
@@ -1767,6 +1841,27 @@ export class WorldStore {
             detail: `commit ${commit.commitId} ledger evidence does not match its receipt`,
           })
         }
+        // R3-04.3：execution receipt 三体一致 —— commit row 声称的 receipt
+        // 必须存在于 CAS 且被 world_commit owner link 引用。
+        for (const receiptId of parseCanonicalJson<string[]>(commit.executionReceiptIdsJson)) {
+          if (typeof receiptId !== "string" || !receiptId.startsWith("sha256:")) continue
+          const digest = receiptId as CasDigest
+          if (!this.cas.has(digest)) {
+            issues.push({
+              code: "CAS_MISSING_REFERENCED_OBJECT",
+              worldId: world.worldId,
+              detail: `commit ${commit.commitId} execution receipt ${digest} missing from CAS`,
+            })
+          }
+          const links = this.cas.linksForOwner("world_commit", commit.commitId)
+          if (!links.some(link => link.digest === digest)) {
+            issues.push({
+              code: "CAS_REFERENCE_DIVERGENCE",
+              worldId: world.worldId,
+              detail: `commit ${commit.commitId} execution receipt ${digest} has no world_commit owner link`,
+            })
+          }
+        }
         if (replayState && !invalidMutationEvent) {
           for (const event of mutationEvents) {
             this.replayMaterializedEvent(replayState, event, newRevision)
@@ -1953,6 +2048,70 @@ export class WorldStore {
        FROM world_commits WHERE commit_id = ?`,
       commitId,
     )
+  }
+
+  /** R3-05：最终 World namespace 校验（事务内、写库前）。基于当前
+   *  world_objects 快照 + 内存应用全部 mutations（顺序无关：先 delete
+   *  后 put）→ 校验最终状态：path 全局唯一、类型稳定（dir↔file 冲突）、
+   *  file 的祖先必须存在且为 directory（file 永远不能是其他对象的祖先）。 */
+  private validateFinalNamespace(worldId: string, branchId: string, mutations: readonly WorldMutation[]): void {
+    const rows = dbAll<{ path: string | null; objectId: string; objectType: string }>(
+      this.db,
+      `SELECT path, object_id AS objectId, object_type AS objectType
+       FROM world_objects WHERE world_id = ? AND branch_id = ?`,
+      worldId,
+      branchId,
+    )
+    const byPath = new Map<string, { objectId: string; objectType: string }>()
+    const idToPath = new Map<string, string>()
+    for (const row of rows) {
+      if (row.path === null) continue
+      byPath.set(row.path, { objectId: row.objectId, objectType: row.objectType })
+      idToPath.set(row.objectId, row.path)
+    }
+    // 1) 全部 delete 先应用（delete+put 同 path 替换允许 → 顺序无关）。
+    for (const mutation of mutations) {
+      if (mutation.type !== "object.delete") continue
+      const path = idToPath.get(mutation.objectId)
+      if (path !== undefined) {
+        byPath.delete(path)
+        idToPath.delete(mutation.objectId)
+      }
+    }
+    // 2) 全部 put 应用（跨 commit 的 path 全局唯一 + 类型稳定）。
+    for (const mutation of mutations) {
+      if (mutation.type !== "object.put" || mutation.path === undefined) continue
+      const existing = byPath.get(mutation.path)
+      if (existing !== undefined) {
+        if (existing.objectId !== mutation.objectId) {
+          throw new Error(
+            `World commit path collision: ${mutation.path} mapped by both ${existing.objectId} and ${mutation.objectId}`,
+          )
+        }
+        if (existing.objectType !== mutation.objectType) {
+          throw new Error(
+            `World commit type conflict: ${mutation.path} is ${existing.objectType}, mutation declares ${mutation.objectType}`,
+          )
+        }
+      }
+      byPath.set(mutation.path, { objectId: mutation.objectId, objectType: mutation.objectType })
+      idToPath.set(mutation.objectId, mutation.path)
+    }
+    // 3) 最终状态校验：file 的祖先必须存在且为 directory。
+    for (const [path, entry] of byPath) {
+      if (entry.objectType !== "file") continue
+      let parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : undefined
+      while (parent !== undefined && parent.length > 0) {
+        const ancestor = byPath.get(parent)
+        if (ancestor === undefined) {
+          throw new Error(`World namespace invalid: file ${path} has missing ancestor ${parent}`)
+        }
+        if (ancestor.objectType !== "directory") {
+          throw new Error(`World namespace invalid: file ${path} has file ancestor ${parent}`)
+        }
+        parent = parent.includes("/") ? parent.slice(0, parent.lastIndexOf("/")) : undefined
+      }
+    }
   }
 
   private applyMutation(

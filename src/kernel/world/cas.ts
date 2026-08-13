@@ -15,7 +15,7 @@ import {
 } from "node:fs"
 import { join, resolve } from "node:path"
 import type { Database } from "bun:sqlite"
-import { canonicalJson, compareCanonicalStrings, sha256Digest } from "./canonical"
+import { canonicalJson, compareCanonicalStrings, parseCanonicalJson, sha256Digest } from "./canonical"
 import type {
   CasDigest,
   CasLink,
@@ -77,6 +77,7 @@ interface WorldCommitReferenceRow {
   worldId: string
   commitId: string
   deltaDigest: string
+  readonly executionReceiptIdsJson?: string
 }
 
 const MANIFEST_MEDIA_TYPE = "application/vnd.orcana.manifest+json"
@@ -887,7 +888,8 @@ export class WorldCas {
 
     const commits = dbAll<WorldCommitReferenceRow>(
       this.db,
-      `SELECT world_id AS worldId, commit_id AS commitId, delta_digest AS deltaDigest
+      `SELECT world_id AS worldId, commit_id AS commitId, delta_digest AS deltaDigest,
+              execution_receipt_ids_json AS executionReceiptIdsJson
        FROM world_commits`,
     )
     for (const commit of commits) {
@@ -897,6 +899,19 @@ export class WorldCas {
         digest: commit.deltaDigest as CasDigest,
         worldId: commit.worldId,
       })
+      // R3-04.1：execution receipt（sha256: CAS digest）必须进入权威引用/
+      // 可达性 —— gc 不得删除已提交 receipt。
+      const receiptIds = parseCanonicalJson<string[]>(commit.executionReceiptIdsJson ?? "[]")
+      for (const receiptId of receiptIds) {
+        if (typeof receiptId === "string" && receiptId.startsWith("sha256:")) {
+          references.push({
+            ownerType: "world_commit",
+            ownerId: commit.commitId,
+            digest: receiptId as CasDigest,
+            worldId: commit.worldId,
+          })
+        }
+      }
     }
 
     const snapshots = dbAll<SnapshotReferenceRow>(

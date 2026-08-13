@@ -14,11 +14,15 @@
 import {
   closeSync,
   constants as fsConstants,
+  fchmodSync,
   fstatSync,
+  lstatSync,
   openSync,
   readFileSync,
   readdirSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
 } from "node:fs"
 import { join } from "node:path"
 import { ProjectionError } from "./contracts"
@@ -38,9 +42,21 @@ export interface DirIdentity {
   readonly ino: number
 }
 
-/** 打开目录（无跟随；非目录/symlink 拒绝），返回 fd + 身份。 */
+/** 打开目录（无跟随；非目录/symlink 拒绝），返回 fd + 身份。
+ *  open 失败（缺失/替换为 symlink/bun 对 /proc/self/fd 缺失路径的
+ *  EFAULT 等）统一包装为 DELTA_SCAN_FAILED（fail-closed，不泄露裸
+ *  系统错误码）。 */
 export function openDirAnchored(parentFd: number, name: string): { fd: number; identity: DirIdentity } {
-  const fd = openAtNoFollow(parentFd, name, fsConstants.O_DIRECTORY)
+  let fd: number
+  try {
+    fd = openAtNoFollow(parentFd, name, fsConstants.O_DIRECTORY)
+  } catch (error) {
+    throw new ProjectionError(
+      "DELTA_SCAN_FAILED",
+      `cannot open anchored directory ${name}`,
+      error instanceof Error ? error.message : String(error),
+    )
+  }
   const stat = fstatSync(fd)
   if (!stat.isDirectory()) {
     closeSync(fd)
@@ -79,7 +95,16 @@ export function readFileAnchored(
   relative: string,
   onReadAfter?: (relative: string) => void,
 ): Buffer {
-  const fd = openAtNoFollow(parentFd, name)
+  let fd: number
+  try {
+    fd = openAtNoFollow(parentFd, name)
+  } catch (error) {
+    throw new ProjectionError(
+      "DELTA_SCAN_FAILED",
+      `cannot open anchored file ${relative}`,
+      error instanceof Error ? error.message : String(error),
+    )
+  }
   try {
     const before = fstatSync(fd)
     if (!before.isFile()) {
@@ -185,5 +210,80 @@ export function assertDirIdentityUnchanged(fd: number, expected: DirIdentity, re
   const stat = fstatSync(fd)
   if (!stat.isDirectory() || stat.dev !== expected.dev || stat.ino !== expected.ino) {
     throw new ProjectionError("DELTA_SCAN_FAILED", `directory identity changed during scan: ${relative}`)
+  }
+}
+
+/**
+ * R3-03.4/5：fd 锚定、no-follow、identity-fenced 的树删除原语。
+ *
+ * 传入**已验证**的根目录 fd（open O_NOFOLLOW|O_DIRECTORY 获得）。递归
+ * 删除全程经过 `/proc/self/fd/<fd>/<name>` 相对解析（父目录 rename/swap
+ * 不影响已锚定 fd）：
+ * - 子项 open 带 O_NOFOLLOW（symlink/特殊文件拒绝跟随 → 直接 unlink 本身）；
+ * - 目录 fchmod(fd)（fchmod 不跟随，外部 sentinel 不被 chmod）；
+ * - 文件/符号链接 unlink（不跟随）；
+ * - 返回后调用方 closeSync(fd) + 空目录 rmdir（调用方负责路径身份再验证）。
+ */
+export function removeTreeAnchored(rootFd: number, relative = ""): void {
+  let names: string[]
+  try {
+    names = readdirSync(join("/proc/self/fd", String(rootFd))) as string[]
+  } catch (error) {
+    throw new ProjectionError(
+      "PROJECTION_ROOT_ESCAPE",
+      `cannot read projection subtree ${relative}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  for (const raw of names) {
+    const name = Buffer.from(raw).toString("utf8")
+    const child = join("/proc/self/fd", String(rootFd), name)
+    let stat
+    try {
+      stat = lstatSync(child)
+    } catch (error) {
+      // 条目已消失（并发删除）—— 继续（fail-open 于条目本身，但 fd 锚定
+      // 保证不会误删其他路径）。
+      continue
+    }
+    if (stat.isDirectory()) {
+      let childFd: number
+      try {
+        childFd = openSync(
+          child,
+          fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+        )
+      } catch (error) {
+        // 目录被替换为 symlink/文件 → 拒绝跟随；直接 unlink 条目本身。
+        unlinkSync(child)
+        continue
+      }
+      try {
+        fchmodSync(childFd, 0o700)
+        removeTreeAnchored(childFd, join(relative, name))
+      } finally {
+        closeSync(childFd)
+      }
+      try {
+        // 目录用 rmdir（unlink 对目录 EISDIR；打开中的目录 EPERM ——
+        // childFd 已关闭）。非空（并发写入）→ residue 保留（调用方以
+        // cleanupOk=false 记录）。
+        rmdirSync(child)
+      } catch (error) {
+        throw new ProjectionError(
+          "PROJECTION_ROOT_ESCAPE",
+          `projection subtree not empty after anchored removal: ${join(relative, name)} (${error instanceof Error ? (error as Error & { code?: string }).code ?? error.message : String(error)})`,
+        )
+      }
+    } else {
+      // 文件 / symlink / 特殊文件：unlink 不跟随 symlink（sentinel 安全）。
+      try {
+        unlinkSync(child)
+      } catch (error) {
+        throw new ProjectionError(
+          "PROJECTION_ROOT_ESCAPE",
+          `cannot remove projection entry ${join(relative, name)}: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    }
   }
 }

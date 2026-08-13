@@ -29,7 +29,7 @@ import { join, resolve, sep } from "node:path"
 import type { CasDigest, WorldSnapshot } from "../world/contracts"
 import { ProjectionError, DEFAULT_PROJECTION_LIMITS, validateProjectionLimits } from "./contracts"
 import { canonicalizeProjectionPath } from "./path-policy"
-import { parseCanonicalJson } from "../world/canonical"
+import { canonicalJson, parseCanonicalJson } from "../world/canonical"
 
 /** 物化内容源 —— 只读消费 WorldStore 的公开快照/CAS 边界。 */
 export interface ProjectionMaterializerSource {
@@ -162,6 +162,17 @@ export class SnapshotMaterializer {
 
     const manifestBytes = this.readSectionManifest(snapshot.filesystemDigest)
     const manifest = parseFilesystemSection(manifestBytes)
+    // R3-06.5：单条目 metadata JSON 大小上限（canonical 字节）。
+    for (const entry of manifest.entries) {
+      if (entry.metadata === undefined) continue
+      const metadataBytes = Buffer.byteLength(canonicalJson(entry.metadata), "utf8")
+      if (metadataBytes > this.limits.maxMetadataBytes) {
+        throw new ProjectionError(
+          "PROJECTION_RESOURCE_LIMIT",
+          `filesystem entry ${entry.id} metadata ${metadataBytes} bytes exceeds maxMetadataBytes ${this.limits.maxMetadataBytes}`,
+        )
+      }
+    }
 
     // 规范顺序验证（createSectionManifest 按 path/id canonical 排序）。
     const canonicalOrder = [...manifest.entries].sort((left, right) => {
@@ -256,6 +267,16 @@ export class SnapshotMaterializer {
       const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
       if (parent.length > 0) this.ensureDirectory(absoluteBase, parent)
       const target = this.joinWithin(absoluteBase, path)
+      // R3-06.6：下一文件读取/写入前预留累计预算（CAS record size 已知
+      // —— 拒绝在读取/分配之前，不是先分配再检查）。
+      const contentRecord = this.source.getCasRecord(entry.contentRef!)
+      const declaredSize = contentRecord?.size
+      if (declaredSize !== undefined && treeBytes + declaredSize > this.limits.maxTreeBytes) {
+        throw new ProjectionError(
+          "PROJECTION_RESOURCE_LIMIT",
+          `materialized tree would exceed maxTreeBytes before writing ${path} (${treeBytes} + ${declaredSize} > ${this.limits.maxTreeBytes})`,
+        )
+      }
       const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o444)
       try {
         // R2-07-9：有界流式写入（逐 chunk 写目标 fd —— 避免
@@ -330,6 +351,13 @@ export class SnapshotMaterializer {
     // 解析 world manifest（内容寻址 —— 无法伪造与 digest 一致的 bytes）。
     let manifest: Record<string, unknown> | undefined
     try {
+      const worldManifestRecord = this.source.getCasRecord(snapshot.manifestDigest as CasDigest)
+      if (worldManifestRecord !== undefined && worldManifestRecord.size > this.limits.maxManifestBytes) {
+        throw new ProjectionError(
+          "PROJECTION_RESOURCE_LIMIT",
+          `world manifest ${snapshot.manifestDigest} size ${worldManifestRecord.size} exceeds maxManifestBytes ${this.limits.maxManifestBytes} (refused before read/parse)`,
+        )
+      }
       const bytes = this.readCasObjectSafe(snapshot.manifestDigest as CasDigest, "world manifest")
       const parsed = parseCanonicalJson<unknown>(bytes.toString("utf8"))
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -449,6 +477,14 @@ export class SnapshotMaterializer {
 
   /** 解析并校验 AK-1 FileManifest schema（type==="file" + chunks 连续覆盖）。 */
   private parseFileManifest(digest: CasDigest, path: string): import("../world/contracts").FileManifest {
+    // R3-06.4/5：manifest 读取/JSON parse 前检查 CAS record size。
+    const record = this.source.getCasRecord(digest)
+    if (record !== undefined && record.size > this.limits.maxManifestBytes) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `file ${path}: FileManifest ${digest} size ${record.size} exceeds maxManifestBytes ${this.limits.maxManifestBytes} (refused before read/parse)`,
+      )
+    }
     let bytes: Buffer
     try {
       bytes = this.source.readCasObject(digest)
@@ -521,8 +557,16 @@ export class SnapshotMaterializer {
     }
   }
 
-  /** 读取 section manifest（source 错误统一包装为 MATERIALIZATION_FAILED）。 */
+  /** 读取 section manifest（R3-06.4：读取/JSON parse 前检查 CAS record
+   *  size；source 错误统一包装为 MATERIALIZATION_FAILED）。 */
   private readSectionManifest(digest: CasDigest): Buffer {
+    const record = this.source.getCasRecord(digest)
+    if (record !== undefined && record.size > this.limits.maxManifestBytes) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `filesystem section manifest ${digest} size ${record.size} exceeds maxManifestBytes ${this.limits.maxManifestBytes} (refused before read/parse)`,
+      )
+    }
     return this.readCasObjectSafe(digest, "filesystem section manifest")
   }
 

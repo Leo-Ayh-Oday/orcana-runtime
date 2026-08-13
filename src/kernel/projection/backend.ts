@@ -287,8 +287,9 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       },
       cleanup: () => {
         if (!existsSync(merged) && !existsSync(upper) && !existsSync(work)) return true
-        // R2-06-4：只卸载本 projection 创建的 mount（mountId 匹配）；
-        // foreign mount 拒绝卸载。
+        // R2-06-4/R3-00-8：只卸载本 projection 创建的 mount（mountId 匹配
+        // + upper 身份一致）；foreign mount（含同路径重挂载）拒绝卸载、
+        // 拒绝 rm/chmod 任何内容 —— 立即返回 cleanup failure（不抛）。
         let upperOwned = false
         try {
           const upperNow = lstatSync(upper)
@@ -296,18 +297,34 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
         } catch {
           upperOwned = false
         }
-        if (this.isFuseMount(merged) && ownedFuseMountId(merged) === mountId && upperOwned) {
+        const stillFuse = this.isFuseMount(merged)
+        if (stillFuse) {
+          if (ownedFuseMountId(merged) !== mountId || !upperOwned) {
+            // R3-03.1：foreign mount / mount identity mismatch → cleanup
+            // failure；禁止 unmount、禁止 rm/chmod upper/work/merged。
+            return false
+          }
           const unmounted = this.unmount(merged)
           if (!unmounted) {
             // R03.2/3 + R2-06-5：确认真实卸载成功前禁止删除仍在使用的
             // upper/work/merged（unmount 失败 → residue 保留，返回 false）。
             return false
           }
+          // R3-03.2：删除前再次证明 mount 已消失（fusermount exit 0 不等于
+          // 已卸载 —— 复核 statfs；仍挂载 → 不删除，返回 failure）。
+          if (this.isFuseMount(merged)) {
+            return false
+          }
         }
         // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work/merged。
-        rmSync(upper, { recursive: true, force: true })
-        rmSync(work, { recursive: true, force: true })
-        rmSync(merged, { recursive: true, force: true })
+        // rmSync 抛错（如挂载点仍被占用）→ 规范化为 cleanup failure（不抛）。
+        try {
+          rmSync(upper, { recursive: true, force: true })
+          rmSync(work, { recursive: true, force: true })
+          rmSync(merged, { recursive: true, force: true })
+        } catch {
+          return false
+        }
         return true
       },
     }

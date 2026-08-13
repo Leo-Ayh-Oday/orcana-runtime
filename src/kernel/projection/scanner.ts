@@ -27,7 +27,7 @@
  *   world-delta manifest 编码（单一 delta 格式真源）。
  */
 
-import { closeSync, fstatSync, openSync } from "node:fs"
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
   assertDirIdentityUnchanged,
@@ -329,6 +329,8 @@ function digestAnchored(
 ): Map<string, ScannedNode> {
   const { nodes, dirs, dirChildren } = walked
   const resolved = new Map<string, ScannedNode>()
+  // R3-06.1：最终 barrier 的内容对比需要阶段 2 的读取字节（返回前丢弃）。
+  const resolvedBytes = new Map<string, Buffer>()
   const root = openRootAnchored(rootPath)
   const openedDirs: number[] = []
   try {
@@ -398,6 +400,14 @@ function digestAnchored(
           const name = childRelative.slice(prefix.length)
           if (name.includes("/") || childNode.kind !== "file") continue
           if (resolved.has(childRelative)) continue
+          // R3-06.6：下一文件读取前预留预算（walk 已记录 size —— 拒绝在
+          // 读取/分配之前，不是先分配再检查）。
+          if (treeBytes + childNode.size > limits.maxTreeBytes) {
+            throw new ProjectionError(
+              "PROJECTION_RESOURCE_LIMIT",
+              `scanned tree would exceed maxTreeBytes before reading ${childRelative} (${treeBytes} + ${childNode.size} > ${limits.maxTreeBytes})`,
+            )
+          }
           const bytes = readFileAnchored(
             dirFd,
             name,
@@ -406,12 +416,7 @@ function digestAnchored(
             onFileReadAfter,
           )
           treeBytes += bytes.byteLength
-          if (treeBytes > limits.maxTreeBytes) {
-            throw new ProjectionError(
-              "PROJECTION_RESOURCE_LIMIT",
-              `scanned tree exceeds maxTreeBytes (${treeBytes} > ${limits.maxTreeBytes})`,
-            )
-          }
+          resolvedBytes.set(childRelative, bytes)
           resolved.set(childRelative, {
             kind: "file",
             digest: fileDigest(cas, bytes),
@@ -448,10 +453,132 @@ function digestAnchored(
         nlink: node.nlink,
       })
     }
+    // R3-06.1：最终 terminal barrier —— 所有文件 digest 后，再对每个目录
+    // 执行最终 dev/ino 复核 + 完整成员集合复核 + 每文件身份/size/nlink/
+    // mtime/ctime 复核 + 内容重读对比（对已处理 sibling 的改写也检测）。
+    finalVerify(rootPath, { nodes, dirs, dirChildren }, resolved, resolvedBytes)
   } finally {
     closeSync(root.fd)
   }
   return resolved
+}
+
+/** R3-06.1：最终 terminal barrier —— 全部 digest 后对每目录重新锚定：
+ *  目录 dev/ino 复核、完整成员集合复核、每文件 identity/size/nlink/
+ *  mtime/ctime 复核 + 内容重读对比（内容级权威 —— bun statSync 缓存
+ *  盲窗不影响；对 onFileReadAfter 期间新增/删除/改写 sibling 全部
+ *  fail-closed）。 */
+function finalVerify(
+  rootPath: string,
+  walked: { nodes: Map<string, ScannedNode>; dirs: Map<string, DirIdentity>; dirChildren: Map<string, Set<string>> },
+  resolved: Map<string, ScannedNode>,
+  resolvedBytes: Map<string, Buffer>,
+): void {
+  const { nodes, dirs, dirChildren } = walked
+  const root = openRootAnchored(rootPath)
+  const openedDirs: number[] = []
+  try {
+    const dirsSorted = [...nodes.entries()]
+      .filter(([, node]) => node.kind === "directory")
+      .sort(([a], [b]) => (a.split("/").length - b.split("/").length) * 1000 + (a < b ? -1 : a > b ? 1 : 0))
+    for (const [relative] of dirsSorted) {
+      const segments = relative.split("/")
+      let dirFd = root.fd
+      openedDirs.length = 0
+      try {
+        for (let index = 0; index < segments.length; index++) {
+          const isRoot = index === 0 && relative === ""
+          if (isRoot) continue
+          const name = segments[index]!
+          const { fd, identity } = openDirAnchored(dirFd, name)
+          const expected = dirs.get(segments.slice(0, index + 1).join("/"))
+          if (expected === undefined || expected.dev !== identity.dev || expected.ino !== identity.ino) {
+            closeSync(fd)
+            throw new ProjectionError(
+              "DELTA_SCAN_FAILED",
+              `directory identity changed during final verify: ${segments.slice(0, index + 1).join("/")}`,
+            )
+          }
+          openedDirs.push(fd)
+          dirFd = fd
+        }
+        // 完整成员集合复核（新增/删除 → fail-closed）。
+        const expectedMembers = dirChildren.get(relative)
+        if (expectedMembers === undefined) {
+          throw new ProjectionError("DELTA_SCAN_FAILED", `directory ${relative} missing walk membership snapshot (final verify)`)
+        }
+        const currentMembers = new Set<string>()
+        for (const raw of readDirAnchored(dirFd)) {
+          const bytes = Buffer.from(raw)
+          if (!isValidUtf8Bytes(bytes)) {
+            throw new ProjectionError("DELTA_SCAN_FAILED", `invalid UTF-8 entry name in ${relative} (final verify)`)
+          }
+          currentMembers.add(bytes.toString("utf8"))
+        }
+        if (currentMembers.size !== expectedMembers.size) {
+          throw new ProjectionError(
+            "DELTA_SCAN_FAILED",
+            `directory membership changed during final verify: ${relative} (${currentMembers.size} != ${expectedMembers.size})`,
+          )
+        }
+        for (const member of currentMembers) {
+          if (!expectedMembers.has(member)) {
+            throw new ProjectionError(
+              "DELTA_SCAN_FAILED",
+              `directory membership changed during final verify: ${relative} gained ${member}`,
+            )
+          }
+        }
+        // 每文件：identity/size/nlink/mtime/ctime + 内容重读对比。
+        const prefix = relative.length === 0 ? "" : `${relative}/`
+        for (const [childRelative, childNode] of nodes) {
+          if (!childRelative.startsWith(prefix)) continue
+          const name = childRelative.slice(prefix.length)
+          if (name.includes("/") || childNode.kind !== "file") continue
+          if (!resolved.has(childRelative)) continue
+          let fd: number
+          try {
+            fd = openAtNoFollow(dirFd, name)
+          } catch (error) {
+            throw new ProjectionError(
+              "DELTA_SCAN_FAILED",
+              `cannot open anchored file ${childRelative} (final verify)`,
+              error instanceof Error ? error.message : String(error),
+            )
+          }
+          try {
+            const stat = fstatSync(fd)
+            if (!stat.isFile()) {
+              throw new ProjectionError("DELTA_SCAN_FAILED", `entry type changed during final verify: ${childRelative}`)
+            }
+            if (stat.dev !== childNode.dev || stat.ino !== childNode.ino) {
+              throw new ProjectionError("DELTA_SCAN_FAILED", `entry identity changed during final verify: ${childRelative}`)
+            }
+            if (stat.nlink !== childNode.nlink || stat.size !== childNode.size) {
+              throw new ProjectionError("DELTA_SCAN_FAILED", `entry size/link changed during final verify: ${childRelative}`)
+            }
+            if (childNode.mtimeMs !== undefined && stat.mtimeMs !== childNode.mtimeMs) {
+              throw new ProjectionError("DELTA_SCAN_FAILED", `entry mtime changed during final verify (in-place mutation): ${childRelative}`)
+            }
+            if (childNode.ctimeMs !== undefined && stat.ctimeMs !== childNode.ctimeMs) {
+              throw new ProjectionError("DELTA_SCAN_FAILED", `entry ctime changed during final verify (in-place mutation): ${childRelative}`)
+            }
+            const bytes = readFileSync(fd)
+            const expected = resolvedBytes.get(childRelative)
+            if (expected === undefined || !bytes.equals(expected)) {
+              throw new ProjectionError("DELTA_SCAN_FAILED", `file content changed during final verify (in-place mutation): ${childRelative}`)
+            }
+          } finally {
+            closeSync(fd)
+          }
+        }
+      } finally {
+        for (const fd of openedDirs) closeSync(fd)
+      }
+    }
+  } finally {
+    closeSync(root.fd)
+  }
 }
 
 export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDeltaResult {

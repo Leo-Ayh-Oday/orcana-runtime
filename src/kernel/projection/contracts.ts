@@ -131,7 +131,11 @@ export const PROJECTION_TRANSITION_TABLE: Readonly<Record<ProjectionStateTransit
     "execute-running": Object.freeze([{ from: { world: "PROJECTED", execution: "STARTING" }, to: { world: "PROJECTED", execution: "RUNNING" } }]),
     "execute-completed": Object.freeze([{ from: { world: "PROJECTED", execution: "RUNNING" }, to: { world: "PROJECTED", execution: "COMPLETED" } }]),
     "execute-failed": Object.freeze([{ from: { world: "PROJECTED", execution: "RUNNING" }, to: { world: "PROJECTED", execution: "FAILED" } }]),
-    "execute-cancelled": Object.freeze([{ from: { world: "PROJECTED", execution: "RUNNING" }, to: { world: "PROJECTED", execution: "CANCELLED" } }]),
+    "execute-cancelled": Object.freeze([
+      { from: { world: "PROJECTED", execution: "PENDING" }, to: { world: "PROJECTED", execution: "CANCELLED" } },
+      { from: { world: "PROJECTED", execution: "STARTING" }, to: { world: "PROJECTED", execution: "CANCELLED" } },
+      { from: { world: "PROJECTED", execution: "RUNNING" }, to: { world: "PROJECTED", execution: "CANCELLED" } },
+    ]),
     "scan-completed": Object.freeze([
       { from: { world: "PROJECTED", execution: "COMPLETED" }, to: { world: "DELTA_READY", execution: "COMPLETED" } },
     ]),
@@ -267,6 +271,10 @@ export interface ProjectionLimits {
   readonly maxTreeBytes: number
   /** FileManifest 最大 chunk 数。 */
   readonly maxFileChunks: number
+  /** R3-06.5：section/world/FileManifest JSON 单对象最大字节（parse 前预检）。 */
+  readonly maxManifestBytes: number
+  /** R3-06.5：单条目 metadata JSON 最大字节。 */
+  readonly maxMetadataBytes: number
 }
 
 export const DEFAULT_PROJECTION_LIMITS: ProjectionLimits = Object.freeze({
@@ -275,6 +283,8 @@ export const DEFAULT_PROJECTION_LIMITS: ProjectionLimits = Object.freeze({
   maxFileBytes: 64 * 1024 * 1024,
   maxTreeBytes: 512 * 1024 * 1024,
   maxFileChunks: 4096,
+  maxManifestBytes: 64 * 1024 * 1024,
+  maxMetadataBytes: 1024 * 1024,
 })
 
 /** 运行时验证 limits（P2-4）：每字段必须 Number.isSafeInteger 且 > 0。
@@ -302,6 +312,20 @@ export function validateProjectionLimits(limits: ProjectionLimits): ProjectionLi
       "PROJECTION_RESOURCE_LIMIT",
       `projection limit maxTreeBytes (${limits.maxTreeBytes}) must be >= maxFileBytes (${limits.maxFileBytes})`,
     )
+  }
+  // R3-06.5：manifest/metadata 上限必须是正 safe integer。
+  const newFields: Array<[keyof ProjectionLimits, string]> = [
+    ["maxManifestBytes", "maxManifestBytes"],
+    ["maxMetadataBytes", "maxMetadataBytes"],
+  ]
+  for (const [key, label] of newFields) {
+    const value = limits[key]
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+      throw new ProjectionError(
+        "PROJECTION_RESOURCE_LIMIT",
+        `projection limit ${label} must be a positive safe integer, got ${String(value)}`,
+      )
+    }
   }
   return limits
 }

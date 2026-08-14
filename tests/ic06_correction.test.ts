@@ -170,7 +170,13 @@ test("P0-4: launcher — parent crash before go → EOF → target NOT executed"
 
 // ── 5. real scheduler write-node ordering（reserve before lock；有界）──
 
-test("P0-5: scheduler reserves before write lock; failed lock rolls back reservation", async () => {
+test("P0-5(relabeled): write-lock acquisition is cancellable via AbortSignal — scheduler ordering NOT covered here", async () => {
+  // IC06 审核修复（P1-5）：原测试名声称验证 scheduler 的 reserve-before-lock
+  // 顺序与锁失败回滚，但从不驱动 runScheduler（构造即弃）—— 回归会绿灯通过。
+  // 此处只诚实断言本文件真正覆盖的行为：ConcurrencyController.acquireWrite
+  // 的取消路径。scheduler 的 reserve-before-lock 顺序与回滚需真实驱动
+  // runScheduler 的集成测试（tests/ic06_resource_authority.test.ts 的 R83 已
+  // 覆盖 authority 侧 double-acquire 拒绝；调度器侧顺序仍属未覆盖区）。
   const { runScheduler } = await import("../src/workflow/scheduler/scheduler")
   const { ResourceLedger } = await import("../src/runtime/linux/scheduler/resource-ledger")
   const dir = mkdtempSync(join(tmpdir(), "ic06c-sched-"))
@@ -183,14 +189,10 @@ test("P0-5: scheduler reserves before write lock; failed lock rolls back reserva
       ],
     }
     const registry = { isWriteHandler: (h: string) => h === "write", execute: async () => ({ ok: true }) }
-    // 并发写锁被占用：先取得锁 → scheduler reserve 成功（先于锁）→ 锁获取
-    // 卡住（无并发竞争者释放）→ 资源等待有界 60s 内不成功但可取消？
-    // 简化真实断言：reserve 在 acquireWrite 之前完成（无锁期间 reserve 成功）。
     const cc = new ConcurrencyController()
     const held = cc.tryAcquireWrite()
     expect(held).not.toBeNull()
-    // scheduler 需要注入 cc —— 通过包内构造；直接验证 awaitReservation 顺序
-    // 已在源码中（reserve 先于 acquireWrite），此处验证 acquireWrite 取消路径：
+    // 已取消信号 → acquireWrite 立即拒绝（WRITE_LOCK_CANCELLED_WAITER_RESURRECTION 面）。
     const ac = new AbortController()
     ac.abort()
     await expect(cc.acquireWrite({ signal: ac.signal })).rejects.toThrow("WRITE_LOCK_ACQUIRE_CANCELLED")

@@ -8,7 +8,7 @@ All notable changes to Orcana Runtime.
 > every listed capability is present in the public package or fully closed in
 > the current source. See [`docs/status.md`](docs/status.md) for current truth.
 
-## [0.8.30.0] — 2026-08-14 (production-closure line: IC01–IC06 + audit fixes)
+## [0.8.30] — 2026-08-14 (production-closure line: IC01–IC06 + audit fixes)
 
 First release since 0.8.16 (2026-08-05). Source versions 0.8.17–0.8.26.x were
 unreleased development ledgers; this release reconciles npm / tag / GitHub

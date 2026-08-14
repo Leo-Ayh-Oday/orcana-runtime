@@ -1,7 +1,7 @@
 # Orcana Current Status
 
 Updated: 2026-08-14
-Source snapshot: `origin/main` @ `v0.8.30.0` (2026-08-14 release; IC01..IC06 production-closure line merged + audit-fix batch 2)
+Source snapshot: `origin/main` @ `v0.8.30` (2026-08-14 release; IC01..IC06 production-closure line merged + audit-fix batch 2)
 
 This file is the conservative current-status entry point. Historical plans and
 completion records describe what was built at a point in time; they do not
@@ -11,9 +11,9 @@ override current code, current tests, real runtime evidence or a later audit.
 
 | Surface | Version | Meaning |
 |---|---:|---|
-| npm `latest` | `0.8.30.0` | Current public package (2026-08-14) |
-| GitHub Latest Release | `v0.8.30.0` | Current public Release/tag |
-| `origin/main` | `0.8.30.0` | Released source — reconciled with npm / tag / GitHub Release |
+| npm `latest` | `0.8.30` | Current public package (2026-08-14) |
+| GitHub Latest Release | `v0.8.30` | Current public Release/tag |
+| `origin/main` | `0.8.30` | Released source — reconciled with npm / tag / GitHub Release |
 | Active repair line | — | None unreleased at this time |
 
 Version-truth source of record: [SECURITY.md Version Channels](../SECURITY.md#version-channels).
@@ -59,7 +59,7 @@ installed back from the public registry for smoke verification.
 | Approval / Cache / Replay | `PARTIAL` | Implementations and deterministic harnesses exist; immutable approval grants, provenance-complete cache identity and zero-live-side-effect strict runtime replay remain closure work |
 | Typed Execution Graph | `IMPLEMENTED`, authority closure remains | `src/workflow/` provides typed contracts, compiler/validation, DAG scheduling, read/write serialization, result cache/replay, repair loops, dynamic compilation, interrupts, agent/worktree coordination and Harness-node execution; strict replay, immutable approval, cache provenance and authoritative resource/retry/liveness integration remain partial |
 | GitHub Actions | `LOCAL_REAL_VERIFIED` | Self-hosted runner (`orcana-linux-runtime`); triggers limited to `push → main` + `workflow_dispatch`; 2026-08-12 CI and Linux Sandbox Lanes all green |
-| Release | `RELEASED` at `0.8.30.0` | npm + tag + GitHub Release reconciled 2026-08-14; release smoke (isolated global install + CLI probe) passed |
+| Release | `RELEASED` at `0.8.30` | npm + tag + GitHub Release reconciled 2026-08-14; release smoke (isolated global install + CLI probe) passed |
 
 ## Linux development-host observation
 
@@ -86,7 +86,7 @@ Facts must remain separated:
 3. GitHub-hosted lanes have not executed while the billing lock is active.
 4. The current source snapshot is a green release candidate: `bun run typecheck`
    reports 0 errors (the former `AgentRunStopReason "paused"` drift was closed by
-   the RC/IC line); full test gate green at v0.8.30.0.
+   the RC/IC line); full test gate green at v0.8.30.
 5. Uncommitted work in another worktree is not part of this status snapshot.
 
 ## Next acceptance order
@@ -94,14 +94,14 @@ Facts must remain separated:
 1. ✅ Restore the clean TypeScript baseline (IC00 fix) — closed.
 2. Re-audit each Infrastructure Closure item against current code; do not
    replay stale plans over functionality that already exists.
-3. ✅ Complete IC01 through IC06 (Gate A) — merged into main at v0.8.30.0
+3. ✅ Complete IC01 through IC06 (Gate A) — merged into main at v0.8.30
    (2026-08-14), including audit-fix batch 2 from the independent review.
 4. Complete service/process/secret/TOCTOU closure before strong Runtime
    isolation claims (Gate B) — still open.
 5. Complete evidence/approval/cache/replay/durable-state closure before
    publishing Runtime research claims (Gate C) — still open.
 6. ✅ Reconcile npm/tag/GitHub Release from a clean, audited candidate with
-   explicit owner authorization — done at v0.8.30.0 (2026-08-14).
+   explicit owner authorization — done at v0.8.30 (2026-08-14).
 
 ## Claim rules
 

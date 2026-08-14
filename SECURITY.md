@@ -11,8 +11,8 @@ status documents reference it instead of restating independent claims.
 
 | Channel | Version | Security status |
 |---|---:|---|
-| npm / GitHub Latest Release | `0.8.30.0` | Current public baseline (2026-08-14; reconciled from `0.8.16` across the RC/LPIC/IC development line) |
-| `origin/main` source | `0.8.30.0` | Released source — IC01..IC06 production-closure line merged (Gate A), audit-fix batch 2 applied |
+| npm / GitHub Latest Release | `0.8.30` | Current public baseline (2026-08-14; reconciled from `0.8.16` across the RC/LPIC/IC development line) |
+| `origin/main` source | `0.8.30` | Released source — IC01..IC06 production-closure line merged (Gate A), audit-fix batch 2 applied |
 | Active repair line | — | None unreleased at this time; future work opens new branches and follows the same gates |
 
 The project does not currently promise long-term support for older minor

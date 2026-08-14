@@ -124,6 +124,27 @@ r6-counterexamples.test.ts tests/kernel/world/r6-cas-snapshot.test.ts` →
    落地后 scan fail-open —— 生产 seal authority 缺失；禁止伪造 GREEN。
 3. **production 正向 B lane**：无 cgroup 委托 → `ENV_BLOCKED`。
 
+## 7b. 独立只读审计结果（8 轮复核项全绿）
+
+独立只读 Agent 审计（无写操作）结论：`READY_FOR_INDEPENDENT_AUDIT`。
+11 项检查全部通过：链完整性（4 提交、RED 隔离、无 amend）、白名单（29
+ 路径全部在桶内、零越界）、门禁（305/1 KNOWN RED、typecheck 0、diff
+--check 干净）、gate 语义（brand 配对、无导出面泄漏、R6-00-1/3/6/10
+保持阻断）、spec binding / durable reservation / representation /
+snapshot ordering / FUSE ownership 结构确认、OWNER-DECISION-REQUIRED
+纪律（same-UID receipt + upper seal 不写 CLOSED）、环境（0 mount、0
+进程、worktree clean）。
+
+### 审计发现 + 反驳（逐条）
+
+| # | 发现（严重度） | 反驳 / 处置 |
+|---|---|---|
+| A | cellSpecDigestNormalized 仅规范化 cellId —— 未来 authenticated verifier 的 identity/workspace envelope 若与 buildProjectionAuthority 不一致会误拒（MEDIUM，fail-closed） | 接受为潜在风险并记录：当前所有路径 envelope 同源（adapter 身份由 intent 覆盖 broker-adapter.ts:178-187；spec 只取 hostRoot/ownerFiles，与 kernel 同源），一致性由 R4-00-3a/b/c、R6-00-7/8、R3-01.4、B lane 实证；误拒方向正确（无接受路径）；修复（规范化 runId/attempt）将削弱 digest 的 runId 绑定 —— 不修复，留待 authenticated-verifier 设计 |
+| B | adapter timeoutMs 回退（options.timeoutMs 兜底）与 kernel 期望可能发散（LOW，fail-closed） | 接受为潜在风险并记录：当前 wiring 不设置 options.timeoutMs；intent.command.timeoutMs 与 command.timeoutMs 恒同源（coordinator.ts:774-778），assertIntentBinding 拒绝双定义不一致；发散只会发生在未来 wiring 且方向为误拒 —— 不修复，留待 authenticated-verifier 设计 |
+
+两项均不产生任何接受路径（只可能拒绝）；不涉及 R5 审计 Critical/High
+范围；已在 stage 文档 RESIDUAL RISK 记录，不静默。
+
 ## 8. 复核指引（独立只读）
 
 - 复现：`cd /home/fuqiang/worktrees/orcana-agent-os-r6 && bun test

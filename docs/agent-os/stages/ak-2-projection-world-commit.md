@@ -824,6 +824,20 @@ merge、未建 PR；等待独立只读复审 —— 不复用实现者结论，�
 - daemon 命令行判别依赖 /proc 可见性；跨命名空间/特权场景未验证。
 - LF-2 static gate 基线外失败（R5 引入）未在本轮白名单内修复 —— 已记录，
   不静默。
+- 独立审计发现 A（MEDIUM，fail-closed，潜在）：`cellSpecDigestNormalized`
+  只规范化 cellId（receipt.ts:72-77）—— 若未来 authenticated verifier 的
+  identity/workspace envelope 与 `buildProjectionAuthority`（spec-binding.ts）
+  不一致，pre-spawn 规范化 digest 比对会**误拒**（拒绝方向正确）。当前
+  所有路径一致：adapter 身份由 intent 覆盖（broker-adapter.ts:178-187），
+  spec 只取 workspace.hostRoot/ownerFiles（与 kernel 同源）—— 一致性由
+  R4-00-3a/b/c、R6-00-7/8、R3-01.4、B lane 实证。不修复：把 runId/attempt
+  也规范化会削弱 digest 的 runId 绑定（commit 期 ForCell 校验必须含身份）。
+- 独立审计发现 B（LOW，fail-closed，潜在）：adapter `timeoutMs` 回退
+  （broker-adapter.ts:243）—— options.timeoutMs 设置而 command/intent 均
+  未携带时才会与 kernel 期望发散（误拒方向）。当前 wiring 不设置
+  options.timeoutMs；intent.command.timeoutMs 与 command.timeoutMs 恒同源
+  （coordinator.ts:774-778），assertIntentBinding 亦拒绝双定义不一致。
+  两者均无接受路径；记录不静默，修复留待 authenticated-verifier 设计。
 
 ### 最终状态
 

@@ -141,8 +141,10 @@ snapshot ordering / FUSE ownership 结构确认、OWNER-DECISION-REQUIRED
 |---|---|---|
 | A | cellSpecDigestNormalized 仅规范化 cellId —— 未来 authenticated verifier 的 identity/workspace envelope 若与 buildProjectionAuthority 不一致会误拒（MEDIUM，fail-closed） | 接受为潜在风险并记录：当前所有路径 envelope 同源（adapter 身份由 intent 覆盖 broker-adapter.ts:178-187；spec 只取 hostRoot/ownerFiles，与 kernel 同源），一致性由 R4-00-3a/b/c、R6-00-7/8、R3-01.4、B lane 实证；误拒方向正确（无接受路径）；修复（规范化 runId/attempt）将削弱 digest 的 runId 绑定 —— 不修复，留待 authenticated-verifier 设计 |
 | B | adapter timeoutMs 回退（options.timeoutMs 兜底）与 kernel 期望可能发散（LOW，fail-closed） | 接受为潜在风险并记录：当前 wiring 不设置 options.timeoutMs；intent.command.timeoutMs 与 command.timeoutMs 恒同源（coordinator.ts:774-778），assertIntentBinding 拒绝双定义不一致；发散只会发生在未来 wiring 且方向为误拒 —— 不修复，留待 authenticated-verifier 设计 |
+| C（INFO） | projectionIntentDigest 剔除 expectedCellSpecDigest（contracts.ts）—— env 注入/spec digest 循环依赖有意打断 | 记录即答复：绑定强度已在 contracts.ts 注释与本证据包 §5 文档化；不构成缺陷（fail-closed） |
+| D（INFO） | plan.secretsDigest 缺省为空串而非 hash —— 后续声明 secrets 的 plan 会改变 intent digest | 记录即答复：plan 构造契约（R6-03 之前即如此），非 gate 旁路（fail-closed）；与 R5 审计 Critical/High 无关 |
 
-两项均不产生任何接受路径（只可能拒绝）；不涉及 R5 审计 Critical/High
+四项均不产生任何接受路径（只可能拒绝）；不涉及 R5 审计 Critical/High
 范围；已在 stage 文档 RESIDUAL RISK 记录，不静默。
 
 ## 8. 复核指引（独立只读）

@@ -190,3 +190,59 @@ r5-counterexamples.test.ts tests/kernel/world/r5-cas-representation.test.ts`
   不可得（无 cgroup 委托）限制（ENV_BLOCKED）。
 - daemon 命令行判别依赖 /proc 可见性（同 UID 命名空间）；跨命名空间 /
   特权场景未覆盖（文档如实记录；超出本机验证范围）。
+
+## 10. 独立复审窗口记录（2026-08-14 · DSH 会话两窗口）
+
+### 窗口 A —— workspace-write 沙箱（受限视图）
+
+环境事实：`/dev/fuse` 缺失（沙箱最小 /dev 视图）；`/home/fuqiang/.orcana`
+只读（EROFS）；R5 worktree 只读（EROFS）；`/tmp` 每次 bash 调用重置。
+
+- RED 独立复验（纯 b7d15db archive + d15cf90 测试，与 R5 worktree 完全
+  隔离）：**16 fail / 1 pass**（R5-01 静态门 pass）—— 与冻结记录一致，
+  且失败断言逐一为目标缺陷驱动（receiptless commit 被接受 / symlink
+  base 未拒绝 / cleanup 未调用 / cancel 未等待 / seam 未 terminalize /
+  intent 复用 / CAS 双重解释 / namespace residue / chunk 上限后置）。
+- focused（22 文件）：**283 pass / 20 fail** —— 20 = 19 环境归因（真实
+  FUSE/broker lane：/dev/fuse 缺失、.orcana 只读）+ 1 KNOWN RED（R5-00-9）。
+- BASE 同窗口 focused（纯 b7d15db，20 文件）：**268 pass / 17 fail** ——
+  17 个失败与 HEAD 的 19 个环境失败完全同源（真实 lane）→ **零回归**。
+- typecheck 0；diff --check 0；build 未执行成功（clean-dist EROFS）。
+
+### 窗口 B —— danger-full-access（解锁视图）
+
+环境事实：/dev/fuse 可用、.orcana 可写、worktree 可写、/tmp 持久。
+
+- focused（22 文件）：**302 pass / 1 fail（KNOWN RED R5-00-9）**，44.7s，
+  1208 expect —— 与候选记录（302+1）一致。
+- 真实 lane 真执行（非 conditional return）：R5-00-5（REAL FUSE foreign
+  swap）79ms PASS；R5-00-8 6532ms PASS（真实 bwrap 执行：adapterA
+  exitCode 0，adapterB/adapterC 被 kernel-owned registry 拒绝）；R3-00-8 /
+  R4-00-9 / R4-00-11d / AK2-T03 / AK2-T06 / AK2-T07 全部 PASS。
+- typecheck 0 error；build ✓；git diff --check ✓（range + worktree）。
+- aggregate `bun run test`：**378 files → 370 pass / 8 FAIL**（388.4s）。
+  逐文件归因：
+  - tests/runtime/linux/linux-foundation.test.ts / process-core.test.ts /
+    service-cell.test.ts：BASE 同窗口同样 FAIL（同文件同断言）→ 基线外
+    环境/静态门类（LF-1 能力探测 digest、LF-2 静态门、cleanupRun）。
+  - tests/doctor.test.ts / git_tools.test.ts / execution-authority.test.ts /
+    tools/process.test.ts：aggregate 内失败，**单独重跑全部 PASS**（5/5、
+    3/3、6/6、11/11）→ 长跑时序/负载类，非代码缺陷，非本 diff。
+  - tests/kernel/projection/r5-counterexamples.test.ts：KNOWN RED
+    （R5-00-9）—— 预期。
+  - BASE 同窗口 aggregate：**376 files → 373 pass / 3 FAIL**（仅上述 3 个
+    基线外文件）。
+  - QUARANTINED 7（live/provider）未运行 → NOT_RUN（清单未变）。
+- 测试后环境：0 FUSE mount 残留；0 本任务进程；bwrap 进程 1 个（
+  /home/fuqiang/worktrees/pcba/… mvnw 集成测试 —— 其他任务既有负载，
+  未触碰）；worktree tracked+untracked clean。
+- /tmp state 目录残留（adapter-state/persist-state/finaldigest-state/
+  slice-state）：单文件跑完不删除 —— **BASE 同窗口同样残留（A/B 对照）
+  → 既有测试 cleanup 行为，非 R5 回归**；已清理，未计入残留清单。
+
+### 窗口结论
+
+- RED→GREEN 证据链独立复验成立（窗口 A 16 fail 与冻结记录一致；窗口 B
+  302+1 与候选记录一致）。
+- 零代码级回归（BASE/HEAD 双窗口 A/B 对照）。
+- live/provider 保持 NOT_RUN（无 key lane；QUARANTINED 清单未变）。

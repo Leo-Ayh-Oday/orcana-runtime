@@ -3,8 +3,8 @@
 > 当前裁决入口（2026-08-10）：下方 LF/R/PR 表是历史阶段证据，不是当前
 > 发布候选的整体 PASS 声明。当前运行级能力与降级矩阵见
 > [current-status.md](current-status.md)。当前源码快照为
-> `fix/gate-control-plane` @ `76a90ef`；公开 npm/GitHub Release 仍为
-> `0.8.16`。
+> `origin/main` @ `v0.8.30`（2026-08-14 发布）；公开 npm/GitHub Release 为
+> `0.8.30`。
 
 ## 当前总裁决
 
@@ -23,8 +23,8 @@
 | Local real Rootless Podman | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；不外推到其他主机/提交 |
 | Local delegated cgroup | `LOCAL_REAL_VERIFIED` | 2026-08-09 权威 WSL 主机真实 lane 通过；每次运行仍需 attach/cleanup Evidence |
 | GitHub-hosted Linux lanes | `CI_BLOCKED_EXTERNAL` | billing lock 导致 job 0 steps；既不是代码 PASS，也不是代码 FAIL |
-| Current source release gate | `FAIL` | `bun run typecheck` 当前存在 `paused` Stop-hook 类型漂移；修复和全门禁前不可发布 |
-| npm/GitHub release convergence | `FAIL` | npm/Release `0.8.16`，`origin/main` `0.8.26.2`（未发布），修复线 `0.8.26.3` |
+| Current source release gate | `PASS` | typecheck 0 错误；全量门禁绿（370+ pass，7 QUARANTINED live-provider 待凭据） |
+| npm/GitHub release convergence | `PASS` | npm/Release `0.8.30` 与 `origin/main` 对齐（2026-08-14） |
 
 ## 历史阶段记录
 

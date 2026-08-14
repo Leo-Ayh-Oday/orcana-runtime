@@ -316,9 +316,8 @@ Orcana 具备多层上下文管理能力，包括：
 ## 当前项目状态
 
 > [!IMPORTANT]
-> 当前公开版本与源码版本已经分叉：npm 和 GitHub Latest Release 仍为
-> `0.8.16`，`origin/main` 声明 `0.8.26.2`，活动修复线声明尚未发布的
-> `0.8.26.3` 候选。修改源码中的版本号不等于 npm 包或 GitHub Release
+> npm 与 GitHub Latest Release 已与 `origin/main` 在 `0.8.30`（2026-08-14）
+> 对齐发布。修改源码中的版本号不等于 npm 包或 GitHub Release
 > 已经发布。权威版本表见 [SECURITY.md 版本渠道](./SECURITY.md#version-channels)。
 
 | 子系统 | 当前状态 | 说明 |

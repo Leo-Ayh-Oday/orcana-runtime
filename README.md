@@ -316,10 +316,9 @@ Orcana has multi-layer context management, including:
 ## Current project status
 
 > [!IMPORTANT]
-> Publication and source versions are currently split: npm and GitHub Latest
-> Release are `0.8.16`, `origin/main` declares `0.8.26.2`, and the active
-> repair line declares the unreleased candidate `0.8.26.3`. A source version
-> change is not evidence that a package or Release was published. The
+> npm and GitHub Latest Release are reconciled at `0.8.30` (2026-08-14) with
+> `origin/main`. A source version change is not evidence that a package or
+> Release was published. The
 > [Security Policy Version Channels](./SECURITY.md#version-channels) is the
 > authoritative version-truth table.
 

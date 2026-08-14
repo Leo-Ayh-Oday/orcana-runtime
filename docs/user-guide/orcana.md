@@ -4,9 +4,8 @@
 
 Orcana is a model-agnostic terminal Coding Agent runtime with first-class DeepSeek integration, built for long-running software engineering tasks.
 
-> Public package: `0.8.16`. The repository contains newer unreleased source.
-> See [current status](../status.md) before comparing package behavior with the
-> repository.
+> Public package: `0.8.30` (2026-08-14), reconciled with `origin/main`.
+> See [current status](../status.md) for the authoritative version table.
 
 Its core direction is constraint-first coding workflow: task triage, planning gates, task packets, controlled tool calls, patch transactions, evidence-based completion, and an interactive TUI for coding sessions.
 
@@ -213,8 +212,8 @@ boundary; see the [Linux sandbox status](../linux-foundation/current-status.md).
 
 For high-risk operations, inspect the plan, changes, and verification output before accepting results. Do not use auto-approve mode in production repositories unless you fully understand the tool permissions and rollback behavior.
 
-Current public version: `0.8.16`. Newer repository versions are unreleased until
-npm, tag, GitHub Release and public-install smoke verification agree.
+Current public version: `0.8.30` (2026-08-14). npm, tag, GitHub Release and
+public-install smoke verification all agree on this version.
 
 ## 10. Troubleshooting
 

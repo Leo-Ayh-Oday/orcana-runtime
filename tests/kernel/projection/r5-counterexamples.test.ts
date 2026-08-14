@@ -2,9 +2,12 @@
  * AK2-R5 Correction Gate —— R5-00 先红反例冻结。
  *
  * 每个反例在修复前必须 RED（断言生产代码当前错误行为），修复后 GREEN。
- * 例外：R5-00-9（sealed 后同 UID 直写 upper）为 **KNOWN RED** —— 当前
- * same-UID 架构无法阻止（无 kernel-owned immutable snapshot / 独立 UID /
- * MAC 授权）—— 标记 OWNER-DECISION-REQUIRED；禁止伪造 GREEN。
+ * 例外：R5-00-9（R6-00-14 修正 / sealed 后同 UID 直写 upper）为
+ * **KNOWN RED** —— 当前 same-UID 架构无法阻止（无 kernel-owned immutable
+ * snapshot / 独立 UID / MAC 授权）—— 标记 OWNER-DECISION-REQUIRED；
+ * 禁止伪造 GREEN。R6-00-14 修正该测试：攻击必须真实写入 writeLayer/upper
+ * 并确认成功后再 scan（旧版在 writeFileSync 处 EACCES —— setup error
+ * 冒充攻击证明）。
  *
  * 分层：
  * - FIXTURE：fixture backend + TestReceiptAuthority（deterministic）；
@@ -30,7 +33,8 @@
  *   8  同一 intent 被两个 adapter 实例使用 → 只允许一个 execution cell
  *      （kernel-owned 一次性 reservation；不依赖实例内 Set）
  *   9  sealed 后同 UID 直写 writeLayerPath/upper → 不得返回成功 delta、
- *      不得 commit —— KNOWN RED / OWNER-DECISION-REQUIRED
+ *      不得 commit —— KNOWN RED / OWNER-DECISION-REQUIRED（R6-00-14 修正：
+ *      攻击动作必须真实成功后再 scan，不得以 EACCES/setup error 冒充）
  *  10  raw bytes 恰为合法 FileManifest JSON → snapshot 物化逐字节一致
  *      （R5-07，world 层测试文件）
  *  11  invalid final namespace 拒绝后无 CAS/file/staging residue（R5-08，
@@ -808,7 +812,7 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     ctx.cleanup()
   })
 
-  test("R5-00-9（KNOWN RED / OWNER-DECISION-REQUIRED）：sealed 后同 UID 直写 writeLayerPath/upper → 不得返回成功 delta、不得 commit", async () => {
+  test("R5-00-9（R6-00-14 修正 / KNOWN RED / OWNER-DECISION-REQUIRED）：sealed 后同 UID 直写 writeLayerPath/upper —— 攻击动作必须真实成功后再 scan（不得以 EACCES/setup error 冒充已证明的 KNOWN RED）", async () => {
     const { ctx, snapshotId } = buildWorld()
     const harness = createHarness()
     const coord = coordinator(ctx, harness.backend, { receiptAuthority: harness.authority })
@@ -820,9 +824,30 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       expect("error" in sealed).toBe(false)
       const sealedPath = (sealed as { sealedPath: string }).sealedPath
       session.sealedPath = sealedPath
-      // 同 UID 直接写 sealed 视图的 writeLayer（fixture：merged === writeLayer）。
+      // 攻击：同 UID 把 sealed 视图（fixture：mode-based 只读，同 UID 可
+      // 还原）**整树**还原为可写，然后直接写入 writeLayer（fixture：
+      // merged === writeLayer）。此前版本只 chmod 顶层 → src/ 仍 0555 →
+      // 写入 EACCES —— setup error 冒充攻击证明。修正：整树还原，
+      // 确认写入真实成功，再调用 scan。
+      const makeWritable = (dir: string): void => {
+        for (const entry of readdirSync(dir)) {
+          const full = join(dir, entry)
+          const stat = lstatSync(full)
+          if (stat.isDirectory()) {
+            chmodSync(full, 0o755)
+            makeWritable(full)
+          } else if (stat.isFile()) {
+            chmodSync(full, 0o644)
+          }
+        }
+      }
       chmodSync(sealedPath, 0o755)
-      writeFileSync(join(sealedPath, "src/tampered.txt"), "tampered\n")
+      makeWritable(sealedPath)
+      const tampered = join(sealedPath, "src", "tampered.txt")
+      writeFileSync(tampered, "tampered\n")
+      // 攻击动作必须真实成功（R6-00-14：不得以 EACCES/setup error 冒充）。
+      expect(existsSync(tampered)).toBe(true)
+      expect(readFileSync(tampered, "utf8")).toBe("tampered\n")
       let delta: unknown
       let scanError: unknown
       try {
@@ -831,14 +856,18 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
         scanError = error
       }
       // 期望 fail-closed：不得返回成功 delta。
-      // KNOWN RED：same-UID 架构无法阻止（无 kernel-owned immutable view）。
-      // 不伪造 GREEN —— 该项标记 OWNER-DECISION-REQUIRED。
-      expect(scanError).toBeDefined()
+      // KNOWN RED（R6-00-14 修正后攻击已证明落地）：same-UID 架构无法
+      // 阻止 —— 攻击写入成功且被 scan 观察到（fail-open）。不伪造 GREEN
+      // —— 该项标记 OWNER-DECISION-REQUIRED。
       if (scanError === undefined) {
+        const deltaEntries = (delta as { entries?: Array<{ path: string }> })?.entries ?? []
         throw new Error(
-          "R5-00-9 KNOWN RED: sealed view accepted a same-UID direct upper write and returned a success delta (OWNER-DECISION-REQUIRED: no kernel-owned immutable seal in same-UID architecture)",
+          "R6-00-14 KNOWN RED (proven attack): same-UID direct upper write SUCCEEDED (file exists in the write layer) and the sealed scan returned a success delta including " +
+            JSON.stringify(deltaEntries.map(entry => entry.path)) +
+            " (OWNER-DECISION-REQUIRED: no kernel-owned immutable seal in same-UID architecture)",
         )
       }
+      expect(scanError).toBeDefined()
       expect(delta).toBeUndefined()
       // 且不得 commit。
       let commitError: unknown

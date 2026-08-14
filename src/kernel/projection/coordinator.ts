@@ -150,6 +150,14 @@ export interface ProjectionCoordinatorOptions {
    *  child 创建前调用（R5-00-3 反例的确定性 base-swap 窗口）。
    *  无此选项时零开销（undefined 短路）。 */
   readonly onBeforeChildCreate?: (baseRoot: string) => void
+  /** 测试注入窗口（test-only；生产不传）：base root 的 parent 验证后、
+   *  base mkdir/open 前调用（R6-00-8 反例的确定性 parent-swap 窗口）。
+   *  无此选项时零开销（undefined 短路）。 */
+  readonly onBeforeBaseMkdir?: (basePath: string) => void
+  /** 测试注入窗口（test-only；生产不传）：projection child 打开并捕获
+   *  身份后、base dir 创建 / 物化前调用（R6-00-9 反例的确定性 child-swap
+   *  窗口）。无此选项时零开销（undefined 短路）。 */
+  readonly onAfterChildOpened?: (projectionRoot: string) => void
 }
 
 /** 单一 cleanup 状态机结果。 */
@@ -205,7 +213,13 @@ class ProjectionBaseRootAuthority {
   private fd: number | undefined
   private identity: { readonly dev: number; readonly ino: number } | undefined
 
-  constructor(readonly basePath: string) {}
+  /** 测试注入窗口（test-only；生产不传）：parent 验证后、base mkdir 前
+   *  （R6-00-8 反例的确定性 parent-swap 窗口）。 */
+  private readonly onBeforeBaseMkdir?: (basePath: string) => void
+
+  constructor(readonly basePath: string, onBeforeBaseMkdir?: (basePath: string) => void) {
+    this.onBeforeBaseMkdir = onBeforeBaseMkdir
+  }
 
   /** 创建/验证/打开 base root（幂等；返回保留的 dirfd）。 */
   prepare(): number {
@@ -228,6 +242,8 @@ class ProjectionBaseRootAuthority {
     } finally {
       if (parentFd !== undefined) closeSync(parentFd)
     }
+    // 测试注入窗口（test-only）：parent 验证后、base mkdir 前（R6-00-8）。
+    this.onBeforeBaseMkdir?.(base)
     try {
       mkdirSync(base, { mode: 0o700 })
     } catch (error) {
@@ -356,6 +372,8 @@ export class ProjectionCoordinator {
   private readonly receiptAuthority: ProjectionReceiptAuthority
   private readonly onBeforeProjectionRootOpen?: (root: string) => void
   private readonly onBeforeChildCreate?: (baseRoot: string) => void
+  private readonly onBeforeBaseMkdir?: (basePath: string) => void
+  private readonly onAfterChildOpened?: (projectionRoot: string) => void
   /** R5-02：可信 projection base root authority（retained dirfd）。 */
   private readonly baseRoot: ProjectionBaseRootAuthority
   /** R5-05：kernel-owned 一次性 intent reservation。 */
@@ -378,8 +396,10 @@ export class ProjectionCoordinator {
     this.receiptAuthority = options.receiptAuthority
     this.onBeforeProjectionRootOpen = options.onBeforeProjectionRootOpen
     this.onBeforeChildCreate = options.onBeforeChildCreate
+    this.onBeforeBaseMkdir = options.onBeforeBaseMkdir
+    this.onAfterChildOpened = options.onAfterChildOpened
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
-    this.baseRoot = new ProjectionBaseRootAuthority(resolve(this.baseProjectionRoot))
+    this.baseRoot = new ProjectionBaseRootAuthority(resolve(this.baseProjectionRoot), options.onBeforeBaseMkdir)
   }
 
   /** UNPROJECTED → PROJECTED：物化 immutable base + backend 挂载。 */
@@ -445,6 +465,9 @@ export class ProjectionCoordinator {
       } finally {
         closeSync(rootFd)
       }
+      // 测试注入窗口（test-only）：child fd 身份捕获后、base dir 创建 /
+      // 物化前（R6-00-9 反例的确定性 child-swap 窗口）。
+      this.onAfterChildOpened?.(projectionRoot)
       const baseDir = join(projectionRoot, "base")
       mkdirSync(baseDir, { mode: 0o700 })
       // 物化 immutable lower（内容只来自 snapshot CAS，不读 World HEAD）。

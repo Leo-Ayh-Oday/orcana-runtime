@@ -36,7 +36,7 @@ describe("AK2-T03 fixture backend（TEST FIXTURE ONLY）", () => {
     const root = tmpRoot("fx")
     const lower = buildLower(root)
     const instance = new CopyProjectionFixtureBackend().create({ lowerDir: lower, projectionRoot: root, label: "p1" })
-    expect(instance.backend).toBe("fixture")
+    expect((instance.backend as string)).toBe("fixture")
     expect(instance.mergedPath).toBe(join(root, "merged-p1"))
     instance.assertReady()
     expect(readFileSync(join(instance.mergedPath, "src/main.ts"), "utf8")).toBe("export const x = 1\n")

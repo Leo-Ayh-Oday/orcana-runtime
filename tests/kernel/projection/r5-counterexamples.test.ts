@@ -161,7 +161,7 @@ function makePlan(snapshotId: string, overrides: Partial<WorldProjectionPlanInpu
  *  （R5-01 修复后 allowTestBackends 选项被删除，运行时被忽略）。 */
 function coordinator(
   ctx: TestWorldStore,
-  backend?: NativeProjectionBackend,
+  backend?: NativeProjectionBackend | CopyProjectionFixtureBackend,
   options: { receiptAuthority?: ProjectionReceiptAuthority; projectionRoot?: string } & Record<string, unknown> = {},
 ): ProjectionCoordinator {
   const materializer = new SnapshotMaterializer({
@@ -715,57 +715,60 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     ctx.cleanup()
   })
 
-  test("R5-00-8：同一 intent 被两个 adapter 实例 / 重建 adapter 使用 → 只允许一个 execution cell", async () => {
+  test("R5-00-8（R6-02 重写）：同一 intent 跨 coordinator（durable reservation）→ 只允许一个 execution cell；重建后仍拒绝", async () => {
     const { ctx, snapshotId } = buildWorld()
-    const harness = createHarness()
-    const coord = coordinator(ctx, harness.backend, { receiptAuthority: harness.authority })
-    const session = coord.start(makePlan(snapshotId))
-    // 绑定 command 的 intent（与 coordinator.execute 的 intent 绑定同构）。
-    const intent = {
-      ...session.intent,
-      command: { executable: "/bin/sh", args: ["-c", "true"] },
-      filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir),
-    }
-    const stateDir = join(tmpdir(), `ak2-r5-intent-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
-    const stateStore = new RuntimeStateStore({ root: stateDir })
+    const harness = createHarness(merged => writeFileSync(join(merged, "src/main.ts"), "changed\n"))
+    // R6-02：durable reservation 由 coordinator.execute 在任意 executor
+    // 调用前完成（adapter 不再接收 registry）。两个 coordinator 共享同一
+    // reservation 路径（跨实例等价）；plan.intentId 是 kernel-owned 覆盖
+    // （确定性重放场景）。
+    const reservationPath = join(tmpdir(), `ak2-r5-intent-${process.pid}-${Math.random().toString(36).slice(2, 8)}.sqlite`)
     cleanups.push(() => {
       try {
-        rmSync(stateDir, { recursive: true, force: true })
+        rmSync(reservationPath, { recursive: true, force: true })
       } catch {
         // 已删
       }
     })
-    const broker = createLinuxBroker({ mode: "enabled", stateStore })
-    // 同一 kernel-owned registry 传给两个 adapter 实例。
-    const registry = new ProjectionIntentRegistry()
-    const baseOptions = {
-      broker,
-      authority: authorityFor(session.mergedDir),
-      writableRoots: ["src"],
-      readonlyRoots: ["docs"],
-      profile: "build",
-      receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
-      intentRegistry: registry,
-    }
-    const adapterA = new LinuxBrokerProjectionExecutor(baseOptions as never)
-    const adapterB = new LinuxBrokerProjectionExecutor(baseOptions as never)
-    const adapterC = new LinuxBrokerProjectionExecutor(baseOptions as never)
-    const resultA = await adapterA.execute(session.mergedDir, {
-      executable: "/bin/sh",
-      args: ["-c", "true"],
-      intent,
+    const coordA = coordinator(ctx, harness.backend, {
+      receiptAuthority: harness.authority,
+      intentReservationPath: reservationPath,
     })
-    expect(resultA.outcome.exitCode).toBe(0)
-    // adapterB（第二个实例）必须拒绝 —— RED at baseline（B 有自己的空 Set）。
-    await expect(
-      adapterB.execute(session.mergedDir, { executable: "/bin/sh", args: ["-c", "true"], intent }),
-    ).rejects.toMatchObject({ code: "EXECUTION_RECEIPT_BINDING_MISMATCH" })
-    // 重建后的 adapterC（共享同一 registry）也必须拒绝。
-    await expect(
-      adapterC.execute(session.mergedDir, { executable: "/bin/sh", args: ["-c", "true"], intent }),
-    ).rejects.toMatchObject({ code: "EXECUTION_RECEIPT_BINDING_MISMATCH" })
-    // 只有一个 cell 被授权（registry 状态不可逆）。
-    expect(registry.isReserved(intent.intentId)).toBe(true)
+    const coordB = coordinator(ctx, harness.backend, {
+      receiptAuthority: harness.authority,
+      intentReservationPath: reservationPath,
+    })
+    const intentId = `intent-r5-00-8-${process.pid}-${Date.now()}`
+    const sessionA = coordA.start(makePlan(snapshotId, { intentId }))
+    const sessionB = coordB.start(makePlan(snapshotId, { intentId }))
+    // 第一个 cell 正常执行（reserve 成功）。
+    const resultA = await coordA.execute(sessionA, { executable: "noop", args: [] }, harness.executor)
+    expect(resultA.exitCode).toBe(0)
+    // 第二个 coordinator（同一 intentId）必须拒绝 —— durable reservation
+    // 跨实例/跨重建不可复用。
+    let execErrorB: unknown
+    try {
+      await coordB.execute(sessionB, { executable: "noop", args: [] }, harness.executor)
+    } catch (error) {
+      execErrorB = error
+    }
+    expect((execErrorB as ProjectionError).code).toBe("EXECUTION_RECEIPT_BINDING_MISMATCH")
+    if ((execErrorB as ProjectionError).code !== "EXECUTION_RECEIPT_BINDING_MISMATCH") {
+      throw new Error("R5-00-8 RED: a second coordinator re-authorized the same intent (reservation not durable across instances)")
+    }
+    expect(sessionB.worldState).toBe("REJECTED")
+    // 重建（进程重启等价）：新 registry 实例也必须拒绝同一 intent。
+    const rebuilt = new ProjectionIntentRegistry(reservationPath)
+    expect(rebuilt.isReserved(intentId)).toBe(true)
+    expect(rebuilt.reserve(intentId)).toBe(false)
+    // 只有一个 cell 被授权（reservation 状态不可逆）。
+    expect(coordA.intentRegistry.isReserved(intentId)).toBe(true)
+    // 清理 sessionA 的投影（sessionB 已在 execute 失败时 terminalize）。
+    try {
+      await coordA.cancel(sessionA)
+    } catch {
+      // 已清理
+    }
     ctx.cleanup()
   }, 60_000)
 

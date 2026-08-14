@@ -88,7 +88,9 @@ async function runVerticalSlice(
   const coord = new ProjectionCoordinator({
     store: ctx.store,
     materializer,
-    backend,
+    // R6-01：production NativeBackendKind 无 fixture discriminant ——
+    // test-only fixture 经显式 cast 传入（gate 由 brand 判定）。
+    backend: backend as unknown as import("../../../src/kernel/projection/backend").NativeProjectionBackend,
     projectionRoot: tmpRoot("proj"),
     // R5-01：所有 backend 都要求 receipt authority —— A 层 fixture 用
     // TestReceiptAuthority（test-only）；B 层用 RuntimeStateReceiptAuthority。
@@ -214,7 +216,6 @@ function brokerExecutorFactory(merged: string, stateStore?: RuntimeStateStore) {
   const executor = new LinuxBrokerProjectionExecutor({
     broker,
     authority: { identity: { runId: `run-${process.pid}`, nodeRunId: `run-${process.pid}:n1`, attempt: 1 }, workspace },
-    intentRegistry: new ProjectionIntentRegistry(),
     writableRoots: ["src"],
     readonlyRoots: ["docs"],
     profile: "build",

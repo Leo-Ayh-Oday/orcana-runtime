@@ -12,6 +12,7 @@ import { WorkspaceAuthorityRegistry } from "../../../src/runtime/linux/workspace
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
 import { ProjectionIntentRegistry, expectedProjectionFilesystemPolicyDigest } from "../../../src/kernel/projection/coordinator"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
+import { expectedProjectionCellSpecDigest } from "../../../src/kernel/projection/spec-binding"
 import type { TrustedExecutionAuthority } from "../../../src/runtime/linux/contracts"
 
 const cleanups: Array<() => void> = []
@@ -42,18 +43,6 @@ function authorityFor(merged: string): TrustedExecutionAuthority {
   }
 }
 
-/** 每个测试自己的 registry（同一测试内共享 → 一个 intent 一个 cell）。 */
-const testRegistries = new WeakMap<object, ProjectionIntentRegistry>()
-
-function registryFor(key: object): ProjectionIntentRegistry {
-  let registry = testRegistries.get(key)
-  if (registry === undefined) {
-    registry = new ProjectionIntentRegistry()
-    testRegistries.set(key, registry)
-  }
-  return registry
-}
-
 function adapter(merged: string, overrides: Partial<ConstructorParameters<typeof LinuxBrokerProjectionExecutor>[0]> = {}) {
   // 真实 broker（无 testCapabilities）：真实能力探测 + bubblewrap strict
   // lane —— receipt.backend 必须是 bubblewrap/podman（R01.4：host-audit
@@ -69,7 +58,6 @@ function adapter(merged: string, overrides: Partial<ConstructorParameters<typeof
     readonlyRoots: ["docs"],
     profile: "build",
     receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
-    intentRegistry: registryFor(broker),
     ...overrides,
   })
 }
@@ -86,7 +74,6 @@ describe("AK2-T06 adapter 边界", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
-      intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, { executable: "/bin/true", args: [] }),
@@ -110,7 +97,6 @@ describe("AK2-T06 adapter 边界", () => {
       writableRoots: ["src"],
       readonlyRoots: [],
       profile: "build",
-      intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, { executable: "/bin/true", args: [] }),
@@ -185,7 +171,6 @@ describe("AK2-T06 真实 broker 执行", () => {
     const executor = new LinuxBrokerProjectionExecutor({
       broker,
       authority,
-      intentRegistry: new ProjectionIntentRegistry(),
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
@@ -211,7 +196,6 @@ describe("AK2-T06 真实 broker 执行", () => {
     const executor = new LinuxBrokerProjectionExecutor({
       broker,
       authority,
-      intentRegistry: new ProjectionIntentRegistry(),
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
@@ -247,7 +231,19 @@ describe("AK2-T06 真实 broker 执行", () => {
         { writableRoots: ["src"], readonlyRoots: ["docs"] } as never,
         resolve(merged),
       ),
+      // R6-03：intent 携带 kernel-owned 执行 policy（profile/network）——
+      // adapter 在 spawn 前与自己的选项逐字段比对（profile 不一致 → 拒绝）。
+      profile: "build" as const,
     }
+    // R6-03：expectedCellSpecDigest 由 kernel 从权威输入（intent + merged
+    // hostRoot + ownerFiles）经 trusted compiler 派生 —— adapter pre-spawn
+    // 把实际编译 spec 的规范化 digest 与它比对。必须在 intent 字面量之后
+    // 计算（自引用）。
+    ;(intent as unknown as { expectedCellSpecDigest: string }).expectedCellSpecDigest = expectedProjectionCellSpecDigest(
+      intent as never,
+      resolve(merged),
+      ["src"],
+    )
     await executor.execute(merged, {
       executable: "/bin/echo",
       args: ["hello", "world"],
@@ -285,7 +281,6 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
-          intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, {
@@ -314,7 +309,6 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
-      intentRegistry: new ProjectionIntentRegistry(),
       receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
     })
     const { outcome } = await executor.execute(merged, { executable: "/bin/true", args: [] })
@@ -357,7 +351,6 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
-      intentRegistry: new ProjectionIntentRegistry(),
       receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
     })
     const { outcome } = await executor.execute(merged, { executable: "/bin/true", args: [] })
@@ -378,7 +371,6 @@ describe("AK2-T06 真实 broker 执行", () => {
       writableRoots: ["src"],
       readonlyRoots: ["docs"],
       profile: "build",
-          intentRegistry: new ProjectionIntentRegistry(),
     })
     await expect(
       executor.execute(merged, { executable: "/bin/true", args: [] }),

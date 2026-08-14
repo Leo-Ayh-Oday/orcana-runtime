@@ -71,13 +71,15 @@ describe("AK2-R6 World/CAS 反例（R6-00 先红冻结）", () => {
       expect(ctx.store.cas.record(rawDigest)!.isManifest).toBe(true)
     }
     // A：commit → snapshot → promotion。
-    const a = build("wA")
-    const sA = a.ctx.store.createSnapshot("wA", "b")
+    //（两个独立 store 使用相同 worldId —— 世界状态逐位一致，只有
+    //  promotion 时序不同；filesystemDigest 与 manifestDigest 必须一致。）
+    const a = build("wAB")
+    const sA = a.ctx.store.createSnapshot("wAB", "b")
     promote(a.ctx, a.rawDigest)
     // B：commit → promotion → snapshot。
-    const b = build("wB")
+    const b = build("wAB")
     promote(b.ctx, b.rawDigest)
-    const sB = b.ctx.store.createSnapshot("wB", "b")
+    const sB = b.ctx.store.createSnapshot("wAB", "b")
 
     // filesystemDigest 与 manifestDigest 必须一致（representation 是 World
     // revision 的持久事实，与 promotion 时序无关）。

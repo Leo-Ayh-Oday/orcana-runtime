@@ -8,13 +8,13 @@ import { ProjectionError } from "../../../src/kernel/projection/contracts"
 import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type ProjectionExecutor } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import { CopyProjectionFixtureBackend, TestReceiptAuthority, fixtureExecutor } from "./test-fixtures"
-import { type NativeProjectionBackend, type ProjectionInstance } from "../../../src/kernel/projection/backend"
+import { type NativeProjectionBackend, type ProjectionInstance, markTestFixtureBackend } from "../../../src/kernel/projection/backend"
 import { validateWorldProjectionPlan, type WorldProjectionPlanInput } from "../../../src/kernel/projection/plan"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
 import type { CasDigest } from "../../../src/kernel/world"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
-import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
+import { markTestHarnessReceiptAuthority, type ProjectionReceiptAuthority, type ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -53,6 +53,9 @@ function buildWorld(): { ctx: TestWorldStore; snapshotId: string; baseContent: s
     mutations: [
       { type: "object.put", objectId: "obj-src", objectType: "directory", path: "src" },
       { type: "object.put", objectId: "obj-main", objectType: "file", path: "src/main.ts", contentRef: digest },
+      // R6-03：plan 声明的 readonlyRoots 必须在 World 中存在（kernel spec
+      // compiler 对 required mount source 做存在性校验）。
+      { type: "object.put", objectId: "obj-docs", objectType: "directory", path: "docs" },
     ],
   })
   ctx.store.createSnapshot("world-c", "branch-main")
@@ -94,7 +97,7 @@ function coordinator(
   return new ProjectionCoordinator({
     store: ctx.store,
     materializer,
-    backend: backend ?? new CopyProjectionFixtureBackend(),
+    backend: (backend ?? new CopyProjectionFixtureBackend()) as unknown as NativeProjectionBackend,
     projectionRoot: tmpRoot("projroot"),
     receiptAuthority: effective,
   })
@@ -318,11 +321,11 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     const { ctx, snapshotId } = buildWorld()
     const failingBackend: NativeProjectionBackend = {
       id: "fixture-failing-cleanup",
-      kind: "fixture",
+      kind: "fixture" as never,
       create(input) {
         const inner = new CopyProjectionFixtureBackend().create(input)
         const instance: ProjectionInstance = {
-          backend: "fixture",
+          backend: "fixture" as never,
           mergedPath: inner.mergedPath,
           writeLayerPath: inner.writeLayerPath,
           assertReady: inner.assertReady,
@@ -332,6 +335,9 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         return instance
       },
     }
+    // R6-01：tests/** 构造的 fixture backend 必须携带 test-fixture brand ——
+    // kind:'fixture' 字符串不再授予 commit 授权。
+    markTestFixtureBackend(failingBackend)
     const coord = coordinator(ctx, failingBackend)
     const session = coord.start(makePlan(snapshotId))
     await coord.execute(
@@ -694,6 +700,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
   function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean } = {}): ProjectionReceiptAuthority & {
     setIntentDigest(digest: string | undefined): void
     setFilesystemPolicyDigest(digest: string): void
+    setCellSpecDigest(digest: string): void
     setCleanupFinalized(finalized: boolean): void
     setHidden(next: boolean): void
     currentDigest(): string | undefined
@@ -702,6 +709,11 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     let intentDigest: string | undefined
     // R4-03.4：fake receipt 必须携带 coordinator 派生的期望 policy digest。
     let filesystemPolicyDigest = "d".repeat(64)
+    // R6-03：commit 时 kernel 用 receipt 真实 cellId 重编译期望 spec digest ——
+    // fake receipt 的 cellSpecDigest 必须由 bindIntent 从 session 派生
+    // （expectedProjectionCellSpecDigestForCell），否则合法 commit 也会被
+    // EXECUTION_RECEIPT_BINDING_MISMATCH 拒绝。
+    let cellSpecDigest = "c".repeat(64)
     let cleanupFinalized = true
     let hidden = initiallyHidden === true
     // 预生成 digest（receipt 内容在构造时固定）。
@@ -710,13 +722,16 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     const inner: ProjectionReceiptAuthority = {
       // R5-01：显式 trust level（test-harness —— 只可配对 test-only fixture
       // backend；production acceptance 不信任）。
+      // R6-01：test-harness brand（WeakSet）—— 结构化对象 + 公开字符串
+      // 不再授予 commit 授权；只有 tests/** 构造的 branded fixture 配对
+      // （authority + fixture backend）才能通过 production gate。
       trustLevel: "test-harness" as const,
       getFinalReceipt: () => {
         if (hidden === true) return undefined
         if (intentDigest === undefined) return undefined
         // digest 必须与最终内容（含 projectionIntentDigest）自洽 —— 与
         // broker 注入 intent 后重算 digest 的语义一致。
-        const receipt = fakeFinalReceipt({ ...receiptOverrides, filesystemPolicyDigest })
+        const receipt = fakeFinalReceipt({ ...receiptOverrides, filesystemPolicyDigest, cellSpecDigest })
         const { receiptDigest: _rd, ...content } = receipt
         const withIntent = { ...content, projectionIntentDigest: intentDigest }
         const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
@@ -725,12 +740,16 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       },
       isCleanupFinalized: () => cleanupFinalized,
     }
+    markTestHarnessReceiptAuthority(inner)
     return Object.assign(inner, {
       setIntentDigest(digest: string | undefined): void {
         intentDigest = digest
       },
       setFilesystemPolicyDigest(digest: string): void {
         filesystemPolicyDigest = digest
+      },
+      setCellSpecDigest(digest: string): void {
+        cellSpecDigest = digest
       },
       setCleanupFinalized(finalized: boolean): void {
         cleanupFinalized = finalized
@@ -742,7 +761,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         // intent 已绑定时，digest 必须反映最终内容（含 projectionIntentDigest）。
         if (intentDigest === undefined) return latestDigest
         const { computeReceiptDigest: crd } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
-        const { receiptDigest: _rd, ...content } = fakeFinalReceipt({ ...receiptOverrides, filesystemPolicyDigest })
+        const { receiptDigest: _rd, ...content } = fakeFinalReceipt({ ...receiptOverrides, filesystemPolicyDigest, cellSpecDigest })
         return crd({ ...content, projectionIntentDigest: intentDigest })
       },
     })
@@ -751,14 +770,31 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
   /** bindIntent 需要的最小 session 形态（plan + mergedDir + intent）。 */
   type ProjectionSessionLike = { plan: WorldProjectionPlan; mergedDir: string; intent: import("../../../src/kernel/projection/contracts").ProjectionExecutionIntent }
 
+  /** R6-03：kernel 用 receipt 真实 cellId（cell-fake）重编译的期望 spec
+   *  digest —— outcome claim binding 必须与 receipt 一致（直接派生，
+   *  不硬编码；与 bindIntent/commit 校验同构）。 */
+  function expectedClaimSpecDigest(session: ProjectionSessionLike): string {
+    const { expectedProjectionCellSpecDigestForCell } = require("../../../src/kernel/projection/spec-binding") as typeof import("../../../src/kernel/projection/spec-binding")
+    return expectedProjectionCellSpecDigestForCell(session.intent, session.mergedDir, session.plan.writableRoots, "cell-fake")
+  }
+
   /** 用当前 session.intent 配置 fake authority（模拟 broker 注入 intent）。 */
   function bindIntent(auth: ReturnType<typeof fakeAuthority>, session: ProjectionSessionLike): void {
     const { projectionIntentDigest: pid } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
     const { expectedProjectionFilesystemPolicyDigest } = require("../../../src/kernel/projection/coordinator") as typeof import("../../../src/kernel/projection/coordinator")
+    const { expectedProjectionCellSpecDigestForCell } = require("../../../src/kernel/projection/spec-binding") as typeof import("../../../src/kernel/projection/spec-binding")
     auth.setIntentDigest(pid(session.intent))
     // R4-03.4：fake receipt 的 filesystemPolicyDigest 必须等于 coordinator
     // 从 kernel-owned input 派生的期望值。
     auth.setFilesystemPolicyDigest(expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir))
+    // R6-03：fake receipt 的 cellSpecDigest 必须等于 kernel 用 receipt
+    // 真实 cellId（cell-fake）重编译的期望 spec digest（deterministic
+    // recompile；与 commit 时的校验同构）。merged 视图已被 cleanup 的
+    // session（如 replay 测试中已 commit 的 sessionA）无法再编译 ——
+    // 保留既有值（replay 路径只依赖 intent digest 绑定）。
+    if (existsSync(session.mergedDir)) {
+      auth.setCellSpecDigest(expectedProjectionCellSpecDigestForCell(session.intent, session.mergedDir, session.plan.writableRoots, "cell-fake"))
+    }
   }
 
   /** 走完 start→execute(ok)→scan 的 session。R5-01：scan 门对 fixture 也
@@ -801,7 +837,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     sessionA.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: authA.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionA.plan, sessionA.mergedDir), workspaceHostRoot: sessionA.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(sessionA), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionA.plan, sessionA.mergedDir), workspaceHostRoot: sessionA.mergedDir },
     }
     const receiptA = coordA.commit(sessionA)
     expect(receiptA.newRevision).toBe(2n)
@@ -825,7 +861,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     })
     const authB = fakeAuthority()
     const coordB = new ProjectionCoordinator({
-      store: ctxB.store, materializer: materializerB, backend: new CopyProjectionFixtureBackend(),
+      store: ctxB.store, materializer: materializerB, backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
       projectionRoot: tmpRoot("replay"), receiptAuthority: authB,
     })
     const planB = validateWorldProjectionPlan({
@@ -841,7 +877,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       // 重放 world-A 的 receipt（同 binding、同 intent digest）。
       executionReceiptId: authB.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionB.plan, sessionB.mergedDir), workspaceHostRoot: sessionB.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(sessionB), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionB.plan, sessionB.mergedDir), workspaceHostRoot: sessionB.mergedDir },
     }
     try {
       coordB.commit(sessionB)
@@ -879,7 +915,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     })
     const root = tmpRoot("cleanupthrow")
     const throwingBackend: NativeProjectionBackend = {
-      id: "fixture-throwing", kind: "fixture",
+      id: "fixture-throwing", kind: "fixture" as never,
       create(input) {
         const merged = join(input.projectionRoot, "merged-m")
         mkdirSync(merged, { mode: 0o700 })
@@ -894,7 +930,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         }
         chmodTree(merged)
         return {
-          backend: "fixture", mergedPath: merged, writeLayerPath: merged,
+          backend: "fixture" as never, mergedPath: merged, writeLayerPath: merged,
           assertReady: () => undefined,
           sealForScan: () => ({ sealedPath: merged }),
           cleanup: () => { throw new Error("cleanup exploded") },
@@ -943,7 +979,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     sessionA.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: auth.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionA.plan, sessionA.mergedDir), workspaceHostRoot: sessionA.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(sessionA), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionA.plan, sessionA.mergedDir), workspaceHostRoot: sessionA.mergedDir },
     }
     const receiptA = coord.commit(sessionA)
     expect(receiptA.newRevision).toBe(2n)
@@ -968,7 +1004,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     sessionB.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: auth.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionB.plan, sessionB.mergedDir), workspaceHostRoot: sessionB.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(sessionB), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(sessionB.plan, sessionB.mergedDir), workspaceHostRoot: sessionB.mergedDir },
     }
     try {
       coordB.commit(sessionB)
@@ -1011,7 +1047,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: auth.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     const receipt = coord.commit(session)
     expect(receipt.newRevision).toBe(2n)
@@ -1036,7 +1072,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: auth.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-other", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-other", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     try {
       coord.commit(session)
@@ -1142,6 +1178,9 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         const merged = join(resolve(input.projectionRoot), "merged-stub")
         mkdirSync(merged, { mode: 0o700 })
         mkdirSync(join(merged, "src"), { recursive: true })
+        // R6-03：kernel-owned spec compiler 对 required mount source 做
+        // 存在性校验 —— stub 必须镜像 plan 声明的 roots（含 readonlyRoots）。
+        mkdirSync(join(merged, "docs"), { recursive: true })
         return {
           backend: "fuse-overlayfs",
           mergedPath: merged,
@@ -1187,7 +1226,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: "f".repeat(64),
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     try {
       coord.commit(session)
@@ -1208,7 +1247,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: "f".repeat(64), // authority 返回 digest=a*64
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     try {
       coord.commit(session)
@@ -1230,7 +1269,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: auth.currentDigest()!,
       // binding 指向另一个 cell。
-      receiptBinding: { runId: "run-other", nodeRunId: "run-other:n1", cellId: "cell-other", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-other", nodeRunId: "run-other:n1", cellId: "cell-other", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     try {
       coord.commit(session)
@@ -1254,7 +1293,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: "a".repeat(64),
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     try {
       coord.commit(session)
@@ -1275,7 +1314,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: auth.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     try {
       coord.commit(session)
@@ -1296,7 +1335,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     session.outcome = {
       exitCode: 0, timedOut: false, cancelled: false, violation: false,
       executionReceiptId: auth.currentDigest()!,
-      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: "c".repeat(64), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
+      receiptBinding: { runId: "run-fake", nodeRunId: "run-fake:n1", cellId: "cell-fake", cellSpecDigest: expectedClaimSpecDigest(session), filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir), workspaceHostRoot: session.mergedDir },
     }
     const receipt = coord.commit(session)
     expect(receipt.newRevision).toBe(2n)
@@ -1359,7 +1398,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     const coord = new ProjectionCoordinator({
       store: ctx.store,
       materializer,
-      backend: new CopyProjectionFixtureBackend(),
+      backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
       projectionRoot: tmpRoot("p13"),
       receiptAuthority: auth,
     })
@@ -1425,7 +1464,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       new ProjectionCoordinator({
         store: ctx.store,
         materializer,
-        backend: new CopyProjectionFixtureBackend(),
+        backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
         projectionRoot: tmpRoot("nofix"),
       } as never),
     ).toThrow(ProjectionError)
@@ -1435,7 +1474,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     const coord = new ProjectionCoordinator({
       store: ctx.store,
       materializer,
-      backend: new CopyProjectionFixtureBackend(),
+      backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
       projectionRoot: tmpRoot("fix"),
       receiptAuthority: auth,
     })
@@ -1456,7 +1495,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     // stub backend：真实 fixture 语义但 cleanup 恒 false（模拟 unmount 失败）。
     const failingBackend: NativeProjectionBackend = {
       id: "fixture-failing",
-      kind: "fixture",
+      kind: "fixture" as never,
       create(input) {
         const merged = join(input.projectionRoot, "merged-m")
         mkdirSync(merged, { mode: 0o700 })
@@ -1472,7 +1511,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         }
         chmodTree(merged)
         return {
-          backend: "fixture",
+          backend: "fixture" as never,
           mergedPath: merged,
           writeLayerPath: merged,
           assertReady: () => undefined,
@@ -1481,6 +1520,10 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         }
       },
     }
+    // R6-01：tests/** 构造的 fixture backend 必须携带 test-fixture brand
+    // （配合 branded TestReceiptAuthority 通过 production gate；cleanup
+    // 失败语义不变 —— 仍 CLEANUP_FAILED 阻止 commit）。
+    markTestFixtureBackend(failingBackend)
     const auth = new TestReceiptAuthority()
     activeAuthority = auth
     const coord = new ProjectionCoordinator({

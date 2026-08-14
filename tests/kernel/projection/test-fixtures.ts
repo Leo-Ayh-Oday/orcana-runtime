@@ -26,8 +26,14 @@ import type {
   ProjectionInstance,
 } from "../../../src/kernel/projection/backend"
 import { ProjectionError, projectionIntentDigest, type ProjectionExecutionIntent } from "../../../src/kernel/projection/contracts"
-import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
+import {
+  markTestHarnessReceiptAuthority,
+  type ProjectionReceiptAuthority,
+  type ProjectionReceiptBinding,
+} from "../../../src/kernel/projection/receipt-authority"
+import { markTestFixtureBackend } from "../../../src/kernel/projection/backend"
 import { expectedProjectionFilesystemPolicyDigest, type ProjectionExecutor } from "../../../src/kernel/projection/coordinator"
+import { expectedProjectionCellSpecDigestForCell } from "../../../src/kernel/projection/spec-binding"
 import type { ProjectionExecutionOutcome } from "../../../src/kernel/projection/validator"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
@@ -46,7 +52,11 @@ export class TestReceiptAuthority implements ProjectionReceiptAuthority {
 
   private readonly receipts = new Map<string, SandboxReceipt>()
 
-  constructor(private readonly options: { cellSpecDigest?: string; cleanupFinalized?: boolean } = {}) {}
+  constructor(private readonly options: { cellSpecDigest?: string; cleanupFinalized?: boolean } = {}) {
+    // R6-01：test-only brand —— 只有真实 fixture 构造的实例携带；
+    // 普通结构化对象（公开字符串 trustLevel）无法伪造授权。
+    markTestHarnessReceiptAuthority(this)
+  }
 
   private key(runId: string, cellId: string): string {
     return `${runId}\u0000${cellId}`
@@ -68,7 +78,18 @@ export class TestReceiptAuthority implements ProjectionReceiptAuthority {
       backend: "bubblewrap",
       profile: "build",
       capabilitiesDigest: "b".repeat(64),
-      cellSpecDigest: this.options.cellSpecDigest ?? "c".repeat(64),
+      // R6-03：happy path 的 receipt 必须携带 kernel 派生的期望 spec
+      // digest —— 用**真实 cellId** 重编译（commit 时 coordinator 用同一
+      // cellId 重编译并直接比较；intent.expectedCellSpecDigest 是规范化
+      // 形式（pre-spawn 比对用），这里用 raw 形式。显式 overrides 用于
+      // 伪造/偏差反例。
+      cellSpecDigest: this.options.cellSpecDigest ??
+        expectedProjectionCellSpecDigestForCell(
+          intent,
+          intent.workspaceIdentity.path,
+          [...intent.filesystemScope.writableRoots],
+          cellId,
+        ),
       filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(
         {
           writableRoots: intent.filesystemScope.writableRoots,
@@ -231,10 +252,17 @@ function makeTreeWritable(root: string): void {
  * 同 UID 可 chmod 还原，因此只是 fixture 语义；真实 seal 是生产 backend
  * 的 FUSE ro remount（内核 EROFS）。
  */
-export class CopyProjectionFixtureBackend implements NativeProjectionBackend {
+export class CopyProjectionFixtureBackend implements Omit<NativeProjectionBackend, "kind"> {
   readonly id = "fixture-copy"
+  /** R6-01：production NativeBackendKind 已删除 fixture discriminant ——
+   *  test-only fixture 的 kind 只存在于 tests/**。 */
   readonly kind = "fixture" as const
   readonly testFixtureOnly = true
+
+  constructor() {
+    // R6-01：test-only brand —— 只有真实 fixture 构造的实例携带。
+    markTestFixtureBackend(this as unknown as NativeProjectionBackend)
+  }
 
   create(input: CreateProjectionInput): ProjectionInstance {
     const label = assertSafeLabel(input.label)
@@ -251,7 +279,7 @@ export class CopyProjectionFixtureBackend implements NativeProjectionBackend {
 
     let sealed = false
     return {
-      backend: "fixture",
+      backend: "fixture" as unknown as import("../../../src/kernel/projection/backend").NativeBackendKind,
       mergedPath: merged,
       writeLayerPath: merged,
       assertReady: () => {

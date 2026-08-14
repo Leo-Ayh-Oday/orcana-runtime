@@ -65,7 +65,8 @@ import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
 import type { CasDigest } from "../../../src/kernel/world"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
-import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
+import { markTestHarnessReceiptAuthority, type ProjectionReceiptAuthority, type ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
+import { expectedProjectionCellSpecDigestForCell } from "../../../src/kernel/projection/spec-binding"
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
 import { compileBwrapArgv, createBubblewrapBackend } from "../../../src/runtime/linux/backends/bubblewrap"
 import { probeNativeBackends } from "../../../src/kernel/projection/backend"
@@ -108,6 +109,9 @@ function buildWorld(): { ctx: TestWorldStore; snapshotId: string; baseContent: s
     mutations: [
       { type: "object.put", objectId: "obj-src", objectType: "directory", path: "src" },
       { type: "object.put", objectId: "obj-main", objectType: "file", path: "src/main.ts", contentRef: digest },
+      // R6-03：plan 声明的 readonlyRoots 必须在 World 中存在（kernel spec
+      // compiler 对 required mount source 做存在性校验）。
+      { type: "object.put", objectId: "obj-docs", objectType: "directory", path: "docs" },
     ],
   })
   ctx.store.createSnapshot("world-c", "branch-main")
@@ -138,7 +142,7 @@ let activeAuthority: TestReceiptAuthority
 
 function coordinator(
   ctx: TestWorldStore,
-  backend?: NativeProjectionBackend,
+  backend?: NativeProjectionBackend | CopyProjectionFixtureBackend,
   options: Record<string, unknown> = {},
 ): ProjectionCoordinator {
   const materializer = new SnapshotMaterializer({
@@ -237,27 +241,34 @@ function fakeFinalReceipt(overrides: Partial<SandboxReceipt> = {}): SandboxRecei
 function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionReceiptAuthority & {
   setIntentDigest(digest: string | undefined): void
   setFilesystemPolicyDigest(digest: string): void
+  setCellSpecDigest(digest: string): void
   setCleanupFinalized(finalized: boolean): void
   currentDigest(): string | undefined
 } {
   let intentDigest: string | undefined
   // R4-03.4：fake receipt 必须携带 coordinator 派生的期望 policy digest。
   let filesystemPolicyDigest = "d".repeat(64)
+  // R6-03：commit 时 kernel 用 receipt 真实 cellId 重编译期望 spec digest ——
+  // fake receipt 的 cellSpecDigest 必须由 bindIntent 从 session 派生。
+  let cellSpecDigest = "c".repeat(64)
   let cleanupFinalized = true
   let latestDigest = fakeFinalReceipt(overrides)
   const { computeReceiptDigest } = require("../../../src/runtime/linux/receipt") as typeof import("../../../src/runtime/linux/receipt")
   const inner: ProjectionReceiptAuthority = {
     // R5-01：显式 trust level（test-harness —— 只可配对 test-only fixture）。
+    // R6-01：test-harness brand（WeakSet）—— 结构化对象 + 公开字符串不再
+    // 授予 commit 授权；仅 tests/** 构造的 branded fixture 配对可通过 gate。
     trustLevel: "test-harness" as const,
     getFinalReceipt: () => {
       if (intentDigest === undefined) return undefined
-      const base = fakeFinalReceipt({ ...overrides, filesystemPolicyDigest })
+      const base = fakeFinalReceipt({ ...overrides, filesystemPolicyDigest, cellSpecDigest })
       const withIntent = { ...base, projectionIntentDigest: intentDigest }
       latestDigest = { ...withIntent, receiptDigest: computeReceiptDigest(withIntent) }
       return latestDigest as SandboxReceipt
     },
     isCleanupFinalized: () => cleanupFinalized,
   }
+  markTestHarnessReceiptAuthority(inner)
   return Object.assign(inner, {
     setIntentDigest(digest: string | undefined): void {
       intentDigest = digest
@@ -265,12 +276,15 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionRecei
     setFilesystemPolicyDigest(digest: string): void {
       filesystemPolicyDigest = digest
     },
+    setCellSpecDigest(digest: string): void {
+      cellSpecDigest = digest
+    },
     setCleanupFinalized(finalized: boolean): void {
       cleanupFinalized = finalized
     },
     currentDigest(): string | undefined {
       if (intentDigest === undefined) return latestDigest.receiptDigest
-      const base = fakeFinalReceipt({ ...overrides, filesystemPolicyDigest })
+      const base = fakeFinalReceipt({ ...overrides, filesystemPolicyDigest, cellSpecDigest })
       return computeReceiptDigest({ ...base, projectionIntentDigest: intentDigest })
     },
   })
@@ -279,8 +293,12 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionRecei
 function bindIntent(auth: ReturnType<typeof fakeAuthority>, session: ProjectionSession): void {
   const { projectionIntentDigest } = require("../../../src/kernel/projection/contracts") as typeof import("../../../src/kernel/projection/contracts")
   const { expectedProjectionFilesystemPolicyDigest } = require("../../../src/kernel/projection/coordinator") as typeof import("../../../src/kernel/projection/coordinator")
+  const { expectedProjectionCellSpecDigestForCell } = require("../../../src/kernel/projection/spec-binding") as typeof import("../../../src/kernel/projection/spec-binding")
   auth.setIntentDigest(projectionIntentDigest(session.intent))
   auth.setFilesystemPolicyDigest(expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir))
+  // R6-03：fake receipt 的 cellSpecDigest 必须等于 kernel 用 receipt 真实
+  // cellId（cell-fake）重编译的期望 spec digest。
+  auth.setCellSpecDigest(expectedProjectionCellSpecDigestForCell(session.intent, session.mergedDir, session.plan.writableRoots, "cell-fake"))
 }
 
 function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAuthority>): void {
@@ -294,7 +312,9 @@ function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAut
       runId: "run-fake",
       nodeRunId: "run-fake:n1",
       cellId: "cell-fake",
-      cellSpecDigest: "c".repeat(64),
+      // R6-03：claim 的 cellSpecDigest 必须与 receipt 一致（kernel 用真实
+      // cellId 重编译派生 —— 不硬编码）。
+      cellSpecDigest: expectedProjectionCellSpecDigestForCell(session.intent, session.mergedDir, session.plan.writableRoots, "cell-fake"),
       filesystemPolicyDigest: expectedProjectionFilesystemPolicyDigest(session.plan, session.mergedDir),
       workspaceHostRoot: session.mergedDir,
     } as ProjectionReceiptBinding,
@@ -500,7 +520,6 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
       return new LinuxBrokerProjectionExecutor({
         broker,
         authority: { identity: { runId: "run-r4", nodeRunId: "run-r4:n1", attempt: 1 }, workspace },
-        intentRegistry: new ProjectionIntentRegistry(),
         writableRoots: ["src"],
         readonlyRoots: ["docs"],
         profile: "build",
@@ -712,7 +731,7 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
 
   describe("R4-00-11：scanner final verification 期间写入必须被拒绝（sealed view）或 fail-closed", () => {
     async function runScanWithFinalWrite(
-      backend: NativeProjectionBackend,
+      backend: NativeProjectionBackend | CopyProjectionFixtureBackend,
       attempt: (merged: string) => void,
     ): Promise<{ writeRejected: boolean; scanFailed: boolean }> {
       const { ctx, snapshotId } = buildWorld()

@@ -47,6 +47,8 @@ const plan: WorldProjectionPlan = {
   readonlyRoots: ["docs"],
   expectedOutputs: ["src/out.txt"],
   graphCompletionAllowed: false,
+  profile: "build",
+  secretsDigest: "",
 }
 
 const snapshot: WorldSnapshot = {

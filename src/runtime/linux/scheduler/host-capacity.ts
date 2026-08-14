@@ -11,7 +11,30 @@
  *  （OWNER_TOKEN_RELEASE_WITHOUT_TERMINATION_PROOF = 0）。
  */
 
-import { Database } from "bun:sqlite"
+/** bun:sqlite 仅在 Bun 运行时可用。Node.js 下动态导入失败 →
+ *  DatabaseCtor=null → HostCapacityAuthority 构造时 fail-closed 抛
+ *  SQLITE_UNAVAILABLE（容量权威是安全关键组件；与 broker 的
+ *  RESOURCE_AUTHORITY_UNAVAILABLE → FAIL CLOSED 语义一致，不允许
+ *  无持久化记账的静默降级）。模块本身在 Node 下可正常加载。 */
+type SqlValue = string | number | null | bigint | Uint8Array | boolean
+interface SqliteDatabase {
+  exec: (sql: string) => void
+  run: (sql: string, ...params: SqlValue[]) => { changes?: number | bigint; lastInsertRowid?: number | bigint }
+  query: <Row = unknown, Params extends unknown[] = SqlValue[]>(sql: string) => {
+    get: (...params: Params) => Row | null
+    all: (...params: Params) => Row[]
+    run: (...params: Params) => { changes?: number | bigint; lastInsertRowid?: number | bigint }
+  }
+  /** bun:sqlite 的 transaction(fn) 返回可调用包装（须再次调用执行）。 */
+  transaction: <T>(fn: () => T) => () => T
+  close: () => void
+}
+let DatabaseCtor: (new (path: string) => SqliteDatabase) | null = null
+try {
+  DatabaseCtor = (await import("bun:sqlite")).Database as unknown as new (path: string) => SqliteDatabase
+} catch {
+  // Node.js runtime: bun:sqlite unavailable — authority constructor fails closed.
+}
 import { randomUUID, createHash } from "node:crypto"
 import { cpus, totalmem } from "node:os"
 import { readdirSync, statSync, readFileSync } from "node:fs"
@@ -240,7 +263,7 @@ interface ClaimRow {
 }
 
 export class HostCapacityAuthority implements CapacityAuthority {
-  private readonly db: Database
+  private readonly db: SqliteDatabase
   private readonly reality: RealityProvider
   private readonly capacity: { cpuQuota: number; memoryBytes: number; pids: number; networkSlots: number; tempBytes: number }
   private readonly maxConcurrentCells: number
@@ -260,7 +283,10 @@ export class HostCapacityAuthority implements CapacityAuthority {
     }
     this.maxConcurrentCells = config.maxConcurrentCells ?? 6
     this.reality = config.reality ?? createProcessRealityProvider()
-    this.db = new Database(config.dbPath)
+    if (!DatabaseCtor) {
+      throw new Error("SQLITE_UNAVAILABLE: HostCapacityAuthority requires bun:sqlite (Bun runtime); Node.js 下容量权威不可用")
+    }
+    this.db = new DatabaseCtor(config.dbPath)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS claims (
         claim_id TEXT PRIMARY KEY,

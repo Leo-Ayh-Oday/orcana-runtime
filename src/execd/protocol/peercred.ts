@@ -6,7 +6,17 @@
  *  只依赖 socket 文件权限 0600/0700）。
  */
 
-import { dlopen } from "bun:ffi"
+/** bun:ffi 仅在 Bun 运行时可用。Node.js 下动态导入失败 → dlopenFn
+ *  undefined → 降级为 undefined（认证层显式记录降级，只依赖 socket
+ *  文件权限 0600/0700）。与 src/session/sqlite-session.ts 的
+ *  top-level try/catch 降级模式一致。 */
+let dlopenFn: ((name: string, symbols: Record<string, unknown>) => { symbols: Record<string, unknown> }) | undefined
+try {
+  // bun 的 dlopen 是泛型函数 —— 经 unknown 断言收敛为宽松签名。
+  dlopenFn = ((await import("bun:ffi")) as unknown as { dlopen?: typeof dlopenFn }).dlopen
+} catch {
+  // Node.js runtime: bun:ffi unavailable — peer credentials degrade to undefined.
+}
 
 const SOL_SOCKET = 1
 const SO_PEERCRED = 17 // linux; macOS 为 LOCAL_PEERCRED（不同结构）
@@ -22,11 +32,13 @@ let getsockoptFn: ((fd: number, level: number, opt: number, value: Uint8Array, l
 function loadGetsockopt(): ((fd: number, level: number, opt: number, value: Uint8Array, len: Int32Array) => number) | undefined {
   if (getsockoptFn) return getsockoptFn
   if (process.platform !== "linux") return undefined
+  if (!dlopenFn) return undefined
   try {
-    const libc = dlopen("libc.so.6", {
+    const libc = dlopenFn("libc.so.6", {
       getsockopt: { args: ["int", "int", "int", "ptr", "ptr"], returns: "int" },
     })
-    getsockoptFn = (fd, level, opt, value, len) => libc.symbols.getsockopt(fd, level, opt, value, len)
+    getsockoptFn = (fd, level, opt, value, len) =>
+      (libc.symbols.getsockopt as (fd: number, level: number, opt: number, value: Uint8Array, len: Int32Array) => number)(fd, level, opt, value, len)
   } catch {
     getsockoptFn = undefined
   }

@@ -1,9 +1,9 @@
 # AK-2 Projection + World Commit
 
 **Task ID:** `AK2-PROJECTION-001`
-**状态:** `READY_FOR_INDEPENDENT_AUDIT`（AK2-R5 Correction Gate 候选提交链 `b7d15db..HEAD`；等待独立复审；不等于 PASS/CLOSED，不得进入 AK-3）
-**基线 / 回滚点:** `e224ad6bb8aed5cca2d1b8b63f048333cfb88003`
-**专用分支:** `feat/agent-os`（R5 专用：`feat/agent-os-r5` @ `/home/fuqiang/worktrees/orcana-agent-os-r5`）
+**状态:** `READY_FOR_INDEPENDENT_AUDIT`（AK2-R6 Correction Gate 候选提交链 `3be4b86..HEAD`；等待独立复审；不等于 PASS/CLOSED，不得进入 AK-3）
+**基线 / 回滚点:** `3be4b86aaa9a8dab653feefc51d0df6b466efdce`（AK2-R6 起点）
+**专用分支:** `feat/agent-os-r6` @ `/home/fuqiang/worktrees/orcana-agent-os-r6`（R5 专用：`feat/agent-os-r5` @ `/home/fuqiang/worktrees/orcana-agent-os-r5`）
 
 ## 目标
 
@@ -642,6 +642,191 @@ receipt、重算公开 SHA-256，并被当前 `RuntimeStateReceiptAuthority` 接
 
 ### 最终状态
 
+### 最终状态
+
 `READY_FOR_INDEPENDENT_AUDIT`（候选提交链 `b7d15db..HEAD`；未 push、未
+merge、未建 PR；等待独立只读复审 —— 不复用实现者结论，不写文件、不修复、
+不提交）。不得写 PASS / CLOSED / AK-2 COMPLETE / READY FOR AK-3。
+## AK2-R6 Correction Gate 记录（候选提交链，等待独立复审）
+
+**R6 专用分支 / worktree:** `feat/agent-os-r6` @ `/home/fuqiang/worktrees/orcana-agent-os-r6`
+**R6 起点（Base）:** `3be4b86aaa9a8dab653feefc51d0df6b466efdce`（AK2-R5 候选链末端）
+**R6 文件白名单:** 本阶段文档、`docs/agent-os/evidence/ak2-r6/**`、
+`src/kernel/projection/**`、`src/kernel/world/{contracts,schema,store,manifests,snapshot}.ts`、
+`tests/kernel/projection/**`、`tests/kernel/world/**`。
+本轮 `src/runtime/linux/**` 仅三处最小 spec-binding 改动（`contracts.ts` 加
+`TrustedExecutionIdentity.cellId?`；`receipt.ts` 加 `cellSpecDigestNormalized()`；
+`broker.ts` 未改动，仅经公开 API 调用）—— 绑定链必要性记录在案。
+未触碰：`src/workflow/**`、`src/harness/**`、`src/execd/**`、`src/kernel/effects/**`、
+`src/kernel/capabilities/**`、package.json/lockfile、CI/secrets/billing、WSL 配置。
+
+### R6 范围（Correction Gate —— 不是扩展阶段）
+
+仅修复 R5 独立审计确认的代码级 Critical/High（十项阻断 + R6-00-14 修正）：
+
+| 阻断项 | R6 修复 |
+|---|---|
+| 伪造 trustLevel / 公开字符串获得授权 | R6-01 fail-close authority gate（WeakSet brand；字符串不授予任何东西） |
+| 结构性 fixture 可冒充 production | R6-01/R6-05 brand 配对（tests/** 专属）+ R6-03 kernel-owned spec 编译 |
+| per-coordinator registry 可被重建绕过 | R6-02 SQLite durable reservation（跨 coordinator/进程/重启） |
+| spec binding 不完整（adapter 选项自报） | R6-03 kernel-owned spec compiler + pre-spawn 规范化 digest 比对 + commit 用 receipt 真实 cellId 重编译 |
+| FUSE mount-gone-leak（挂载消失仍视为 owned） | R6-05 wasMounted + fullOwnershipCheck（mount id + fsType + source + upper 身份 + daemon cmdline） |
+| parent/child fd 生命周期（替换后可被删除/chmod） | R6-04 retained child+parent fd（/proc/self/fd/N）；dispose 拒绝活跃 session |
+| sync executor throw 裸传播 | R6-04 Promise.resolve().then() 统一进入状态机 |
+| isManifest 派生 representation（全局可变标志） | R6-06 WorldObject 持久化 representation（schema v5 + DB CHECK）；snapshot 只复制持久值 |
+| snapshot 先写 CAS 再查 existing（幂等残留） | R6-07 纯 digest 计算先行；existing 检查在任何 CAS put 之前 |
+| delta CAS 物理写入后才发现 contentRef 缺失 | R6-07 统一引用 preflight（区分 missing vs corrupt）在物理写入前 |
+| R5-00-9 攻击未真实成功（EACCES/setup 冒充） | R6-00-14 修正：同 UID 直写 upper 必须真实成功后 scan 才宣布 KNOWN RED |
+
+### R6-00 反例冻结（14 反例；RED 提交 `43edb4a`，隔离、未 amend）
+
+| 反例 | 内容 | RED→GREEN |
+|---|---|---|
+| R6-00-1 | 普通对象自报 trustLevel='kernel-authenticated' + 自洽伪 receipt → 不得获得 production World commit | ✓ 2e6a1e4 |
+| R6-00-2 | trustLevel undefined/unknown/错误大小写 → 构造即 fail-closed（EXECUTION_RECEIPT_AUTHORITY_ERROR） | ✓ 2e6a1e4 |
+| R6-00-3 | 普通 kind:'fixture' backend + 普通 trustLevel:'test-harness' authority → 不得通过 production gate | ✓ 2e6a1e4 |
+| R6-00-4/5 | 两个独立 registry / 重建 registry → 同一 intent 只允许一个 execution cell（durable） | ✓ 2e6a1e4 |
+| R6-00-6 | 结构化 authority 无法伪造 test-only brand（WeakSet）→ PRODUCTION_WORLD_COMMIT_BLOCKED | ✓ 2e6a1e4 |
+| R6-00-7/8 | kernel 期望 spec digest 与 adapter 实际编译不一致（mount/workspace 偏差）→ spawn 前拒绝 | ✓ 2e6a1e4 |
+| R6-00-9 | commit 时 receipt.cellSpecDigest 必须等于 kernel 用 receipt 真实 cellId 重编译的 digest | ✓ 2e6a1e4 |
+| R6-00-10 | 未认证（same-uid-untrusted）authority → commit 必须 fail-closed，不写 CLOSED | ✓ 2e6a1e4 |
+| R6-00-11 | 同一 raw FileManifest JSON —— 两种顺序的物化 bytes/filesystemDigest 必须一致（representation 持久化） | ✓ 2e6a1e4 |
+| R6-00-12 | 已有 revision snapshot 后再次 createSnapshot → 幂等返回 existing 且零新增物理 CAS residue | ✓ 2e6a1e4 |
+| R6-00-13 | 合法 namespace + 不存在 contentRef → commit 拒绝且 revision/ledger/CAS/物理对象零变化 | ✓ 2e6a1e4 |
+| R6-00-14 | 修正 R5-00-9：同 UID 直写 upper 真实成功后被 scan 观察（fail-open 证据） | **KNOWN RED**（OWNER-DECISION-REQUIRED；禁止伪造 GREEN） |
+
+### R6-01 fail-close production authority gate
+
+- 授权只来自：authenticated verifier brand（当前无任何实现可设置 ——
+  `isAuthenticatedReceiptAuthority` 恒 false）或 test-only brand 配对
+  （`markTestHarnessReceiptAuthority` + `markTestFixtureBackend`，WeakSet；
+  仅 tests/** 构造时可设置）。公开 trustLevel/kind 字符串、普通结构化
+  对象、`RuntimeStateReceiptAuthority`（same-uid-untrusted）一律
+  `PRODUCTION_WORLD_COMMIT_BLOCKED`。
+- trustLevel 构造时 strict exhaustive 校验（未知/缺失/大小写错误 →
+  `EXECUTION_RECEIPT_AUTHORITY_ERROR`）。
+- 注意：brand 不解决 same-UID 攻击（同 UID 进程可调用 mark 函数本身）——
+  gate 保护 kernel 自身构造流程；真实性仍需 OWNER 决策（见下）。
+
+### R6-02 durable intent reservation
+
+- `DurableIntentReservation`（SQLite，unique-key）：RESERVED→DISPATCHED→
+  RECEIPT_BOUND→COMMITTED/REJECTED；UNKNOWN 仅经 reconcile 出现。
+- 跨 coordinator 实例 / 进程 / 重启不可复用；reserve 在任何 executor/
+  broker 调用之前发生；失败 → terminalize + 精确错误码。
+
+### R6-03 kernel-owned execution spec binding
+
+- `spec-binding.ts`：kernel 用 runtime 唯一正式编译器（
+  `compileCapabilityRequest`，policy-compiler.ts）从 intent 派生
+  `expectedCellSpecDigest`（规范化 cellId）与 commit 期 `ForCell` 变体
+  （receipt 真实 cellId 重编译，deterministic）。
+- adapter pre-spawn：逐字段断言（command/roots/workspace identity/profile/
+  network）+ 实际编译 spec 的规范化 digest 比对 —— 任何策略偏差 →
+  `EXECUTION_RECEIPT_BINDING_MISMATCH`，command 从未 spawn。
+- commit：receipt.cellSpecDigest 与 kernel 重编译直接比较（禁止同源互比）。
+- intent 扩展 profile/network/resources/secretsDigest/expectedCellSpecDigest；
+  `projectionIntentDigest` 剔除 expectedCellSpecDigest（binding 链自洽）。
+
+### R6-04 projection root fd lifecycle
+
+- retained child fd + retained parent fd（/proc/self/fd/N/...）；fd 锚定
+  base mkdir/open/materialize；cleanup/删除前路径身份复核。
+- `dispose()`：关闭 retained fds；任一活跃 session → fail-closed。
+- sync executor throw 经 `Promise.resolve().then()` 进入状态机
+  （terminalize；不裸传播）。
+
+### R6-05 FUSE mount ownership（挂载消失 = 不再 owned）
+
+- `wasMounted` 标志：create 时真实挂载、现在 statfs 不是 FUSE →
+  `assertMountOwned()` false（R5-00-5 家族修复 mount-gone 泄漏）。
+- `fullOwnershipCheck`：mount id + fsType + source + upper 身份 + daemon
+  cmdline 全部必查；sealForScan 在 remount 后重新证明。
+
+### R6-06 representation 持久化（schema v5）
+
+- WorldObject.representation（raw | file-manifest）持久化列 + DB CHECK；
+  object.put 变更可声明。snapshot 复制 WorldObject.representation ——
+  绝不从可变 `cas.record(...).isManifest` 推断；缺失 → fail-closed。
+- `WORLD_SCHEMA_FINGERPRINT` 更新为 v5 计算值。
+
+### R6-07 CAS ordering（先证明、后物理写入）
+
+- snapshot existing 检查：先纯计算全部 manifest digest（零 CAS 写），
+  全 attestation 通过且 existing 判定后才 put —— 幂等重入零 residue。
+- compareAndCommit 统一引用 preflight：所有 contentRef/definitionDigest
+  在 delta CAS 物理写入前检查；区分「未注册（not in CAS）」与「已注册
+  但内容损坏（CAS object content is corrupt）」—— metadata-only 更新
+  不得复用同 digest 的损坏对象（AK-1 语义保留）。
+
+### 门禁（R6 候选链）
+
+- `bun test tests/kernel/projection/ tests/kernel/world/`：**305 PASS +
+  1 KNOWN RED（R6-00-14）**（多轮一致）；`bun run typecheck` 0 error；
+  `git diff --check` ✓。
+- R6-00-1..10（projection）与 R6-00-11..13（world）全绿；R5/R4/R3 反例
+  回归全绿（R5-00-9 以 R6-00-14 修正语义 KNOWN RED）。
+- 真实 fuse-overlayfs lane（R4-00-11d EROFS / R3-00-8 foreign swap / B
+  lane）PASS 或 ENV_BLOCKED 如实标注；live/provider NOT_RUN。
+- 全量 `bun test tests/`（383 files / 4437 tests）：11 fail + 2 errors
+  逐项归因 —— 5 个 eval（DEEPSEEK_API_KEY 未设置，BASE/HEAD 同失败）、
+  LF-2 static gate（`src/kernel/projection/backend.ts` execFileSync 站点
+  为 R5-04/R5-05 引入，BASE 3be4b86 即失败 —— 基线外）、LF-1 capability
+  probe 超时（环境）、`divide` 零除数（预存、无关）、R6-00-14 KNOWN
+  RED；2 errors 为 workflow checkpoint 并行干扰（单独跑全绿，非本 diff）。
+- 测试后环境：0 mount residue、0 残留进程、0 残留 /tmp 目录（test-run
+  产物）、worktree tracked+untracked clean；未 push、未 merge、未建 PR。
+
+### FACT
+
+- RED 冻结 43edb4a 在 Base 3be4b86 上验证：projection 10/10 fail、world
+  3/3 fail、R6-00-14 以「攻击真实成功 + scan fail-open」消息 fail。
+- 修复后上述 14 项除 R6-00-14（KNOWN RED）全部 GREEN；R5 审计十项阻断
+  的对应修复逐一在反例/回归测试中可观察。
+- R6 引入的测试回归（P0-2 家族 / R2-00-3 / R2-08 / R2-02 / R2-01-8 /
+  R3-00-2/2b/4/5/6/6b/9/13 / R4-00-5 / R3-01.4 / AK-1 contentRef）全部
+  在 BASE 3be4b86 对照归因：BASE 全绿 → 均为 R6 改动所致 → 已修复；
+  归因证据见 evidence/ak2-r6/README.md §3。
+- LF-2 static gate 失败在 BASE 3be4b86 复现（backend.ts:108 execFileSync
+  —— R5-04/R5-05 提交 b02882d 引入）→ 基线外，不在本轮白名单修复范围。
+
+### INFERENCE
+
+- brand gate 把「结构合法」与「授权」分离：测试双胞胎必须显式配对，
+  生产构造路径（RuntimeStateReceiptAuthority + FuseOverlayfs）结构性
+  无法正向提交 —— fail-closed 由构造路径承载而非字符串自报。
+- SQLite unique-key 使 reservation 的不可复用性不依赖进程内状态。
+- kernel-owned spec 编译把「期望值」从 adapter 自报字段迁移到权威
+  compiler —— commit 时用 receipt 真实 cellId 重编译，同源互比消失。
+- representation 进 schema（v5 + CHECK）使内容语义成为 revision 的
+  持久事实；快照幂等性由「先证明后写入」保证。
+
+### PROPOSAL
+
+- authenticated verifier（MAC/signature、sealed IPC、独立 UID）与生产
+  seal authority（R6-00-14）需要 Owner 决策；实施文件不在本轮白名单。
+- production 正向 B lane：本机无 cgroup 委托 → cleanup proof 不可得
+  （ENV_BLOCKED）。
+
+### OWNER-DECISION-REQUIRED
+
+- **Execution Receipt 真实性（same-UID authenticated receipt）**：同 UID
+  进程可改 receipt JSON + 重算公开 digest（R3-00-3 证据测试 PASS 即证明
+  缺口存在）—— 不写 CLOSED；`PRODUCTION_WORLD_COMMIT_BLOCKED` 保持。
+- **R6-00-14 / R5-00-9：same-UID sealed upper 直写无法阻止**（无
+  kernel-owned immutable snapshot / 独立 UID / MAC 授权）—— KNOWN RED，
+  攻击真实成功后 scan fail-open；禁止伪造 GREEN。
+- **production 正向 B lane**：无 cgroup 委托 → `ENV_BLOCKED`。
+
+### RESIDUAL RISK（不掩盖可构造反例）
+
+- R6-00-14 是已确认未闭合反例（KNOWN RED）—— 不是理论风险。
+- daemon 命令行判别依赖 /proc 可见性；跨命名空间/特权场景未验证。
+- LF-2 static gate 基线外失败（R5 引入）未在本轮白名单内修复 —— 已记录，
+  不静默。
+
+### 最终状态
+
+`READY_FOR_INDEPENDENT_AUDIT`（候选提交链 `3be4b86..HEAD`；未 push、未
 merge、未建 PR；等待独立只读复审 —— 不复用实现者结论，不写文件、不修复、
 不提交）。不得写 PASS / CLOSED / AK-2 COMPLETE / READY FOR AK-3。

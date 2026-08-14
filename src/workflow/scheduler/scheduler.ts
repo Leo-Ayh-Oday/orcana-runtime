@@ -82,24 +82,67 @@ export interface SchedulerOptions {
    *  the integrated files). */
   integrationVerify?: (projectRoot: string) => Promise<{ passed: boolean; summary: string }>
   /** R4: 资源账本 —— 节点启动前原子预留，不足时等待而非先启动
-   *  （acceptance #11：RESOURCE_OVERCOMMIT: 0）。缺省 = 不启用。 */
+   *  （acceptance #11：RESOURCE_OVERCOMMIT: 0）。缺省 = 不启用。
+   *  IC06：production scheduler 不承担 host hard Resource Authority ——
+   *  ledger 仅为 legacy advisory 预留；真实 process 执行走
+   *  process-executor → Broker → CapacityAuthority 单 claim（adopt 或
+   *  authority 去重，禁止 second reserve）。 */
   ledger?: ResourceLedger
+  /** IC06：可选 CapacityAuthority（仅测试/未来显式启用）。启用时
+   *  awaitReservation 走 authority + bounded release（SCHEDULER_BROKER_
+   *  DOUBLE_RESERVE=0：同一 (runId,cellId) 的 broker claim 由 authority
+   *  端去重拒绝）。缺省 = 不启用（production 语义）。 */
+  capacityAuthority?: import("../../runtime/linux/scheduler/host-capacity").CapacityAuthority
   /** R4: 每节点资源估算（缺省按并发上限宽松估算）。 */
   resourceRequestFor?: (node: import("../types").WorkflowNodeSpec) => ResourceRequest
 }
 
-/** R4: 资源预留等待（原子预留成功才放行）。 */
+/** R4: 资源预留等待（原子预留成功才放行）。
+ *  IC06：capacityAuthority 注入时走权威 reserve（失败重试不创建第二 claim ——
+ *  idempotencyKey 恒定）；否则 legacy ledger 预留。 */
 async function awaitReservation(
-  ledger: ResourceLedger,
+  ledger: ResourceLedger | undefined,
+  capacityAuthority: import("../../runtime/linux/scheduler/host-capacity").CapacityAuthority | undefined,
   request: ResourceRequest,
   runId: string,
   cellId: string,
   agentId?: string,
-): Promise<string> {
+  signal?: AbortSignal,
+  deadlineMs?: number,
+): Promise<{ reservationId?: string; capacityClaim?: { claimId: string; ownerToken: string } }> {
+  const deadline = deadlineMs !== undefined && deadlineMs > 0 ? Date.now() + deadlineMs : undefined
+  const waitUntil = (ms: number) => new Promise<void>(resolve => {
+    const t = setTimeout(resolve, ms)
+    t.unref?.()
+    signal?.addEventListener("abort", () => { clearTimeout(t); resolve() }, { once: true })
+  })
+  const throwIfCancelled = () => {
+    if (signal?.aborted) throw new Error("RESOURCE_WAIT_CANCELLED")
+    if (deadline !== undefined && Date.now() >= deadline) throw new Error("RESOURCE_WAIT_TIMEOUT")
+  }
+  if (capacityAuthority) {
+    for (;;) {
+      throwIfCancelled()
+      const outcome = await capacityAuthority.reserve(
+        { request, runId, cellId, agentId },
+        `sched-reserve-${runId}-${cellId}`,
+        {
+          uid: process.getuid?.() ?? -1,
+          pid: process.pid,
+          startticks: 0,
+          clientInstanceId: `scheduler-${process.pid}`,
+        },
+      )
+      if (outcome.ok) return { capacityClaim: { claimId: outcome.claimId, ownerToken: outcome.ownerToken } }
+      await waitUntil(100)
+    }
+  }
+  if (!ledger) return {}
   for (;;) {
+    throwIfCancelled()
     const result = ledger.reserve(request, runId, cellId, agentId)
-    if (result.ok) return result.reservation.reservationId
-    await new Promise(r => setTimeout(r, 100))
+    if (result.ok) return { reservationId: result.reservation.reservationId }
+    await waitUntil(100)
   }
 }
 
@@ -394,16 +437,38 @@ export async function runScheduler(
           return replayed
         }
       }
-      const lock = isWrite ? await cc.acquireWrite() : null
-      // R4: 资源预留（不足时等待；释放与锁同 finally）。
+      // IC06（P0-5）：bounded resource reservation 先于 write lock（资源
+      // 等待期间不得持 write lock —— WRITE_LOCK_HELD_DURING_RESOURCE_WAIT=0）；
+      // 锁在 finally 统一释放；acquisition 失败 rollback 已取得资源。
       let reservationId: string | null = null
-      if (options.ledger) {
+      let capacityClaim: { claimId: string; ownerToken: string } | null = null
+      let reserved = false
+      if (options.ledger || options.capacityAuthority) {
         const request = options.resourceRequestFor
           ? options.resourceRequestFor(node)
           : { cpuQuota: 1, memoryBytes: 256 * 1024 * 1024, pids: 32, ioWeight: 0, networkSlots: 0, tempBytes: 512 * 1024 * 1024 }
-        reservationId = await awaitReservation(options.ledger, request, spec.specId, node.id, agentId ?? undefined)
+        const acquired = await awaitReservation(options.ledger, options.capacityAuthority, request, spec.specId, node.id, agentId ?? undefined, scopeSignalOf(harnessRuntime?.scope.cancellation), 60_000)
+        reservationId = acquired.reservationId ?? null
+        capacityClaim = acquired.capacityClaim ?? null
+        reserved = reservationId !== null || capacityClaim !== null
       }
+      let lock: import("./concurrency-controller").WriteLockHandle | null = null
       try {
+        if (isWrite) {
+          try {
+            lock = await cc.acquireWrite({ signal: scopeSignalOf(harnessRuntime?.scope.cancellation), deadlineMs: 60_000 })
+          } catch (error) {
+            // 锁获取失败（取消/deadline）→ rollback 已取得资源。
+            if (reserved) {
+              if (capacityClaim && options.capacityAuthority) {
+                try { await options.capacityAuthority.releaseRequested(capacityClaim.claimId, capacityClaim.ownerToken) } catch { /* best-effort */ }
+              } else if (reservationId && options.ledger) {
+                options.ledger.release(reservationId)
+              }
+            }
+            throw error
+          }
+        }
         // MACP-M4: pass the interrupt runtime into the harness execution so
         // human nodes can pause (persisted record) or resume (answer).
         const interruptRuntime = options.interrupts
@@ -499,6 +564,22 @@ export async function runScheduler(
       } finally {
         lock?.release()
         if (reservationId) options.ledger?.release(reservationId)
+        // IC06：scheduler claim 释放（bounded ≤5s；失败 → claim 保持
+        // charged/suspect —— SCHEDULER_RELEASE_FAILURE_STATE 不影响节点结果；
+        // adopt 场景 ownership 已转移给 broker，scheduler 不再释放）。
+        if (capacityClaim && options.capacityAuthority) {
+          try {
+            await Promise.race([
+              options.capacityAuthority.releaseRequested(capacityClaim.claimId, capacityClaim.ownerToken),
+              new Promise<never>((_, reject) => {
+                const t = setTimeout(() => reject(new Error("SCHEDULER_CAPACITY_RELEASE_TIMEOUT")), 5000)
+                t.unref?.()
+              }),
+            ])
+          } catch {
+            // claim 保持 charged（不 undercount）。
+          }
+        }
       }
     })().then(result => {
       running.delete(node.id)
@@ -723,6 +804,11 @@ export async function runScheduler(
     }
   }
   return base
+}
+
+/** IC06（P0-5）：run-scope cancellation signal（资源等待/写锁有界可取消）。 */
+function scopeSignalOf(scope: import("../../harness/contracts/scope").RunCancellation | undefined): AbortSignal | undefined {
+  return scope?.signal
 }
 
 /** M5: compose the run-scope cancellation with an agent-local one — a

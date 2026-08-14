@@ -12,15 +12,40 @@
  *  大对象（stdout/artifact）不入库：SQLite 存索引，Filesystem/CAS 存内容。
  */
 
-import { Database, type SQLQueryBindings } from "bun:sqlite"
+/** bun:sqlite 仅在 Bun 运行时可用。Node.js 下动态导入失败 →
+ *  DatabaseCtor=null → StateStore 构造时 fail-closed 抛 SQLITE_UNAVAILABLE
+ *  （持久化状态权威不能静默 no-op：状态/Receipt/幂等记录丢失等于审计
+ *  丢失）。与 src/session/sqlite-session.ts 的 top-level try/catch
+ *  降级模式一致；模块本身在 Node 下可正常加载。 */
+type SqlValue = string | number | null | bigint | Uint8Array | boolean
+interface SqliteDatabase {
+  exec: (sql: string) => void
+  run: (sql: string, ...params: SqlValue[]) => { changes?: number | bigint; lastInsertRowid?: number | bigint }
+  /** bun:sqlite 的 query 支持双泛型（Row/Params）；这里保留签名以便
+   *  调用点（含测试）不改变写法。 */
+  query: <Row = unknown, Params extends unknown[] = SqlValue[]>(sql: string) => {
+    get: (...params: Params) => Row | null
+    all: (...params: Params) => Row[]
+    run: (...params: Params) => { changes?: number | bigint; lastInsertRowid?: number | bigint }
+  }
+  /** bun:sqlite 的 transaction(fn) 返回可调用包装（须再次调用执行）。 */
+  transaction: <T>(fn: () => T) => () => T
+  close: () => void
+}
+let DatabaseCtor: (new (path: string) => SqliteDatabase) | null = null
+try {
+  DatabaseCtor = (await import("bun:sqlite")).Database as unknown as new (path: string) => SqliteDatabase
+} catch {
+  // Node.js runtime: bun:sqlite unavailable — StateStore constructor fails closed.
+}
 
 /** @types/bun 的 bindings 签名是数组风格且 query 必须双泛型 —— 这里
  *  收敛为宽松类型 helper，调用点保持变参风格（bun 运行时接受变参）。 */
 type RunResult = { changes: number; lastInsertRowid: number | bigint }
-type RunFn = (sql: string, ...bindings: SQLQueryBindings[]) => RunResult
+type RunFn = (sql: string, ...bindings: SqlValue[]) => RunResult
 type QueryFn = (sql: string) => {
-  get: (...bindings: SQLQueryBindings[]) => unknown
-  all: (...bindings: SQLQueryBindings[]) => unknown[]
+  get: (...bindings: SqlValue[]) => unknown
+  all: (...bindings: SqlValue[]) => unknown[]
 }
 
 export type CellState =
@@ -219,10 +244,13 @@ CREATE INDEX IF NOT EXISTS idx_cells_run ON cells(run_id);
 `
 
 export class StateStore {
-  readonly db: Database
+  readonly db: SqliteDatabase
 
   constructor(path: string) {
-    this.db = new Database(path)
+    if (!DatabaseCtor) {
+      throw new Error("SQLITE_UNAVAILABLE: StateStore requires bun:sqlite (Bun runtime); Node.js 下 execd 持久化状态不可用")
+    }
+    this.db = new DatabaseCtor(path)
     this.db.exec("PRAGMA journal_mode = WAL")
     this.db.exec("PRAGMA busy_timeout = 5000")
     this.db.exec("PRAGMA synchronous = NORMAL")
@@ -239,17 +267,17 @@ export class StateStore {
     return run()
   }
 
-  private run(sql: string, ...bindings: SQLQueryBindings[]): RunResult {
+  private run(sql: string, ...bindings: SqlValue[]): RunResult {
     return (this.db.run as unknown as RunFn)(sql, ...bindings)
   }
 
-  private get<T>(sql: string, ...bindings: SQLQueryBindings[]): T | undefined {
+  private get<T>(sql: string, ...bindings: SqlValue[]): T | undefined {
     // bun:sqlite 无行返回 null —— 归一化为 undefined（调用方语义）。
     const row = (this.db.query as unknown as QueryFn)(sql).get(...bindings)
     return row === null || row === undefined ? undefined : (row as T)
   }
 
-  private all<T>(sql: string, ...bindings: SQLQueryBindings[]): T[] {
+  private all<T>(sql: string, ...bindings: SqlValue[]): T[] {
     return (this.db.query as unknown as QueryFn)(sql).all(...bindings) as T[]
   }
 

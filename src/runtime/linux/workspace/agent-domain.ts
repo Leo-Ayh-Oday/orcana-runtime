@@ -55,6 +55,16 @@ export class AgentDomainManager {
       tempRoot: input.tempRoot ?? `/tmp/orcana-${input.runId}-${input.agentId}`,
       cacheNamespace: input.cacheNamespace ?? `run-${input.runId}/agent-${input.agentId}`,
       resourceBudget: budget,
+      // IC06：占位（真实值在 cgroup 创建后按实际结果覆盖）。
+      budgetEnforcement: {
+        memory: this.cgroup ? "cgroup" : "none",
+        pids: this.cgroup ? "cgroup" : "none",
+        cpu: "weight-hint",
+        cells: "advisory",
+        wallTime: "per-cell",
+        output: "tool-layer",
+        temp: "none",
+      },
       createdAt: Date.now(),
       status: "active",
     }
@@ -70,6 +80,17 @@ export class AgentDomainManager {
       } catch {
         domain.cgroupPath = "" // 无委托 → 资源隔离降级（严格 Profile 由调用方拒绝）
       }
+    }
+    // IC06：budget enforcement 按真实结果声明（cgroup 实际创建成功 → cgroup）。
+    const cgroupActive = !!domain.cgroupPath
+    domain.budgetEnforcement = {
+      memory: cgroupActive ? "cgroup" : "none",
+      pids: cgroupActive ? "cgroup" : "none",
+      cpu: "weight-hint",
+      cells: "advisory",
+      wallTime: "per-cell",
+      output: "tool-layer",
+      temp: "none",
     }
     mkdirSync(domain.tempRoot, { recursive: true })
     this.domains.set(domain.domainId, domain)

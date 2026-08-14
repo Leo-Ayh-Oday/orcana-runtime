@@ -11,9 +11,9 @@ status documents reference it instead of restating independent claims.
 
 | Channel | Version | Security status |
 |---|---:|---|
-| npm / GitHub Latest Release | `0.8.16` | Current public baseline |
-| `origin/main` source | `0.8.26.2` | Unreleased source (RC-18 convergence baseline `fe913ed`); not an installable public release |
-| Active repair line | `0.8.26.3` | Unreleased candidate (production-closure line, R2-0 + PR-E1); not release-ready until its gates and audit pass |
+| npm / GitHub Latest Release | `0.8.30.0` | Current public baseline (2026-08-14; reconciled from `0.8.16` across the RC/LPIC/IC development line) |
+| `origin/main` source | `0.8.30.0` | Released source — IC01..IC06 production-closure line merged (Gate A), audit-fix batch 2 applied |
+| Active repair line | — | None unreleased at this time; future work opens new branches and follows the same gates |
 
 The project does not currently promise long-term support for older minor
 versions. Use the latest published package for ordinary installations and read

@@ -25,14 +25,17 @@ export interface BackendRunContext {
   cgroupPath?: string
   /** spawn 后立即 attach（cgroup 绑定真实进程，P0-4 修复）。 */
   /** LR2-0F：attach 回调；返回 false 表示未确认（launcher handshake
-   *  保持阻塞，目标程序不 exec）。 */
-  attachCell?: (pid: number) => boolean | void
+   *  保持阻塞，目标程序不 exec）。IC06（P0-3）：可返回 Promise ——
+   *  durable spawn identity commit 完成后才 resolve true。 */
+  attachCell?: (pid: number) => boolean | void | Promise<boolean | void>
   /** 执行结束后读取 cgroup 指标（真实 metrics，P0-6 修复）。 */
   readCellMetrics?: () => SandboxReceipt["metrics"] | undefined
   /** 清理验证：真实执行后报告（默认不假设安全值）。 */
   cleanupVerify?: () => Partial<SandboxReceipt["cleanup"]>
   /** 运行期物化材料（seccomp/secret/cache 宿主路径）——不属于 Policy Spec。 */
   materialization?: ExecutionMaterialization
+  /** IC06: claimId 运行时传输（→ env ORCANA_CLAIM_ID，runtime metadata）。 */
+  claimId?: string
 }
 
 export interface ExecutionBackend {
@@ -43,8 +46,9 @@ export interface ExecutionBackend {
   /** [] = 可执行；非空 = 拒绝原因（错误码前缀）。 */
   validateSpec(spec: ExecutionCellSpec): string[]
 
-  /** 编译后端专属启动参数（Policy Compiler 唯一来源 + 运行期物化材料）。 */
-  compile(spec: ExecutionCellSpec, caps: LinuxCapabilities, materialization?: ExecutionMaterialization): CompiledExecution
+  /** 编译后端专属启动参数（Policy Compiler 唯一来源 + 运行期物化材料）。
+   *  IC06：claimId 可选（沙盒内 --setenv 传输；无 claim 路径不变）。 */
+  compile(spec: ExecutionCellSpec, caps: LinuxCapabilities, materialization?: ExecutionMaterialization, claimId?: string): CompiledExecution
 
   run(spec: ExecutionCellSpec, ctx: BackendRunContext): AsyncIterable<ExecutionCellEvent>
 
@@ -98,11 +102,15 @@ export async function* streamBackendRun(
   const startedAt = Date.now()
   yield { type: "cell.status", cellId: spec.identity.cellId, state: "running", at: startedAt }
   const compiled = compile()
+  // IC06：claimId 同时注入沙盒内 env（bwrap --clearenv 会清掉外层 env；
+  // 外层 override 由 spawnSupervised 负责，这里保证沙盒内部可见）。
+  const runtimeEnv = ctx.claimId ? { ...compiled.env, ORCANA_CLAIM_ID: ctx.claimId } : compiled.env
   for await (const event of streamSupervised({
     executable: compiled.argv[0]!,
     args: compiled.argv.slice(1),
     cwd: compiled.cwd,
-    env: compiled.env,
+    env: runtimeEnv,
+    claimId: ctx.claimId,
     limits: { stdoutMaxBytes: spec.resources.stdoutMaxBytes, stderrMaxBytes: spec.resources.stderrMaxBytes },
     wallTimeMs: spec.resources.wallTimeMs,
     detectDaemon: spec.lifecycle.killOnParentExit,

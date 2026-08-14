@@ -327,6 +327,20 @@ export interface DomainResourceBudget {
   maxTempBytes: number
 }
 
+/** IC06（Domain Budget Truth）：AgentExecutionDomain 必须暴露真实 enforcement
+ *  方式 —— 声明字段绝不冒充 hard authority（memory/pids = cgroup | none；
+ *  cpu = weight-hint；cells = advisory；wallTime = per-cell；output =
+ *  tool-layer；temp = none）。 */
+export interface BudgetEnforcementTruth {
+  memory: "cgroup" | "none"
+  pids: "cgroup" | "none"
+  cpu: "weight-hint"
+  cells: "advisory"
+  wallTime: "per-cell"
+  output: "tool-layer"
+  temp: "none"
+}
+
 export interface AgentExecutionDomain {
   domainId: string
   runId: string
@@ -338,6 +352,8 @@ export interface AgentExecutionDomain {
   tempRoot: string
   cacheNamespace: string
   resourceBudget: DomainResourceBudget
+  /** IC06：真实 enforcement 方式（cgroup 委托时 memory/pids=cgroup，否则 none）。 */
+  budgetEnforcement: BudgetEnforcementTruth
   createdAt: number
   status: "active" | "cancelling" | "closed" | "failed"
 }

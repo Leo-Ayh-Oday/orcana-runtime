@@ -338,6 +338,9 @@ export interface InputChromeState {
   /** TextArea 当前行数（1-3），用于动态计算 footerHeight */
   textRows: number
   commandRows?: number
+  /** 输入框当前是否有非空文本（编辑中）——浏览态 block 导航据此让路。
+   *  可选：缺省 undefined 视为未编辑（保持历史行为）。 */
+  textActive?: boolean
 }
 
 export interface AppShellProps {

@@ -40,6 +40,8 @@ import { createBubblewrapBackend } from "./backends/bubblewrap"
 import { createPodmanBackend } from "./backends/podman"
 import type { ExecutionBackend } from "./backends/backend"
 import { ResourceLedger } from "./scheduler/resource-ledger"
+import { readProcessStartticks } from "./scheduler/host-capacity"
+import type { CapacityAuthority } from "./scheduler/host-capacity"
 import type { ResourceRequest } from "./contracts"
 import { IsolationDomainLock } from "./workspace/isolation-lock"
 import { AgentDomainManager } from "./workspace/agent-domain"
@@ -80,6 +82,11 @@ export interface LinuxBrokerOptions {
   cgroup?: CgroupManager
   /** R2: 注入资源账本（默认宿主预留 + 6 并发 Cell）。 */
   ledger?: ResourceLedger
+  /** IC06: 注入 CapacityAuthority（execd HostCapacityAuthority 或其 IPC
+   *  CapacityClient）。注入后 production hard admission 只走 authority
+   *  （REMOTE_RESERVE_ACK_BEFORE_EXECUTION=1）；未注入 = 特性未启用，
+   *  local ledger 仅为 legacy advisory 视图（无 hard 声明）。 */
+  capacityAuthority?: CapacityAuthority
   /** R2: 状态持久化（默认 ~/.orcana/runtime/linux）。 */
   stateStore?: RuntimeStateStore
   /** 缓存宿主根（CacheManager 权威路径；默认 stateStore root/cache）。 */
@@ -130,6 +137,10 @@ export interface BrokerAcquiredResources {
   backendId: string
   /** ledger.reserve 成功后写入（清理时 ledger.release，绝不从 registry 找）。 */
   reservationId?: string
+  /** IC06: authority reserve ACK 后立即记录（REMOTE_CLAIM_ACQUIRED_BUT_NOT_RECORDED=0）；
+   *  cleanup 时经 finally 后半段 releaseRequested。单 acquisition truth 的
+   *  narrow 扩展（IC02：结构扩展 ≠ transaction redesign）。 */
+  capacityClaim?: { claimId: string; ownerToken: string }
   lockKeys: string[]
   /** CrossProcessWorkspaceLease 释放回调（跨进程写互斥）。 */
   leaseRelease?: () => void
@@ -280,6 +291,56 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
   }
 
   const ledger = options.ledger ?? new ResourceLedger()
+  /** IC06: Hard Authority。注入后 production hard admission 只经 authority；
+   *  local ledger 退化为 advisory/local view（不参与 admission）。 */
+  const capacityAuthority = options.capacityAuthority
+  const hardAuthority = capacityAuthority !== undefined
+
+  /** IC06: broker 进程自身的认证 principal（in-process authority 使用）。 */
+  const inProcessPrincipal = (): import("./scheduler/host-capacity").ClientPrincipal => ({
+    uid: process.getuid?.() ?? -1,
+    pid: process.pid,
+    startticks: readProcessStartticks(process.pid) ?? 0,
+    clientInstanceId: `broker-${process.pid}`,
+  })
+
+  /** IC06: claim phase 上报 —— durable crash-boundary facts（P0-3）：
+   *  PRE_SPAWN/SPAWN_ATTEMPTING/SPAWN_IDENTITY_COMMITTED/EXECUTING 必须
+   *  commit 成功才能跨越执行边界；失败 → 抛错（调用点 fail closed，
+   *  不 best-effort）。release 路径（finally 后半段）不经过此函数。 */
+  const reportPhase = async (
+    acquired: BrokerAcquiredResources,
+    phase: import("./scheduler/host-capacity").ClaimPhase,
+    spawn?: { pid: number; startticks: number; cgroupPath?: string },
+  ): Promise<void> => {
+    if (!acquired.capacityClaim || !capacityAuthority) return
+    if (phase === "TERMINATION_PROVEN" || phase === "RELEASED") return
+    await capacityAuthority.updatePhase(
+      acquired.capacityClaim.claimId,
+      acquired.capacityClaim.ownerToken,
+      phase as "PRE_SPAWN" | "SPAWN_ATTEMPTING" | "SPAWN_IDENTITY_COMMITTED" | "EXECUTING",
+      spawn,
+    )
+  }
+
+  /** IC06: finally 后半段 bounded release request（REMOTE_RELEASE_WAIT_UNBOUNDED=0；
+   *  超时/失败 → claim 保持 charged/quarantine，generator 正常结束）。 */
+  const boundedReleaseRequest = async (acquired: BrokerAcquiredResources): Promise<void> => {
+    if (!acquired.capacityClaim || !capacityAuthority) return
+    const { claimId, ownerToken } = acquired.capacityClaim
+    const deadline = 5000
+    try {
+      await Promise.race([
+        capacityAuthority.releaseRequested(claimId, ownerToken),
+        new Promise<never>((_, reject) => {
+          const t = setTimeout(() => reject(new Error("CAPACITY_RELEASE_TIMEOUT")), deadline)
+          t.unref?.()
+        }),
+      ])
+    } catch {
+      // release 未确认 → central claim 保持 charged（REMOTE_RELEASE_UNACKNOWLEDGED_FREE=0）。
+    }
+  }
   const stateStore = options.stateStore ?? new RuntimeStateStore()
   const domainManager = new AgentDomainManager({ ledger })
   // GATE（GS-13）：跨进程 workspace lease（mkdir 原子锁）。
@@ -673,13 +734,13 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       yield* this.execute(this.compileRequest(request, executeOptions?.authority), executeOptions)
     },
     selectBackendFor(spec) {
-      return selectBackend(spec, caps)
+      return selectBackend(spec, caps, { hardAuthority })
     },
     shadow(spec) {
       const compiled = compileOrThrow(spec)
       let selection: BackendSelection
       try {
-        selection = selectBackend(compiled, caps)
+        selection = selectBackend(compiled, caps, { hardAuthority })
       } catch (error) {
         selection = {
           backend: "host-audit",
@@ -724,7 +785,7 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
       // （allowDegradation=true）允许经编译器重编译到 minimum=audit；
       // 严格 Profile 在 selectBackend 直接抛 DEGRADATION_NOT_ALLOWED。
       try {
-        selectBackend(compiled, caps)
+        selectBackend(compiled, caps, { hardAuthority })
       } catch (error) {
         if (!compiled.isolation.allowDegradation) throw error
         const downgraded = compileCellSpec({
@@ -734,9 +795,10 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         })
         if (!downgraded.ok) throw error
         compiled = downgraded.spec
-        selectBackend(compiled, caps)
+        // IC06：降级到 host-audit 同样被 hardAuthority 拒绝（fail closed）。
+        selectBackend(compiled, caps, { hardAuthority })
       }
-      const selection = selectBackend(compiled, caps)
+      const selection = selectBackend(compiled, caps, { hardAuthority })
       const backend = backendOf(selection.backend)
       if (!backend) {
         throw new LinuxExecutionError("PROCESS_START_FAILED", `no backend implementation for "${selection.backend}"`)
@@ -795,11 +857,38 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
         cellRuns.set(cellId, { runId, agentId, phase: "starting", acquired })
         await checkpoint("after-register-starting")
         const requested = resourceRequestOf(compiled)
-        const reservation = ledger.reserve(requested, runId, cellId, agentId)
-        if (!reservation.ok) {
-          throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${reservation.reason}`, { available: reservation.available })
+        if (hardAuthority && capacityAuthority) {
+          // IC06: authority reserve —— ACK 后立即写入 acquired（单 acquisition
+          // truth）。authority 不可达 → FAIL CLOSED（无 local-ledger fallback）。
+          let outcome: import("./scheduler/host-capacity").ReserveOutcome
+          try {
+            outcome = await capacityAuthority.reserve(
+              {
+                request: requested,
+                runId,
+                cellId,
+                agentId,
+                backendId: selection.backend,
+              },
+              `reserve-${runId}-${cellId}`,
+              inProcessPrincipal(),
+            )
+          } catch (error) {
+            throw new LinuxExecutionError("RESOURCE_AUTHORITY_UNAVAILABLE", `capacity authority unreachable: ${error instanceof Error ? error.message : String(error)}`, {})
+          }
+          if (!outcome.ok) {
+            throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${outcome.reason}`, {})
+          }
+          acquired.capacityClaim = { claimId: outcome.claimId, ownerToken: outcome.ownerToken }
+          // 进入执行生命周期：claim 在 materialize 前推进 PRE_SPAWN（durable）。
+          await reportPhase(acquired, "PRE_SPAWN")
+        } else {
+          const reservation = ledger.reserve(requested, runId, cellId, agentId)
+          if (!reservation.ok) {
+            throw new LinuxExecutionError("RESOURCE_RESERVATION_FAILED", `resources unavailable: ${reservation.reason}`, { available: reservation.available })
+          }
+          acquired.reservationId = reservation.reservation.reservationId
         }
-        acquired.reservationId = reservation.reservation.reservationId
 
         // R3: 运行期物化（seccomp/secret/cache）——不修改冻结后的 Spec。
         // C5：物化在事务内进行 —— cleanupAcquired 保证宿主文件（sealed
@@ -904,14 +993,45 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
 
         // PR-2：捕获后端 Receipt（真实执行证据），cleanup 中持久化并合并清理真值。
         await checkpoint("before-backend-run")
+        // IC06：claim 进入 SPAWN_ATTEMPTING（spawn 前状态推进）。
+        await reportPhase(acquired, "SPAWN_ATTEMPTING")
         try {
           for await (const event of backend.run(compiled, {
             capabilities: caps,
             abortSignal: acquired.controller.signal,
             cgroupPath: acquired.cgroupCellPath,
             materialization: acquired.materialization,
-            attachCell: pid => {
+            // IC06：claimId 运行时传输（→ env ORCANA_CLAIM_ID）。
+            claimId: acquired.capacityClaim?.claimId,
+            attachCell: async (pid) => {
               acquired.spawnedPid = pid
+              // IC06（P0-3）：spawn identity 必须在 go token 之前 durable
+              // commit —— await reportPhase（非 fire-and-forget）。commit
+              // 失败 → return false（launcher 不释放，目标不 exec）。
+              // PRE_SPAWN/SPAWN_ATTEMPTING 也是 durable crash-boundary facts：
+              // 由 reportPhase 抛错 fail closed（见 P0-3 strictPhase）。
+              let identityCommitted = true
+              if (acquired.capacityClaim) {
+                // IC06 修复（P2-1）：spawn identity 读取失败 → fail-closed
+                // （不 commit 身份、不发 go token）。写入 0 会让 reality 把
+                // 活进程误判为 PID replaced（真实 ticks > 0 != 0 → proven）
+                // 而释放容量 —— 唯一 fail-open 路径。
+                const startticks = readProcessStartticks(pid)
+                if (startticks === undefined) {
+                  identityCommitted = false
+                  acquired.controller.abort()
+                  return false
+                }
+                try {
+                  await reportPhase(acquired, "SPAWN_IDENTITY_COMMITTED", { pid, startticks, cgroupPath: acquired.cgroupCellPath })
+                } catch {
+                  identityCommitted = false
+                }
+              }
+              if (!identityCommitted) {
+                acquired.controller.abort()
+                return false // go token 不发（REGISTRY_COMMIT_FAILURE_EXEC_BYPASS=0）
+              }
               if (cgroup && acquired.cgroupCellPath) {
                 try {
                   cgroup.attach(pid, acquired.cgroupCellPath)
@@ -944,6 +1064,15 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               // 是既有正常路径，不记 degradation）；Receipt 必须如实声明
               // cleanupVerified=false，不得假装有强保证。
               attachVerified = false
+              // IC06：身份 commit 后进入 EXECUTING（严格 await，无并发 fire）。
+              if (acquired.capacityClaim) {
+                try {
+                  await reportPhase(acquired, "EXECUTING")
+                } catch {
+                  acquired.controller.abort()
+                  return false
+                }
+              }
               return true // 无 attach 需求 → 立即释放（不阻塞执行）
             },
             readCellMetrics: () => readCellMetrics(acquired.cgroupCellPath ?? ""),
@@ -983,6 +1112,10 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
           attachVerified,
           compiled,
         })
+        // IC06：remote release request 位于同一 outer finally 的后半段
+        // （iterator return/throw/cancel 全路径均运行；bounded ≤5s；
+        // 超时/失败 → central claim 保持 charged/quarantine）。
+        await boundedReleaseRequest(acquired)
       }
     },
     createAgentDomain(input) {

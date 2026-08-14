@@ -8,6 +8,57 @@ All notable changes to Orcana Runtime.
 > every listed capability is present in the public package or fully closed in
 > the current source. See [`docs/status.md`](docs/status.md) for current truth.
 
+## [0.8.30.0] — 2026-08-14 (production-closure line: IC01–IC06 + audit fixes)
+
+First release since 0.8.16 (2026-08-05). Source versions 0.8.17–0.8.26.x were
+unreleased development ledgers; this release reconciles npm / tag / GitHub
+Release with the converged source.
+
+### Reliability closure (RC-00..RC-18, LPIC R0–R6, LNXF-7/8)
+
+- Verification truthfulness (VerificationStatus six-state contract, fail-closed
+  tsc/tool/ripple accounting), completion semantics (GateResult.incomplete),
+  ContextGuard rolling distillation, LSP/apply_patch truthfulness, process
+  alias bans, seccomp deny-by-default, revisePlan recovery chain.
+- Linux production integration closure: single process entry, Broker execution
+  transaction (reserve → isolation lock → Agent Domain → Cell cgroup → real
+  backend → receipts → cleanup → release), real seccomp-BPF/OCI files,
+  ResourceLedger-backed scheduling, evidence binding, host-audit PathGuard.
+- Linux sandbox evaluation (35 production scenarios), egress policy with
+  DNS-rebinding guard, Landlock/seccomp hardening layers, crash recovery
+  janitor with boot-identity safety.
+- Self-hosted runner isolation migrated/verified (SECURITY BLOCKER: CLOSED).
+
+### IC06 Resource Authority (final Gate A item)
+
+- Durable per-reservation claims (SQLite), owner-token proof, idempotent
+  reserve with token rekey, release-request reality checks, quarantine/suspect
+  phases, server-side reconcile, recovered-cell charging, capacity IPC with
+  mandatory SO_PEERCRED (fail closed), bounded RPC deadlines.
+- Audit-fix batch 2 (2026-08-14): reconcile reclaims orphaned
+  RESERVED/PRE_SPAWN claims; periodic daemon reconcile (60s); idempotent
+  reserve no longer revives released claims (fresh reserve, capacity
+  re-checked); table-level UNIQUE replaced by partial unique index with
+  automatic legacy-schema migration; spawn identity read failure fails closed
+  (no startticks=0 fail-open).
+
+### CLI / TUI repair (2026-08-14)
+
+- Node startup crash on `bun:` imports fixed (dynamic import, fail-closed).
+- Six TUI fixes: bare-slash guard (no accidental LLM run), auth-error
+  mislabeling fixed (word-boundary matching), empty-round air-bubble removed,
+  non-TTY fallback to CLI, block navigation no longer hijacks input,
+  duplicate transcript dispatch removed.
+
+### Gate evidence (2026-08-14)
+
+- typecheck 0 errors; full test gate green (370+ pass, 0 fail; 7 live-provider
+  tests QUARANTINED pending credential config); build ok; pack dry-run ok;
+  release smoke (isolated global install + CLI probe) ok.
+- Known limitations documented in docs/status.md; Landlock unavailable on the
+  WSL2 host; strict-isolation and research claims remain gated (Gate B/C) per
+  docs/status.md claim rules.
+
 ## [0.8.17] — in progress (reliability-freeze)
 
 ### Added (RC-00 基线)

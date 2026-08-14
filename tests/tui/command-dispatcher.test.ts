@@ -58,6 +58,15 @@ describe("dispatchTuiCommand", () => {
     expect(dispatchTuiCommand("/custom do this", context)).toBe("pass_to_agent")
   })
 
+  test("bare slash shows command help instead of starting a run", () => {
+    const { context, messages } = createContext()
+    // 裸 "/" 是命令入口：必须 handled，绝不 pass_to_agent（否则会创建 LLM run）
+    expect(dispatchTuiCommand("/", context)).toBe("handled")
+    expect(messages.join(" ")).toContain("/help")
+    // 带空白也归一到裸斜杠
+    expect(dispatchTuiCommand(" / ", context)).toBe("handled")
+  })
+
   test("rejects unsafe commands while the agent is running", () => {
     const { context, messages } = createContext({ isRunning: () => true })
     expect(dispatchTuiCommand("/clear", context)).toBe("handled")

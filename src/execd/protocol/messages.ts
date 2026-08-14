@@ -32,6 +32,11 @@ export type Request =
   | ({ method: "ReleaseLease"; payload: { leaseId: string } } & RequestBase)
   | ({ method: "AttachLogs"; payload: { cellId: string; kind?: "stdout" | "stderr"; offset?: number } } & RequestBase)
   | ({ method: "ListRecoverableRuns"; payload: Record<string, never> } & RequestBase)
+  | ({ method: "CapacityReserve"; payload: import("../../runtime/linux/scheduler/host-capacity").CapacityReserveRequest & { clientInstanceId: string } } & RequestBase)
+  | ({ method: "CapacityReleaseRequest"; payload: { claimId: string; ownerToken: string; clientInstanceId: string } } & RequestBase)
+  | ({ method: "CapacityPhase"; payload: { claimId: string; ownerToken: string; phase: string; spawn?: { pid: number; startticks: number; cgroupPath?: string }; clientInstanceId: string } } & RequestBase)
+  | ({ method: "CapacityReconcile"; payload: { clientInstanceId: string } } & RequestBase)
+  | ({ method: "CapacityStatus"; payload: { clientInstanceId: string } } & RequestBase)
 
 /** SubmitCell：复用 ExecutionIntent 的业务形状（LR2-0D 契约）。 */
 export interface SubmitCellPayload {

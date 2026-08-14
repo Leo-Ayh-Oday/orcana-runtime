@@ -20,6 +20,9 @@ export interface SupervisorOptions {
   cwd: string
   /** 显式构造的完整环境（禁止宿主 env 继承 —— environment.ts）。 */
   env: Record<string, string>
+  /** IC06: claimId 运行时传输 —— spawn 前 final override 写入
+   *  ORCANA_CLAIM_ID（runtime metadata；禁止 model/tool/request 覆盖）。 */
+  claimId?: string
   stdin?: "closed" | "pipe"
   limits: OutputLimits
   wallTimeMs: number
@@ -30,8 +33,11 @@ export interface SupervisorOptions {
   onOutput?: (stream: "stdout" | "stderr", data: Buffer) => void
   /** spawn 完成回调（cgroup attach 用）。返回值决定 launcher handshake
    *  释放：true/undefined = 释放目标 exec；false = 阻塞（attach 未确认，
-   *  目标程序不得开始执行 —— LR2-0F 关闭"启动后再 attach"竞态）。 */
-  onSpawn?: (pid: number) => boolean | void
+   *  目标程序不得开始执行 —— LR2-0F 关闭"启动后再 attach"竞态）。
+   *  IC06（P0-3）：可返回 Promise<boolean> —— durable spawn identity
+   *  （claim SPAWN_IDENTITY_COMMITTED + pid/startTicks）commit 完成才返回
+   *  true；commit 失败 → false（go token 不发，目标不 exec）。 */
+  onSpawn?: (pid: number) => boolean | void | Promise<boolean | void>
   /** bwrap seccomp BPF 文件：以 FD 3 打开传给子进程（bwrap --seccomp 3）。
    *  PR-4：bwrap --seccomp 协议要求 FD 数字，不是文件路径。 */
   seccompFdPath?: string
@@ -74,11 +80,18 @@ export function spawnSupervised(options: SupervisorOptions): SpawnedProcess {
   }
   let executable = options.executable
   let args = options.args
+  // IC06: claimId final override —— spawn 环境唯一注入点（spawnSupervised
+  // 是 Linux runtime 唯一 spawn 入口；任何 request/tool env 无法覆盖）。
+  if (options.claimId) {
+    options.env = { ...options.env, ORCANA_CLAIM_ID: options.claimId }
+  }
   if (options.launcherHandshake && process.platform === "linux") {
-    // 包装进程：read 阻塞（释放令牌）→ exec 目标。exec 替换进程自身，
-    // PID/进程组不变；目标 stdin 为 pipe（释放后 end → EOF ≈ closed）。
+    // 包装进程：read 阻塞（释放令牌）→ 校验 exact token → exec 目标。
+    // IC06（P0-4）：EOF/空/错误/垃圾令牌全部 exit 127 —— 目标不 exec
+    // （LAUNCHER_EOF_EXEC_BYPASS=0 / INVALID_LAUNCH_TOKEN_EXEC_BYPASS=0；
+    // parent crash before go → EOF → 同样 exit 127）。
     executable = "/bin/sh"
-    args = ["-c", 'read _ <&0; exec "$@"', "orcana-cell-launcher", options.executable, ...options.args]
+    args = ["-c", 'IFS= read -r tok <&0; [ "$tok" = "go" ] || exit 127; exec "$@"', "orcana-cell-launcher", options.executable, ...options.args]
   }
   const proc = spawn(executable, args, {
     cwd: options.cwd,
@@ -95,10 +108,10 @@ export async function runSupervised(options: SupervisorOptions): Promise<Supervi
   const startedAt = Date.now()
   const limiter = createOutputLimiter(options.limits)
   const { proc, pid } = spawnSupervised(options)
-  // LR2-0F：launcher handshake —— attach 确认（onSpawn 返回 true/undefined）
-  // 后写入释放令牌；返回 false（attach 未确认）→ 目标程序阻塞在 read，
-  // 不执行任何指令（由取消/清理路径终止）。
-  const released = options.onSpawn?.(pid)
+  // LR2-0F + IC06：launcher handshake —— onSpawn 是 await 点：durable
+  // spawn identity commit 完成才返回 true；false → 不写 go（目标阻塞在
+  // read，由取消/清理路径终止）。
+  const released = await options.onSpawn?.(pid)
   if (options.launcherHandshake && released !== false && pid > 0) {
     try {
       proc.stdin?.write("go\n")

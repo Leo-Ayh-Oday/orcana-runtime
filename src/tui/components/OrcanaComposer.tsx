@@ -191,7 +191,7 @@ export interface OrcanaComposerProps {
   rightStatus?: string
   commands?: SlashCommandHint[]
   focused?: boolean
-  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number; textRows: number; commandRows?: number }) => void
+  onChromeChange?: (state: { commandOpen: boolean; pasteCount: number; textRows: number; commandRows?: number; textActive: boolean }) => void
 }
 
 export function OrcanaComposer({
@@ -245,8 +245,8 @@ export function OrcanaComposer({
 
   // ── 通知 parent chrome 状态 ──
   useEffect(() => {
-    onChromeChange?.({ commandOpen: showCommands, pasteCount, textRows, commandRows })
-  }, [commandRows, onChromeChange, pasteCount, showCommands, textRows])
+    onChromeChange?.({ commandOpen: showCommands, pasteCount, textRows, commandRows, textActive: value.trim().length > 0 })
+  }, [commandRows, onChromeChange, pasteCount, showCommands, textRows, value])
 
   // PR-3: slashQuery 变化时重置 commandsDismissed —— 用户继续输入则菜单重新出现。
   // 覆盖场景：/hel → Esc → 退格 → /he（slashQuery 变化 → 菜单重现）。

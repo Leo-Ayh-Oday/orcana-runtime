@@ -186,8 +186,16 @@ async function main() {
   }
 
   const prompt = process.argv.slice(2).join(" ") || undefined
-  const { startInkTUI } = await import("./tui/main")
-  await startInkTUI(prompt)
+  // 非 TTY（管道/脚本/CI）下 Ink 无法进入 raw mode：直接走 CLI，
+  // 避免 "Raw mode is not supported" 崩溃。显式 --tui 仍保持原行为。
+  if (process.stdout.isTTY) {
+    const { startInkTUI } = await import("./tui/main")
+    await startInkTUI(prompt)
+    return
+  }
+  const { startCLI } = await import("./ui/cli")
+  await startCLI(prompt)
+  if (prompt) process.exit(0)
 }
 
 main().catch((err) => {

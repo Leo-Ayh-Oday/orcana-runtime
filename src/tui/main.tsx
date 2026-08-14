@@ -330,6 +330,11 @@ function useAgentStream(
       ]
       // assistant.final("") marks pending message non-pending, preserves accumulated text
       store.dispatch({ type: "assistant.final", text: "" })
+      if (!assistantText.trim()) {
+        // 空轮（provider 空回复/empty_round）：不渲染空气泡（derive-blocks 跳过），
+        // 明确提示用户本轮没有输出，而不是把失败显示成成功。
+        store.dispatch({ type: "ui.event_message", kind: "activity", text: "本轮模型没有返回内容，请重试或换一种问法。", minIntervalMs: 0 })
+      }
       traceRenderedAssistant(traceRef.current, store, finalText.length)
       store.dispatch({ type: "ui.done", done: true })
       store.dispatch({ type: "ui.status", text: "done" })
@@ -402,7 +407,10 @@ function useAgentStream(
   }, [addSystemMessage])
 
   const answerQuestion = useCallback((answer: string) => {
-    store.dispatch({ type: "user.message", text: answer })
+    // 注意：这里不 dispatch user.message —— runAgent(answer) 启动时会 dispatch
+    // 一次（main.tsx 的 runAgent 内 "user.message 必须在 run 启动前 dispatch"）。
+    // 之前这里重复 dispatch 会生成 2 条 user 消息 + 2 条 pending assistant
+    // （第一条空 assistant 在 assistant.final("") 后保留为空气泡）——A-审查高危 #6。
     store.dispatch({
       type: "ui.event_message",
       kind: "activity",
@@ -524,7 +532,7 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
   const [scrollState, setScrollState] = useState<ScrollbackScrollState>({ maxOffset: 0, normalizedOffset: 0, hiddenAbove: false, hiddenBelow: false })
   const previousMaxOffsetRef = useRef(0)
   const [autoFollow, setAutoFollow] = useState(true)
-  const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1 })
+  const [inputChrome, setInputChrome] = useState<InputChromeState>({ commandOpen: false, pasteCount: 0, textRows: 1, textActive: false })
   const [showStartup, setShowStartup] = useState(process.env.ORCANA_TUI_SPLASH !== "off")
   const isWorking = !state.done && !state.errorLine
 
@@ -673,8 +681,11 @@ export function ChatApp({ prompt, runtime }: { prompt?: string; runtime: Runtime
       if (key.escape) overlayController.closeOverlay()
       return
     }
-    // Depthline P4: 浏览态（有选中块或已上滚）→ j/k/Enter/Space 走 block 导航
-    const blockNavActive = viewState.selectedBlockId !== null || scrollOffset > 0
+    // Depthline P4: 浏览态（有选中块或已上滚）→ j/k/Enter/Space 走 block 导航。
+    // 守卫：输入框正在编辑（textActive）时停用 —— Ink 所有 useInput handler
+    // 都收到同一按键，若不守卫，上滚后输入含 j/k/空格 的文本会边打字边移动
+    // 块选择，Enter 提交消息的同时折叠/展开选中块（A-审查高危 #1）。
+    const blockNavActive = (viewState.selectedBlockId !== null || scrollOffset > 0) && !inputChrome.textActive
     if (blockNavActive && activeKeyContext === "Scrollback") {
       const blockKey = matchBlockNavKey(_input, key)
       if (blockKey) {

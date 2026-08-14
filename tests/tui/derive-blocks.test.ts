@@ -156,6 +156,33 @@ describe("ExecutionSummaryBlock（结构化数组）", () => {
   })
 })
 
+describe("空轮守卫", () => {
+  test("空文本且已结束的 assistant 不渲染空气泡", () => {
+    const store = makeStore()
+    store.dispatch({ type: "user.message", text: "q1" })
+    // 空轮：无 delta，直接 final 空文本（empty_round 路径）
+    store.dispatch({ type: "assistant.final", text: "" })
+    const blocks = deriveTranscriptBlocks(store.getState())
+    expect(kindOf(blocks, "assistant").length).toBe(0)
+  })
+
+  test("pending 中的空 assistant 仍渲染（思考中占位）", () => {
+    const store = makeStore()
+    store.dispatch({ type: "user.message", text: "q2" })
+    const blocks = deriveTranscriptBlocks(store.getState())
+    const assistants = kindOf(blocks, "assistant")
+    expect(assistants.length).toBe(1)
+    expect(assistants[0]!.lifecycle).toBe("running")
+  })
+
+  test("有文本的正常回复不受影响", () => {
+    const store = makeStore()
+    store.dispatch({ type: "user.message", text: "q3" })
+    store.dispatch({ type: "assistant.final", text: "answer" })
+    expect(kindOf(deriveTranscriptBlocks(store.getState()), "assistant").length).toBe(1)
+  })
+})
+
 describe("稳定 ID", () => {
   test("流式增长：既有块的 id 不变", () => {
     const store = makeStore()

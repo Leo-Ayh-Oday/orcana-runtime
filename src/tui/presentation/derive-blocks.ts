@@ -135,6 +135,13 @@ export function deriveTranscriptBlocks(state: TuiState): TranscriptBlock[] {
     }
 
     if (msg.role === "assistant") {
+      // 空轮守卫：已结束但无任何文本的 assistant 消息（空轮/空白 complete）
+      // 不渲染空气泡 —— 否则"空轮静默终止"会显示空白占位块，把失败当成功。
+      // pending 中的占位仍渲染（"正在思考"状态），有文本/错误正常渲染。
+      if (!msg.pending && !msg.text.trim()) {
+        i++
+        continue
+      }
       const lifecycle = assistantLifecycle(msg)
       blocks.push({
         id: blockIdForMessage(msg),

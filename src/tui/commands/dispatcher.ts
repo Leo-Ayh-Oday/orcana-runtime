@@ -207,6 +207,13 @@ function formatProvidersList(providers: string[]): string {
 export function dispatchTuiCommand(input: string, context: TuiCommandContext): TuiCommandDispatchResult {
   const intent = resolveRuntimeControlIntent(input, COMMANDS, { isRunning: context.isRunning() })
   if (intent.kind === "agent_prompt" || intent.kind === "empty") return "not_command"
+  // 裸 "/"（无命令名）：TUI 提示 "[Enter] send [/] commands"，用户输入 "/" 的
+  // 预期是命令入口而非消息。空命令名既不补全也不启动 run —— 提示帮助后拦截。
+  // 有名字的未知命令仍按设计 pass_to_agent（command-dispatcher.test.ts 锁定）。
+  if (intent.kind === "unknown_command" && intent.name === "") {
+    context.addSystemMessage("输入 /help 查看可用命令。")
+    return "handled"
+  }
   if (intent.kind === "unknown_command") return "pass_to_agent"
   if (intent.kind === "blocked_command") {
     context.addSystemMessage(`${intent.reason} Wait for it to finish or use /status to check progress.`)

@@ -63,6 +63,17 @@ export function compactStatusText(status: string): string {
   return status
 }
 
+/** 模型 provider 认证失败信号 —— 只匹配带明确认证/配置错误语义的文本，
+ *  避免把工具/execd 层含 "auth" 子串的错误（"authenticated peer"、
+ *  "authorization"、文件路径 "auth.ts"、SSH 错误等）误报为模型认证失败。 */
+function isModelAuthFailure(text: string): boolean {
+  // 强信号：401 / unauthorized / authentication failed|error / invalid api key|credential|token
+  if (/\b(?:401|unauthorized|authentication[ _-]*(?:failed|error)|invalid[ _-]*(?:api[ _-]?key|credential|token))\b/i.test(text)) return true
+  // 配置缺失信号：API key 字样后伴随"未配置/请…/missing/required"等配置语义
+  if (/\bapi[ _-]?key\b[^\n]{0,80}(?:请|尚未配置|未配置|没有配置|missing|required|not set|not found|not configured)/i.test(text)) return true
+  return false
+}
+
 export function cleanAgentError(text: string): string {
   if (/unexpected end of (?:hex|unicode) escape|failed to parse the request body as json/i.test(text)) {
     return "模型请求中的加载上下文被截断在转义序列中。本轮已安全停止；上下文裁剪已修复，请直接重试或发送“继续”。"
@@ -70,10 +81,10 @@ export function cleanAgentError(text: string): string {
   if (text.includes("[clarification-gate]")) {
     return "需要补充信息。请把需求说得更具体一点，然后重试。"
   }
-  if (/api key|auth|unauthorized|401/i.test(text)) {
+  if (isModelAuthFailure(text)) {
     return "模型服务认证失败。请运行 /models，选择当前模型并重新输入 API key。"
   }
-  if (/quota|insufficient[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|402|额度|余额|欠费|账户余额|资源包|套餐/i.test(text)) {
+  if (/quota|insufficient[_\s-]*quota|balance|billing|payment\s*required|prepaid|credits?|额度|余额|欠费|账户余额|资源包|套餐/i.test(text)) {
     return "模型服务额度或余额不足。请在 /models 切换模型、重新输入可用 key，或到对应平台充值后再试。"
   }
   if (/model not found|ProviderRegistry|no registered provider|unknown model/i.test(text)) {

@@ -1,6 +1,6 @@
 {
   "name": "orcana-runtime",
-  "version": "0.8.26.2",
+  "version": "0.8.30.0",
   "description": "Orcana Runtime — model-agnostic agent runtime for reliable, governed, evidence-backed long-horizon execution.",
   "type": "module",
   "license": "MIT",

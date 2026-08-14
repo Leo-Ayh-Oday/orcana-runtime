@@ -3,7 +3,11 @@ import { canonicalDigest } from "./canonical"
 import type { CasDigest } from "./contracts"
 import { dbAll, dbRun } from "./database"
 
-export const WORLD_SCHEMA_VERSION = 4
+/** R6-06：v5 —— world_objects.representation（内容表示类型的持久事实；
+ *  file 必须 raw|file-manifest；非 file 必须 NULL）。旧版本 DB 因 schema
+ *  fingerprint 不匹配而 fail-closed（WORLD_SCHEMA_INCOMPATIBLE —— legacy
+ *  缺 representation 的唯一规则就是整体拒绝，无静默 reinterpretation）。 */
+export const WORLD_SCHEMA_VERSION = 5
 
 interface SchemaObjectRow {
   type: "table" | "index" | "trigger"
@@ -41,7 +45,7 @@ export function worldSchemaFingerprint(db: Database): CasDigest {
 }
 
 export const WORLD_SCHEMA_FINGERPRINT: CasDigest =
-  "sha256:e166a4904d61cd84f6503d3895be4119645d95add38e00844365f08f3a53da24"
+  "sha256:6595fe55114d4763f719c0530f6582b8c83a518ff12d1cbd9287b01fc72994fa"
 
 export function assertWorldSchemaCompatible(db: Database): void {
   const installedObjects = worldSchemaObjectNames(db)
@@ -134,11 +138,17 @@ CREATE TABLE IF NOT EXISTS world_objects (
   object_type TEXT NOT NULL,
   path TEXT,
   content_ref TEXT,
+  representation TEXT,
   metadata_json TEXT NOT NULL,
   updated_revision TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (world_id, branch_id, object_id),
+  CHECK (
+    (object_type = 'file' AND representation IN ('raw', 'file-manifest'))
+    OR
+    (object_type != 'file' AND representation IS NULL)
+  ),
   FOREIGN KEY (world_id, branch_id) REFERENCES world_branches(world_id, branch_id)
 );
 

@@ -123,13 +123,20 @@ export interface AuthorizedWorkspace {
   ownerFiles: readonly string[]
 }
 
-/** 可信执行身份（R2 PR-9：INV-A）。由 Runtime 生成，请求不得覆盖。 */
+/** 可信执行身份（R2 PR-9：INV-A）。由 Runtime 生成，请求不得覆盖。
+ *
+ *  R6-03：cellId 可选覆盖 —— compileCapabilityRequest 的 identity 组装为
+ *  `{ cellId: random, ...authority.identity }`（spread 覆盖随机值）：
+ *  kernel 侧用真实 cellId 重编译 spec 并直接与 receipt.cellSpecDigest
+ *  比较（deterministic recompile；禁止同源字段互相比对）。production
+ *  adapter 的 authority 不设置 cellId（运行时随机生成）。 */
 export interface TrustedExecutionIdentity {
   runId: string
   nodeRunId: string
   attempt: number
   agentId?: string
   assignmentId?: string
+  cellId?: string
 }
 
 /** 可信执行权威 —— Linux enabled 执行的唯一身份/工作区来源。 */

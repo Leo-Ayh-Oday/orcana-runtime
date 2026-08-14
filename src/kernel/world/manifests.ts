@@ -1,4 +1,4 @@
-import { canonicalJson, compareCanonicalStrings } from "./canonical"
+import { canonicalJson, compareCanonicalStrings, sha256Digest } from "./canonical"
 import type {
   CasDigest,
   DirectoryManifest,
@@ -102,11 +102,20 @@ export function createDirectoryManifest(
   return storeManifest(cas, manifest, sorted.map(entry => entry.digest))
 }
 
-export function createSectionManifest(
+export interface ComputedSectionManifest {
+  readonly digest: CasDigest
+  readonly content: Buffer
+  readonly references: readonly CasDigest[]
+}
+
+/** R6-07-1：纯计算 section manifest（排序 + canonical 编码 + digest；
+ *  引用存在性只读校验 —— **不写 CAS**）。createSnapshot 用它先算 digest、
+ *  查 existing snapshot，再决定是否物理写入（existing 命中 → 零 residue）。 */
+export function computeSectionManifest(
   cas: WorldCas,
   section: string,
   entries: readonly SectionManifestEntry[],
-): StoredManifest<SectionManifest> {
+): ComputedSectionManifest {
   const sorted = [...entries].sort((left, right) => {
     const pathOrder = compareCanonicalStrings(left.path ?? "", right.path ?? "")
     return pathOrder !== 0 ? pathOrder : compareCanonicalStrings(left.id, right.id)
@@ -121,13 +130,44 @@ export function createSectionManifest(
     section,
     entries: Object.freeze(sorted.map(entry => Object.freeze({ ...entry }))),
   })
-  return storeManifest(cas, manifest, referenced)
+  const content = Buffer.from(canonicalJson(manifest), "utf8")
+  const digest = sha256Digest(content) as CasDigest
+  return Object.freeze({ digest, content, references: Object.freeze(referenced) })
 }
 
-export function createWorldManifest(
+export function createSectionManifest(
   cas: WorldCas,
+  section: string,
+  entries: readonly SectionManifestEntry[],
+): StoredManifest<SectionManifest> {
+  const computed = computeSectionManifest(cas, section, entries)
+  const record = cas.putManifest(computed.content, computed.references)
+  const parsed = parseSectionManifestFromBuffer(computed.content)
+  return { digest: record.digest, manifest: parsed }
+}
+
+function parseSectionManifestFromBuffer(content: Buffer): SectionManifest {
+  const parsed = JSON.parse(content.toString("utf8")) as SectionManifest
+  return Object.freeze({
+    ...parsed,
+    entries: Object.freeze(parsed.entries.map(entry => Object.freeze(entry))),
+  })
+}
+
+export interface ComputedWorldManifest {
+  readonly digest: CasDigest
+  readonly content: Buffer
+  readonly references: readonly CasDigest[]
+}
+
+/** R6-07-1：纯计算 world manifest（**不写 CAS**）。
+ *  引用（各 section digest）在纯计算阶段**不要求已存在** —— section
+ *  manifests 尚未写入；写入路径（createWorldManifest → putManifest）在
+ *  section 写入后自行校验引用存在。 */
+export function computeWorldManifest(
+  _cas: WorldCas,
   manifest: WorldManifest,
-): StoredManifest<WorldManifest> {
+): ComputedWorldManifest {
   const references = [
     manifest.filesystemDigest,
     manifest.memoryDigest,
@@ -136,7 +176,17 @@ export function createWorldManifest(
     manifest.serviceStateDigest,
     manifest.artifactStateDigest,
   ]
-  assertManifestReferences(cas, references)
   const frozen = Object.freeze({ ...manifest })
-  return storeManifest(cas, frozen, references)
+  const content = Buffer.from(canonicalJson(frozen), "utf8")
+  const digest = sha256Digest(content) as CasDigest
+  return Object.freeze({ digest, content, references: Object.freeze(references) })
+}
+
+export function createWorldManifest(
+  cas: WorldCas,
+  manifest: WorldManifest,
+): StoredManifest<WorldManifest> {
+  const computed = computeWorldManifest(cas, manifest)
+  const record = cas.putManifest(computed.content, computed.references)
+  return { digest: record.digest, manifest: Object.freeze({ ...manifest }) }
 }

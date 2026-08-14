@@ -35,7 +35,25 @@ import { join, resolve, sep } from "node:path"
 import { detectOverlayBackend, type OverlayBackend } from "../../runtime/linux/workspace/overlay"
 import { ProjectionError } from "./contracts"
 
-export type NativeBackendKind = "overlayfs" | "fuse-overlayfs" | "fixture"
+/** R6-01：production backend 类型**不包含** fixture discriminant ——
+ *  生产模块无法表达 test-only backend（fixture 只存在于 tests/**）。 */
+export type NativeBackendKind = "overlayfs" | "fuse-overlayfs"
+
+/**
+ * R6-01：test-only fixture backend brand —— 只防 API 误用 / 公开字符串
+ * 伪造（kind:"fixture" 字符串不再授予任何东西）。仅 tests/** 内的
+ * CopyProjectionFixtureBackend 在构造时调用 mark。**不解决 same-UID
+ * 攻击** —— 文档明确：该 gate 保护 kernel 自身构造流程，不冒充认证。
+ */
+const TEST_FIXTURE_BACKENDS = new WeakSet<object>()
+
+export function markTestFixtureBackend(backend: NativeProjectionBackend): void {
+  TEST_FIXTURE_BACKENDS.add(backend)
+}
+
+export function isTestFixtureBackend(backend: NativeProjectionBackend): boolean {
+  return TEST_FIXTURE_BACKENDS.has(backend)
+}
 
 export interface CreateProjectionInput {
   /** 物化后的 immutable lower base（只读）。 */
@@ -357,6 +375,10 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     // R2-06：upper 身份（mount id 卸载后会被内核复用 —— upper dev/ino 是
     // 更强绑定：攻击者替换 upper 重挂载 → 身份不匹配 → fail-closed）。
     // R5-04：mountpoint 身份（merged dev/ino）+ fsType/source 一并绑定。
+    // R6-05-1：wasMounted —— 本次 invocation 确实完成了 FUSE mount；
+    // 之后 mount 消失（外部卸载）→ assertMountOwned 必须 false（仅剩
+    // 底层 merged inode 不算 owned —— 生产 backend 无「从未挂载」状态）。
+    const wasMounted = mounted
     let sealedMountId: string | undefined = undefined
     let sealed = false
     return {
@@ -373,6 +395,9 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
       // 前、cleanup 时调用；mount 消失/被替换 → false（fail-closed）。
       // R4-06：seal 后接受 sealed mount id（同一 upper 身份的 ro 重挂载）。
       // R5-04：mountpoint 身份（dev/ino）+ fsType/source 一并复核。
+      // R6-05：多因子 ownership 复核 —— mount id + fsType + source +
+      // upper 身份 + daemon 命令行，缺任何一项都拒绝（/proc cmdline 子串
+      // 从不单独构成 authority）。
       assertMountOwned: () => {
         if (!existsSync(merged)) return false
         try {
@@ -381,18 +406,13 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
         } catch {
           return false
         }
-        const info = fuseMountInfo(merged)
-        if (info !== undefined) {
-          // 挂载中：挂载点的 lstat 反映 FUSE 视图（dev/ino 与底层目录不同）——
-          // 身份判别用 mount id + source + upper 身份 + daemon 命令行。
-          if (info.source !== "fuse-overlayfs") return false
-          if (info.id !== mountId && info.id !== sealedMountId) return false
-          if (!this.upperMatches(upper, upperIdentity)) return false
-          // R5-04：mount id 会被内核复用 —— daemon 必须仍使用我们的 upper。
-          if (!this.fuseDaemonUsesUpper(merged, upper)) return false
-          return true
+        // R6-05-1：生产 backend 已真实挂载过 —— mount 消失（无 FUSE
+        // mountinfo/statfs）→ 直接 false。仅剩底层 merged inode 不算 owned
+        // （曾挂载 ≠ 仍挂载；生产 backend 无「从未挂载」回退）。
+        if (wasMounted) {
+          return this.fullOwnershipCheck(merged, upper, upperIdentity, mountId, sealedMountId)
         }
-        // 未挂载：mountpoint 必须是原目录（身份匹配；替换 → false）。
+        // 从未挂载（仅测试可构造的退化路径）：mountpoint 必须是原目录。
         try {
           const stat = lstatSync(merged)
           if (stat.dev !== mergedIdentity.dev || stat.ino !== mergedIdentity.ino) return false
@@ -453,6 +473,12 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
             return { error: "read-only remount produced an unowned/foreign FUSE mount; seal refused" }
           }
           return { error: "read-only remount did not produce a real FUSE mount; seal refused" }
+        }
+        // R6-05-4：RO remount 后**重新证明完整 ownership**（多因子：mount
+        // id + fsType + source + upper 身份 + daemon 命令行）—— 仅凭 mount
+        // id 存在不够（foreign 同路径重挂载 / 替换 upper 均拒绝）。
+        if (!this.fullOwnershipCheck(merged, upper, upperIdentity, mountId, sealedId)) {
+          return { error: "read-only remount ownership re-proof failed (mount id/fsType/source/upper/daemon mismatch); seal refused" }
         }
         sealedMountId = sealedId
         sealed = true
@@ -524,6 +550,30 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     } catch {
       return false
     }
+  }
+
+  /** R6-05-2/3/4：统一多因子 ownership 复核（assertMountOwned 与 seal 共用）。
+   *  mount id + fsType（fuse/fuse.*）+ source（fuse-overlayfs）+ upper 身份
+   *  + daemon 命令行 —— 缺任何一项都拒绝；/proc cmdline 子串不单独构成
+   *  authority。seal 后的 RO remount 用 sealedMountId 重新证明。 */
+  private fullOwnershipCheck(
+    merged: string,
+    upper: string,
+    upperIdentity: { readonly dev: number; readonly ino: number },
+    mountId: string | undefined,
+    sealedMountId: string | undefined,
+  ): boolean {
+    const info = fuseMountInfo(merged)
+    if (info === undefined) return false
+    // fsType：必须是 fuse / fuse.*（fuseMountInfo 已过滤 —— 显式再校验）。
+    if (!(info.fsType === "fuse" || info.fsType.startsWith("fuse."))) return false
+    if (info.source !== "fuse-overlayfs") return false
+    if (info.id !== mountId && info.id !== sealedMountId) return false
+    if (!this.upperMatches(upper, upperIdentity)) return false
+    // R5-04/R6-05-3：mount id 会被内核复用 —— daemon 必须仍使用我们的
+    // upper（多因子之一，不单独构成 authority）。
+    if (!this.fuseDaemonUsesUpper(merged, upper)) return false
+    return true
   }
 
   /** R5-04：upper 目录身份复核（mount/unmount/rm 的更强绑定）。 */

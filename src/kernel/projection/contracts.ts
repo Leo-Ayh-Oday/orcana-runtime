@@ -196,13 +196,42 @@ export interface ProjectionExecutionIntent {
    *  merged hostRoot 按 runtime 的 spec.filesystem canonical 结构独立派生
    *  （kernel-owned；不能与 receipt/claim 自报值互相比对）。 */
   readonly filesystemPolicyDigest: string
+  /** R6-03：完整 execution policy 绑定 —— kernel-owned input（plan +
+   *  session），不是 adapter 选项自报。 */
+  /** 执行 profile（kernel-owned；与 adapter 编译出的 spec.profile 一致）。 */
+  readonly profile: import("../../runtime/linux/contracts").ExecutionProfile
+  /** 网络策略（kernel-owned；缺省 = profile 默认 none）。 */
+  readonly network?: { readonly mode: import("../../runtime/linux/contracts").NetworkMode; readonly allowedHosts?: readonly string[]; readonly allowedPorts?: readonly number[] }
+  /** 资源策略（kernel-owned；缺省 = profile 默认）。 */
+  readonly resources?: {
+    readonly memoryMaxBytes?: number
+    readonly pidsMax?: number
+    readonly stdoutMaxBytes?: number
+    readonly stderrMaxBytes?: number
+  }
+  /** secrets/capability 声明摘要（kernel-owned；进入 intent digest →
+   *  ORCANA_PROJECTION_INTENT → receipt.projectionIntentDigest —— 改变
+   *  secrets 会破坏整个 binding 链）。 */
+  readonly secretsDigest: string
+  /** R6-03：期望 cellSpecDigest —— coordinator 用 kernel-owned/trusted
+   *  compiler（compileCapabilityRequest + 规范化 cellId）从权威输入派生；
+   *  adapter spawn 前对实际编译 spec 的规范化 digest 比对；commit 时
+   *  用 receipt 的真实 cellId 重编译并直接与 receipt.cellSpecDigest 比较
+   *  （禁止只把 receipt 与 outcome 的同源字段互相比对）。 */
+  readonly expectedCellSpecDigest: string
 }
 
 /** intent 的 canonical 摘要（注入 spec 环境变量 → 进入 cellSpecDigest →
- *  由 broker 填入 final receipt.projectionIntentDigest）。 */
+ *  由 broker 填入 final receipt.projectionIntentDigest）。
+ *
+ *  R6-03：expectedCellSpecDigest 是**派生字段**（其它字段的确定函数）——
+ *  从摘要中剔除以避免循环（spec env 含 intent digest，而 expected
+ *  cellSpecDigest 又来自该 spec）；binding 强度不损失：任何 policy 差异
+ *  都同时改变其它字段与派生 digest。 */
 export function projectionIntentDigest(intent: ProjectionExecutionIntent): string {
   const { canonicalJson, sha256Digest } = require("../world/canonical") as typeof import("../world/canonical")
-  return sha256Digest(Buffer.from(canonicalJson(intent), "utf8"))
+  const { expectedCellSpecDigest: _derived, ...bindingFields } = intent
+  return sha256Digest(Buffer.from(canonicalJson(bindingFields), "utf8"))
 }
 
 /** 状态机模型：唯一真源（R2-04）—— 显式白名单查表；未列出的边一律
@@ -248,6 +277,22 @@ export interface WorldProjectionPlanInput {
   readonly expectedOutputs: readonly string[]
   /** 必须为 false（AK-2 无 Graph completion authority）。 */
   readonly graphCompletionAllowed: false
+  /** R6-03：kernel-owned 执行 policy（缺省 profile="build"、network 与
+   *  resources 取 profile 默认）。spec binding 的权威输入 —— 不是
+   *  adapter 选项自报。 */
+  readonly profile?: import("../../runtime/linux/contracts").ExecutionProfile
+  readonly network?: { readonly mode: import("../../runtime/linux/contracts").NetworkMode; readonly allowedHosts?: readonly string[]; readonly allowedPorts?: readonly number[] }
+  readonly resources?: {
+    readonly memoryMaxBytes?: number
+    readonly pidsMax?: number
+    readonly stdoutMaxBytes?: number
+    readonly stderrMaxBytes?: number
+  }
+  /** secrets/capability 声明摘要（kernel-owned）。 */
+  readonly secretsDigest?: string
+  /** R6-02：kernel-owned intentId 覆盖（确定性重放测试 / 恢复场景用；
+   *  生产缺省 → coordinator 生成 uuid）。 */
+  readonly intentId?: string
 }
 
 export interface WorldProjectionPlan {
@@ -261,6 +306,16 @@ export interface WorldProjectionPlan {
   readonly readonlyRoots: readonly string[]
   readonly expectedOutputs: readonly string[]
   readonly graphCompletionAllowed: false
+  readonly profile: import("../../runtime/linux/contracts").ExecutionProfile
+  readonly network?: { readonly mode: import("../../runtime/linux/contracts").NetworkMode; readonly allowedHosts?: readonly string[]; readonly allowedPorts?: readonly number[] }
+  readonly resources?: {
+    readonly memoryMaxBytes?: number
+    readonly pidsMax?: number
+    readonly stdoutMaxBytes?: number
+    readonly stderrMaxBytes?: number
+  }
+  readonly secretsDigest: string
+  readonly intentId?: string
 }
 
 /** Projection receipt —— 只记录本 projection 的事实，不提供 Graph/

@@ -14,7 +14,13 @@ import { WorldCorruptionError } from "./contracts"
 import { WorldCas } from "./cas"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { WorldLedger } from "./ledger"
-import { createSectionManifest, createWorldManifest, type SectionManifestEntry } from "./manifests"
+import {
+  computeSectionManifest,
+  computeWorldManifest,
+  createSectionManifest,
+  createWorldManifest,
+  type SectionManifestEntry,
+} from "./manifests"
 
 interface SnapshotRow {
   snapshotId: string
@@ -56,17 +62,25 @@ function snapshotFromRow(row: SnapshotRow): WorldSnapshot {
   }
 }
 
-/** R5-07：内容表示类型的不可变绑定 —— 在 snapshot 创建时从 CAS 记录
- *  isManifest 快照（此后 promotion/GC/recovery 都不得改变语义 —— 同一
- *  snapshot 物化必须逐字节一致；NONDETERMINISTIC_SNAPSHOT = 0）。 */
-function objectEntry(object: WorldObject, cas: WorldCas): SectionManifestEntry {
+/** R5-07/R6-06：内容表示类型的不可变绑定 —— snapshot 只能复制
+ *  WorldObject.representation（World revision 的持久事实；commit 时绑定）。
+ *  **禁止**读取 cas.record(...).isManifest 推断语义（全局 isManifest 可被
+ *  promotion 翻转 → 双重解释；NONDETERMINISTIC_SNAPSHOT = 0）。file 缺
+ *  representation（corrupt/legacy 行）→ 明确 fail-closed。 */
+function objectEntry(object: WorldObject, _cas: WorldCas): SectionManifestEntry {
   let representation: "raw" | "file-manifest" | undefined
   if (object.objectType === "file") {
     if (object.contentRef === undefined) {
       throw new Error(`file object ${object.objectId} has no contentRef`)
     }
-    const record = cas.record(object.contentRef)
-    representation = record?.isManifest === true ? "file-manifest" : "raw"
+    if (object.representation !== "raw" && object.representation !== "file-manifest") {
+      throw new Error(
+        `file object ${object.objectId} has no persisted representation (legacy/corrupt row); snapshot creation refused fail-closed`,
+      )
+    }
+    representation = object.representation
+  } else if (object.representation !== undefined) {
+    throw new Error(`non-file object ${object.objectId} must not carry representation`)
   }
   return {
     id: object.objectId,
@@ -99,56 +113,46 @@ export class WorldSnapshotManager {
       }
 
       const objects = this.source.listObjects(worldId, branchId)
-      const filesystem = createSectionManifest(
-        this.cas,
-        "filesystem",
-        objects
-          .filter(object => ["file", "directory", "workspace"].includes(object.objectType))
-          .map(object => objectEntry(object, this.cas)),
-      )
-      const memory = createSectionManifest(
-        this.cas,
-        "memory-and-world-objects",
-        objects
-          .filter(object =>
-            !["file", "directory", "workspace", "task_projection", "capability_state"].includes(
-              object.objectType,
-            ),
-          )
-          .map(object => objectEntry(object, this.cas)),
-      )
-      const task = createSectionManifest(
-        this.cas,
-        "task-projection-non-authoritative",
-        objects.filter(object => object.objectType === "task_projection").map(object => objectEntry(object, this.cas)),
-      )
-      const capability = createSectionManifest(
-        this.cas,
-        "capability-state",
-        objects.filter(object => object.objectType === "capability_state").map(object => objectEntry(object, this.cas)),
-      )
-      const services = createSectionManifest(
-        this.cas,
-        "services",
-        this.source.listServices(worldId, branchId).map(service => ({
-          id: service.serviceId,
-          kind: "service",
-          ...(service.definitionDigest === undefined
-            ? {}
-            : { contentRef: service.definitionDigest }),
-          metadata: { ...service.metadata, status: service.status },
-        })),
-      )
-      const artifacts = createSectionManifest(
-        this.cas,
-        "artifacts",
-        this.source.listArtifacts(worldId, branchId).map(artifact => ({
-          id: artifact.artifactId,
-          kind: "artifact",
-          contentRef: artifact.contentRef,
-          metadata: { ...artifact.metadata, mediaType: artifact.mediaType },
-        })),
-      )
+      // R6-07-1：**先纯计算**全部 section/world manifest digest（只读
+      // 引用校验；不写 CAS）→ 查 existing snapshot → 命中则验证 attestation
+      // 并幂等返回（**任何 CAS put 之前** —— promotion 后重复 create
+      // 不得产生新物理对象；R6-00-12）。
+      const filesystemEntries: SectionManifestEntry[] = objects
+        .filter(object => ["file", "directory", "workspace"].includes(object.objectType))
+        .map(object => objectEntry(object, this.cas))
+      const memoryEntries: SectionManifestEntry[] = objects
+        .filter(object =>
+          !["file", "directory", "workspace", "task_projection", "capability_state"].includes(
+            object.objectType,
+          ),
+        )
+        .map(object => objectEntry(object, this.cas))
+      const taskEntries: SectionManifestEntry[] = objects
+        .filter(object => object.objectType === "task_projection")
+        .map(object => objectEntry(object, this.cas))
+      const capabilityEntries: SectionManifestEntry[] = objects
+        .filter(object => object.objectType === "capability_state")
+        .map(object => objectEntry(object, this.cas))
+      const servicesEntries: SectionManifestEntry[] = this.source.listServices(worldId, branchId).map(service => ({
+        id: service.serviceId,
+        kind: "service",
+        ...(service.definitionDigest === undefined
+          ? {}
+          : { contentRef: service.definitionDigest }),
+        metadata: { ...service.metadata, status: service.status },
+      }))
+      const artifactsEntries: SectionManifestEntry[] = this.source.listArtifacts(worldId, branchId).map(artifact => ({
+        id: artifact.artifactId,
+        kind: "artifact",
+        contentRef: artifact.contentRef,
+        metadata: { ...artifact.metadata, mediaType: artifact.mediaType },
+      }))
+      const filesystem = computeSectionManifest(this.cas, "filesystem", filesystemEntries)
+      const memory = computeSectionManifest(this.cas, "memory-and-world-objects", memoryEntries)
+      const task = computeSectionManifest(this.cas, "task-projection-non-authoritative", taskEntries)
+      const capability = computeSectionManifest(this.cas, "capability-state", capabilityEntries)
+      const services = computeSectionManifest(this.cas, "services", servicesEntries)
+      const artifacts = computeSectionManifest(this.cas, "artifacts", artifactsEntries)
 
       const worldManifest: WorldManifest = {
         schemaVersion: 1,
@@ -165,19 +169,58 @@ export class WorldSnapshotManager {
         serviceStateDigest: services.digest,
         artifactStateDigest: artifacts.digest,
       }
-      const stored = createWorldManifest(this.cas, worldManifest)
+      const stored = computeWorldManifest(this.cas, worldManifest)
       const snapshotId = `snapshot:${stored.digest.slice("sha256:".length)}`
-      this.faultInjector?.("after_snapshot_manifest_before_insert")
       const existing = this.getForRevision(worldId, branchId, world.currentRevision)
       if (existing) {
-        if (existing.manifestDigest !== stored.digest) {
+        // R6-07-2：验证 existing attestation（全部 digest 与当前派生一致
+        // —— representation 等 World 事实变更 → LEDGER_DB_DIVERGENCE，
+        // 不静默返回）。任何 CAS put 之前幂等返回 existing。
+        if (
+          existing.manifestDigest !== stored.digest ||
+          existing.filesystemDigest !== filesystem.digest ||
+          existing.memoryDigest !== memory.digest ||
+          existing.taskStateDigest !== task.digest ||
+          existing.capabilityStateDigest !== capability.digest ||
+          existing.serviceStateDigest !== services.digest ||
+          existing.artifactStateDigest !== artifacts.digest
+        ) {
           throw new WorldCorruptionError([{
             code: "LEDGER_DB_DIVERGENCE",
             worldId,
-            detail: `revision ${world.currentRevision} already has snapshot ${existing.manifestDigest}, refusing ${stored.digest}`,
+            detail: `revision ${world.currentRevision} already has snapshot ${existing.manifestDigest} but the derived world state now produces ${stored.digest} (attestation divergence; no CAS writes performed)`,
           }])
         }
         return existing
+      }
+      // existing 不存在 → 物理写入（putManifest；引用已只读校验通过，
+      // 这里不会因引用缺失中途失败 → 确定性失败零 residue）。
+      this.faultInjector?.("after_snapshot_manifest_before_insert")
+      // 写入全部 section manifest（digest 必须与纯计算一致 —— 不一致即
+      // CAS 实现缺陷，fail-closed）。
+      const writeSection = (computed: ReturnType<typeof computeSectionManifest>, section: string, entries: readonly SectionManifestEntry[]): void => {
+        const written = createSectionManifest(this.cas, section, entries)
+        if (written.digest !== computed.digest) {
+          throw new WorldCorruptionError([{
+            code: "LEDGER_DB_DIVERGENCE",
+            worldId,
+            detail: `section manifest ${section} digest mismatch after write (${written.digest} != ${computed.digest})`,
+          }])
+        }
+      }
+      writeSection(filesystem, "filesystem", filesystemEntries)
+      writeSection(memory, "memory-and-world-objects", memoryEntries)
+      writeSection(task, "task-projection-non-authoritative", taskEntries)
+      writeSection(capability, "capability-state", capabilityEntries)
+      writeSection(services, "services", servicesEntries)
+      writeSection(artifacts, "artifacts", artifactsEntries)
+      const storedWorld = createWorldManifest(this.cas, worldManifest)
+      if (storedWorld.digest !== stored.digest) {
+        throw new WorldCorruptionError([{
+          code: "LEDGER_DB_DIVERGENCE",
+          worldId,
+          detail: `world manifest digest mismatch after write (${storedWorld.digest} != ${stored.digest})`,
+        }])
       }
 
       const createdAt = this.now()

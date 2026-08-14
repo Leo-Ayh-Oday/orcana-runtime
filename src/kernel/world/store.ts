@@ -21,7 +21,7 @@ import {
   parseCanonicalJson,
   sha256Digest,
 } from "./canonical"
-import { encodeCasOwnerId, WorldCas } from "./cas"
+import { CasIntegrityError, encodeCasOwnerId, WorldCas } from "./cas"
 import type {
   AgentWorld,
   CasDigest,
@@ -86,6 +86,7 @@ interface WorldObjectRow {
   objectType: WorldObject["objectType"]
   path: string | null
   contentRef: string | null
+  representation: string | null
   metadataJson: string
   updatedRevision: string
   createdAt: number
@@ -156,6 +157,7 @@ interface MaterializedStateImage {
     objectType: WorldObject["objectType"]
     path: string | null
     contentRef: CasDigest | null
+    representation: "raw" | "file-manifest" | null
     metadata: Readonly<Record<string, unknown>>
     updatedRevision: string
     createdAt: number
@@ -230,6 +232,10 @@ function objectFromRow(row: WorldObjectRow): WorldObject {
     objectType: row.objectType,
     path: row.path ?? undefined,
     contentRef: (row.contentRef ?? undefined) as CasDigest | undefined,
+    // R6-06：持久 representation（DB CHECK 保证 file 非空 / 非 file 为空）。
+    ...(row.representation === null || row.representation === undefined
+      ? {}
+      : { representation: row.representation as "raw" | "file-manifest" }),
     metadata: parseCanonicalJson(row.metadataJson),
     updatedRevision: BigInt(row.updatedRevision),
     createdAt: row.createdAt,
@@ -356,6 +362,20 @@ function validateWorldMutation(mutation: WorldMutation, index: number): void {
       // R2-07-3：file object 必须携带 contentRef（缺少 → 拒绝）。
       if (mutation.objectType === "file" && mutation.contentRef === undefined) {
         throw new Error(`${prefix} file object requires contentRef`)
+      }
+      // R6-06：representation 只对 file 有效；file 显式声明时必须合法
+      // （legacy 缺省 → 唯一兼容规则：commit 时按 CAS isManifest 一次性
+      // 派生并持久化）。非 file 携带 representation → 拒绝。
+      if (mutation.objectType === "file") {
+        if (
+          mutation.representation !== undefined &&
+          mutation.representation !== "raw" &&
+          mutation.representation !== "file-manifest"
+        ) {
+          throw new Error(`${prefix} file representation must be "raw" | "file-manifest"`)
+        }
+      } else if (mutation.representation !== undefined) {
+        throw new Error(`${prefix} representation is only valid for file objects`)
       }
       assertPlainMetadata(mutation.metadata, `${prefix} metadata`)
       return
@@ -1072,7 +1092,8 @@ export class WorldStore {
       this.db,
       `SELECT world_id AS worldId, branch_id AS branchId, object_id AS objectId,
               object_type AS objectType, path, content_ref AS contentRef,
-              metadata_json AS metadataJson, updated_revision AS updatedRevision,
+              representation, metadata_json AS metadataJson,
+              updated_revision AS updatedRevision,
               created_at AS createdAt, updated_at AS updatedAt
        FROM world_objects WHERE world_id = ? AND branch_id = ?
        ORDER BY COALESCE(path, ''), object_id`,
@@ -1140,6 +1161,8 @@ export class WorldStore {
           objectType: object.objectType,
           path: object.path ?? null,
           contentRef: object.contentRef ?? null,
+          // R6-06：materialized state 绑定持久 representation（ledger 事实）。
+          representation: object.representation ?? null,
           metadata: object.metadata,
           updatedRevision: object.updatedRevision.toString(),
           createdAt: object.createdAt,
@@ -1190,6 +1213,15 @@ export class WorldStore {
           objectType: mutation.objectType,
           path: mutation.path ?? null,
           contentRef: mutation.contentRef ?? null,
+          // R6-06：replay 复制 mutation 的持久 representation（与 commit
+          // 派生的唯一兼容规则一致：file 缺省时按 isManifest 派生 ——
+          // replay 与原始 commit 逐位一致）。
+          representation: (() => {
+            if (mutation.objectType !== "file") return null
+            if (mutation.representation !== undefined) return mutation.representation
+            const record = this.cas.record(mutation.contentRef as CasDigest)
+            return record?.isManifest === true ? "file-manifest" : "raw"
+          })(),
           metadata: mutation.metadata ?? {},
           updatedRevision,
           createdAt: existing?.createdAt ?? event.occurredAt,
@@ -1308,6 +1340,7 @@ export class WorldStore {
             path: mutation.path ?? null,
             objectType: mutation.objectType,
             contentRef: mutation.contentRef ?? null,
+            representation: mutation.representation ?? null,
             metadata: mutation.metadata ?? {},
           })
           const existing = idToIdentity.get(mutation.objectId)
@@ -1432,6 +1465,31 @@ export class WorldStore {
       // （cas.put 的物理 rename 无法随 SQLite rollback 撤销 —— 校验必须
       // 在物理写入之前完成）。
       this.validateFinalNamespace(request.worldId, request.branchId, mutations)
+      // R6-07-4：统一引用 preflight —— 在 delta CAS 物理写入前检查全部
+      // content/definition 引用存在（object contentRef / artifact contentRef
+      // / service definitionDigest；execution receipt 已在事务前检查）。
+      // 确定性校验失败不得留下物理 file-only residue（R6-00-13）。
+      // 区分「未注册」与「已注册但内容损坏」：前者 → not in CAS；后者 →
+      // content is corrupt（引用校验必须重新验证内容，不能只查注册表 ——
+      // 同 digest 的损坏对象不得被 metadata-only 更新复用）。
+      const assertCasContentValid = (digest: CasDigest, label: string): void => {
+        const registered = this.cas.record(digest)
+        if (!registered) {
+          throw new CasIntegrityError(`World commit ${label} is not in CAS: ${digest}`)
+        }
+        if (!this.cas.has(digest)) {
+          throw new CasIntegrityError(`CAS object content is corrupt: ${digest}`)
+        }
+      }
+      for (const mutation of mutations) {
+        if (mutation.type === "object.put" && mutation.contentRef !== undefined) {
+          assertCasContentValid(mutation.contentRef, "object contentRef")
+        } else if (mutation.type === "artifact.put") {
+          assertCasContentValid(mutation.contentRef, "artifact contentRef")
+        } else if (mutation.type === "service.set" && mutation.definitionDigest !== undefined) {
+          assertCasContentValid(mutation.definitionDigest, "service definitionDigest")
+        }
+      }
 
       const deltaRecord = this.cas.put(deltaBytes, WORLD_DELTA_MEDIA_TYPE)
       if (deltaRecord.digest !== deltaDigest) {
@@ -2169,6 +2227,14 @@ export class WorldStore {
     switch (mutation.type) {
       case "object.put": {
         if (mutation.contentRef) this.cas.get(mutation.contentRef)
+        // R6-06：持久 representation —— mutation 显式声明；legacy 缺省 →
+        // 唯一兼容规则：commit 时刻按 CAS isManifest 一次性派生（此后
+        // snapshot/ledger 永不重新推断）。
+        let representation: "raw" | "file-manifest" | null = null
+        if (mutation.objectType === "file") {
+          representation = mutation.representation ??
+            (this.cas.record(mutation.contentRef!)?.isManifest === true ? "file-manifest" : "raw")
+        }
         const ownerId = objectOwnerId(worldId, branchId, mutation.objectId)
         const existing = dbGet<{ contentRef: string | null; createdAt: number }>(
           this.db,
@@ -2183,13 +2249,14 @@ export class WorldStore {
         dbRun(
           this.db,
           `INSERT INTO world_objects (
-             world_id, branch_id, object_id, object_type, path, content_ref,
+             world_id, branch_id, object_id, object_type, path, content_ref, representation,
              metadata_json, updated_revision, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(world_id, branch_id, object_id) DO UPDATE SET
              object_type = excluded.object_type,
              path = excluded.path,
              content_ref = excluded.content_ref,
+             representation = excluded.representation,
              metadata_json = excluded.metadata_json,
              updated_revision = excluded.updated_revision,
              updated_at = excluded.updated_at`,
@@ -2199,6 +2266,7 @@ export class WorldStore {
           mutation.objectType,
           mutation.path ?? null,
           mutation.contentRef ?? null,
+          representation,
           canonicalJson(mutation.metadata ?? {}),
           revision.toString(),
           existing?.createdAt ?? at,

@@ -53,6 +53,13 @@ export interface WorldObject {
   readonly objectType: WorldObjectType
   readonly path?: string
   readonly contentRef?: CasDigest
+  /** R6-06：内容表示类型的**持久事实**（file 必须为 "raw" |
+   *  "file-manifest"；其它类型必须缺省）。在 commit 时绑定（mutation
+   *  显式声明；legacy mutation 未声明 → 唯一兼容规则：按 commit 时刻
+   *  CAS isManifest 一次性派生并持久化）—— snapshot/ledger/materialized
+   *  state 全部复制该字段，**禁止**从可变的 cas.record(...).isManifest
+   * 重新推断语义。 */
+  readonly representation?: "raw" | "file-manifest"
   readonly metadata: Readonly<Record<string, unknown>>
   readonly updatedRevision: WorldRevision
   readonly createdAt: number
@@ -90,6 +97,10 @@ export type WorldMutation =
       readonly objectType: WorldObjectType
       readonly path?: string
       readonly contentRef?: CasDigest
+      /** R6-06：file 的显式表示类型（"raw" | "file-manifest"；非 file
+       *  必须缺省）。legacy mutation（缺省）→ 唯一兼容规则：commit 时
+       *  按 CAS isManifest 一次性派生并持久化（此后不再重新推断）。 */
+      readonly representation?: "raw" | "file-manifest"
       readonly metadata?: Readonly<Record<string, unknown>>
     }
   | {

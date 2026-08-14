@@ -66,6 +66,16 @@ export function cellSpecDigest(spec: ExecutionCellSpec): string {
   return digestOf(spec)
 }
 
+/** R6-03：规范化 cellId 的 spec digest —— cellId 是运行时随机生成的
+ *  身份（kernel 无法预知），pre-spawn 比对用规范化形式（adapter 实际
+ *  编译 spec vs kernel 期望 spec；policy 差异仍使 digest 不同）。 */
+export function cellSpecDigestNormalized(spec: ExecutionCellSpec, normalizedCellId = "kernel-expected-cell"): string {
+  return digestOf({
+    ...spec,
+    identity: { ...spec.identity, cellId: normalizedCellId },
+  })
+}
+
 export interface ReceiptInput {
   spec: ExecutionCellSpec
   capabilities: LinuxCapabilities

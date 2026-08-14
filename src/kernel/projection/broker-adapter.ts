@@ -31,9 +31,9 @@ import type {
   TrustedExecutionAuthority,
   UntrustedCapabilityRequest,
 } from "../../runtime/linux/contracts"
-import { ProjectionError, projectionIntentDigest } from "./contracts"
-import type { ProjectionIntentRegistry } from "./coordinator"
+import { ProjectionError, projectionIntentDigest, type ProjectionExecutionIntent } from "./contracts"
 import type { ProjectionExecutionOutcome } from "./validator"
+import { cellSpecDigestNormalized } from "../../runtime/linux/receipt"
 import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "./receipt-authority"
 
 export interface ProjectionBrokerAdapterOptions {
@@ -51,10 +51,9 @@ export interface ProjectionBrokerAdapterOptions {
    *  receipt。缺失时 adapter 无法证明 final truth —— outcome 不携带
    *  executionReceiptId（coordinator 将拒绝 production commit）。 */
   readonly receiptAuthority?: ProjectionReceiptAuthority
-  /** R5-05：kernel-owned 一次性 intent reservation（coordinator 持有；
-   *  intent 执行必须经它 —— 一个 intent = 恰好一个 cell；跨 adapter
-   *  实例 / 重建 / 并发均不能重用；不依赖 adapter 实例内 Set）。 */
-  readonly intentRegistry: ProjectionIntentRegistry
+  /** R6-02：adapter **不再接收**可替换的 intent registry —— durable
+   *  reservation 由 coordinator.execute 在任意 executor/broker 调用前
+   *  完成（一个 intent = 恰好一个 cell；跨 adapter/coordinator/进程）。 */
 }
 
 export interface BrokerProjectionExecution {
@@ -139,6 +138,24 @@ export class LinuxBrokerProjectionExecutor {
     })) {
       if (typeof value !== "string" || value.length === 0) mismatch(`${name} must be non-empty`)
     }
+    // R6-03：adapter 选项必须与 kernel-owned intent policy 一致 —— adapter
+    // 不得用自报选项偏离 kernel 期望（profile/network）。
+    if (this.options.profile !== intent.profile) {
+      mismatch(`adapter profile ${this.options.profile} != intent ${intent.profile}`)
+    }
+    const sameNetwork = (actual: ProjectionBrokerAdapterOptions["network"], expected: ProjectionExecutionIntent["network"]): boolean => {
+      if (actual === undefined && expected === undefined) return true
+      if (actual === undefined || expected === undefined) return false
+      if (actual.mode !== expected.mode) return false
+      const sameList = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean =>
+        a === undefined && b === undefined ? true
+          : a === undefined || b === undefined ? false
+            : a.length === b.length && a.every((value, index) => value === b[index])
+      return sameList(actual.allowedHosts, expected.allowedHosts) && sameList(actual.allowedPorts?.map(String), expected.allowedPorts?.map(String))
+    }
+    if (!sameNetwork(this.options.network, intent.network)) {
+      mismatch(`adapter network does not match intent network`)
+    }
   }
 
   /** 执行一个命令；返回 Execution 事实（receipt id 仅记录 Execution）。 */
@@ -152,15 +169,8 @@ export class LinuxBrokerProjectionExecutor {
     // receipt.projectionIntentDigest（打破 outcome 自报 binding 循环）。
     const intent = command.intent
     if (intent !== undefined) {
-      // R5-05：kernel-owned 一次性 reservation —— 同一 intentId 第二次
-      // execute（任意 adapter 实例 / 重建后的 adapter / 并发）拒绝。
-      // 保留失败也消耗该 intent（fail-closed：不允许重试放大 cell）。
-      if (!this.options.intentRegistry.reserve(intent.intentId)) {
-        throw new ProjectionError(
-          "EXECUTION_RECEIPT_BINDING_MISMATCH",
-          `intent ${intent.intentId} already authorized an execution cell (kernel-owned one-time reservation; one intent = one cell)`,
-        )
-      }
+      // R6-02：durable reservation 由 coordinator.execute 在调用本 executor
+      // 前完成 —— adapter 不再持有/接收 registry（不可替换）。
       // R4-03.2：spawn 前逐字段验证（executable/args/timeout/roots/workspace
       // identity/intent ids）。任何不一致 → 拒绝，command 从未执行。
       this.assertIntentBinding(cwd, intent, command)
@@ -216,11 +226,27 @@ export class LinuxBrokerProjectionExecutor {
         relativeCwd: ".",
         stdin: "closed",
       },
-      profile: this.options.profile,
-      ...(this.options.network === undefined ? {} : { network: this.options.network }),
-      timeoutMs: command.timeoutMs ?? this.options.timeoutMs,
+      // R6-03：spec 的 profile/network/timeout/resources **只来自 kernel
+      // owned intent**（adapter 选项已断言一致 —— 偏离即 spawn 前拒绝）。
+      profile: intent?.profile ?? this.options.profile,
+      ...(() => {
+        const network = intent?.network ?? this.options.network
+        if (network === undefined) return {}
+        return {
+          network: {
+            mode: network.mode,
+            ...(network.allowedHosts === undefined ? {} : { allowedHosts: [...network.allowedHosts] }),
+            ...(network.allowedPorts === undefined ? {} : { allowedPorts: [...network.allowedPorts] }),
+          },
+        }
+      })(),
+      timeoutMs: command.timeoutMs ?? intent?.command.timeoutMs ?? this.options.timeoutMs,
       writableMounts,
       readonlyMounts,
+      ...(intent?.resources?.memoryMaxBytes === undefined ? {} : { memoryMaxBytes: intent.resources.memoryMaxBytes }),
+      ...(intent?.resources?.pidsMax === undefined ? {} : { pidsMax: intent.resources.pidsMax }),
+      ...(intent?.resources?.stdoutMaxBytes === undefined ? {} : { stdoutMaxBytes: intent.resources.stdoutMaxBytes }),
+      ...(intent?.resources?.stderrMaxBytes === undefined ? {} : { stderrMaxBytes: intent.resources.stderrMaxBytes }),
       // R2-01：intent digest 注入环境变量（进入 cellSpecDigest → broker
       // 注入 final receipt.projectionIntentDigest）。
       ...(intent === undefined
@@ -228,6 +254,15 @@ export class LinuxBrokerProjectionExecutor {
         : { env: { ORCANA_PROJECTION_INTENT: projectionIntentDigest(intent) } }),
     }
     const spec = broker.compileRequest(request, authority)
+
+    // R6-03（belt）：实际编译 spec 的规范化 digest 必须等于 kernel 派生
+    // 的期望值（cellId 规范化后比较；任何 policy 偏差 → spawn 前拒绝）。
+    if (intent !== undefined && cellSpecDigestNormalized(spec) !== intent.expectedCellSpecDigest) {
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        `compiled spec digest does not match the kernel-derived expected spec digest (profile/network/resources/command/mounts deviate from the kernel-owned execution policy)`,
+      )
+    }
 
     // R4-03.4（belt）：编译后的 spec.filesystem digest 必须等于 intent 的
     // 期望 filesystemPolicyDigest（coordinator 从 kernel-owned input 派生）

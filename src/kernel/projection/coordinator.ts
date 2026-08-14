@@ -36,7 +36,7 @@ import { tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
 import { WorldConflictError } from "../world/contracts"
 import type { WorldStore } from "../world/store"
-import type { NativeProjectionBackend, ProjectionInstance } from "./backend"
+import { isTestFixtureBackend, type NativeProjectionBackend, type ProjectionInstance } from "./backend"
 import type { WorldProjectionPlan, WorldProjectionReceipt } from "./contracts"
 import {
   DEFAULT_PROJECTION_LIMITS,
@@ -54,9 +54,24 @@ import type { ProjectionDeltaResult } from "./scanner"
 import { scanProjectionDelta } from "./scanner"
 import type { ProjectionExecutionOutcome } from "./validator"
 import { validateProjectionCommit } from "./validator"
-import { assertTrustedExecutionReceipt, type ProjectionReceiptAuthority } from "./receipt-authority"
+import {
+  assertTrustedExecutionReceipt,
+  isAuthenticatedReceiptAuthority,
+  isTestHarnessReceiptAuthority,
+  validateProjectionReceiptAuthority,
+  type ProjectionReceiptAuthority,
+} from "./receipt-authority"
 import { removeTreeAnchored } from "./anchored-fs"
 import { randomUUID } from "node:crypto"
+import {
+  defaultIntentReservationPath,
+  type IntentReservationInput,
+} from "./intent-reservation"
+import { DurableIntentReservation } from "./intent-reservation"
+import {
+  expectedProjectionCellSpecDigest,
+  expectedProjectionCellSpecDigestForCell,
+} from "./spec-binding"
 
 /** R5-01：production coordinator 不存在任何 receiptless commit 分支。
  *  - 构造时结构性要求 receiptAuthority（所有 backend —— 含 fixture）；
@@ -112,6 +127,10 @@ export interface ProjectionSession {
   runningExecute?: Promise<ProjectionExecutionOutcome | void>
   /** R5-03：本 session 的取消信号（cancel 先发出取消再等待 executor）。 */
   abortController?: AbortController
+  /** R6-04：retained projection child dirfd（start 打开；cleanup/dispose
+   *  关闭 —— materialize/backend/attestation/cleanup 全程覆盖，不关闭后
+   *  依赖可交换 pathname）。 */
+  rootFd?: number
 }
 
 export interface ProjectionCommand {
@@ -158,6 +177,9 @@ export interface ProjectionCoordinatorOptions {
    *  身份后、base dir 创建 / 物化前调用（R6-00-9 反例的确定性 child-swap
    *  窗口）。无此选项时零开销（undefined 短路）。 */
   readonly onAfterChildOpened?: (projectionRoot: string) => void
+  /** R6-02：durable intent reservation 持久化路径（缺省 = 共享默认位置；
+   *  测试传独立路径隔离）。 */
+  readonly intentReservationPath?: string
 }
 
 /** 单一 cleanup 状态机结果。 */
@@ -176,22 +198,64 @@ export interface ProjectionCleanupResult {
   readonly error?: string
 }
 
-/** R5-05：kernel-owned 一次性 intent reservation —— 一个 intent 只能对应
- *  一个 execution cell（跨 adapter 实例 / 重建；不依赖 adapter 实例内 Set）。
- *  coordinator 持有唯一 registry 并传给 adapter；reserve 原子（单线程
- *  JS 同步）。R5 修复前为 inert（无调用方）—— 先红冻结用。 */
+/** R5-05/R6-02：kernel-owned 一次性 intent reservation —— 一个 intent
+ *  只能对应一个 execution cell。R6-02 起由 SQLite unique-key 持久化
+ *  支撑（跨 adapter 实例 / 跨 coordinator / 跨进程 / 重启后仍保留）：
+ *  内存 Set 已删除（两个 registry / 两个 coordinator / 进程重启后都
+ *  不能复用同一 intent）。reserve 必须发生在任意 executor/broker 调用
+ *  之前（coordinator.execute 唯一调用点）。 */
 export class ProjectionIntentRegistry {
-  private readonly reserved = new Set<string>()
+  private readonly durable: DurableIntentReservation
 
-  /** 原子保留：已保留 → false（拒绝第二次 cell）；否则标记并返回 true。 */
+  /** path 缺省 = 共享默认位置（defaultIntentReservationPath）。 */
+  constructor(path?: string) {
+    this.durable = new DurableIntentReservation(path)
+  }
+
+  /** 原子保留（SQLite UNIQUE + INSERT OR IGNORE；跨进程）。已保留
+   *  （任何状态，含 UNKNOWN）→ false —— 拒绝第二次 cell，绝不重放。 */
   reserve(intentId: string): boolean {
-    if (this.reserved.has(intentId)) return false
-    this.reserved.add(intentId)
-    return true
+    return this.durable.reserve({
+      intentId,
+      worldId: "",
+      branchId: "",
+      snapshotId: "",
+      projectionId: "",
+      sessionNonce: "",
+    })
+  }
+
+  /** 完整元数据保留（coordinator.execute 使用）。 */
+  reserveDetailed(input: IntentReservationInput): boolean {
+    return this.durable.reserve(input)
   }
 
   isReserved(intentId: string): boolean {
-    return this.reserved.has(intentId)
+    return this.durable.isReserved(intentId)
+  }
+
+  markDispatched(intentId: string, cellId?: string): void {
+    this.durable.markDispatched(intentId, cellId)
+  }
+
+  markReceiptBound(intentId: string, receiptDigest: string, cellSpecDigest?: string): void {
+    this.durable.markReceiptBound(intentId, receiptDigest, cellSpecDigest)
+  }
+
+  markCommitted(intentId: string, commitId: string): void {
+    this.durable.markCommitted(intentId, commitId)
+  }
+
+  markRejected(intentId: string): void {
+    this.durable.markRejected(intentId)
+  }
+
+  reconcileStale(maxAgeMs: number): string[] {
+    return this.durable.reconcileStale(maxAgeMs)
+  }
+
+  close(): void {
+    this.durable.close()
   }
 }
 
@@ -212,6 +276,10 @@ export class ProjectionIntentRegistry {
 class ProjectionBaseRootAuthority {
   private fd: number | undefined
   private identity: { readonly dev: number; readonly ino: number } | undefined
+  /** R6-04：保留的 parent dirfd（验证后**不关闭** —— base 的 mkdir/open
+   *  相对它进行；parent pathname 被 rename/替换/symlink 后仍然安全）。 */
+  private parentFd: number | undefined
+  private parentPath: string | undefined
 
   /** 测试注入窗口（test-only；生产不传）：parent 验证后、base mkdir 前
    *  （R6-00-8 反例的确定性 parent-swap 窗口）。 */
@@ -219,6 +287,14 @@ class ProjectionBaseRootAuthority {
 
   constructor(readonly basePath: string, onBeforeBaseMkdir?: (basePath: string) => void) {
     this.onBeforeBaseMkdir = onBeforeBaseMkdir
+  }
+
+  /** parent 内的相对路径（/proc/self/fd/<parentFd>/<baseName>）。 */
+  private parentRelative(baseName: string): string {
+    if (this.parentFd === undefined || this.parentPath === undefined) {
+      throw new ProjectionError("PROJECTION_BASE_PATH_AUTHORITY", "projection base parent is not prepared")
+    }
+    return "/proc/self/fd/" + this.parentFd + "/" + baseName
   }
 
   /** 创建/验证/打开 base root（幂等；返回保留的 dirfd）。 */
@@ -229,34 +305,52 @@ class ProjectionBaseRootAuthority {
     }
     const base = this.basePath
     // 父目录必须是真实目录（resolve 后单层创建；深层路径由调用方保证）。
+    // R6-04-1/2：parent fd 从验证**一直保留**到 base mkdir/open 完成 ——
+    // mkdir/open 相对 parent fd（/proc/self/fd/<parentFd>/<baseName>，
+    // O_NOFOLLOW 语义；RESOLVE_BENEATH/NO_SYMLINKS 等价约束），不依赖
+    // 可交换的 pathname。
     const parent = base.includes("/") ? base.slice(0, base.lastIndexOf("/")) : "."
-    let parentFd: number | undefined
+    const baseName = base.slice(parent.length + 1)
+    if (baseName.length === 0 || baseName === "." || baseName === ".." || /[\\/\0]/.test(baseName)) {
+      throw new ProjectionError("PROJECTION_BASE_PATH_AUTHORITY", "invalid projection base name: " + baseName)
+    }
+    let parentFd: number
     try {
       parentFd = openSync(parent, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
       if (!fstatSync(parentFd).isDirectory()) {
+        closeSync(parentFd)
         throw new ProjectionError(
           "PROJECTION_BASE_PATH_AUTHORITY",
-          `projection base parent is not a real directory: ${parent}`,
+          "projection base parent is not a real directory: " + parent,
         )
       }
-    } finally {
-      if (parentFd !== undefined) closeSync(parentFd)
+    } catch (error) {
+      if (error instanceof ProjectionError) throw error
+      throw new ProjectionError(
+        "PROJECTION_BASE_PATH_AUTHORITY",
+        "projection base parent cannot be opened securely: " + parent + " (" + (error instanceof Error ? error.message : String(error)) + ")",
+      )
     }
+    this.parentFd = parentFd
+    this.parentPath = parent
     // 测试注入窗口（test-only）：parent 验证后、base mkdir 前（R6-00-8）。
     this.onBeforeBaseMkdir?.(base)
+    // base 创建相对 retained parent fd（parent 被替换/变中间 symlink →
+    // 写入仍落在原 parent inode —— 外部目录不产生任何 child）。
+    const baseEntryPath = this.parentRelative(baseName)
     try {
-      mkdirSync(base, { mode: 0o700 })
+      mkdirSync(baseEntryPath, { mode: 0o700 })
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
     }
     // O_NOFOLLOW：symlink base → ELOOP/ENOTDIR → fail-closed（R5-00-2）。
     let fd: number
     try {
-      fd = openSync(base, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
+      fd = openSync(baseEntryPath, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
     } catch (error) {
       throw new ProjectionError(
         "PROJECTION_BASE_PATH_AUTHORITY",
-        `projection base cannot be opened securely (symlink/non-directory?): ${base} (${error instanceof Error ? error.message : String(error)})`,
+        "projection base cannot be opened securely (symlink/non-directory?): " + base + " (" + (error instanceof Error ? error.message : String(error)) + ")",
       )
     }
     try {
@@ -345,12 +439,17 @@ class ProjectionBaseRootAuthority {
     rmdirSync(this.childFdPath(this.assertSafeChildName(projectionId)))
   }
 
-  /** 关闭保留的 dirfd（coordinator 生命周期结束）。 */
+  /** 关闭保留的 dirfd + parent fd（coordinator dispose 时；幂等）。 */
   close(): void {
     if (this.fd !== undefined) {
       closeSync(this.fd)
       this.fd = undefined
       this.identity = undefined
+    }
+    if (this.parentFd !== undefined) {
+      closeSync(this.parentFd)
+      this.parentFd = undefined
+      this.parentPath = undefined
     }
   }
 }
@@ -376,8 +475,10 @@ export class ProjectionCoordinator {
   private readonly onAfterChildOpened?: (projectionRoot: string) => void
   /** R5-02：可信 projection base root authority（retained dirfd）。 */
   private readonly baseRoot: ProjectionBaseRootAuthority
-  /** R5-05：kernel-owned 一次性 intent reservation。 */
-  readonly intentRegistry = new ProjectionIntentRegistry()
+  /** R5-05/R6-02：kernel-owned 一次性 intent reservation（durable）。 */
+  readonly intentRegistry: ProjectionIntentRegistry
+  /** R6-04-5：活跃 session 追踪（dispose 时任一未终态 → fail-closed）。 */
+  private readonly activeSessions = new Set<ProjectionSession>()
 
   constructor(options: ProjectionCoordinatorOptions) {
     this.store = options.store
@@ -393,13 +494,18 @@ export class ProjectionCoordinator {
         "production coordinator requires a receipt authority (receipt-producing executor); refusing construction — receiptless world commit does not exist",
       )
     }
-    this.receiptAuthority = options.receiptAuthority
+    // R6-01：strict exhaustive runtime validation —— unknown/missing/
+    // 错误大小写 trustLevel 或缺失方法在构造时拒绝（fail-closed；
+    // EXECUTION_RECEIPT_AUTHORITY_ERROR）。
+    this.receiptAuthority = validateProjectionReceiptAuthority(options.receiptAuthority)
     this.onBeforeProjectionRootOpen = options.onBeforeProjectionRootOpen
     this.onBeforeChildCreate = options.onBeforeChildCreate
     this.onBeforeBaseMkdir = options.onBeforeBaseMkdir
     this.onAfterChildOpened = options.onAfterChildOpened
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
     this.baseRoot = new ProjectionBaseRootAuthority(resolve(this.baseProjectionRoot), options.onBeforeBaseMkdir)
+    // R6-02：durable intent reservation（SQLite；跨 coordinator / 进程）。
+    this.intentRegistry = new ProjectionIntentRegistry(options.intentReservationPath ?? defaultIntentReservationPath())
   }
 
   /** UNPROJECTED → PROJECTED：物化 immutable base + backend 挂载。 */
@@ -444,6 +550,8 @@ export class ProjectionCoordinator {
       )
     }
     let rootIdentity: { dev: number; ino: number } | undefined
+    let rootFd: number | undefined
+    let childFdOpen = false
     let instance: ProjectionInstance | undefined
     try {
       try {
@@ -455,20 +563,28 @@ export class ProjectionCoordinator {
         throw error
       }
       // 相对 base fd 打开 child 并记录身份（O_NOFOLLOW；不依赖 pathname）。
-      const rootFd = this.baseRoot.openChild(plan.projectionId)
+      // R6-04-3：child fd **保留**到 session —— materialize/backend 创建/
+      // 身份 attestation/cleanup 全程覆盖（不再关闭后依赖可交换 pathname）。
+      rootFd = this.baseRoot.openChild(plan.projectionId)
+      childFdOpen = true
       try {
         const rootStat = fstatSync(rootFd)
         if (!rootStat.isDirectory()) {
           throw new ProjectionError("PROJECTION_ROOT_ESCAPE", `projection root is not a directory: ${projectionRoot}`)
         }
         rootIdentity = { dev: rootStat.dev, ino: rootStat.ino }
-      } finally {
+      } catch (error) {
         closeSync(rootFd)
+        childFdOpen = false
+        throw error
       }
       // 测试注入窗口（test-only）：child fd 身份捕获后、base dir 创建 /
       // 物化前（R6-00-9 反例的确定性 child-swap 窗口）。
       this.onAfterChildOpened?.(projectionRoot)
-      const baseDir = join(projectionRoot, "base")
+      // R6-04-2/3：base dir 创建与物化**相对 retained child fd**
+      // （/proc/self/fd/<rootFd>/base —— child pathname 被替换后写入仍
+      // 落在 session 创建的原始 inode；外部 sentinel/content/mode 不变）。
+      const baseDir = this.childFdRelative(rootFd, "base")
       mkdirSync(baseDir, { mode: 0o700 })
       // 物化 immutable lower（内容只来自 snapshot CAS，不读 World HEAD）。
       // materializer 从 WorldStore 取 canonical snapshot 并严格校验身份字段。
@@ -479,15 +595,50 @@ export class ProjectionCoordinator {
           `canonical snapshot ${plan.snapshotId} belongs to ${materialized.snapshot.worldId}/${materialized.snapshot.branchId}, plan wants ${plan.worldId}/${plan.branchId}`,
         )
       }
-      instance = this.backend.create({ lowerDir: baseDir, projectionRoot, label: "m" })
+      // R6-04-3：backend 创建前**重新证明 path 身份**（pathname 仍指向
+      // session 创建的 inode —— swap 后这里 fail-closed，backend 从未在
+      // 外部目录创建任何内容；materialize 已写入的原始 inode 与外部无关）。
+      {
+        const pathStat = lstatSync(projectionRoot)
+        if (
+          pathStat.isSymbolicLink() ||
+          !pathStat.isDirectory() ||
+          pathStat.dev !== rootIdentity.dev ||
+          pathStat.ino !== rootIdentity.ino
+        ) {
+          throw new ProjectionError(
+            "PROJECTION_ROOT_ESCAPE",
+            `projection root path identity changed before backend create (replaced); refusing backend creation under a foreign directory`,
+          )
+        }
+      }
+      instance = this.backend.create({ lowerDir: resolve(join(projectionRoot, "base")), projectionRoot, label: "m" })
       instance.assertReady()
+      // R6-04-3：backend 创建后再次证明 path 身份（R5 的末尾 recheck
+      // 语义保留；rootFd 仍保留 —— 下方 start 完成后注册到 session）。
+      {
+        const recheckStat = lstatSync(projectionRoot)
+        if (
+          recheckStat.isSymbolicLink() ||
+          !recheckStat.isDirectory() ||
+          recheckStat.dev !== rootIdentity.dev ||
+          recheckStat.ino !== rootIdentity.ino
+        ) {
+          closeSync(rootFd)
+          childFdOpen = false
+          throw new ProjectionError(
+            "PROJECTION_ROOT_ESCAPE",
+            `projection root identity changed during start; refusing session`,
+          )
+        }
+      }
       // R2-01/R4-03：Execution Intent —— 期望 binding 真源（world/branch/
       // snapshot/projection/session nonce/merged root identity/command/scope/
       // filesystemScope/workspaceIdentity/filesystemPolicyDigest 全部来自
       // kernel-owned plan + session，不是 outcome/executor 自报）。
       const mergedStat = lstatSync(instance.mergedPath)
       const intent: ProjectionExecutionIntent = {
-        intentId: randomUUID(),
+        intentId: plan.intentId ?? randomUUID(),
         worldId: plan.worldId,
         branchId: plan.branchId,
         snapshotId: plan.snapshotId,
@@ -506,25 +657,36 @@ export class ProjectionCoordinator {
           ino: mergedStat.ino,
         },
         filesystemPolicyDigest: "",
+        // R6-03：kernel-owned 执行 policy（来自 plan —— 不是 adapter
+        // 选项自报）；expectedCellSpecDigest 在 execute 时派生（依赖
+        // command）。
+        profile: plan.profile,
+        ...(plan.network === undefined ? {} : { network: plan.network }),
+        ...(plan.resources === undefined ? {} : { resources: plan.resources }),
+        secretsDigest: plan.secretsDigest,
+        expectedCellSpecDigest: "",
       }
-      // R5-02：start 完成前再次相对 base fd 复核 root 身份（start 阶段
-      // 的替换窗口 fail-closed）。
-      const recheckFd = this.baseRoot.openChild(plan.projectionId)
-      try {
-        const recheck = fstatSync(recheckFd)
-        if (recheck.dev !== rootIdentity.dev || recheck.ino !== rootIdentity.ino) {
-          throw new ProjectionError(
-            "PROJECTION_ROOT_ESCAPE",
-            `projection root identity changed during start; refusing session`,
-          )
+      // R5-02/R6-04：start 完成前再次证明 path 身份（openChild 复核的
+      // pathname 语义已被上方 path lstat recheck 覆盖 —— 此处保留 base
+      // fd 相对复核作为 belt）。
+      {
+        const recheckFd = this.baseRoot.openChild(plan.projectionId)
+        try {
+          const recheck = fstatSync(recheckFd)
+          if (recheck.dev !== rootIdentity.dev || recheck.ino !== rootIdentity.ino) {
+            throw new ProjectionError(
+              "PROJECTION_ROOT_ESCAPE",
+              `projection root identity changed during start; refusing session`,
+            )
+          }
+        } finally {
+          closeSync(recheckFd)
         }
-      } finally {
-        closeSync(recheckFd)
       }
-      return {
+      const session: ProjectionSession = {
         plan,
         projectionRoot,
-        baseDir,
+        baseDir: resolve(join(projectionRoot, "base")),
         mergedDir: instance.mergedPath,
         instance,
         rootIdentity,
@@ -532,8 +694,20 @@ export class ProjectionCoordinator {
         worldState: "PROJECTED",
         executionState: "PENDING",
         abortController: new AbortController(),
+        // R6-04-3：retained child fd（cleanup/dispose 时关闭）。
+        rootFd,
       }
+      this.activeSessions.add(session)
+      return session
     } catch (error) {
+      // R6-04：关闭 retained child fd（若仍打开）。
+      if (childFdOpen === true && rootFd !== undefined) {
+        try {
+          closeSync(rootFd)
+        } catch {
+          // 已关闭
+        }
+      }
       // R5-00-4/R5-03：instance 已创建 → 任何后续失败必须先调用
       // ownership-verified cleanup（真实卸载证明），cleanupOk 才允许删除
       // projection root；未证明卸载 → 保留 residue（不遍历/不删除）。
@@ -555,6 +729,11 @@ export class ProjectionCoordinator {
       }
       throw error
     }
+  }
+
+  /** R6-04：相对 child fd 的路径（/proc/self/fd/<fd>/<entry>）。 */
+  private childFdRelative(fd: number, entry: string): string {
+    return `/proc/self/fd/${fd}/${entry}`
   }
 
   /** PROJECTED → RUNNING → COMPLETED/FAILED/CANCELLED（P1-2/R2-04：所有
@@ -612,6 +791,14 @@ export class ProjectionCoordinator {
           ino: mergedStat.ino,
         },
         filesystemPolicyDigest: this.expectedFilesystemPolicyDigest(session),
+        // R6-03：expected cellSpecDigest —— kernel-owned/trusted compiler
+        // 从权威输入（intent = plan + session）派生（规范化 cellId）。
+        // adapter spawn 前对其实际编译 spec 做规范化 digest 比对。
+        expectedCellSpecDigest: expectedProjectionCellSpecDigest(
+          { ...session.intent, command: intentCommand },
+          resolve(session.mergedDir),
+          session.plan.writableRoots,
+        ),
       }
     } catch (error) {
       this.terminalize(
@@ -626,10 +813,6 @@ export class ProjectionCoordinator {
       )
     }
     session.intent = intent
-    // R5-05：一次性 reservation 由 adapter 经 kernel-owned registry 执行
-    // （coordinator 不预占 —— 否则 adapter 对同一 intent 的 reserve 会
-    // 误拒绝本 session 的合法执行）。intent 执行必须携带 registry；
-    // 无 adapter 的 fixture 路径由 session 状态机保证 one-cell-per-session。
     // R5-03：取消信号 —— cancel 先 abort，executor 观察 command.signal。
     const boundCommand: ProjectionCommand = {
       ...command,
@@ -638,17 +821,51 @@ export class ProjectionCoordinator {
         ? session.abortController!.signal
         : AbortSignal.any([command.signal, session.abortController!.signal]),
     }
+    // R6-02：durable 一次性 reservation —— **在任意 executor/broker 调用
+    // 之前**发生；跨 adapter / coordinator / 进程 / 重启都不可复用。
+    // 保留失败（含重建后的 registry）→ terminalize + 精确错误码。
+    if (!this.intentRegistry.reserveDetailed({
+      intentId: intent.intentId,
+      worldId: intent.worldId,
+      branchId: intent.branchId,
+      snapshotId: intent.snapshotId,
+      projectionId: intent.projectionId,
+      sessionNonce: intent.sessionNonce,
+    })) {
+      this.terminalize(
+        session,
+        "rejected",
+        `intent ${intent.intentId} already authorized an execution cell (durable kernel-owned one-time reservation; one intent = one cell; no replay across coordinators/restarts)`,
+      )
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        `intent ${intent.intentId} already authorized an execution cell (durable kernel-owned one-time reservation; one intent = one cell; no replay across coordinators/restarts)`,
+      )
+    }
     let outcome: ProjectionExecutionOutcome | undefined
     let terminalFailure: unknown = undefined
-    // R5-03：注册进行中的 execute promise（cancel 等待它完成后再清理 ——
-    // 绝不在 writer 仍在运行时删除 workspace）。
-    const executionPromise = executor(session.mergedDir, boundCommand)
-    session.runningExecute = executionPromise
+    let executionPromise: Promise<ProjectionExecutionOutcome> | undefined
     try {
+      // R6-04-6：executor 调用位于 try/terminal guard 内 —— **同步 throw**
+      // 与 rejected Promise 行为一致（Promise.resolve().then 把同步 throw
+      // 转成 rejection，统一走下方 terminalize；绝不留 RUNNING）。
+      executionPromise = Promise.resolve().then(() => executor(session.mergedDir, boundCommand))
+      session.runningExecute = executionPromise
+      // R6-02：DISPATCHED —— executor 已实际调用。
+      this.intentRegistry.markDispatched(intent.intentId)
       outcome = await executionPromise
     } catch (error) {
       this.transition(session, { kind: "execute-failed" })
       terminalFailure = error
+    } finally {
+      if (terminalFailure !== undefined) {
+        // R6-02：terminal failure → REJECTED（reservation 不可复用）。
+        try {
+          this.intentRegistry.markRejected(intent.intentId)
+        } catch {
+          // reservation 记录失败不掩盖主失败
+        }
+      }
     }
     if (terminalFailure === undefined && outcome !== undefined) {
       session.outcome = outcome
@@ -658,6 +875,30 @@ export class ProjectionCoordinator {
         this.transition(session, { kind: "execute-failed" })
       } else {
         this.transition(session, { kind: "execute-completed" })
+      }
+      // R6-02：final receipt 已绑定 → RECEIPT_BOUND（durable provenance）。
+      if (outcome.executionReceiptId !== undefined) {
+        try {
+          this.intentRegistry.markReceiptBound(
+            session.intent.intentId,
+            outcome.executionReceiptId,
+            outcome.receiptBinding?.cellSpecDigest,
+          )
+        } catch {
+          // 记录失败不改变执行事实（receipt 校验在 commit 时仍执行）。
+        }
+      }
+    }
+    // R6-02：FAILED/CANCELLED outcome（非 throw）→ REJECTED（不可复用）。
+    if (
+      terminalFailure === undefined &&
+      outcome !== undefined &&
+      (outcome.cancelled || outcome.exitCode !== 0 || outcome.timedOut || outcome.violation)
+    ) {
+      try {
+        this.intentRegistry.markRejected(session.intent.intentId)
+      } catch {
+        // 不掩盖主失败
       }
     }
     // R2-06-2/R3-00-4：execute 后复核（COMPLETED 时 mount 必须仍是本
@@ -837,26 +1078,20 @@ export class ProjectionCoordinator {
 
     this.transition(session, { kind: "commit-pending" })
     try {
-      // 0. R5-01/R5-06：trust level 门 —— production acceptance 遇到
-      //    untrusted authority 必须 fail-closed（不写 CLOSED；
-      //    PRODUCTION_WORLD_COMMIT_BLOCKED）。
-      //    - "same-uid-untrusted"：普通 JSON + 公开 SHA-256 不是
-      //      authenticated authority（同 UID 可改写并重算）→ 拒绝。
-      //    - "test-harness"：test-only authority 只可配对 test-only
-      //      fixture backend（生产模块不导出 fixture 执行能力）。
-      //    - "kernel-authenticated"：未来 MAC/signature 方案（
-      //      OWNER-DECISION-REQUIRED）。
-      const trustLevel = this.receiptAuthority.trustLevel
-      if (trustLevel === "same-uid-untrusted") {
+      // 0. R6-01：production authority 门 —— **公开字符串（trustLevel /
+      //    kind）不再授予任何东西**。授权只来自：
+      //    - authenticated verifier brand（未来 MAC/signature 方案 ——
+      //      当前无任何实现可设置 → 恒 false；OWNER-DECISION-REQUIRED）；
+      //    - test-only brand 配对（TestReceiptAuthority +
+      //      CopyProjectionFixtureBackend，仅 tests/** 构造时可设置 ——
+      //      防 API 误用 / 公开字符串伪造；**不解决 same-UID 攻击**，
+      //      生产构造路径永不传入）。
+      //    production（RuntimeStateReceiptAuthority + FuseOverlayfs 或
+      //    普通结构化对象）一律 PRODUCTION_WORLD_COMMIT_BLOCKED。
+      if (!this.isProductionCommitAuthorized()) {
         throw new ProjectionError(
           "PRODUCTION_WORLD_COMMIT_BLOCKED",
-          "same-uid-untrusted receipt authority is not an authenticated authority (same-UID processes can rewrite the JSON receipt and recompute its public digest); production world commit blocked — authenticated authority is OWNER-DECISION-REQUIRED",
-        )
-      }
-      if (trustLevel === "test-harness" && this.backend.kind !== "fixture") {
-        throw new ProjectionError(
-          "PRODUCTION_WORLD_COMMIT_BLOCKED",
-          "test-harness receipt authority may only pair with the test-only fixture backend; production world commit blocked",
+          "no authenticated receipt verifier is available (self-reported trustLevel strings grant nothing; same-UID JSON receipts are not authenticated authority); production world commit blocked — authenticated authority is OWNER-DECISION-REQUIRED",
         )
       }
       // 1. commit preflight（R5-00-7e：getWorld/getBranch/snapshot 抛异常
@@ -920,6 +1155,26 @@ export class ProjectionCoordinator {
             "EXECUTION_RECEIPT_BINDING_MISMATCH",
             `final receipt outcome (exitCode=${verifiedReceipt.exitCode}, signal=${String(verifiedReceipt.signal)}, timedOut=${verifiedReceipt.timedOut}, cancelled=${verifiedReceipt.cancelled}, oomKilled=${verifiedReceipt.oomKilled}, pidLimitHit=${verifiedReceipt.pidLimitHit}, outputLimitHit=${verifiedReceipt.outputLimitHit}, tempLimitHit=${verifiedReceipt.tempLimitHit}, violation=${receiptViolation}) conflicts with coordinator outcome (exitCode=${outcome.exitCode}, timedOut=${outcome.timedOut}, cancelled=${outcome.cancelled}, violation=${outcome.violation})`,
           )
+        }
+        // R6-03：receipt.cellSpecDigest 必须与 kernel 期望值直接比较 ——
+        // kernel 用 receipt 的真实 cellId 经 trusted compiler 重编译
+        // （deterministic recompile；权威输入 = session intent）。禁止只
+        // 把 receipt 与 outcome 的同源字段互相比对。任何实际执行的
+        // profile/network/resource/command/mount 偏差 → digest 不同 →
+        // EXECUTION_RECEIPT_BINDING_MISMATCH。
+        {
+          const expectedSpecDigest = expectedProjectionCellSpecDigestForCell(
+            session.intent,
+            resolve(session.mergedDir),
+            session.plan.writableRoots,
+            verifiedReceipt.cellId,
+          )
+          if (verifiedReceipt.cellSpecDigest !== expectedSpecDigest) {
+            throw new ProjectionError(
+              "EXECUTION_RECEIPT_BINDING_MISMATCH",
+              `final receipt cellSpecDigest ${verifiedReceipt.cellSpecDigest} does not match the kernel-derived expected spec digest ${expectedSpecDigest} for cell ${verifiedReceipt.cellId} (profile/network/resources/command/mounts deviate from the kernel-owned execution policy)`,
+            )
+          }
         }
         // R2-02：canonical final receipt 进入 World CAS —— 由 World commit
         // 建立 world_commit owner reference（durable provenance；runtime
@@ -1033,6 +1288,12 @@ export class ProjectionCoordinator {
           this.transition(session, { kind: "committed" })
           session.receipt = this.buildReceipt(session, "COMMITTED", undefined, delta, committed)
           session.cleanupState = { cleanupOk: true, rootRemoved: true }
+          // R6-02：COMMITTED —— durable reservation 终态（provenance）。
+          try {
+            this.intentRegistry.markCommitted(session.intent.intentId, commitId)
+          } catch {
+            // 记录失败不改变 World 事实（commit 已 durable）。
+          }
           return committed
         }
         throw error
@@ -1041,6 +1302,12 @@ export class ProjectionCoordinator {
       session.receipt = this.buildReceipt(session, "COMMITTED", undefined, delta, receipt)
       // 已 COMMITTED：本地清理结果只记录，不再改变世界状态。
       session.cleanupState = { cleanupOk: true, rootRemoved: true }
+      // R6-02：COMMITTED —— durable reservation 终态（provenance）。
+      try {
+        this.intentRegistry.markCommitted(session.intent.intentId, commitId)
+      } catch {
+        // 记录失败不改变 World 事实（commit 已 durable）。
+      }
       return receipt
     } catch (error) {
       // R3-00-6b：所有失败路径走统一 terminalize（cleanup 异常规范化）。
@@ -1087,8 +1354,49 @@ export class ProjectionCoordinator {
     if ((session.worldState as SessionWorldState) === "REJECTED" && session.cleanupState !== undefined) {
       return session.cleanupState
     }
+    // R6-02：取消 → REJECTED（reservation 不可复用）。
+    try {
+      this.intentRegistry.markRejected(session.intent.intentId)
+    } catch {
+      // 记录失败不掩盖取消事实
+    }
     this.terminalize(session, "rejected", "cancelled by caller")
     return session.cleanupState!
+  }
+
+  /** R6-01：production commit authority 门（fail-closed 默认）。
+   *  - 公开 trustLevel 字符串不授予任何东西；
+   *  - 只有 authenticated verifier brand（未来实现，当前恒 false）或
+   *    test-only brand 配对（仅 tests/** 构造）通过；
+   *  - same-uid-untrusted / kernel-authenticated 自报字符串 / 普通结构化
+   *    对象全部拒绝 → PRODUCTION_WORLD_COMMIT_BLOCKED。 */
+  private isProductionCommitAuthorized(): boolean {
+    const authority = validateProjectionReceiptAuthority(this.receiptAuthority)
+    if (isAuthenticatedReceiptAuthority(authority)) return true
+    return isTestHarnessReceiptAuthority(authority) && isTestFixtureBackend(this.backend)
+  }
+
+  /** R6-04-5：coordinator dispose/close —— 关闭 retained base dirfd +
+   *  retained parent fd；幂等。任一活跃（未终态）session 存在时
+   *  fail-closed（INVALID_STATE —— 不得在投影生命周期内丢弃根锚）。
+   *  注意：durable intent reservation 是共享资源（跨 coordinator），
+   *  不在此关闭。 */
+  dispose(): void {
+    for (const session of this.activeSessions) {
+      const world = session.worldState
+      if (
+        world !== "COMMITTED" &&
+        world !== "CONFLICTED" &&
+        world !== "REJECTED" &&
+        world !== "RECONCILING"
+      ) {
+        throw new ProjectionError(
+          "INVALID_STATE",
+          `cannot dispose coordinator with an active session (${world}/${session.executionState}); terminalize or cancel it first`,
+        )
+      }
+    }
+    this.baseRoot.close()
   }
 
   /** R3-02/R5-03：统一 terminalizer —— 唯一终态化路径（永不抛）。任何
@@ -1149,6 +1457,8 @@ export class ProjectionCoordinator {
     } else {
       residue = session.projectionRoot
     }
+    // R6-04-3：无论结果如何，retained child fd 在 cleanup 后关闭（幂等）。
+    this.closeSessionRootFd(session)
     return Object.freeze({
       cleanupOk: cleanupOk && rootRemoved,
       rootRemoved,
@@ -1209,6 +1519,19 @@ export class ProjectionCoordinator {
       )
     }
     this.removeProjectionRoot(session.plan.projectionId, session.rootIdentity)
+    // R6-04-3：root 已删除 —— retained child fd 不再需要（幂等关闭）。
+    this.closeSessionRootFd(session)
+  }
+
+  /** R6-04：关闭 session 的 retained child fd（幂等）。 */
+  private closeSessionRootFd(session: ProjectionSession): void {
+    if (session.rootFd === undefined) return
+    try {
+      closeSync(session.rootFd)
+    } catch {
+      // 已关闭
+    }
+    session.rootFd = undefined
   }
 
   /** R2-01：plan scope 的 canonical 摘要（filesystem policy binding）。 */

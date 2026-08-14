@@ -54,6 +54,79 @@ export type ProjectionReceiptTrustLevel =
   | "test-harness"
   | "same-uid-untrusted"
 
+/**
+ * R6-01：strict exhaustive runtime validation。
+ *
+ * - unknown/missing/错误大小写 trustLevel 一律拒绝（EXECUTION_RECEIPT_
+ *   AUTHORITY_ERROR）—— 公开字符串不是认证通道，但**结构必须合法**；
+ * - getFinalReceipt / isCleanupFinalized 必须是函数；
+ * - 返回同一对象（类型窄化后的权威边界）。
+ *
+ * 注意：合法 trustLevel **不授予** production commit。授权只来自
+ * test-only brand（仅测试构造可设置）或未来 authenticated verifier brand
+ * （当前无任何实现可设置 —— isAuthenticatedReceiptAuthority 恒 false）。
+ */
+const PROJECTION_TRUST_LEVELS: ReadonlySet<string> = new Set([
+  "kernel-authenticated",
+  "test-harness",
+  "same-uid-untrusted",
+])
+
+export function validateProjectionReceiptAuthority(value: unknown): ProjectionReceiptAuthority {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_AUTHORITY_ERROR",
+      "receipt authority must be an object implementing ProjectionReceiptAuthority",
+    )
+  }
+  const candidate = value as Record<string, unknown>
+  const trustLevel = candidate.trustLevel
+  if (typeof trustLevel !== "string" || !PROJECTION_TRUST_LEVELS.has(trustLevel)) {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_AUTHORITY_ERROR",
+      "receipt authority trustLevel must be exactly one of [kernel-authenticated, test-harness, same-uid-untrusted], got " + String(trustLevel),
+    )
+  }
+  if (typeof candidate.getFinalReceipt !== "function" || typeof candidate.isCleanupFinalized !== "function") {
+    throw new ProjectionError(
+      "EXECUTION_RECEIPT_AUTHORITY_ERROR",
+      "receipt authority must provide getFinalReceipt(runId, cellId) and isCleanupFinalized(receipt) functions",
+    )
+  }
+  return value as ProjectionReceiptAuthority
+}
+
+/**
+ * R6-01：test-only brand —— 只防 API 误用 / 公开字符串伪造，**不解决
+ * same-UID 攻击**（同 UID 进程可调用 mark 函数本身 —— 文档明确：该 gate
+ * 保护的是 kernel 自身的构造流程，不冒充认证）。生产构造路径永远不会
+ * 传入 branded test authority（RuntimeStateReceiptAuthority 与
+ * FuseOverlayfsProjectionBackend 均无 brand）。
+ *
+ * 只有 tests/** 内的 fixture 类（TestReceiptAuthority）在构造时调用
+ * mark —— 使「结构化对象 + 公开字符串」无法伪造授权。
+ */
+const TEST_HARNESS_AUTHORITIES = new WeakSet<object>()
+
+export function markTestHarnessReceiptAuthority(authority: ProjectionReceiptAuthority): void {
+  TEST_HARNESS_AUTHORITIES.add(authority)
+}
+
+export function isTestHarnessReceiptAuthority(authority: ProjectionReceiptAuthority): boolean {
+  return TEST_HARNESS_AUTHORITIES.has(authority)
+}
+
+/**
+ * 未来 authenticated verifier（MAC/signature、sealed IPC）的 brand ——
+ * 当前**没有任何实现可设置**（不导出 mark）：production positive commit
+ * 因此永远 fail-closed（PRODUCTION_WORLD_COMMIT_BLOCKED）。OWNER-DECISION-
+ * REQUIRED：same-UID authenticated receipt 未决。
+ */
+const AUTHENTICATED_AUTHORITIES = new WeakSet<object>()
+
+export function isAuthenticatedReceiptAuthority(authority: ProjectionReceiptAuthority): boolean {
+  return AUTHENTICATED_AUTHORITIES.has(authority)
+}
 /** 读取最终权威 receipt 的边界。 */
 export interface ProjectionReceiptAuthority {
   /** 显式 trust level（R5-01：production acceptance 依赖它 fail-closed）。 */

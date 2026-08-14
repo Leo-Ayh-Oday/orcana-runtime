@@ -641,7 +641,7 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
         mutations.push({ type: "object.delete", objectId })
         const fileId = deriveObjectId(input.worldId, input.branchId, input.baseRevision, "file", relative)
         entries.push({ kind: "create", path: relative, objectId: fileId, objectType: "file", contentRef: mergedNode.digest })
-        mutations.push({ type: "object.put", objectId: fileId, objectType: "file", path: relative, contentRef: mergedNode.digest })
+        mutations.push({ type: "object.put", objectId: fileId, objectType: "file", path: relative, contentRef: mergedNode.digest, representation: "raw" })
       }
       continue
     }
@@ -658,6 +658,9 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
             objectType: "file",
             path: relative,
             contentRef: mergedNode.digest,
+            // R6-06：scanner 创建 mutation 时明确 representation（raw ——
+            // 投影内容以原始 bytes 入 CAS）。
+            representation: "raw",
             ...(baseEntry?.metadata === undefined ? {} : { metadata: baseEntry.metadata }),
           })
         }
@@ -720,6 +723,7 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
       objectType: "file",
       path: newPath,
       contentRef: digestRef,
+      representation: "raw",
       ...(baseEntry?.metadata === undefined ? {} : { metadata: baseEntry.metadata }),
     })
     renamedOld.add(oldPath)
@@ -744,6 +748,7 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
       objectType: "file",
       path: relative,
       contentRef: node.digest,
+      representation: "raw",
     })
   }
 
@@ -764,6 +769,7 @@ export function scanProjectionDelta(input: ProjectionScanInput): ProjectionDelta
           path: mutation.path ?? null,
           objectType: mutation.objectType,
           contentRef: mutation.contentRef ?? null,
+          representation: mutation.representation ?? null,
           metadata: mutation.metadata ?? {},
         })
         const existing = idToIdentity.get(mutation.objectId)

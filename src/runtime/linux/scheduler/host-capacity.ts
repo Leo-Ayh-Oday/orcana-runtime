@@ -305,8 +305,7 @@ export class HostCapacityAuthority implements CapacityAuthority {
         updated_at INTEGER NOT NULL,
         spawned_pid INTEGER,
         spawn_startticks INTEGER,
-        cgroup_path TEXT,
-        UNIQUE (run_id, cell_id)
+        cgroup_path TEXT
       );
       CREATE TABLE IF NOT EXISTS authority_idempotency (
         method TEXT NOT NULL,
@@ -317,8 +316,57 @@ export class HostCapacityAuthority implements CapacityAuthority {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (method, principal, idempotency_key)
       );
+    `)
+    this.migrateLegacySchema()
+    // IC06 修复（P1-4）：同一 (run_id, cell_id) 的**活动** claim 唯一 ——
+    // RELEASED 行保留历史但不占唯一性，已释放的 run/cell 可用新 idempotency
+    // key 再次 reserve（表级 UNIQUE 会让二次 INSERT 抛 SQLITE_CONSTRAINT）。
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_active_run_cell
+        ON claims (run_id, cell_id) WHERE phase NOT IN ('RELEASED');
       CREATE INDEX IF NOT EXISTS idx_claims_phase ON claims (phase);
     `)
+  }
+
+  /** P1-4 迁移：旧库表级 `UNIQUE (run_id, cell_id)`（SQLite 自动索引
+   *  sqlite_autoindex_claims_1）→ 重建为部分唯一索引，保留全部行
+   *  （含 RELEASED 历史）。检测到旧结构才重建；新库 no-op。 */
+  private migrateLegacySchema(): void {
+    const indexes = this.db.query(`PRAGMA index_list('claims')`).all() as Array<{ name: string; origin: string }>
+    const hasLegacyTableUnique = indexes.some(i => i.name.startsWith("sqlite_autoindex_claims") && i.origin === "u")
+    if (!hasLegacyTableUnique) return
+    this.db.transaction(() => {
+      this.db.exec(`ALTER TABLE claims RENAME TO claims_legacy`)
+      this.db.exec(`
+        CREATE TABLE claims (
+          claim_id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          cell_id TEXT NOT NULL,
+          agent_id TEXT,
+          backend_id TEXT,
+          phase TEXT NOT NULL,
+          requested_json TEXT NOT NULL,
+          owner_token_hash TEXT NOT NULL,
+          principal TEXT NOT NULL,
+          client_instance_id TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          request_digest TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          spawned_pid INTEGER,
+          spawn_startticks INTEGER,
+          cgroup_path TEXT
+        )
+      `)
+      // 列序与旧表一致（SELECT * 保序拷贝，含 RELEASED 历史）。
+      this.db.exec(`INSERT INTO claims SELECT * FROM claims_legacy`)
+      this.db.exec(`DROP TABLE claims_legacy`)
+      this.db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_active_run_cell
+          ON claims (run_id, cell_id) WHERE phase NOT IN ('RELEASED');
+        CREATE INDEX IF NOT EXISTS idx_claims_phase ON claims (phase);
+      `)
+    })()
   }
 
   static tokenHash(token: string): string {
@@ -421,17 +469,40 @@ export class HostCapacityAuthority implements CapacityAuthority {
       if (hit.request_digest !== digest) {
         return { ok: false, reason: "IDEMPOTENCY_MISMATCH: same idempotency key with different ResourceRequest" }
       }
+      const row = this.db.query(`SELECT * FROM claims WHERE claim_id=?`).get(hit.claim_id) as ClaimRow | null
+      // IC06 修复（P1-3）：claim 已终结（上次执行已 RELEASED）→ 同 key 重试
+      // 视为全新 reserve（容量重新检查 + 新 claim + 幂等记录改指新 claim）。
+      // 绝不 rekey 一个已释放的 claim —— 那会让调用方以为有容量而实际未记账
+      // （超卖窗口），或 broker 在 updatePhase 前崩溃造成永久不记账。
+      if (!row || row.phase === "RELEASED" || row.phase === "TERMINATION_PROVEN") {
+        this.db.query(`DELETE FROM authority_idempotency WHERE method='reserve' AND principal=? AND idempotency_key=?`).run(pkey, idempotencyKey)
+        return this.reserveFresh(req, pkey, digest, idempotencyKey, principal)
+      }
       // token rekey：原子轮换新 token（同 claim，不创建第二 claim）。
       return this.db.transaction(() => {
-        const row = this.db.query(`SELECT * FROM claims WHERE claim_id=?`).get(hit.claim_id) as ClaimRow | null
-        if (!row) return { ok: false, reason: "IDEMPOTENT_CLAIM_LOST" } as ReserveOutcome
+        const fresh = this.db.query(`SELECT * FROM claims WHERE claim_id=?`).get(hit.claim_id) as ClaimRow | null
+        if (!fresh || fresh.phase === "RELEASED" || fresh.phase === "TERMINATION_PROVEN") {
+          // 事务内再次确认（防并发 release 在读取与 rekey 之间终结 claim）。
+          return { ok: false, reason: "IDEMPOTENT_CLAIM_RELEASED_RETRY" } as ReserveOutcome
+        }
         const newToken = `tok_${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "")}`
         this.db.query(`UPDATE claims SET owner_token_hash=?, updated_at=? WHERE claim_id=?`).run(HostCapacityAuthority.tokenHash(newToken), Date.now(), hit.claim_id)
         this.tokens.set(hit.claim_id, newToken)
         return { ok: true, claimId: hit.claim_id, ownerToken: newToken } as ReserveOutcome
       })()
     }
-    // 容量检查（原子：全满足才授予）。
+    return this.reserveFresh(req, pkey, digest, idempotencyKey, principal)
+  }
+
+  /** 全新 claim 创建（容量检查原子 + INSERT + 幂等记录）。 */
+  private reserveFresh(
+    req: CapacityReserveRequest,
+    pkey: string,
+    digest: string,
+    idempotencyKey: string,
+    principal: ClientPrincipal,
+  ): ReserveOutcome {
+    // 容量检查（原子：全满足才授予；单线程同步段无 await，无竞态窗口）。
     const avail = this.available()
     const over: string[] = []
     if (req.request.cpuQuota > avail.cpuQuota) over.push("cpu")
@@ -447,15 +518,21 @@ export class HostCapacityAuthority implements CapacityAuthority {
     const claimId = `claim_${randomUUID().replace(/-/g, "")}`
     const ownerToken = `tok_${randomUUID().replace(/-/g, "")}${randomUUID().replace(/-/g, "")}`
     const now = Date.now()
-    this.db.transaction(() => {
-      this.db.query(`INSERT INTO claims (claim_id, run_id, cell_id, agent_id, backend_id, phase, requested_json, owner_token_hash, principal, client_instance_id, idempotency_key, request_digest, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        claimId, req.runId, req.cellId, req.agentId ?? null, req.backendId ?? null, "RESERVED",
-        JSON.stringify(req.request), HostCapacityAuthority.tokenHash(ownerToken), pkey, principal.clientInstanceId,
-        idempotencyKey, digest, now, now,
-      )
-      this.db.query(`INSERT INTO authority_idempotency (method, principal, idempotency_key, request_digest, claim_id, created_at) VALUES ('reserve',?,?,?,?,?)`).run(pkey, idempotencyKey, digest, claimId, now)
-    })()
+    try {
+      this.db.transaction(() => {
+        this.db.query(`INSERT INTO claims (claim_id, run_id, cell_id, agent_id, backend_id, phase, requested_json, owner_token_hash, principal, client_instance_id, idempotency_key, request_digest, created_at, updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          claimId, req.runId, req.cellId, req.agentId ?? null, req.backendId ?? null, "RESERVED",
+          JSON.stringify(req.request), HostCapacityAuthority.tokenHash(ownerToken), pkey, principal.clientInstanceId,
+          idempotencyKey, digest, now, now,
+        )
+        this.db.query(`INSERT INTO authority_idempotency (method, principal, idempotency_key, request_digest, claim_id, created_at) VALUES ('reserve',?,?,?,?,?)`).run(pkey, idempotencyKey, digest, claimId, now)
+      })()
+    } catch (error) {
+      // P1-4：同 (run_id, cell_id) 活动 claim 冲突（并发双 reserve）→
+      // 明确失败而非抛出 SQLITE_CONSTRAINT 未捕获异常。
+      return { ok: false, reason: "RESOURCE_DOUBLE_ACQUIRE: active claim already exists for this run/cell" }
+    }
     this.tokens.set(claimId, ownerToken)
     return { ok: true, claimId, ownerToken }
   }
@@ -562,12 +639,29 @@ export class HostCapacityAuthority implements CapacityAuthority {
     return { claimId, state: "recovered-charged" }
   }
 
-  /** reconcile：server 自读 OS reality（client 仅 trigger）。 */
+  /** reconcile：server 自读 OS reality（client 仅 trigger）。
+   *  P1-1：扫描全部未终结 claim（含 RESERVED/PRE_SPAWN —— 崩溃于
+   *  reserve ACK 与 spawn 之间的 claim 由 reconcile 回收，否则永久泄漏
+   *  容量与并发槽）。无 spawn identity 的 RESERVED/PRE_SPAWN 是 durable
+   *  证明 spawn 未发生（与 releaseRequested 语义一致）→ RELEASED；
+   *  SPAWN_* 无 identity 无法证明进程不存在 → 保守 SUSPECT（保持 charged）。 */
   async reconcile(_principal: ClientPrincipal): Promise<{ freed: number; remainingCharged: number }> {
-    const rows = this.db.query(`SELECT * FROM claims WHERE phase IN ('QUARANTINED','SUSPECT','EXECUTING','SPAWN_ATTEMPTING','SPAWN_IDENTITY_COMMITTED')`).all() as ClaimRow[]
+    const rows = this.db.query(`SELECT * FROM claims WHERE phase NOT IN ('RELEASED','TERMINATION_PROVEN')`).all() as ClaimRow[]
     let freed = 0
     for (const row of rows) {
       const claim = this.view(row)
+      if (!claim.spawnedPid) {
+        if (claim.phase === "RESERVED" || claim.phase === "PRE_SPAWN") {
+          this.db.query(`UPDATE claims SET phase='RELEASED', updated_at=? WHERE claim_id=?`).run(Date.now(), claim.claimId)
+          this.tokens.delete(claim.claimId)
+          freed += 1
+        } else if (claim.phase !== "SUSPECT") {
+          // SPAWN_ATTEMPTING / SPAWN_IDENTITY_COMMITTED / QUARANTINED 无
+          // identity：无法证明进程不存在 → 保守 SUSPECT（保持 charged）。
+          this.db.query(`UPDATE claims SET phase='SUSPECT', updated_at=? WHERE claim_id=?`).run(Date.now(), claim.claimId)
+        }
+        continue
+      }
       const reality = await this.reality(claim)
       if (reality.state === "proven") {
         this.db.query(`UPDATE claims SET phase='RELEASED', updated_at=? WHERE claim_id=?`).run(Date.now(), claim.claimId)

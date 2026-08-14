@@ -21,6 +21,18 @@ import { envApprovalTokenProvider, type ApprovalTokenProvider } from "./approval
 /** M3：租约过期扫描间隔（daemon 常驻定时器）。 */
 const LEASE_SWEEP_INTERVAL_MS = 30_000
 
+/** IC06 修复（P1-2）：容量 reconcile 周期（daemon 常驻定时器）。
+ *  仅启动时 reconcile 一次会让 QUARANTINED/SUSPECT（release 时进程恰好
+ *  活着 / reality 暂不可读）的 claim 一直占用容量直到 daemon 重启；
+ *  周期 reconcile 使已死进程的 claim 在下一周期内释放。
+ *  可用 ORCANA_EXECD_CAPACITY_RECONCILE_MS 覆盖（0 = 禁用）。 */
+const CAPACITY_RECONCILE_INTERVAL_MS = (() => {
+  const raw = process.env.ORCANA_EXECD_CAPACITY_RECONCILE_MS
+  if (raw === undefined) return 60_000
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) && n >= 0 ? n : 60_000
+})()
+
 export interface ExecdOptions {
   sockPath: string
   statePath: string
@@ -118,6 +130,7 @@ export function createExecd(opts: ExecdOptions): Execd {
 
   let started = false
   let leaseSweepTimer: ReturnType<typeof setInterval> | undefined
+  let capacityReconcileTimer: ReturnType<typeof setInterval> | undefined
 
   const start = async (): Promise<void> => {
     // IC06（P0-7）：authority reconcile → Recovery（含 RECOVERED live cell
@@ -143,6 +156,21 @@ export function createExecd(opts: ExecdOptions): Execd {
         console.error(`[execd] lease sweep failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }, LEASE_SWEEP_INTERVAL_MS)
+    // IC06 修复（P1-2）：周期容量 reconcile —— 已死进程的
+    // QUARANTINED/SUSPECT claim 在下一周期内释放，长驻 daemon 不枯竭。
+    if (CAPACITY_RECONCILE_INTERVAL_MS > 0) {
+      capacityReconcileTimer = setInterval(() => {
+        authority.reconcile({
+          uid: process.getuid?.() ?? -1,
+          pid: process.pid,
+          startticks: readProcessStartticks(process.pid) ?? 0,
+          clientInstanceId: `execd-sweep-${process.pid}`,
+        }).catch(error => {
+          // reconcile 失败不崩溃 daemon（下一周期重试）。
+          console.error(`[execd] capacity reconcile sweep failed: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      }, CAPACITY_RECONCILE_INTERVAL_MS)
+    }
     started = true
   }
   const stop = async (): Promise<void> => {
@@ -150,6 +178,7 @@ export function createExecd(opts: ExecdOptions): Execd {
     // 与 DB —— 否则在途 runCell 写已关闭 DB 崩溃 daemon。
     await cellManager.stop()
     if (leaseSweepTimer) clearInterval(leaseSweepTimer)
+    if (capacityReconcileTimer) clearInterval(capacityReconcileTimer)
     await server.stop()
     state.close()
     await authority.close()

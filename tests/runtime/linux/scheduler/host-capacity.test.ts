@@ -222,4 +222,158 @@ describe("IC06 host capacity authority", () => {
     const res = verifyAuthoritySocket(join(tmpdir(), "ic06-nonexistent.sock"))
     expect(res.ok).toBe(false)
   })
+
+  // ── IC06 审核修复回归（P1-1 / P1-3 / P1-4）──
+
+  test("P1-1: reconcile reclaims orphaned RESERVED/PRE_SPAWN claims (crash between reserve and spawn)", async () => {
+    const { dir, dbPath } = tmpDb()
+    try {
+      const auth = createHostCapacityAuthority({ dbPath, capacityOverride: { cpuQuota: 1000, memoryBytes: 10 * 1024 * 1024 }, reality: liveReality() })
+      const p = principal(11)
+      // 模拟 broker 崩溃于 reserve ACK 后（claim 停在 RESERVED，无 spawn identity）。
+      const a = await auth.reserve(req, "key-p11", p)
+      expect(a.ok).toBe(true)
+      if (!a.ok) return
+      const report = await auth.reconcile(p)
+      expect(report.freed).toBe(1)
+      const st = await auth.status(p)
+      expect(st.charged).toBe(0) // 崩溃孤儿被回收，容量不再永久泄漏
+      await auth.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("P1-1b: reconcile keeps SPAWN_ATTEMPTING without identity as SUSPECT (conservative, stays charged)", async () => {
+    const { dir, dbPath } = tmpDb()
+    try {
+      const auth = createHostCapacityAuthority({ dbPath, capacityOverride: { cpuQuota: 1000, memoryBytes: 10 * 1024 * 1024 }, reality: liveReality() })
+      const p = principal(12)
+      const a = await auth.reserve(req, "key-p12", p)
+      expect(a.ok).toBe(true)
+      if (!a.ok) return
+      await auth.updatePhase(a.claimId, a.ownerToken, "SPAWN_ATTEMPTING")
+      const report = await auth.reconcile(p)
+      expect(report.freed).toBe(0) // 无法证明进程不存在 → 不释放
+      const st = await auth.status(p)
+      expect(st.charged).toBe(1)
+      expect(st.claims[0]!.phase).toBe("SUSPECT")
+      await auth.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("P1-3: idempotent reserve after release — fresh claim, capacity re-accounted, no revival", async () => {
+    const { dir, dbPath } = tmpDb()
+    try {
+      const auth = createHostCapacityAuthority({ dbPath, capacityOverride: { cpuQuota: 1000, memoryBytes: 10 * 1024 * 1024 }, reality: provenReality() })
+      const p = principal(13)
+      const a = await auth.reserve(req, "key-p13", p)
+      expect(a.ok).toBe(true)
+      if (!a.ok) return
+      // 正常释放（reality proven → RELEASED）。
+      await auth.updatePhase(a.claimId, a.ownerToken, "EXECUTING", { pid: 5555, startticks: 777 })
+      const rel = await auth.releaseRequested(a.claimId, a.ownerToken)
+      expect(rel.state).toBe("RELEASED")
+      // 同 key 重试（崩溃恢复 / 重跑场景）→ 全新 claim + 全新 token，容量重新记账。
+      const b = await auth.reserve(req, "key-p13", p)
+      expect(b.ok).toBe(true)
+      if (!b.ok) return
+      expect(b.claimId).not.toBe(a.claimId) // 不复活旧 claim
+      expect(b.ownerToken).not.toBe(a.ownerToken)
+      const st = await auth.status(p)
+      expect(st.charged).toBe(1) // 新 claim 记账（无超卖窗口）
+      // 旧 token 不能释放新 claim（token 托管仍然有效）。
+      const forged = await auth.releaseRequested(b.claimId, a.ownerToken)
+      expect(forged.state).toBe("REJECTED")
+      // 新 token 正常释放。
+      const rel2 = await auth.releaseRequested(b.claimId, b.ownerToken)
+      expect(rel2.state).toBe("RELEASED")
+      await auth.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("P1-4: new idempotency key after release — same run/cell re-reserve succeeds (no SQLITE_CONSTRAINT)", async () => {
+    const { dir, dbPath } = tmpDb()
+    try {
+      const auth = createHostCapacityAuthority({ dbPath, capacityOverride: { cpuQuota: 1000, memoryBytes: 10 * 1024 * 1024 }, reality: provenReality() })
+      const p = principal(14)
+      const a = await auth.reserve(req, "key-p14a", p)
+      expect(a.ok).toBe(true)
+      if (!a.ok) return
+      await auth.updatePhase(a.claimId, a.ownerToken, "EXECUTING", { pid: 5556, startticks: 778 })
+      const rel = await auth.releaseRequested(a.claimId, a.ownerToken)
+      expect(rel.state).toBe("RELEASED")
+      // 新 key 同 (runId, cellId) → 必须成功（RELEASED 不占部分唯一索引）。
+      const b = await auth.reserve(req, "key-p14b", p)
+      expect(b.ok).toBe(true)
+      if (!b.ok) return
+      expect(b.claimId).not.toBe(a.claimId)
+      await auth.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("P1-4b: concurrent active claim — second reserve fails cleanly, no throw", async () => {
+    const { dir, dbPath } = tmpDb()
+    try {
+      const auth = createHostCapacityAuthority({ dbPath, capacityOverride: { cpuQuota: 1000, memoryBytes: 10 * 1024 * 1024 }, reality: provenReality() })
+      const p = principal(15)
+      const a = await auth.reserve(req, "key-p15a", p)
+      expect(a.ok).toBe(true)
+      if (!a.ok) return
+      // 同 run/cell 新 key 且 claim 仍 active → 明确失败（不抛约束异常）。
+      const b = await auth.reserve(req, "key-p15b", p)
+      expect(b.ok).toBe(false)
+      if (!b.ok) expect(b.reason).toContain("RESOURCE_DOUBLE_ACQUIRE")
+      await auth.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("P1-4c: legacy schema (table-level UNIQUE) auto-migrates to partial unique index", async () => {
+    const { dir, dbPath } = tmpDb()
+    try {
+      // 手工构造旧结构库（表级 UNIQUE (run_id, cell_id) + 一条 RELEASED 历史）。
+      const { Database } = await import("bun:sqlite")
+      const legacy = new Database(dbPath)
+      legacy.exec(
+        "CREATE TABLE claims (" +
+        "  claim_id TEXT PRIMARY KEY," +
+        "  run_id TEXT NOT NULL, cell_id TEXT NOT NULL, agent_id TEXT, backend_id TEXT," +
+        "  phase TEXT NOT NULL, requested_json TEXT NOT NULL, owner_token_hash TEXT NOT NULL," +
+        "  principal TEXT NOT NULL, client_instance_id TEXT NOT NULL, idempotency_key TEXT NOT NULL," +
+        "  request_digest TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL," +
+        "  spawned_pid INTEGER, spawn_startticks INTEGER, cgroup_path TEXT," +
+        "  UNIQUE (run_id, cell_id)" +
+        ")"
+      )
+      legacy.exec("INSERT INTO claims VALUES ('legacy-1','r-legacy','c-legacy',NULL,NULL,'RELEASED','{}','h','p','i','k','d',0,0,NULL,NULL,NULL)")
+      legacy.close()
+
+      // 打开旧库 → 自动迁移（重建表 + 部分唯一索引）。
+      const auth = createHostCapacityAuthority({ dbPath, capacityOverride: { cpuQuota: 1000, memoryBytes: 10 * 1024 * 1024 }, reality: provenReality() })
+      const tp = { uid: 1, pid: 1, startticks: 1, clientInstanceId: "t" }
+      // RELEASED 旧行保留（历史不丢）。
+      const st = await auth.status(tp)
+      expect(st.claims.some(c => c.claimId === "legacy-1")).toBe(true)
+      // 同 (runId,cellId) 新 key reserve → 成功（RELEASED 不占唯一性）。
+      const b = await auth.reserve({ ...req, runId: "r-legacy", cellId: "c-legacy" }, "key-p16", tp)
+      expect(b.ok).toBe(true)
+      if (!b.ok) return
+      // 迁移后部分索引生效：再抢同 run/cell 新 key → 明确拒绝。
+      const c = await auth.reserve({ ...req, runId: "r-legacy", cellId: "c-legacy" }, "key-p17", tp)
+      expect(c.ok).toBe(false)
+      if (!c.ok) expect(c.reason).toContain("RESOURCE_DOUBLE_ACQUIRE")
+      await auth.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
 })

@@ -1012,12 +1012,18 @@ export function createLinuxBroker(options: LinuxBrokerOptions): LinuxExecutionBr
               // 由 reportPhase 抛错 fail closed（见 P0-3 strictPhase）。
               let identityCommitted = true
               if (acquired.capacityClaim) {
+                // IC06 修复（P2-1）：spawn identity 读取失败 → fail-closed
+                // （不 commit 身份、不发 go token）。写入 0 会让 reality 把
+                // 活进程误判为 PID replaced（真实 ticks > 0 != 0 → proven）
+                // 而释放容量 —— 唯一 fail-open 路径。
+                const startticks = readProcessStartticks(pid)
+                if (startticks === undefined) {
+                  identityCommitted = false
+                  acquired.controller.abort()
+                  return false
+                }
                 try {
-                  await reportPhase(acquired, "SPAWN_IDENTITY_COMMITTED", {
-                    pid,
-                    startticks: readProcessStartticks(pid) ?? 0,
-                    cgroupPath: acquired.cgroupCellPath,
-                  })
+                  await reportPhase(acquired, "SPAWN_IDENTITY_COMMITTED", { pid, startticks, cgroupPath: acquired.cgroupCellPath })
                 } catch {
                   identityCommitted = false
                 }

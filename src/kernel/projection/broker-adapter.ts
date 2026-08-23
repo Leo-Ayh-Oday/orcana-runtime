@@ -175,6 +175,20 @@ export class LinuxBrokerProjectionExecutor {
       // identity/intent ids）。任何不一致 → 拒绝，command 从未执行。
       this.assertIntentBinding(cwd, intent, command)
     }
+    // R7-02/R7-00-3：projection authority 身份 envelope 契约 —— 只有
+    // {runId, nodeRunId, attempt:1} 且无 agentId/assignmentId 的 authority
+    // 才能与 kernel 的 buildProjectionAuthority（spec-binding.ts）逐位一致：
+    // 任何额外/偏差字段都会使 adapter 实际编译的 spec 与 kernel 期望
+    // digest 自相矛盾地不一致（误导性 EXECUTION_RECEIPT_BINDING_MISMATCH）。
+    // 这里把契约显式化 —— 确定性 PROJECTION_AUTHORITY_IDENTITY_ENVELOPE
+    // 错误（command 从未 spawn）。
+    const identity = this.options.authority.identity
+    if (identity.attempt !== 1 || identity.agentId !== undefined || identity.assignmentId !== undefined) {
+      throw new ProjectionError(
+        "PROJECTION_AUTHORITY_IDENTITY_ENVELOPE",
+        `projection adapter authority identity must be exactly {runId, nodeRunId, attempt:1} with no agentId/assignmentId (kernel-owned spec digest derivation is identity-fixed); got attempt=${String(identity.attempt)} agentId=${String(identity.agentId)} assignmentId=${String(identity.assignmentId)}`,
+      )
+    }
     const authority = intent === undefined
       ? this.options.authority
       : {

@@ -10,9 +10,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ProjectionCoordinator, ProjectionIntentRegistry } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
-import { CopyProjectionFixtureBackend, TestReceiptAuthority } from "./test-fixtures"
+import { CopyProjectionFixtureBackend, TestProjectionCoordinator, TestReceiptAuthority } from "./test-fixtures"
 import {
   FuseOverlayfsProjectionBackend,
   probeNativeBackends,
@@ -22,7 +21,6 @@ import { validateWorldProjectionPlan } from "../../../src/kernel/projection/plan
 import { createLinuxBroker } from "../../../src/runtime/linux/broker"
 import { RuntimeStateStore } from "../../../src/runtime/linux/recovery/state-store"
 import { RuntimeStateReceiptAuthority } from "../../../src/kernel/projection/receipt-authority"
-import { HOST_AUDIT_TEST_CAPABILITIES } from "../../helpers/linux-process-test-broker"
 import { WorkspaceAuthorityRegistry } from "../../../src/runtime/linux/workspace/workspace-authority"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 
@@ -36,7 +34,8 @@ function tmpRoot(label: string): string {
   cleanups.push(() => {
     try {
       rmSync(dir, { recursive: true, force: true })
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉
       // 已删
     }
   })
@@ -85,16 +84,17 @@ async function runVerticalSlice(
     getCasRecord: digest => ctx.store.cas.record(digest),
     readCasObject: digest => ctx.store.cas.get(digest),
   })
-  const coord = new ProjectionCoordinator({
+  const coord = new TestProjectionCoordinator({
     store: ctx.store,
     materializer,
-    // R6-01：production NativeBackendKind 无 fixture discriminant ——
-    // test-only fixture 经显式 cast 传入（gate 由 brand 判定）。
+    // R7-01：test-only composition（tests/** 子类）提供 commit 授权。
     backend: backend as unknown as import("../../../src/kernel/projection/backend").NativeProjectionBackend,
     projectionRoot: tmpRoot("proj"),
     // R5-01：所有 backend 都要求 receipt authority —— A 层 fixture 用
     // TestReceiptAuthority（test-only）；B 层用 RuntimeStateReceiptAuthority。
     receiptAuthority: receiptAuthority ?? testAuthority!,
+    // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+    intentReservationPath: join(tmpRoot("res"), "res.sqlite"),
   })
   // 4. native projection。
   const plan = validateWorldProjectionPlan({
@@ -324,13 +324,15 @@ describe("AK2-T07 B 层：真实 fuse-overlayfs + Linux execution lane", () => {
       })
       const root = tmpRoot("bfail")
       const stateStore = new RuntimeStateStore({ root: join(tmpdir(), `ak2-slice-bfail-state-${process.pid}-${Math.random().toString(36).slice(2, 8)}`) })
-      const coord = new ProjectionCoordinator({
+      const coord = new TestProjectionCoordinator({
         store: ctx.store,
         materializer,
         backend: new FuseOverlayfsProjectionBackend(),
         projectionRoot: root,
         // 真实 broker 执行 → final receipt 持久化到 stateStore → commit 前校验。
         receiptAuthority: new RuntimeStateReceiptAuthority(stateStore),
+        // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+        intentReservationPath: join(tmpRoot("resbfail"), "res.sqlite"),
       })
       const plan = validateWorldProjectionPlan({
         projectionId: "proj-bfail", worldId: "world-vf", branchId: "b", snapshotId: snapshot.snapshotId,

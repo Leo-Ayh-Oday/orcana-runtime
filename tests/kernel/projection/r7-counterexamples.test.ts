@@ -156,46 +156,7 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
     const authorityMod = require("../../../src/kernel/projection/receipt-authority") as Record<string, unknown>
     const markBackend = backendMod.markTestFixtureBackend
     const markAuthority = authorityMod.markTestHarnessReceiptAuthority
-    if (typeof markBackend !== "function" || typeof markAuthority !== "function") {
-      // R7-01 后：生产导出面不再存在公开 mark —— 任意普通对象无法被
-      // brand；production coordinator 对普通对象 commit 必须 fail-closed。
-      const backend = stubProductionBackend()
-      const inner = new TestReceiptAuthority()
-      const authority = {
-        trustLevel: "test-harness" as const,
-        getFinalReceipt: (runId: string, cellId: string) => inner.getFinalReceipt(runId, cellId),
-        isCleanupFinalized: (receipt: SandboxReceipt) => inner.isCleanupFinalized(receipt),
-      } as ProjectionReceiptAuthority
-      const coord = new ProjectionCoordinator({
-        store: ctx.store,
-        materializer: materializerFor(ctx),
-        backend,
-        projectionRoot: tmpRoot("r7-00-1"),
-        receiptAuthority: authority,
-        intentReservationPath: join(tmpRoot("r7-00-1r"), "res.sqlite"),
-      })
-      const session = coord.start(makePlan(snapshotId))
-      await coord.execute(session, { executable: "noop", args: [] }, async () => ({
-        exitCode: 0, timedOut: false, cancelled: false, violation: false,
-      }))
-      coord.scan(session)
-      let blocked = false
-      try {
-        coord.commit(session)
-      } catch (error) {
-        blocked = (error as ProjectionError).code === "PRODUCTION_WORLD_COMMIT_BLOCKED"
-      }
-      expect(blocked).toBe(true)
-      if (!blocked) {
-        throw new Error("R7-00-1 RED: plain objects obtained a production World commit (mark functions still grant authorization from the production export surface)")
-      }
-      expect(ctx.store.getWorld("world-r7")!.currentRevision).toBe(1n)
-      ctx.cleanup()
-      return
-    }
-    // 基线：公开 mark 存在 —— 给任意普通对象 brand 后 commit 必须被拒绝。
     const backend = stubProductionBackend()
-    markBackend(backend)
     const inner = new TestReceiptAuthority()
     const authority = {
       trustLevel: "test-harness" as const,
@@ -204,14 +165,18 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
       recordFinalReceipt: (intent: unknown, cellId: string, overrides?: Partial<SandboxReceipt>) =>
         (inner as unknown as { recordFinalReceipt: (i: unknown, c: string, o?: Partial<SandboxReceipt>) => SandboxReceipt }).recordFinalReceipt(intent, cellId, overrides),
     } as ProjectionReceiptAuthority & { recordFinalReceipt: (intent: unknown, cellId: string, overrides?: Partial<SandboxReceipt>) => SandboxReceipt }
-    markAuthority(authority as never)
+    // 基线：公开 mark 存在于生产导出面 —— 任何调用方都能给任意普通对象
+    // 加 brand（R7-01 后 mark 被删除 → 此分支不可达，普通对象无法被
+    // brand → 必须 fail-closed）。
+    if (typeof markBackend === "function") markBackend(backend)
+    if (typeof markAuthority === "function") markAuthority(authority as never)
     const coord = new ProjectionCoordinator({
       store: ctx.store,
       materializer: materializerFor(ctx),
       backend,
-      projectionRoot: tmpRoot("r7-00-1b"),
+      projectionRoot: tmpRoot("r7-00-1"),
       receiptAuthority: authority as never,
-      intentReservationPath: join(tmpRoot("r7-00-1br"), "res.sqlite"),
+      intentReservationPath: join(tmpRoot("r7-00-1r"), "res.sqlite"),
     })
     const session = coord.start(makePlan(snapshotId))
     await coord.execute(
@@ -287,7 +252,7 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
     const coord = new ProjectionCoordinator({
       store: ctx.store,
       materializer: materializerFor(ctx),
-      backend: new CopyProjectionFixtureBackend(),
+      backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
       projectionRoot: tmpRoot("r7-00-3"),
       receiptAuthority: auth,
       intentReservationPath: join(tmpRoot("r7-00-3r"), "res.sqlite"),
@@ -329,9 +294,10 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
     // （PROJECTION_AUTHORITY_IDENTITY_ENVELOPE）—— 不是自相矛盾的
     // digest 比较（后者会随 spec 字段演化产生误导性错误）。
     if (failure !== undefined) {
-      expect((failure as ProjectionError).code).toBe("PROJECTION_AUTHORITY_IDENTITY_ENVELOPE")
-      if ((failure as ProjectionError).code !== "PROJECTION_AUTHORITY_IDENTITY_ENVELOPE") {
-        throw new Error(`R7-00-3 RED: boundCommand rejected with ${(failure as ProjectionError).code} (expected spec digest derivation inconsistent with the adapter's actual compiled spec; must be a deterministic envelope contract error)`)
+      const failureCode = (failure as { code: string }).code
+      expect(failureCode).toBe("PROJECTION_AUTHORITY_IDENTITY_ENVELOPE")
+      if (failureCode !== "PROJECTION_AUTHORITY_IDENTITY_ENVELOPE") {
+        throw new Error(`R7-00-3 RED: boundCommand rejected with ${failureCode} (expected spec digest derivation inconsistent with the adapter's actual compiled spec; must be a deterministic envelope contract error)`)
       }
     } else {
       // 允许的替代修复：envelope 被接受 → 执行必须真正完成（boundCommand
@@ -349,11 +315,15 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
       { intentId: "i-reserved", worldId: "w", branchId: "b", snapshotId: "s", projectionId: "p", sessionNonce: "n1" },
       old,
     )
-    res.reserve(
-      { intentId: "i-dispatched", worldId: "w", branchId: "b", snapshotId: "s", projectionId: "p", sessionNonce: "n2" },
-      old,
+    // DISPATCHED 陈旧行：模拟崩溃 coordinator 遗留（updated_at 已是过去）
+    // —— 经原始 SQLite 连接播种（与生产行同构）。
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite")
+    const raw = new Database(path)
+    raw.run(
+      "INSERT INTO intent_reservations (intent_id, world_id, branch_id, snapshot_id, projection_id, session_nonce, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ["i-dispatched", "w", "b", "s", "p", "n2", "DISPATCHED", old, old],
     )
-    res.markDispatched("i-dispatched", "cell-1")
+    raw.close()
     let error: unknown
     let affected: string[] = []
     try {
@@ -410,7 +380,7 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
     const coord = new ProjectionCoordinator({
       store: ctx.store,
       materializer: materializerFor(ctx),
-      backend: new CopyProjectionFixtureBackend(),
+      backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
       projectionRoot: tmpRoot("r7-00-6"),
       receiptAuthority: new TestReceiptAuthority(),
       intentReservationPath: join(tmpRoot("r7-00-6r"), "res.sqlite"),
@@ -460,14 +430,26 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
     execFileSync("fusermount3", ["-u", instance.mergedPath], { stdio: "ignore" })
     expect(instance.assertMountOwned!()).toBe(false)
     // 替换 upper/work 为 foreign marker 目录（同路径、不同身份）。
+    // rename 替换（不是 rm+mkdir —— 后者可能触发内核 inode 复用，
+    // 使新目录拿到相同 ino；rename 保留原 inode，新目录必然不同身份）。
     const upper = instance.writeLayerPath
     const work = join(root, "work-own")
-    rmSync(upper, { recursive: true, force: true })
-    rmSync(work, { recursive: true, force: true })
+    const upperStolen = upper + "-stolen"
+    const workStolen = work + "-stolen"
+    renameSync(upper, upperStolen)
+    renameSync(work, workStolen)
     mkdirSync(upper)
     mkdirSync(work)
     writeFileSync(join(upper, "foreign-marker.txt"), "foreign-upper")
     writeFileSync(join(work, "foreign-marker.txt"), "foreign-work")
+    cleanups.push(() => {
+      try {
+        rmSync(upperStolen, { recursive: true, force: true })
+        rmSync(workStolen, { recursive: true, force: true })
+      } catch {
+        // 已删
+      }
+    })
     const result = instance.cleanup()
     const upperMarkerKept = existsSync(join(upper, "foreign-marker.txt"))
     const workMarkerKept = existsSync(join(work, "foreign-marker.txt"))
@@ -485,7 +467,7 @@ describe("AK2-R7 反例冻结（projection 层）", () => {
     const coord = new ProjectionCoordinator({
       store: ctx.store,
       materializer: materializerFor(ctx),
-      backend: new CopyProjectionFixtureBackend(),
+      backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
       projectionRoot: tmpRoot("r7-00-8"),
       receiptAuthority: auth,
       intentReservationPath: join(tmpRoot("r7-00-8r"), "res.sqlite"),

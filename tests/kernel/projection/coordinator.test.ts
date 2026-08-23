@@ -7,14 +7,14 @@ import { join, resolve } from "node:path"
 import { ProjectionError } from "../../../src/kernel/projection/contracts"
 import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type ProjectionExecutor } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
-import { CopyProjectionFixtureBackend, TestReceiptAuthority, fixtureExecutor } from "./test-fixtures"
-import { type NativeProjectionBackend, type ProjectionInstance, markTestFixtureBackend } from "../../../src/kernel/projection/backend"
+import { CopyProjectionFixtureBackend, TestProjectionCoordinator, TestReceiptAuthority, fixtureExecutor } from "./test-fixtures"
+import { type NativeProjectionBackend, type ProjectionInstance } from "../../../src/kernel/projection/backend"
 import { validateWorldProjectionPlan, type WorldProjectionPlanInput } from "../../../src/kernel/projection/plan"
 import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
 import type { CasDigest } from "../../../src/kernel/world"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
-import { markTestHarnessReceiptAuthority, type ProjectionReceiptAuthority, type ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
+import type { ProjectionReceiptAuthority } from "../../../src/kernel/projection/receipt-authority"
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -26,8 +26,11 @@ function tmpRoot(label: string): string {
   cleanups.push(() => {
     try {
       rmSync(dir, { recursive: true, force: true })
-    } catch {
-      // 已删
+    } catch (error) {
+      // ENOENT → 已删（幂等竞态）；其它删除失败必须可见，不得静默吞掉。
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        console.error(`[ak2-test-cleanup] rmSync(${dir}) failed; residue may remain`, error)
+      }
     }
   })
   return dir
@@ -94,12 +97,14 @@ function coordinator(
   })
   const effective = receiptAuthority ?? new TestReceiptAuthority()
   if (effective instanceof TestReceiptAuthority) activeAuthority = effective
-  return new ProjectionCoordinator({
+  return new TestProjectionCoordinator({
     store: ctx.store,
     materializer,
     backend: (backend ?? new CopyProjectionFixtureBackend()) as unknown as NativeProjectionBackend,
     projectionRoot: tmpRoot("projroot"),
     receiptAuthority: effective,
+    // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+    intentReservationPath: join(tmpRoot("res"), "res.sqlite"),
   })
 }
 
@@ -236,7 +241,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         writeFileSync(join(merged, "docs/leak.md"), "tampered")
       }),
     )
-    const delta = coord.scan(session)
+    coord.scan(session)
     try {
       coord.commit(session)
       throw new Error("expected rejection")
@@ -261,7 +266,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         writeFileSync(join(merged, "vendor/sneaky.txt"), "x")
       }),
     )
-    const delta = coord.scan(session)
+    coord.scan(session)
     try {
       coord.commit(session)
       throw new Error("expected rejection")
@@ -282,7 +287,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       { executable: "noop", args: [] },
       mutateExecutor(merged => rmSync(join(merged, "src/main.ts"))),
     )
-    const delta = coord.scan(session)
+    coord.scan(session)
     try {
       coord.commit(session)
       throw new Error("expected rejection")
@@ -335,9 +340,8 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         return instance
       },
     }
-    // R6-01：tests/** 构造的 fixture backend 必须携带 test-fixture brand ——
-    // kind:'fixture' 字符串不再授予 commit 授权。
-    markTestFixtureBackend(failingBackend)
+    // R7-01：fixture backend 只存在于 tests/**；commit 授权来自
+    // TestProjectionCoordinator test-only composition（无生产 brand）。
     const coord = coordinator(ctx, failingBackend)
     const session = coord.start(makePlan(snapshotId))
     await coord.execute(
@@ -378,7 +382,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       { executable: "noop", args: [] },
       mutateExecutor(merged => writeFileSync(join(merged, "src/main.ts"), "mine\n")),
     )
-    const delta = coord.scan(session)
+    coord.scan(session)
     try {
       coord.commit(session)
       throw new Error("expected WORLD_HEAD_MOVED")
@@ -403,7 +407,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       { executable: "noop", args: [] },
       mutateExecutor(merged => writeFileSync(join(merged, "src/ghost.ts"), "ghost content\n")),
     )
-    const delta = coord.scan(session)
+    coord.scan(session)
     // delta 内容已入 CAS。
     const ghostDigest = ctx.store.cas.put(Buffer.from("ghost content\n", "utf8"), "text/plain").digest
     expect(ctx.store.cas.has(ghostDigest)).toBe(true)
@@ -603,10 +607,6 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     ctx.store.createWorld({ worldId: "world-id1", branchId: "branch-main", rootObjectId: "root-1", owner: "owner:test", purpose: "ak2 p1-1" })
     const d1 = ctx.store.cas.put(Buffer.from("one\n", "utf8"), "text/plain").digest
     const d2 = ctx.store.cas.put(Buffer.from("two\n", "utf8"), "text/plain").digest
-    const put = (over: object) => ({
-      worldId: "world-id1", branchId: "branch-main", baseRevision: 0n, actor: "a",
-      mutations: [{ type: "object.put", objectId: "same-id", objectType: "file", path: "a.txt", contentRef: d1 }, ...Object.entries(over).map(([k, v]) => v) as object[]],
-    })
     // same id + same path + different contentRef。
     expect(() =>
       ctx.store.compareAndCommit({
@@ -740,7 +740,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       },
       isCleanupFinalized: () => cleanupFinalized,
     }
-    markTestHarnessReceiptAuthority(inner)
+    // R7-01：test-only authority 只存在于 tests/**（无生产 brand）。
     return Object.assign(inner, {
       setIntentDigest(digest: string | undefined): void {
         intentDigest = digest
@@ -802,7 +802,8 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
   async function sessionAtDeltaReady(
     coord: ProjectionCoordinator,
     plan: WorldProjectionPlan,
-    ctx: TestWorldStore,
+    _ctx: TestWorldStore,
+    //（ctx 未在函数体中使用 —— 保留形参位以维持调用点位置兼容。）
     auth?: ReturnType<typeof fakeAuthority>,
   ): Promise<import("../../../src/kernel/projection/coordinator").ProjectionSession> {
     const session = coord.start(plan)
@@ -860,9 +861,10 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
       readCasObject: d => ctxB.store.cas.get(d),
     })
     const authB = fakeAuthority()
-    const coordB = new ProjectionCoordinator({
+    const coordB = new TestProjectionCoordinator({
       store: ctxB.store, materializer: materializerB, backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
       projectionRoot: tmpRoot("replay"), receiptAuthority: authB,
+      intentReservationPath: join(tmpRoot("replayres"), "res.sqlite"),
     })
     const planB = validateWorldProjectionPlan({
       projectionId: `proj-replay-${Math.random().toString(36).slice(2, 8)}`,
@@ -939,9 +941,11 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     }
     const auth = new TestReceiptAuthority()
     activeAuthority = auth
-    const coord = new ProjectionCoordinator({
+    const coord = new TestProjectionCoordinator({
       store: ctx.store, materializer, backend: throwingBackend, projectionRoot: root,
       receiptAuthority: auth,
+      // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+      intentReservationPath: join(tmpRoot("res"), "res.sqlite"),
     })
     const session = coord.start(makePlan(snapshotId))
     // FAILED 触发自动 cleanup → cleanup 抛异常 → 必须规范化终态。
@@ -1395,10 +1399,11 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     })
     const auth = new TestReceiptAuthority()
     activeAuthority = auth
-    const coord = new ProjectionCoordinator({
+    const coord = new TestProjectionCoordinator({
       store: ctx.store,
       materializer,
       backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
+      intentReservationPath: join(tmpRoot("resdirect"), "res.sqlite"),
       projectionRoot: tmpRoot("p13"),
       receiptAuthority: auth,
     })
@@ -1461,7 +1466,7 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     // 无 receipt authority —— 即使 backend.kind === "fixture" 也拒绝构造
     //（receiptless coordinator 不存在；allowTestBackends 已删除）。
     expect(() =>
-      new ProjectionCoordinator({
+      new TestProjectionCoordinator({
         store: ctx.store,
         materializer,
         backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
@@ -1471,10 +1476,11 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
     // 显式 test receipt authority 才放行。
     const auth = new TestReceiptAuthority()
     activeAuthority = auth
-    const coord = new ProjectionCoordinator({
+    const coord = new TestProjectionCoordinator({
       store: ctx.store,
       materializer,
       backend: new CopyProjectionFixtureBackend() as unknown as NativeProjectionBackend,
+      intentReservationPath: join(tmpRoot("resdirect"), "res.sqlite"),
       projectionRoot: tmpRoot("fix"),
       receiptAuthority: auth,
     })
@@ -1520,18 +1526,17 @@ describe("AK2-T05 故障矩阵（World 不受损 + 不自动完成）", () => {
         }
       },
     }
-    // R6-01：tests/** 构造的 fixture backend 必须携带 test-fixture brand
-    // （配合 branded TestReceiptAuthority 通过 production gate；cleanup
-    // 失败语义不变 —— 仍 CLEANUP_FAILED 阻止 commit）。
-    markTestFixtureBackend(failingBackend)
+    // R7-01：fixture backend 只存在于 tests/**；TestProjectionCoordinator
+    // test-only composition 提供 commit 授权（cleanup 失败语义不变）。
     const auth = new TestReceiptAuthority()
     activeAuthority = auth
-    const coord = new ProjectionCoordinator({
+    const coord = new TestProjectionCoordinator({
       store: ctx.store,
       materializer,
       backend: failingBackend,
       projectionRoot: root,
       receiptAuthority: auth,
+      intentReservationPath: join(tmpRoot("res2"), "res.sqlite"),
     })
     const session = coord.start(makePlan(snapshotId))
     expect(readFileSync(join(session.mergedDir, "src/main.ts"), "utf8")).toBe(baseContent)

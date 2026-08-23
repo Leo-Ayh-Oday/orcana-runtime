@@ -456,6 +456,7 @@ export type ProjectionErrorCode =
   | "PROJECTION_BASE_PATH_AUTHORITY"
   | "EXECUTION_INTENT_BUILD_FAILED"
   | "PRODUCTION_WORLD_COMMIT_BLOCKED"
+  | "PROJECTION_AUTHORITY_IDENTITY_ENVELOPE"
 
 export class ProjectionError extends Error {
   readonly kind = "ProjectionError" as const

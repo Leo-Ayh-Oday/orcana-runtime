@@ -12,7 +12,6 @@ import { afterEach, describe, expect, test } from "bun:test"
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -28,6 +27,7 @@ import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type P
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
+  TestProjectionCoordinator,
   TestReceiptAuthority,
   fixtureExecutor,
 } from "./test-fixtures"
@@ -41,7 +41,7 @@ import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
 import type { CasDigest } from "../../../src/kernel/world"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
-import { markTestHarnessReceiptAuthority, RuntimeStateReceiptAuthority, type ProjectionReceiptAuthority, type ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
+import { RuntimeStateReceiptAuthority, type ProjectionReceiptAuthority } from "../../../src/kernel/projection/receipt-authority"
 import { RuntimeStateStore } from "../../../src/runtime/linux/recovery/state-store"
 import { createHash } from "node:crypto"
 import { scanProjectionDelta } from "../../../src/kernel/projection/scanner"
@@ -70,8 +70,11 @@ function tmpRoot(label: string): string {
   cleanups.push(() => {
     try {
       rmSync(dir, { recursive: true, force: true })
-    } catch {
-      // 已删
+    } catch (error) {
+      // ENOENT → 已删（幂等竞态）；其它删除失败必须可见，不得静默吞掉。
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        console.error(`[ak2-test-cleanup] rmSync(${dir}) failed; residue may remain`, error)
+      }
     }
   })
   return dir
@@ -139,12 +142,16 @@ function coordinator(
   })
   const effective = receiptAuthority ?? new TestReceiptAuthority()
   if (effective instanceof TestReceiptAuthority) activeAuthority = effective
-  return new ProjectionCoordinator({
+  // R7-01：正向 fixture 测试经 TestProjectionCoordinator test-only
+  // composition 进入 commit 路径（生产 gate 恒 fail-closed）。
+  return new TestProjectionCoordinator({
     store: ctx.store,
     materializer,
     backend: (backend ?? new CopyProjectionFixtureBackend()) as unknown as NativeProjectionBackend,
     projectionRoot: tmpRoot("projroot"),
     receiptAuthority: effective,
+    // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+    intentReservationPath: join(tmpRoot("res"), "res.sqlite"),
   })
 }
 
@@ -229,7 +236,7 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> & { hidden?: boolean }
     },
     isCleanupFinalized: () => cleanupFinalized,
   }
-  markTestHarnessReceiptAuthority(inner)
+  // R7-01：test-only authority 只存在于 tests/**（无生产 brand）。
   return Object.assign(inner, {
     setIntentDigest(digest: string | undefined): void {
       intentDigest = digest
@@ -268,7 +275,8 @@ function bindIntent(auth: ReturnType<typeof fakeAuthority>, session: ProjectionS
 async function sessionAtDeltaReady(
   coord: ProjectionCoordinator,
   plan: WorldProjectionPlan,
-  ctx: TestWorldStore,
+  // R7 调和：ctx 未在函数体中使用 —— 下划线前缀保留形参位（调用点位置兼容）。
+  _ctx: TestWorldStore,
   actions: (merged: string) => void = merged => writeFileSync(join(merged, "src/main.ts"), "changed\n"),
   auth?: ReturnType<typeof fakeAuthority>,
 ): Promise<ProjectionSession> {
@@ -463,7 +471,8 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
         // 执行期间 mount 被替换（execute 后复核失败 → terminalize）。
         owned = false
       }))
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
       // execute 后 ownership 检查失败 → 终态 + cleanup（R3-02 terminalizer）。
     }
     // R3-00-4：execute 后 ownership 复核失败必须 terminalize（REJECTED +
@@ -525,7 +534,8 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     // 仍 terminalize。
     try {
       coord.scan(session)
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
       // scan 失败路径触发 cleanup → cleanup 抛 → 必须仍 terminalize。
     }
     expect(session.worldState).toBe("REJECTED")
@@ -549,7 +559,8 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     const session = await sessionAtDeltaReady(coord, makePlan(snapshotId), ctx, undefined, auth)
     try {
       coord.commit(session)
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
       // commit 失败路径触发 cleanup → cleanup 抛 → 必须仍 terminalize。
     }
     expect(session.worldState).toBe("REJECTED")
@@ -822,8 +833,8 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     const sentinel = join(tmpRoot("sentinel"), "sentinel.txt")
     writeFileSync(sentinel, "S")
     chmodSync(sentinel, 0o600)
-    const victimDir = join(session.mergedDir, "src")
-    // 把 src 子项替换为 symlink → sentinel（root 本身身份未变）。
+    // 把 src 子项替换为 symlink → sentinel（root 本身身份未变；目标目录
+    // 即 merged/src —— 在下方 executor 内经 merged 参数重新派生）。
     // 用真实 cleanup（commit 路径）验证 chmod 不跟随。
     await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(merged => {
       // 删除 src 内真实文件，放 symlink → sentinel。
@@ -832,13 +843,15 @@ describe("AK2-R3 反例（R3-00 先红冻结）", () => {
     }))
     try {
       coord.scan(session)
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
       // scan 拒绝 symlink（DELTA_SCAN_FAILED）→ terminalize → cleanup
       //（fd 锚定删除，不得跟随 symlink chmod sentinel）。
     }
     try {
       coord.commit(session)
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
       // 已终态 → 复用拒绝。
     }
     const mode = statSync(sentinel).mode & 0o777

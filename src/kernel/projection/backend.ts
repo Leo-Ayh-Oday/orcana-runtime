@@ -40,21 +40,10 @@ import { ProjectionError } from "./contracts"
 export type NativeBackendKind = "overlayfs" | "fuse-overlayfs"
 
 /**
- * R6-01：test-only fixture backend brand —— 只防 API 误用 / 公开字符串
- * 伪造（kind:"fixture" 字符串不再授予任何东西）。仅 tests/** 内的
- * CopyProjectionFixtureBackend 在构造时调用 mark。**不解决 same-UID
- * 攻击** —— 文档明确：该 gate 保护 kernel 自身构造流程，不冒充认证。
+ * R7-01：生产模块不再提供任何 test authorization（公开 mark 函数已
+ * 删除）。fixture backend 只存在于 tests/**（test-only composition）；
+ * kind 字符串与 TypeScript cast 不授予 production World commit。
  */
-const TEST_FIXTURE_BACKENDS = new WeakSet<object>()
-
-export function markTestFixtureBackend(backend: NativeProjectionBackend): void {
-  TEST_FIXTURE_BACKENDS.add(backend)
-}
-
-export function isTestFixtureBackend(backend: NativeProjectionBackend): boolean {
-  return TEST_FIXTURE_BACKENDS.has(backend)
-}
-
 export interface CreateProjectionInput {
   /** 物化后的 immutable lower base（只读）。 */
   readonly lowerDir: string
@@ -237,6 +226,10 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
     // upper 身份（mount/unmount/rm 的更强绑定 —— mount id 会被内核复用）。
     const upperStatAtCreate = lstatSync(upper)
     const upperIdentity = { dev: upperStatAtCreate.dev, ino: upperStatAtCreate.ino }
+    // R7-04：work 身份同样在创建时记录（mount 消失后替换 upper/work 为
+    // foreign 目录时，删除分支必须复核两侧身份 —— R7-00-7）。
+    const workStatAtCreate = lstatSync(work)
+    const workIdentity = { dev: workStatAtCreate.dev, ino: workStatAtCreate.ino }
 
     let mounted = false
     let afterMountId: string | undefined
@@ -525,14 +518,37 @@ export class FuseOverlayfsProjectionBackend implements NativeProjectionBackend {
           }
         }
         // 卸载成功（或从未挂载）：才删除本 projection 创建的 upper/work。
-        // R4-05.8：merged mountpoint 只允许在确认空且非 mount 后用 rmdir
-        // 删除（禁止递归穿越仍挂载/非空目录）。rmSync 抛错 → cleanup
-        // failure（不抛）。
+        // R7-04/R7-00-7：**所有删除分支先复核身份** —— mount 消失不代表
+        // 路径仍归本 session 所有：upper/work 被替换为 foreign 目录 →
+        // 不 rm/chmod，返回 residue（cleanup failure）。merged 同理
+        // （身份不符 → 不 rmdir）。
+        let workOwned = false
+        try {
+          const workNow = lstatSync(work)
+          workOwned = workNow.dev === workIdentity.dev && workNow.ino === workIdentity.ino
+        } catch {
+          workOwned = false
+        }
+        if (!upperOwned || !workOwned) {
+          // foreign/replaced/unknown 路径：不 unmount、不 chmod、不 rm。
+          return false
+        }
         try {
           rmSync(upper, { recursive: true, force: true })
           rmSync(work, { recursive: true, force: true })
           if (existsSync(merged)) {
             if (this.isFuseMount(merged)) return false
+            try {
+              const mergedNow = lstatSync(merged)
+              if (
+                mergedNow.dev !== mergedIdentity.dev ||
+                mergedNow.ino !== mergedIdentity.ino
+              ) {
+                return false
+              }
+            } catch {
+              return false
+            }
             if (readdirSync(merged).length !== 0) return false
             rmdirSync(merged)
           }

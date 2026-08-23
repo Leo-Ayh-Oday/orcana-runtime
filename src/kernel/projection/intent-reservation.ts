@@ -16,10 +16,56 @@
  * AK-4 Effect Kernel。
  */
 
-import { mkdirSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { chmodSync, lstatSync, mkdirSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
 import { Database, type SQLQueryBindings } from "bun:sqlite"
 import { ProjectionError } from "./contracts"
+
+/** R7-03：reservation 路径（parent/DB/WAL/SHM/journal）owner/mode/no-follow
+ *  fail-closed —— 当前 euid 所有、0700/0600（无 group/other 位）、非
+ *  symlink、regular file（仅文件）。缺失（尚未创建）→ 放行（SQLite 将
+ *  在已锁定的 0700 parent 内创建）。 */
+/** no-follow + owner 预检（打开前；mode 校验延迟到 chmod 之后）。 */
+function assertNoFollowOwned(path: string, label: string, requireFile = false): void {
+  try {
+    const stat = lstatSync(path)
+    if (stat.isSymbolicLink()) {
+      throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `${label} must not be a symlink: ${path}`)
+    }
+    if (requireFile && !stat.isFile()) {
+      throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `${label} must be a regular file: ${path}`)
+    }
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1
+    if (uid >= 0 && stat.uid !== uid) {
+      throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `${label} owner ${stat.uid} does not match current euid ${uid}: ${path}`)
+    }
+  } catch (error) {
+    if (error instanceof ProjectionError) throw error
+    // ENOENT：尚不存在（parent 已锁定）—— 放行。
+  }
+}
+
+function assertTrustedReservationPath(path: string, label: string, requireFile = false): void {
+  try {
+    const stat = lstatSync(path)
+    if (stat.isSymbolicLink()) {
+      throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `${label} must not be a symlink: ${path}`)
+    }
+    if (requireFile && !stat.isFile()) {
+      throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `${label} must be a regular file: ${path}`)
+    }
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1
+    if (uid >= 0 && stat.uid !== uid) {
+      throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `${label} owner ${stat.uid} does not match current euid ${uid}: ${path}`)
+    }
+    if ((stat.mode & 0o077) !== 0) {
+      throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `${label} mode ${(stat.mode & 0o777).toString(8)} must not be group/other accessible: ${path}`)
+    }
+  } catch (error) {
+    if (error instanceof ProjectionError) throw error
+    // ENOENT：尚不存在（parent 已锁定）—— 放行。
+  }
+}
 
 type RunResult = { changes: number; lastInsertRowid: number | bigint }
 type RunFn = (sql: string, ...bindings: SQLQueryBindings[]) => RunResult
@@ -57,11 +103,11 @@ export interface IntentReservationInput {
   readonly sessionNonce: string
 }
 
-/** 默认持久化位置：所有 coordinator / 进程共享（同主机）。 */
-export function defaultIntentReservationPath(): string {
-  return join(require("node:os").tmpdir(), "orcana-ak2", "intent-reservations.sqlite")
-}
-
+/**
+ * R7-03：production 不得默认使用 /tmp —— reservation path 必须由
+ * kernel 显式配置（ProjectionCoordinatorOptions.intentReservationPath 为
+ * 必填项；缺省 → 构造即拒绝）。测试使用 per-test tmp 路径。
+ */
 const RESERVATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS intent_reservations (
   intent_id TEXT PRIMARY KEY,
@@ -82,10 +128,14 @@ CREATE INDEX IF NOT EXISTS idx_intent_reservations_status
   ON intent_reservations(status, updated_at);
 `
 
-/** 允许的状态转移（唯一真源；非法转移抛 EXECUTION_RECEIPT_BINDING_MISMATCH）。 */
+/** 允许的状态转移（唯一真源；非法转移抛 EXECUTION_RECEIPT_BINDING_MISMATCH）。
+ *  R7-03：RESERVED/DISPATCHED → UNKNOWN（stale reconciliation 的合法边）。
+ *  所有转换（含 reconcile）必须使用单条条件 UPDATE（WHERE intent_id=?
+ *  AND status=? [AND stale 时间条件]）并强制 changes===1 —— 陈旧并发
+ *  转换不得覆盖或复活终态（R7-00-5）。 */
 const ALLOWED_TRANSITIONS: Readonly<Record<IntentReservationStatus, readonly IntentReservationStatus[]>> = {
-  RESERVED: Object.freeze(["DISPATCHED", "REJECTED"] as readonly IntentReservationStatus[]),
-  DISPATCHED: Object.freeze(["RECEIPT_BOUND", "REJECTED"] as readonly IntentReservationStatus[]),
+  RESERVED: Object.freeze(["DISPATCHED", "REJECTED", "UNKNOWN"] as readonly IntentReservationStatus[]),
+  DISPATCHED: Object.freeze(["RECEIPT_BOUND", "REJECTED", "UNKNOWN"] as readonly IntentReservationStatus[]),
   RECEIPT_BOUND: Object.freeze(["COMMITTED", "REJECTED"] as readonly IntentReservationStatus[]),
   COMMITTED: Object.freeze([] as readonly IntentReservationStatus[]),
   REJECTED: Object.freeze([] as readonly IntentReservationStatus[]),
@@ -96,13 +146,41 @@ export class DurableIntentReservation {
   private readonly db: Database
   private closed = false
 
-  constructor(path?: string) {
-    const resolved = path ?? defaultIntentReservationPath()
-    mkdirSync(dirname(resolved), { recursive: true, mode: 0o700 })
+  constructor(path: string) {
+    // R7-03：path 必填（production 不得默认 /tmp）。
+    if (typeof path !== "string" || path.length === 0) {
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        "intent reservation path is required (kernel configuration; no /tmp default)",
+      )
+    }
+    const resolved = resolve(path)
+    const parent = dirname(resolved)
+    // R7-03：parent/DB/WAL/SHM/journal owner/mode/no-follow fail-closed：
+    // 0700/0600 + 当前 euid + 非 symlink。SQLite 默认 0644 创建 —— 对
+    // 本 euid 所有的文件在打开后强制 chmod 0600（symlink/错误 owner 仍
+    // 严格拒绝 —— 不修复、fail-closed）。
+    mkdirSync(parent, { recursive: true, mode: 0o700 })
+    assertTrustedReservationPath(parent, "reservation parent")
+    // 打开前：no-follow + owner 预检（mode 在 chmod 后严格校验 ——
+    // SQLite 以 0644 创建文件，我们对本 euid 所有的文件强制 0600）。
+    assertNoFollowOwned(resolved, "reservation database", true)
     this.db = new Database(resolved)
     this.db.exec("PRAGMA journal_mode = WAL")
     this.db.exec("PRAGMA busy_timeout = 10000")
     this.db.exec(RESERVATION_SCHEMA)
+    // 强制 0600（DB + WAL/SHM/journal）后严格校验（mode/owner/no-follow）。
+    for (const file of [resolved, resolved + "-wal", resolved + "-shm", resolved + "-journal"]) {
+      try {
+        chmodSync(file, 0o600)
+      } catch {
+        // 不存在（journal 可能未创建）—— 放行。
+      }
+    }
+    assertTrustedReservationPath(resolved, "reservation database", true)
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      assertTrustedReservationPath(resolved + suffix, `reservation ${suffix.slice(1)}`, true)
+    }
   }
 
   /**
@@ -161,7 +239,11 @@ export class DurableIntentReservation {
     }
   }
 
+  /** 单条条件 UPDATE 转换：WHERE intent_id=? AND status=?；changes===1
+   *  强制。陈旧读取的并发转换（R7-00-5）影响 0 行 → 显式失败，终态
+   *  不被覆盖或复活。 */
   private transition(intentId: string, to: IntentReservationStatus, fields: Record<string, string>, now = Date.now()): void {
+    if (this.closed) throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", "intent reservation store is closed")
     const current = this.statusOf(intentId)
     if (current === undefined) {
       throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", `intent ${intentId} is not reserved`)
@@ -173,21 +255,30 @@ export class DurableIntentReservation {
       )
     }
     const setClause = ["status = ?", "updated_at = ?", ...Object.keys(fields).map(key => `${key} = ?`)].join(", ")
-    ;(this.db.run as unknown as RunFn)(
-      `UPDATE intent_reservations SET ${setClause} WHERE intent_id = ?`,
+    const result = (this.db.run as unknown as RunFn)(
+      `UPDATE intent_reservations SET ${setClause} WHERE intent_id = ? AND status = ?`,
       to,
       now,
       ...Object.values(fields),
       intentId,
+      current.status,
     )
+    if (result.changes !== 1) {
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        `intent ${intentId} transition ${current.status} -> ${to} affected ${result.changes} row(s) (stale concurrent transition refused; terminal state preserved)`,
+      )
+    }
   }
 
   markDispatched(intentId: string, cellId?: string): void {
     this.transition(intentId, "DISPATCHED", cellId === undefined ? {} : { cell_id: cellId })
   }
 
-  markReceiptBound(intentId: string, receiptDigest: string, cellSpecDigest?: string): void {
+  /** R7-03：RECEIPT_BOUND 必须保存 cellId + cellSpecDigest + receiptDigest。 */
+  markReceiptBound(intentId: string, cellId: string, receiptDigest: string, cellSpecDigest?: string): void {
     this.transition(intentId, "RECEIPT_BOUND", {
+      ...(cellId.length === 0 ? {} : { cell_id: cellId }),
       ...(receiptDigest.length === 0 ? {} : { receipt_digest: receiptDigest }),
       ...(cellSpecDigest === undefined ? {} : { cell_spec_digest: cellSpecDigest }),
     })
@@ -201,16 +292,29 @@ export class DurableIntentReservation {
     this.transition(intentId, "REJECTED", {})
   }
 
-  /** 只允许 reconcile 或人工处理：RESERVED/DISPATCHED 超龄 → UNKNOWN
-   *  （不自动重新执行）。返回受影响 intentId。 */
+  /** R7-03：RESERVED/DISPATCHED 超龄 → UNKNOWN（不自动重新执行）。
+   *  stale 时间条件在**同一条 UPDATE** 中（SELECT 与 UPDATE 之间被合法
+   *  转换的行不会被翻成 UNKNOWN —— 时间窗口消除）。返回受影响 intentId。 */
   reconcileStale(maxAgeMs: number, now = Date.now()): string[] {
+    if (this.closed) throw new ProjectionError("EXECUTION_RECEIPT_BINDING_MISMATCH", "intent reservation store is closed")
+    const staleBefore = now - maxAgeMs
     const rows = this.db
       .query("SELECT intent_id AS intentId FROM intent_reservations WHERE status IN ('RESERVED','DISPATCHED') AND updated_at < ?")
-      .all(now - maxAgeMs) as Array<{ intentId: string }>
+      .all(staleBefore) as Array<{ intentId: string }>
+    if (rows.length === 0) return []
     const affected: string[] = []
     for (const row of rows) {
-      this.transition(row.intentId, "UNKNOWN", {})
-      affected.push(row.intentId)
+      // 单条条件 UPDATE（status + stale 时间条件同处 WHERE）：
+      // 并发窗口内被合法转换（DISPATCHED/RECEIPT_BOUND/终态）的行 →
+      // changes=0 → 跳过（不翻 UNKNOWN）。
+      const result = (this.db.run as unknown as RunFn)(
+        `UPDATE intent_reservations SET status = 'UNKNOWN', updated_at = ?
+         WHERE intent_id = ? AND status IN ('RESERVED','DISPATCHED') AND updated_at < ?`,
+        now,
+        row.intentId,
+        staleBefore,
+      )
+      if (result.changes === 1) affected.push(row.intentId)
     }
     return affected
   }

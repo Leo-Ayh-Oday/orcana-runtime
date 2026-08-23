@@ -67,14 +67,12 @@ import { ProjectionError } from "../../../src/kernel/projection/contracts"
 import {
   ProjectionCoordinator,
   ProjectionIntentRegistry,
-  expectedProjectionFilesystemPolicyDigest,
-  type ProjectionSession,
 } from "../../../src/kernel/projection/coordinator"
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
+  TestProjectionCoordinator,
   TestReceiptAuthority,
-  fixtureExecutor,
 } from "./test-fixtures"
 import {
   FuseOverlayfsProjectionBackend,
@@ -89,12 +87,6 @@ import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../..
 import type { ProjectionExecutionOutcome } from "../../../src/kernel/projection/validator"
 import type { WorldStore } from "../../../src/kernel/world/store"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
-import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
-import { createLinuxBroker } from "../../../src/runtime/linux/broker"
-import { RuntimeStateStore } from "../../../src/runtime/linux/recovery/state-store"
-import { RuntimeStateReceiptAuthority } from "../../../src/kernel/projection/receipt-authority"
-import { WorkspaceAuthorityRegistry } from "../../../src/runtime/linux/workspace/workspace-authority"
-import type { TrustedExecutionAuthority } from "../../../src/runtime/linux/contracts"
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -106,7 +98,8 @@ function tmpRoot(label: string): string {
   cleanups.push(() => {
     try {
       rmSync(dir, { recursive: true, force: true })
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉
       // 已删
     }
   })
@@ -170,12 +163,16 @@ function coordinator(
     readCasObject: digest => ctx.store.cas.get(digest),
   })
   const effective = options.receiptAuthority ?? new TestReceiptAuthority()
-  return new ProjectionCoordinator({
+  // R7-01：正向 fixture 测试经 TestProjectionCoordinator test-only
+  // composition 进入 commit 路径（生产 gate 恒 fail-closed）。
+  return new TestProjectionCoordinator({
     store: ctx.store,
     materializer,
     backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: options.projectionRoot ?? tmpRoot("projroot"),
     receiptAuthority: effective,
+    // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+    intentReservationPath: join(tmpRoot("res"), "res.sqlite"),
     ...options,
   } as never)
 }
@@ -234,21 +231,6 @@ async function tickUntil(cond: () => boolean, timeoutMs = 3000): Promise<void> {
   while (!cond()) {
     if (Date.now() > deadline) throw new Error("tickUntil timeout")
     await new Promise(resolve => setTimeout(resolve, 5))
-  }
-}
-
-/** authorityFor —— 最小 writable ownership 注册（ownerFiles === writable roots）。 */
-function authorityFor(merged: string): TrustedExecutionAuthority {
-  const registry = new WorkspaceAuthorityRegistry()
-  const workspace = registry.registerAgentWorktree({
-    projectId: "ak2-r5",
-    hostRoot: merged,
-    access: "readwrite",
-    ownerFiles: ["src"],
-  })
-  return {
-    identity: { runId: `run-${process.pid}`, nodeRunId: `run-${process.pid}:n1`, attempt: 1 },
-    workspace,
   }
 }
 
@@ -360,7 +342,8 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     // 清理 base.old（rename 后的原 base —— afterEach 只删 base）。
     try {
       rmSync(`${base}.old`, { recursive: true, force: true })
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉
       // 已删
     }
     ctx.cleanup()
@@ -461,7 +444,8 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       const stillFuse = (() => {
         try {
           return statfsSync(merged).type === 0x65735546
-        } catch {
+        } catch (error) {
+          void error // 基线约定：best-effort 清理/预期失败，显式吞掉
           return false
         }
       })()
@@ -481,7 +465,8 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       // 清理：卸载 foreign + 删除目录。
       try {
         execFileSync("fusermount3", ["-u", merged], { stdio: "ignore" })
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉
         // 已卸载
       }
       rmSync(root, { recursive: true, force: true })
@@ -510,7 +495,7 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       },
     )
     await tickUntil(() => session.executionState === "RUNNING")
-    const cleanup = await coord.cancel(session)
+    await coord.cancel(session)
     // cleanup 返回时 executor 必须已经完成（先取消、等待，再清理）。
     // RED at baseline：cancel 直接 terminalize + cleanup，writer 仍在运行。
     expect(executorDone).toBe(true)
@@ -682,7 +667,7 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       }
       return (ctx.store as WorldStore).getWorld(worldId)
     }) as WorldStore["getWorld"]
-    const commitCoord = new ProjectionCoordinator({
+    const commitCoord = new TestProjectionCoordinator({
       store: wrapped,
       materializer: new SnapshotMaterializer({
         getSnapshot: id => ctx.store.snapshots.get(id),
@@ -692,6 +677,8 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       backend: harness.backend,
       projectionRoot: tmpRoot("projroot2"),
       receiptAuthority: harness.authority,
+      // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+      intentReservationPath: join(tmpRoot("res7e"), "res.sqlite"),
     } as never)
     const session = commitCoord.start(makePlan(snapshotId))
     await commitCoord.execute(session, { executable: "noop", args: [] }, harness.executor)
@@ -722,11 +709,14 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     // 调用前完成（adapter 不再接收 registry）。两个 coordinator 共享同一
     // reservation 路径（跨实例等价）；plan.intentId 是 kernel-owned 覆盖
     // （确定性重放场景）。
-    const reservationPath = join(tmpdir(), `ak2-r5-intent-${process.pid}-${Math.random().toString(36).slice(2, 8)}.sqlite`)
+    // R7-03：reservation path 必须位于 kernel-owned 0700 目录（直接放 /tmp
+    // 会被 parent owner/mode fail-closed 检查拒绝 —— 生产契约的正确行为）。
+    const reservationPath = join(tmpRoot("r5-00-8-res"), "res.sqlite")
     cleanups.push(() => {
       try {
         rmSync(reservationPath, { recursive: true, force: true })
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉
         // 已删
       }
     })
@@ -766,7 +756,8 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     // 清理 sessionA 的投影（sessionB 已在 execute 失败时 terminalize）。
     try {
       await coordA.cancel(sessionA)
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉
       // 已清理
     }
     ctx.cleanup()
@@ -781,11 +772,11 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
     const wrapped = Object.create(ctx.store) as WorldStore
     const originalCompareAndCommit = ctx.store.compareAndCommit.bind(ctx.store)
     wrapped.compareAndCommit = ((input: Parameters<WorldStore["compareAndCommit"]>[0]) => {
-      const result = originalCompareAndCommit(input)
+      originalCompareAndCommit(input) // 已 durable：真实 commit 先落地
       throw new Error("after-commit-before-response fault")
     }) as WorldStore["compareAndCommit"]
     wrapped.getCommitRequestDigest = () => "sha256:" + "0".repeat(64)
-    const commitCoord = new ProjectionCoordinator({
+    const commitCoord = new TestProjectionCoordinator({
       store: wrapped,
       materializer: new SnapshotMaterializer({
         getSnapshot: id => ctx.store.snapshots.get(id),
@@ -795,6 +786,8 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       backend: harness.backend,
       projectionRoot: tmpRoot("projroot3"),
       receiptAuthority: harness.authority,
+      // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+      intentReservationPath: join(tmpRoot("resr5-03"), "res.sqlite"),
     } as never)
     const session = commitCoord.start(makePlan(snapshotId))
     await commitCoord.execute(session, { executable: "noop", args: [] }, harness.executor)
@@ -886,7 +879,8 @@ describe("AK2-R5 反例（R5-00 先红冻结）", () => {
       // rmSync 直接删除 —— 走 session cleanup 还原 mode 后删除）。
       try {
         void coord.cancel(session)
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉
         // 已清理
       }
       ctx.cleanup()

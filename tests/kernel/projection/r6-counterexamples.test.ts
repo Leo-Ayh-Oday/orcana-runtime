@@ -57,6 +57,7 @@ import {
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
+  TestProjectionCoordinator,
   TestReceiptAuthority,
   fixtureExecutor,
 } from "./test-fixtures"
@@ -83,7 +84,8 @@ function tmpRoot(label: string): string {
   cleanups.push(() => {
     try {
       rmSync(dir, { recursive: true, force: true })
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉
       // 已删
     }
   })
@@ -146,16 +148,20 @@ function coordinator(
   backend: ReturnType<typeof createFixtureHarness>["backend"],
   options: Partial<ConstructorParameters<typeof ProjectionCoordinator>[0]> = {},
 ): ProjectionCoordinator {
-  return new ProjectionCoordinator({
+  // R7-01：正向 fixture 流程经 TestProjectionCoordinator test-only
+  // composition 进入 commit 路径（R6-00-1/3 的 gate 反例显式用生产类）。
+  return new TestProjectionCoordinator({
     store: ctx.store,
     materializer: materializerFor(ctx),
     backend,
     projectionRoot: tmpRoot("coord"),
+    // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+    intentReservationPath: join(tmpRoot("res"), "res.sqlite"),
     ...options,
   } as ConstructorParameters<typeof ProjectionCoordinator>[0])
 }
 
-function createFixtureHarness(mutate?: (merged: string) => void): {
+function createFixtureHarness(): {
   readonly authority: TestReceiptAuthority
   readonly backend: CopyProjectionFixtureBackend
 } {
@@ -206,7 +212,17 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
     const { authority, executor } = plainHarness("kernel-authenticated", merged =>
       writeFileSync(join(merged, "src/main.ts"), "changed\n"))
     const harness = createFixtureHarness()
-    const coord = coordinator(ctx, harness.backend, { receiptAuthority: authority })
+    // R7-01：gate 反例必须使用生产 ProjectionCoordinator（test-only
+    // composition 不参与 —— 生产类无任何 test authorization）。
+    const coord = new ProjectionCoordinator({
+      store: ctx.store,
+      materializer: materializerFor(ctx),
+      backend: harness.backend,
+      projectionRoot: tmpRoot("r6-00-1"),
+      receiptAuthority: authority as never,
+      // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+      intentReservationPath: join(tmpRoot("r6-00-1r"), "res.sqlite"),
+    } as never)
     const session = coord.start(makePlan(snapshotId))
     const result = await runFlow(coord, session, executor)
     // 精确错误码：production World commit 必须被结构性阻止（自报字符串
@@ -237,6 +253,8 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
           backend: harness.backend,
           projectionRoot: tmpRoot("r6-00-2"),
           receiptAuthority: authority as never,
+          // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+          intentReservationPath: join(tmpRoot("r6-00-2r"), "res.sqlite"),
         } as never)
       } catch (error) {
         caught = error
@@ -255,7 +273,16 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
     const { authority, executor } = plainHarness("test-harness", merged =>
       writeFileSync(join(merged, "src/main.ts"), "changed\n"))
     const harness = createFixtureHarness()
-    const coord = coordinator(ctx, harness.backend, { receiptAuthority: authority })
+    // R7-01：gate 反例必须使用生产 ProjectionCoordinator。
+    const coord = new ProjectionCoordinator({
+      store: ctx.store,
+      materializer: materializerFor(ctx),
+      backend: harness.backend,
+      projectionRoot: tmpRoot("r6-00-3"),
+      receiptAuthority: authority as never,
+      // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+      intentReservationPath: join(tmpRoot("r6-00-3r"), "res.sqlite"),
+    } as never)
     const session = coord.start(makePlan(snapshotId))
     const result = await runFlow(coord, session, executor)
     expect(result.committed).toBe(false)
@@ -269,8 +296,9 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
 
   test("R6-00-4：两个独立 registry（跨 coordinator 等价）同一 intent → 只能一个成功", () => {
     const intentId = `r6-00-4-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const registryA = new ProjectionIntentRegistry()
-    const registryB = new ProjectionIntentRegistry()
+    const reservationPath = join(tmpRoot("r6-00-4"), "res.sqlite")
+    const registryA = new ProjectionIntentRegistry(reservationPath)
+    const registryB = new ProjectionIntentRegistry(reservationPath)
     expect(registryA.reserve(intentId)).toBe(true)
     expect(registryB.reserve(intentId)).toBe(false)
     if (registryB.reserve(intentId) === true) {
@@ -280,9 +308,10 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
 
   test("R6-00-5：重建 registry（进程重启等价）后同一 intent → 必须拒绝（不得因内存清空而重放）", () => {
     const intentId = `r6-00-5-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const registryA = new ProjectionIntentRegistry()
+    const reservationPath = join(tmpRoot("r6-00-5"), "res.sqlite")
+    const registryA = new ProjectionIntentRegistry(reservationPath)
     expect(registryA.reserve(intentId)).toBe(true)
-    const rebuilt = new ProjectionIntentRegistry()
+    const rebuilt = new ProjectionIntentRegistry(reservationPath)
     expect(rebuilt.reserve(intentId)).toBe(false)
     if (rebuilt.reserve(intentId) === true) {
       throw new Error("R6-00-5 RED: a rebuilt registry replayed a reserved intent (in-memory Set cleared)")
@@ -344,7 +373,8 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
     cleanups.push(() => {
       try {
         rmSync(root, { recursive: true, force: true })
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉
         // residue 保留诊断
       }
     })
@@ -362,7 +392,8 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
         execFileSync(binary, ["-u", join(root, "merged-m")], { stdio: "ignore" })
         unmounted = true
         break
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉
         // 尝试下一个
       }
     }
@@ -383,14 +414,16 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
     cleanups.push(() => {
       try {
         rmSync(external, { recursive: true, force: true })
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉
         // 已删
       }
     })
     cleanups.push(() => {
       try {
         rmSync(parentRoot + "-stolen", { recursive: true, force: true })
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉
         // 已删
       }
     })
@@ -402,6 +435,8 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
       backend: harness.backend,
       projectionRoot: basePath,
       receiptAuthority: harness.authority,
+      // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+      intentReservationPath: join(tmpRoot("r6-00-8r"), "res.sqlite"),
       onBeforeBaseMkdir: (_base: string) => {
         if (swapped) return
         swapped = true
@@ -446,6 +481,8 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
       backend: harness.backend,
       projectionRoot: root,
       receiptAuthority: harness.authority,
+      // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+      intentReservationPath: join(tmpRoot("r6-00-9r"), "res.sqlite"),
       onAfterChildOpened: (projectionRoot: string) => {
         // child fd 身份捕获后、materialize 前：rename 掉真实 child，用
         // 新目录 + sentinel 替换（外部 sentinel）。
@@ -456,7 +493,8 @@ describe("AK2-R6 反例冻结（projection 层）", () => {
         cleanups.push(() => {
           try {
             rmSync(stolen, { recursive: true, force: true })
-          } catch {
+          } catch (error) {
+            void error // 基线约定：best-effort 清理/预期失败，显式吞掉
             // 已删
           }
         })

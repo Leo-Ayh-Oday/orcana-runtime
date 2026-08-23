@@ -52,6 +52,7 @@ import { ProjectionCoordinator, ProjectionIntentRegistry, expectedProjectionFile
 import { SnapshotMaterializer } from "../../../src/kernel/projection/materializer"
 import {
   CopyProjectionFixtureBackend,
+  TestProjectionCoordinator,
   TestReceiptAuthority,
   fixtureExecutor,
 } from "./test-fixtures"
@@ -65,7 +66,7 @@ import { createTestWorldStore, type TestWorldStore } from "../world/helpers"
 import type { WorldProjectionPlan } from "../../../src/kernel/projection/contracts"
 import type { CasDigest } from "../../../src/kernel/world"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
-import { markTestHarnessReceiptAuthority, type ProjectionReceiptAuthority, type ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
+import type { ProjectionReceiptAuthority, ProjectionReceiptBinding } from "../../../src/kernel/projection/receipt-authority"
 import { expectedProjectionCellSpecDigestForCell } from "../../../src/kernel/projection/spec-binding"
 import { LinuxBrokerProjectionExecutor } from "../../../src/kernel/projection/broker-adapter"
 import { compileBwrapArgv, createBubblewrapBackend } from "../../../src/runtime/linux/backends/bubblewrap"
@@ -83,8 +84,11 @@ function tmpRoot(label: string): string {
   cleanups.push(() => {
     try {
       rmSync(dir, { recursive: true, force: true })
-    } catch {
-      // 已删
+    } catch (error) {
+      // ENOENT → 已删（幂等竞态）；其它删除失败必须可见，不得静默吞掉。
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        console.error(`[ak2-test-cleanup] rmSync(${dir}) failed; residue may remain`, error)
+      }
     }
   })
   return dir
@@ -152,12 +156,16 @@ function coordinator(
   })
   const effective = (options.receiptAuthority as ProjectionReceiptAuthority | undefined) ?? new TestReceiptAuthority()
   if (effective instanceof TestReceiptAuthority) activeAuthority = effective
-  return new ProjectionCoordinator({
+  // R7-01：正向 fixture 测试经 TestProjectionCoordinator test-only
+  // composition 进入 commit 路径（生产 gate 恒 fail-closed）。
+  return new TestProjectionCoordinator({
     store: ctx.store,
     materializer,
     backend: backend ?? new CopyProjectionFixtureBackend(),
     projectionRoot: tmpRoot("projroot"),
     receiptAuthority: effective,
+    // R7-03：durable reservation path 是必填 kernel 配置（测试用 per-test 路径）。
+    intentReservationPath: join(tmpRoot("res"), "res.sqlite"),
     ...options,
   } as never)
 }
@@ -268,7 +276,7 @@ function fakeAuthority(overrides: Partial<SandboxReceipt> = {}): ProjectionRecei
     },
     isCleanupFinalized: () => cleanupFinalized,
   }
-  markTestHarnessReceiptAuthority(inner)
+  // R7-01：test-only authority 只存在于 tests/**（无生产 brand）。
   return Object.assign(inner, {
     setIntentDigest(digest: string | undefined): void {
       intentDigest = digest
@@ -324,7 +332,8 @@ function bindOutcome(session: ProjectionSession, auth: ReturnType<typeof fakeAut
 async function sessionAtDeltaReady(
   coord: ProjectionCoordinator,
   plan: WorldProjectionPlan,
-  ctx: TestWorldStore,
+  // R7 调和：ctx 未在函数体中使用 —— 下划线前缀保留形参位（调用点位置兼容）。
+  _ctx: TestWorldStore,
   actions: (merged: string) => void = merged => writeFileSync(join(merged, "src/main.ts"), "changed\n"),
   auth?: ReturnType<typeof fakeAuthority>,
 ): Promise<ProjectionSession> {
@@ -616,7 +625,8 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
     owned = false
     try {
       await coord.execute(session, { executable: "noop", args: [] }, mutateExecutor(() => {}))
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
       // execute 前 ownership 复核失败 → 必须 terminalize（R4-00-6）。
     }
     expect(session.worldState).toBe("REJECTED")
@@ -723,7 +733,8 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
     const { execFileSync } = require("node:child_process") as typeof import("node:child_process")
     try {
       execFileSync("/usr/bin/fusermount3", ["-u", merged], { stdio: "ignore" })
-    } catch {
+    } catch (error) {
+      void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
       execFileSync("fusermount3", ["-u", merged], { stdio: "ignore" })
     }
     chmodSync(join(lower, "locked"), 0o700)
@@ -743,11 +754,6 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
       })
       let mergedDir = ""
       let writeRejected = false
-      const materializer = new SnapshotMaterializer({
-        getSnapshot: id => ctx.store.snapshots.get(id),
-        getCasRecord: digest => ctx.store.cas.record(digest),
-        readCasObject: digest => ctx.store.cas.get(digest),
-      })
       // 直接驱动 scanner（注入 finalVerify 窗口）—— 与 coordinator 的
       // seal 语义等价：final verification 期间的写入必须被拒绝或检测。
       const { scanProjectionDelta } = require("../../../src/kernel/projection/scanner") as typeof import("../../../src/kernel/projection/scanner")
@@ -785,20 +791,23 @@ describe("AK2-R4 反例（R4-00 先红冻结）", () => {
               if (rootPath !== sealed.sealedPath) return
               try {
                 attempt(sealed.sealedPath)
-              } catch {
+              } catch (error) {
+                void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
                 writeRejected = true
               }
             },
           })
         }
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
         scanFailed = true
       }
       // 清理 projection 实例（含 sealed ro mount —— R4-05/06 cleanup 契约：
       // 真实卸载 + 确认消失 + rmdir；测试残留必须为 0）。
       try {
         coord.cancel(session)
-      } catch {
+      } catch (error) {
+        void error // 基线约定：best-effort 清理/预期失败，显式吞掉（不掩盖测试主体结果）
         // 已终态等 —— cleanup 由 cancel 的幂等路径覆盖
       }
       ctx.cleanup()

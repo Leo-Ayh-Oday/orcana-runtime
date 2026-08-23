@@ -97,25 +97,14 @@ export function validateProjectionReceiptAuthority(value: unknown): ProjectionRe
 }
 
 /**
- * R6-01：test-only brand —— 只防 API 误用 / 公开字符串伪造，**不解决
- * same-UID 攻击**（同 UID 进程可调用 mark 函数本身 —— 文档明确：该 gate
- * 保护的是 kernel 自身的构造流程，不冒充认证）。生产构造路径永远不会
- * 传入 branded test authority（RuntimeStateReceiptAuthority 与
- * FuseOverlayfsProjectionBackend 均无 brand）。
- *
- * 只有 tests/** 内的 fixture 类（TestReceiptAuthority）在构造时调用
- * mark —— 使「结构化对象 + 公开字符串」无法伪造授权。
+ * R7-01：生产模块不再提供任何 test authorization（公开 mark 函数已
+ * 删除 —— 公开可设置的 brand 可被任意调用方用于给任意对象授权）。
+ * fixture 正向测试只能通过 tests/** 内的明确 test-only composition
+ * （TestProjectionCoordinator 子类）进入 commit 校验路径；trustLevel、
+ * backend kind、WeakSet brand、TypeScript cast 都不授予 production
+ * World commit。authenticated verifier 尚未实现 → production World
+ * commit 结构性 fail-closed（PRODUCTION_WORLD_COMMIT_BLOCKED）。
  */
-const TEST_HARNESS_AUTHORITIES = new WeakSet<object>()
-
-export function markTestHarnessReceiptAuthority(authority: ProjectionReceiptAuthority): void {
-  TEST_HARNESS_AUTHORITIES.add(authority)
-}
-
-export function isTestHarnessReceiptAuthority(authority: ProjectionReceiptAuthority): boolean {
-  return TEST_HARNESS_AUTHORITIES.has(authority)
-}
-
 /**
  * 未来 authenticated verifier（MAC/signature、sealed IPC）的 brand ——
  * 当前**没有任何实现可设置**（不导出 mark）：production positive commit

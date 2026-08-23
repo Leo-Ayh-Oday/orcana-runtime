@@ -26,13 +26,12 @@ import type {
   ProjectionInstance,
 } from "../../../src/kernel/projection/backend"
 import { ProjectionError, projectionIntentDigest, type ProjectionExecutionIntent } from "../../../src/kernel/projection/contracts"
-import {
-  markTestHarnessReceiptAuthority,
-  type ProjectionReceiptAuthority,
-  type ProjectionReceiptBinding,
+import type {
+  ProjectionReceiptAuthority,
+  ProjectionReceiptBinding,
 } from "../../../src/kernel/projection/receipt-authority"
-import { markTestFixtureBackend } from "../../../src/kernel/projection/backend"
-import { expectedProjectionFilesystemPolicyDigest, type ProjectionExecutor } from "../../../src/kernel/projection/coordinator"
+
+import { ProjectionCoordinator, expectedProjectionFilesystemPolicyDigest, type ProjectionCoordinatorOptions, type ProjectionExecutor } from "../../../src/kernel/projection/coordinator"
 import { expectedProjectionCellSpecDigestForCell } from "../../../src/kernel/projection/spec-binding"
 import type { ProjectionExecutionOutcome } from "../../../src/kernel/projection/validator"
 import type { SandboxReceipt } from "../../../src/runtime/linux/contracts"
@@ -53,9 +52,7 @@ export class TestReceiptAuthority implements ProjectionReceiptAuthority {
   private readonly receipts = new Map<string, SandboxReceipt>()
 
   constructor(private readonly options: { cellSpecDigest?: string; cleanupFinalized?: boolean } = {}) {
-    // R6-01：test-only brand —— 只有真实 fixture 构造的实例携带；
-    // 普通结构化对象（公开字符串 trustLevel）无法伪造授权。
-    markTestHarnessReceiptAuthority(this)
+    // R7-01：test-only authority 只存在于 tests/**（无生产 brand）。
   }
 
   private key(runId: string, cellId: string): string {
@@ -259,10 +256,8 @@ export class CopyProjectionFixtureBackend implements Omit<NativeProjectionBacken
   readonly kind = "fixture" as const
   readonly testFixtureOnly = true
 
-  constructor() {
-    // R6-01：test-only brand —— 只有真实 fixture 构造的实例携带。
-    markTestFixtureBackend(this as unknown as NativeProjectionBackend)
-  }
+  // R7-01：生产模块不再提供 test-only brand —— fixture 只存在于 tests/**；
+  // 授权来自 tests/** 的 TestProjectionCoordinator test-only composition。
 
   create(input: CreateProjectionInput): ProjectionInstance {
     const label = assertSafeLabel(input.label)
@@ -319,5 +314,25 @@ export class CopyProjectionFixtureBackend implements Omit<NativeProjectionBacken
         return true
       },
     }
+  }
+}
+
+/**
+ * AK2-R7 —— 明确的 test-only composition（只存在于 tests/**）。
+
+ * 生产 ProjectionCoordinator 不再包含任何公开可设置的 test authorization
+ * （R7-01 已删除 mark* 导出）；production World commit 结构性 fail-closed。
+ * fixture 正向测试（receipt 身份/binding、生命周期、reservation 等）必须
+ * 通过本子类进入 commit 校验路径 —— 授权来自 tests/** 的显式子类，而非
+ * 生产导出面的任何可调用能力。trustLevel/kind/cast 无法绕过生产 gate。
+ */
+export class TestProjectionCoordinator extends ProjectionCoordinator {
+  constructor(options: ProjectionCoordinatorOptions) {
+    super(options)
+  }
+
+  /** test-only：绕过 production authority 门（生产类恒 fail-closed）。 */
+  protected isProductionCommitAuthorized(): boolean {
+    return true
   }
 }

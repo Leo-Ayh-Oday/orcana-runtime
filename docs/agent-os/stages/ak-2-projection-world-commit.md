@@ -844,3 +844,58 @@ merge、未建 PR；等待独立只读复审 —— 不复用实现者结论，�
 `READY_FOR_INDEPENDENT_AUDIT`（候选提交链 `3be4b86..HEAD`；未 push、未
 merge、未建 PR；等待独立只读复审 —— 不复用实现者结论，不写文件、不修复、
 不提交）。不得写 PASS / CLOSED / AK-2 COMPLETE / READY FOR AK-3。
+
+---
+
+## AK2-R7 Correction Gate（当前轮）
+
+RED 冻结 `b65e53e`（基线 421f1a7）；候选链 `b65e53e..<HEAD>`。
+证据包：`docs/agent-os/evidence/ak2-r7/README.md`。
+
+### 已闭合（R7-00-1..14 全绿）
+
+- **R7-01 公开 test authority 消除**：markTestFixtureBackend /
+  markTestHarnessReceiptAuthority 及 WeakSet brand 从生产导出面删除；
+  production commit 仅接受 authenticated brand（无实现可设置 → 结构性
+  fail-closed）；fixture 正向能力 = tests/** 的 TestProjectionCoordinator
+  子类；export inventory 覆盖 package/index/直接子模块/动态 require 面
+  （R7-00-1/2）。
+- **R7-02 final intent / cell spec 单一来源**：execute 两阶段构造完整
+  binding intent → expectedCellSpecDigest 由同一 intent 派生后冻结；
+  adapter 身份 envelope 契约确定性拒绝偏差
+  （PROJECTION_AUTHORITY_IDENTITY_ENVELOPE，R7-00-3）。
+- **R7-03 durable reservation**：RESERVED/DISPATCHED→UNKNOWN 合法 stale
+  边（单条条件 UPDATE 含时间窗）；全部转移 compare-and-swap（WHERE
+  status + changes===1），终态不可覆盖/复活（R7-00-4/5）；DISPATCHED 先于
+  executor 持久化，写入失败 → executor 从未启动 + 终态化 + cleanup
+  （R7-00-6）；cellId/receipt/cellSpecDigest/commitId 持久化；dispose 关闭
+  registry connection；reservation path 必填、parent/DB/sidecar
+  owner/mode/no-symlink fail-closed（不再默认 /tmp）。
+- **R7-04 cleanup/mount/root identity**：upper/work/merged 创建时身份记
+  录，删除分支全部先复核 —— foreign 替换不 rm/chmod/unmount（REAL FUSE，
+  R7-00-7）；root rename ≠ rootRemoved，retained fd 存活即拒绝删除与
+  World commit（R7-00-8）；cleanup 异常路径 finally 释放 retained child fd
+  （R7-00-9）。
+- **R7-05 world representation/typed manifest/reachability/snapshot fast
+  path**：commit 时单一规范化点解析 legacy representation 并贯穿
+  requestDigest/delta/ledger/materialized/replay（promotion 后零 divergence，
+  R7-00-10）；attestFileManifest 在 delta CAS 写入前强制认证 FileManifest
+  （raw 冒充 R7-00-11、DirectoryManifest 冒充 R7-00-12 拒绝）；manifest→
+  chunks link 进 reachability，GC/recovery 后存活可物化（R7-00-13）；
+  existing snapshot 快路径全 manifest bytes/typed identity/link attestation，
+  缺失/损坏 fail-closed 零 residue（R7-00-14）。测试调和 3 处
+  （store.test delta 格式、R7-00-13 物化语义对齐 R04、R7-00-14 residue 基
+  线移至删除后）—— 全部记录于证据包 §6，攻击目标未削弱。
+
+### OWNER-DECISION-REQUIRED
+
+- same-UID authenticated receipt（production commit 保持结构性
+  fail-closed）。
+- same-UID immutable upper seal（R5-00-9 / R6-00-14 维持 KNOWN RED）。
+- production B/cgroup lane 可用性（ENV_BLOCKED，非条件 PASS）。
+- durable reservation 宿主的 daemon 化/跨主机架构。
+
+### 最终状态
+
+`READY_FOR_INDEPENDENT_AUDIT`（未 push、未 merge、未建 PR；等待独立只读
+复审）。不得写 PASS / CLOSED / AK-2 COMPLETE / READY FOR AK-3。

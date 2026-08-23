@@ -170,7 +170,10 @@ function manifestInteger(value: unknown, context: string): number {
   return value as number
 }
 
-function parseManifestReferences(content: Buffer, digest: CasDigest): CasDigest[] {
+/** 解析 manifest canonical 内容中的引用集（file/directory/world-section/world）。
+ *  R7-05：导出供 commit preflight 与 snapshot attestation 复用（exact
+ *  reference set 必须与持久 CAS links 一致）。 */
+export function parseManifestReferences(content: Buffer, digest: CasDigest): CasDigest[] {
   let text: string
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(content)
@@ -763,6 +766,62 @@ export class WorldCas {
       throw new CasIntegrityError(`CAS object content is corrupt: ${digest}`)
     }
     return content
+  }
+
+  /**
+   * R7-05：typed FileManifest attestation —— CAS 对象必须是**经过认证**
+   * （isManifest）的 canonical FileManifest，且：
+   * - schema/type 正确（type 必须是 "file" —— DirectoryManifest 及其它
+   *   类型不得冒充 FileManifest）；
+   * - canonical 编码 / digest / chunk layout 正确（parseManifestReferences）；
+   * - 所有 chunk 对象真实存在且字节完整（size + sha256 自洽）；
+   * - 持久 cas_object link 集合与 manifest 声明引用完全一致。
+   * 未 attest 的 raw JSON 即使字节长得像 FileManifest 也不获得 manifest
+   * authority。任何不符 → CasIntegrityError（调用方必须在任何正式
+   * delta CAS 写入或 World mutation 前拒绝）。
+   */
+  attestFileManifest(digest: CasDigest): void {
+    const record = this.record(digest)
+    if (!record) {
+      throw new CasIntegrityError(`file-manifest content is not in CAS: ${digest}`)
+    }
+    if (!record.isManifest) {
+      throw new CasIntegrityError(
+        `file-manifest content is not an attested CAS manifest (raw bytes do not gain manifest authority): ${digest}`,
+      )
+    }
+    const content = this.get(digest)
+    const references = parseManifestReferences(content, digest)
+    let root: { type?: unknown }
+    try {
+      root = JSON.parse(content.toString("utf8")) as { type?: unknown }
+    } catch (error) {
+      // parseManifestReferences 已保证 canonical JSON —— 此分支防御性保留。
+      throw new CasIntegrityError(
+        `file-manifest ${digest} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    if (root.type !== "file") {
+      throw new CasIntegrityError(
+        `CAS manifest ${digest} is type "${String(root.type)}", not "file" — non-file manifests cannot impersonate a FileManifest`,
+      )
+    }
+    // 全部 chunk 真实存在且完整（get 强制 size + sha256 自洽）。
+    for (const reference of references) {
+      this.get(reference)
+    }
+    // 持久 link 集合必须与 manifest 内容声明完全一致。
+    const linked = this.linksForOwner("cas_object", digest)
+      .map(link => link.digest)
+      .sort(compareCanonicalStrings)
+    if (
+      linked.length !== references.length ||
+      linked.some((linkedDigest, index) => linkedDigest !== references[index])
+    ) {
+      throw new CasIntegrityError(
+        `file-manifest ${digest} persisted CAS links diverge from its declared references`,
+      )
+    }
   }
 
   link(ownerType: string, ownerId: string, digest: CasDigest): void {

@@ -132,6 +132,10 @@ describe("AK-1 WorldStore", () => {
             objectType: "file",
             path: "src/index.ts",
             contentRef: content.digest,
+            // R7-05：commit 时单一规范化点为 legacy file mutation 解析出显式
+            // representation 并写入 delta manifest / ledger（request digest、
+            // delta digest、replay、materialized state 使用同一规范化 mutation）。
+            representation: "raw",
             metadata: { language: "typescript" },
           },
         ],

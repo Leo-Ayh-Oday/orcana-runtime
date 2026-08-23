@@ -11,7 +11,8 @@ import type {
   WorldFaultPoint,
 } from "./contracts"
 import { WorldCorruptionError } from "./contracts"
-import { WorldCas } from "./cas"
+import { WorldCas, parseManifestReferences } from "./cas"
+import { compareCanonicalStrings } from "./canonical"
 import { dbAll, dbGet, dbRun, withImmediateTransaction } from "./database"
 import { WorldLedger } from "./ledger"
 import {
@@ -191,6 +192,11 @@ export class WorldSnapshotManager {
             detail: `revision ${world.currentRevision} already has snapshot ${existing.manifestDigest} but the derived world state now produces ${stored.digest} (attestation divergence; no CAS writes performed)`,
           }])
         }
+        // R7-05/R7-00-14：existing fast path 不允许只比较数据库中的旧
+        // digest —— 全部 manifest 的 bytes、typed identity 与 link 必须
+        // 在 CAS 中真实存在且一致。任一缺失/损坏 → fail-closed（不返回
+        // 损坏 snapshot）。本 attest 只读：零 CAS 写入、零 residue。
+        this.attestExistingSnapshot(existing)
         return existing
       }
       // existing 不存在 → 物理写入（putManifest；引用已只读校验通过，
@@ -278,6 +284,87 @@ export class WorldSnapshotManager {
       }
       return result
     })
+  }
+
+  /** R7-05/R7-00-14：existing snapshot 快路径的完整 attestation ——
+   *  1) 七个 manifest（world/filesystem/memory/task/capability/services/
+   *     artifacts）全部注册且 bytes 存在（size+sha256 自洽）；
+   *  2) 每个 manifest 通过 typed canonical 解析（parseManifestReferences）；
+   *  3) world manifest 声明的 section 引用集与 snapshot 记录完全一致；
+   *  4) snapshot owner link 集合恰好覆盖七个 manifest；
+   *  5) 每个 manifest 自身的 cas_object link 集合与其声明引用完全一致。
+   *  任一不符 → WorldCorruptionError（LEDGER_DB_DIVERGENCE）。只读。 */
+  private attestExistingSnapshot(existing: WorldSnapshot): void {
+    const sections: readonly (readonly [string, CasDigest])[] = [
+      ["world", existing.manifestDigest],
+      ["filesystem", existing.filesystemDigest],
+      ["memory", existing.memoryDigest],
+      ["task-state", existing.taskStateDigest],
+      ["capability-state", existing.capabilityStateDigest],
+      ["services", existing.serviceStateDigest],
+      ["artifacts", existing.artifactStateDigest],
+    ]
+    const fail = (detail: string): never => {
+      throw new WorldCorruptionError([{
+        code: "LEDGER_DB_DIVERGENCE",
+        worldId: existing.worldId,
+        detail: `existing snapshot ${existing.snapshotId} failed attestation (fail-closed; no CAS writes performed): ${detail}`,
+      }])
+    }
+    const declaredByManifest = new Map<CasDigest, readonly CasDigest[]>()
+    for (const [label, digest] of sections) {
+      let content: Buffer
+      try {
+        content = this.cas.get(digest)
+      } catch (error) {
+        fail(`manifest ${label} ${digest} is missing or corrupt (${error instanceof Error ? error.message : String(error)})`)
+      }
+      let references: readonly CasDigest[]
+      try {
+        references = parseManifestReferences(content!, digest)
+      } catch (error) {
+        fail(`manifest ${label} ${digest} fails typed canonical attestation (${error instanceof Error ? error.message : String(error)})`)
+      }
+      declaredByManifest.set(digest, references!)
+    }
+    // world manifest 的 section 引用集必须与 snapshot 记录完全一致。
+    {
+      const expectedSections = [...new Set(sections.slice(1).map(([, digest]) => digest))]
+        .sort(compareCanonicalStrings)
+      const declaredWorld = declaredByManifest.get(existing.manifestDigest)!
+      if (
+        expectedSections.length !== declaredWorld.length ||
+        expectedSections.some((digest, index) => digest !== declaredWorld[index])
+      ) {
+        fail("world manifest section references diverge from the snapshot record")
+      }
+    }
+    // snapshot owner links 必须恰好覆盖七个 manifest（无缺、无多）。
+    {
+      const expectedLinks = [...new Set(sections.map(([, digest]) => digest))]
+        .sort(compareCanonicalStrings)
+      const actualLinks = this.cas.linksForOwner("snapshot", existing.snapshotId)
+        .map(link => link.digest)
+        .sort(compareCanonicalStrings)
+      if (
+        expectedLinks.length !== actualLinks.length ||
+        expectedLinks.some((digest, index) => digest !== actualLinks[index])
+      ) {
+        fail("snapshot owner links diverge from its seven manifests")
+      }
+    }
+    // 每个 manifest 自身的 cas_object link 集合必须与其声明引用完全一致。
+    for (const [digest, references] of declaredByManifest) {
+      const linked = this.cas.linksForOwner("cas_object", digest)
+        .map(link => link.digest)
+        .sort(compareCanonicalStrings)
+      if (
+        linked.length !== references.length ||
+        linked.some((linkedDigest, index) => linkedDigest !== references[index])
+      ) {
+        fail(`manifest ${digest} persisted cas_object links diverge from its declared references`)
+      }
+    }
   }
 
   get(snapshotId: string): WorldSnapshot | undefined {

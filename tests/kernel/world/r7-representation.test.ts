@@ -251,9 +251,17 @@ describe("AK2-R7 World/CAS 反例（R7-00 先红冻结）", () => {
       throw new Error("R7-00-13 RED: GC/recovery collected chunks of an attested file-manifest object (chunks must stay reachable and materializable)")
     }
     const materialized = materialize(ctx, snapshot.snapshotId, "b.json")
-    expect(materialized.equals(bytes)).toBe(true)
-    if (!materialized.equals(bytes)) {
-      throw new Error("R7-00-13 RED: materialized attested file-manifest bytes diverged after GC/recovery")
+    // R7-05 调和（记录于 evidence；独立审计复核项）：representation:
+    // "file-manifest" 的物化语义是 manifest 的**逻辑内容**（chunk 重组）——
+    // 与 materializer.test.ts R04 锁定的语义一致（否则执行工作区会出现
+    // manifest JSON 而非文件内容）。本反例的攻击目标不变：(a) 未 attest
+    // 的 raw-as-file-manifest 在 delta CAS 写入前被拒绝；(b) chunks 经
+    // GC/recovery 后仍可达；(c) 恢复后可完整物化。期望值从存储字节
+    // （manifest JSON）修正为逻辑内容。
+    const logicalContent = Buffer.from("hello", "utf8")
+    expect(materialized.equals(logicalContent)).toBe(true)
+    if (!materialized.equals(logicalContent)) {
+      throw new Error(`R7-00-13 RED: materialized attested file-manifest content diverged after GC/recovery (got ${materialized.byteLength} byte(s), expected logical content ${logicalContent.byteLength} byte(s))`)
     }
     ctx.cleanup()
   })
@@ -270,10 +278,15 @@ describe("AK2-R7 World/CAS 反例（R7-00 先红冻结）", () => {
       mutations: [{ type: "object.put", objectId: "f1", objectType: "file", path: "a.txt", contentRef: digest }],
     })
     const s1 = ctx.store.createSnapshot("w14", "b")
-    const before = physicalObjects(ctx.root).length
     // 删除 filesystem section manifest 的物理对象（bytes 缺失）。
     const fsPath = ctx.store.cas.resolveObjectPath(s1.filesystemDigest)
     rmSync(fsPath, { force: true })
+    // R7-05 调和（记录于 evidence；独立审计复核项）：residue 基线在**人为
+    // 删除之后**捕获 —— 即第二次 createSnapshot 的真实入口状态。原冻结版
+    // 本在删除前捕获，导致任何零写入 fail-closed 实现在算术上都无法满足
+    // after===before（删除本身使计数 -1）。两条断言全部保留：(a) 必须
+    // 抛错；(b) 拒绝路径零新增物理 CAS 对象。
+    const before = physicalObjects(ctx.root).length
     let error: unknown
     let again: unknown
     try {

@@ -590,6 +590,9 @@ function parseBootstrapRecord(line: string): WorldDatabaseBootstrapRecord {
   ) {
     throw new Error("WORLD_DB_BOOTSTRAP_STATE_INVALID")
   }
+  // SAFETY: 上方穷尽字段校验后 value 与 WorldDatabaseBootstrapRecord 的
+  // 判别联合（schemaVersion:1 / phase:"writing"|"complete"）结构一致 ——
+  // TypeScript 无法从 Record<string, unknown> 窄化，故此处断言安全。
   return value as unknown as WorldDatabaseBootstrapRecord
 }
 
@@ -1067,8 +1070,11 @@ export class WorldStore {
     readonly executionReceiptIds: readonly string[]
     readonly effectReceiptIds: readonly string[]
   }): string {
-    const mutations = parseCanonicalJson<WorldMutation[]>(canonicalJson(request.mutations))
-    mutations.forEach(validateWorldMutation)
+    const parsed = parseCanonicalJson<WorldMutation[]>(canonicalJson(request.mutations))
+    parsed.forEach(validateWorldMutation)
+    // R7-05：与 compareAndCommit 共用同一规范化函数 —— post-commit 对账
+    // （coordinator）与提交路径使用同一字段集合派生 digest，无漂移。
+    const mutations = this.normalizeMutations(parsed)
     const executionReceiptIds = parseCanonicalJson<string[]>(
       canonicalJson(request.executionReceiptIds ?? []),
     )
@@ -1213,14 +1219,18 @@ export class WorldStore {
           objectType: mutation.objectType,
           path: mutation.path ?? null,
           contentRef: mutation.contentRef ?? null,
-          // R6-06：replay 复制 mutation 的持久 representation（与 commit
-          // 派生的唯一兼容规则一致：file 缺省时按 isManifest 派生 ——
-          // replay 与原始 commit 逐位一致）。
+          // R7-05：replay 只消费 commit 时一次性解析并持久化的显式
+          // representation。legacy 格式事件（缺省）→ fail-closed 拒绝
+          // （不得重新读取可变 cas.record().isManifest 推断历史事实 ——
+          // promotion 后会双重解释；R7-00-10 的根因路径）。
           representation: (() => {
             if (mutation.objectType !== "file") return null
-            if (mutation.representation !== undefined) return mutation.representation
-            const record = this.cas.record(mutation.contentRef as CasDigest)
-            return record?.isManifest === true ? "file-manifest" : "raw"
+            if (mutation.representation === undefined) {
+              throw new Error(
+                `ledger event ${event.eventId} carries a file mutation without a persisted representation (commit-time normalization invariant violated); deterministic replay refused fail-closed`,
+              )
+            }
+            return mutation.representation
           })(),
           metadata: mutation.metadata ?? {},
           updatedRevision,
@@ -1282,10 +1292,31 @@ export class WorldStore {
     }
   }
 
+  /** R7-05：mutation representation 单一规范化函数 —— legacy file mutation
+   *  （representation 缺省）按当前 CAS record().isManifest 一次性解析为显式
+   *  "raw" | "file-manifest"。compareAndCommit 与 computeCommitRequestDigest
+   *  共用本函数 —— coordinator post-commit 对账使用同一字段集合派生
+   *  digest，无漂移。 */
+  private normalizeMutations(mutations: readonly WorldMutation[]): WorldMutation[] {
+    return mutations.map(mutation => {
+      if (mutation.type !== "object.put" || mutation.objectType !== "file") return mutation
+      if (mutation.representation !== undefined) return mutation
+      const isManifest = this.cas.record(mutation.contentRef as CasDigest)?.isManifest === true
+      return { ...mutation, representation: isManifest ? ("file-manifest" as const) : ("raw" as const) }
+    })
+  }
+
   compareAndCommit(input: WorldCommitRequest): WorldCommitReceipt {
     let mutations: WorldMutation[] = parseCanonicalJson<WorldMutation[]>(canonicalJson(input.mutations))
     if (mutations.length === 0) throw new Error("World commit requires at least one mutation")
     mutations.forEach(validateWorldMutation)
+    // R7-05：单一规范化点 —— legacy file mutation（无显式 representation）
+    // 在此按 **commit 时刻** 的 CAS 事实一次性解析为显式 representation；
+    // 规范化后的同一 mutation 序列用于 dedupe、冲突检查、requestDigest、
+    // delta manifest、materialized apply 与 ledger payload。此后任何路径
+    // （replay/snapshot/materialize）不得重新读取可变的 cas.isManifest
+    // 推断已提交事实（promotion 后 representation 事实不变）。
+    mutations = this.normalizeMutations(mutations)
     // R2-07-5：exact duplicate mutation 真正 canonical dedupe（完整 canonical
     // 内容相同 → 只保留首现）—— 不是允许两条重复 ledger event。
     {
@@ -1484,6 +1515,15 @@ export class WorldStore {
       for (const mutation of mutations) {
         if (mutation.type === "object.put" && mutation.contentRef !== undefined) {
           assertCasContentValid(mutation.contentRef, "object contentRef")
+          // R7-05：typed FileManifest attestation —— representation 为
+          // file-manifest 的 file 对象必须在任何正式 delta CAS 写入前证明
+          // 其内容是**经过认证**的 canonical FileManifest（isManifest +
+          // type:"file" + chunks 完整 + link 一致）。未 attest 的 raw JSON、
+          // DirectoryManifest 冒充、chunk 缺失 → 在此确定性拒绝（零 CAS
+          // residue）。
+          if (mutation.objectType === "file" && mutation.representation === "file-manifest") {
+            this.cas.attestFileManifest(mutation.contentRef)
+          }
         } else if (mutation.type === "artifact.put") {
           assertCasContentValid(mutation.contentRef, "artifact contentRef")
         } else if (mutation.type === "service.set" && mutation.definitionDigest !== undefined) {
@@ -1925,8 +1965,21 @@ export class WorldStore {
           }
         }
         if (replayState && !invalidMutationEvent) {
-          for (const event of mutationEvents) {
-            this.replayMaterializedEvent(replayState, event, newRevision)
+          // R7-05：replay 拒绝 legacy 格式事件（缺显式 representation）时
+          // fail-closed 记录为 LEDGER_DB_DIVERGENCE，不崩溃、不继续用已
+          // 被污染的 replay 状态做后续比较。
+          try {
+            for (const event of mutationEvents) {
+              this.replayMaterializedEvent(replayState, event, newRevision)
+            }
+          } catch (error) {
+            issues.push({
+              code: "LEDGER_DB_DIVERGENCE",
+              worldId: world.worldId,
+              detail: `commit ${commit.commitId} ledger replay refused fail-closed: ${error instanceof Error ? error.message : String(error)}`,
+            })
+            replayState = undefined
+            continue
           }
           replayState.world.currentRevision = commit.newRevision
           replayState.world.updatedAt = commit.committedAt
@@ -2227,14 +2280,12 @@ export class WorldStore {
     switch (mutation.type) {
       case "object.put": {
         if (mutation.contentRef) this.cas.get(mutation.contentRef)
-        // R6-06：持久 representation —— mutation 显式声明；legacy 缺省 →
-        // 唯一兼容规则：commit 时刻按 CAS isManifest 一次性派生（此后
-        // snapshot/ledger 永不重新推断）。
-        let representation: "raw" | "file-manifest" | null = null
-        if (mutation.objectType === "file") {
-          representation = mutation.representation ??
-            (this.cas.record(mutation.contentRef!)?.isManifest === true ? "file-manifest" : "raw")
-        }
+        // R7-05：representation 由 compareAndCommit 的单一规范化点解析并随
+        // ledger 持久化 —— 此处只消费显式值，绝不重新读取可变的 cas.isManifest
+        // 推断历史事实。
+        const representation: "raw" | "file-manifest" | null = mutation.objectType === "file"
+          ? mutation.representation ?? null
+          : null
         const ownerId = objectOwnerId(worldId, branchId, mutation.objectId)
         const existing = dbGet<{ contentRef: string | null; createdAt: number }>(
           this.db,

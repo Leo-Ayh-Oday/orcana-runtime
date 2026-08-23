@@ -18,7 +18,6 @@
  */
 
 import {
-  chmodSync,
   closeSync,
   constants as fsConstants,
   existsSync,
@@ -27,7 +26,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readdirSync,
   rmdirSync,
 } from "node:fs"
 import { canonicalJson, sha256Digest } from "../world/canonical"
@@ -36,7 +34,7 @@ import { tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
 import { WorldConflictError } from "../world/contracts"
 import type { WorldStore } from "../world/store"
-import { type NativeProjectionBackend, type ProjectionInstance } from "./backend"
+import type { NativeProjectionBackend, ProjectionInstance } from "./backend"
 import type { WorldProjectionPlan, WorldProjectionReceipt } from "./contracts"
 import {
   DEFAULT_PROJECTION_LIMITS,
@@ -62,7 +60,7 @@ import {
 } from "./receipt-authority"
 import { removeTreeAnchored } from "./anchored-fs"
 import { randomUUID } from "node:crypto"
-import { type IntentReservationInput } from "./intent-reservation"
+import type { IntentReservationInput } from "./intent-reservation"
 import { DurableIntentReservation } from "./intent-reservation"
 import {
   expectedProjectionCellSpecDigest,
@@ -173,9 +171,10 @@ export interface ProjectionCoordinatorOptions {
    *  身份后、base dir 创建 / 物化前调用（R6-00-9 反例的确定性 child-swap
    *  窗口）。无此选项时零开销（undefined 短路）。 */
   readonly onAfterChildOpened?: (projectionRoot: string) => void
-  /** R6-02：durable intent reservation 持久化路径（缺省 = 共享默认位置；
-   *  测试传独立路径隔离）。 */
-  readonly intentReservationPath?: string
+  /** R6-02：durable intent reservation 持久化路径。R7-03 起为必填
+   *  kernel 配置（构造时运行时强制，缺省即拒绝 —— durable authority
+   *  不依赖易失 /tmp）；类型层同步必填以避免误导集成方。 */
+  readonly intentReservationPath: string
 }
 
 /** 单一 cleanup 状态机结果。 */
@@ -467,7 +466,6 @@ export class ProjectionCoordinator {
   private readonly receiptAuthority: ProjectionReceiptAuthority
   private readonly onBeforeProjectionRootOpen?: (root: string) => void
   private readonly onBeforeChildCreate?: (baseRoot: string) => void
-  private readonly onBeforeBaseMkdir?: (basePath: string) => void
   private readonly onAfterChildOpened?: (projectionRoot: string) => void
   /** R5-02：可信 projection base root authority（retained dirfd）。 */
   private readonly baseRoot: ProjectionBaseRootAuthority
@@ -500,7 +498,6 @@ export class ProjectionCoordinator {
     this.receiptAuthority = validateProjectionReceiptAuthority(options.receiptAuthority)
     this.onBeforeProjectionRootOpen = options.onBeforeProjectionRootOpen
     this.onBeforeChildCreate = options.onBeforeChildCreate
-    this.onBeforeBaseMkdir = options.onBeforeBaseMkdir
     this.onAfterChildOpened = options.onAfterChildOpened
     this.baseProjectionRoot = options.projectionRoot ?? join(tmpdir(), "orcana-ak2")
     this.baseRoot = new ProjectionBaseRootAuthority(resolve(this.baseProjectionRoot), options.onBeforeBaseMkdir)
@@ -711,8 +708,11 @@ export class ProjectionCoordinator {
       if (childFdOpen === true && rootFd !== undefined) {
         try {
           closeSync(rootFd)
-        } catch {
-          // 已关闭
+        } catch (closeError) {
+          if ((closeError as NodeJS.ErrnoException)?.code !== "EBADF") {
+            console.error(`[ak2] closeSync(retained child fd) failed:`, closeError)
+          }
+          // EBADF → 已关闭（幂等竞态）；其它错误上报但不掩盖主失败。
         }
       }
       // R5-00-4/R5-03：instance 已创建 → 任何后续失败必须先调用
@@ -840,14 +840,36 @@ export class ProjectionCoordinator {
     // R7-03：durable 一次性 reservation —— **在任意 executor/broker 调用
     // 之前**发生；跨 adapter / coordinator / 进程 / 重启都不可复用。
     // 保留失败（含重建后的 registry）→ terminalize + 精确错误码。
-    if (!this.intentRegistry.reserveDetailed({
-      intentId: intent.intentId,
-      worldId: intent.worldId,
-      branchId: intent.branchId,
-      snapshotId: intent.snapshotId,
-      projectionId: intent.projectionId,
-      sessionNonce: intent.sessionNonce,
-    })) {
+    // R7 审计跟进：reserveDetailed 本身抛错（SQLite 写入故障等）同样不得
+    // 逃逸 —— 与 markDispatched 失败同路径：executor 从未启动 + 统一
+    // 终态化（settlement 对行不确定的情况可观测地记录，行保留供
+    // reconcile）。
+    let reserved = false
+    try {
+      reserved = this.intentRegistry.reserveDetailed({
+        intentId: intent.intentId,
+        worldId: intent.worldId,
+        branchId: intent.branchId,
+        snapshotId: intent.snapshotId,
+        projectionId: intent.projectionId,
+        sessionNonce: intent.sessionNonce,
+      })
+    } catch (error) {
+      // 行是否落库不确定 → 纳入 owned（terminalize settlement 会尝试
+      // markRejected；无行时该写入的显式失败记入 receipt reason，不静默）。
+      this.ownedReservations.add(session)
+      this.terminalize(
+        session,
+        "rejected",
+        `durable reservation write failed before executor start: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      throw new ProjectionError(
+        "EXECUTION_RECEIPT_BINDING_MISMATCH",
+        "durable reservation write failed before executor start; session terminalized and cleaned",
+        error,
+      )
+    }
+    if (!reserved) {
       this.terminalize(
         session,
         "rejected",
@@ -877,7 +899,7 @@ export class ProjectionCoordinator {
       )
     }
     let outcome: ProjectionExecutionOutcome | undefined
-    let terminalFailure: unknown = undefined
+    let terminalFailure: unknown
     let executionPromise: Promise<ProjectionExecutionOutcome> | undefined
     try {
       // R6-04-6：executor 调用位于 try/terminal guard 内 —— **同步 throw**
@@ -1517,7 +1539,7 @@ export class ProjectionCoordinator {
       try {
         this.removeVerifiedProjectionRoot(session)
         rootRemoved = true
-      } catch (error) {
+      } catch {
         rootRemoved = false
         residue = session.projectionRoot
       }
@@ -1593,8 +1615,11 @@ export class ProjectionCoordinator {
     if (session.rootFd === undefined) return
     try {
       closeSync(session.rootFd)
-    } catch {
-      // 已关闭
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "EBADF") {
+        console.error(`[ak2] closeSync(session root fd) failed:`, error)
+      }
+      // EBADF → 已关闭（幂等竞态）；其它错误上报但不掩盖清理主流程。
     }
     session.rootFd = undefined
   }

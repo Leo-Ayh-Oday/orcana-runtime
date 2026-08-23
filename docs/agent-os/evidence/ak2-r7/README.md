@@ -254,6 +254,38 @@ QUARANTINED 7 个（provider lane，缺 DEEPSEEK_API_KEY + 网络）——按设
   bytes+link 检查占优；该位仅 putManifest 单调 0→1 可写，schema 触发器
   保护）。
 
+### 9.2 第二轮独立审计（三路并行，互相隔离）及跟进修复
+
+应用方要求追加多轮审计。三个互相隔离的新 Agent 对同一固定对象并行审
+计（动态验证型 worker / 反例武装度对抗 reviewer / 新攻击面 reviewer），
+结论均为 **READY_FOR_INDEPENDENT_AUDIT（0 BLOCKER / 0 MAJOR）**：
+
+- 动态轮实测：聚焦反例连续两次 14/14；projection+world 全目录
+  319 pass / 1 fail（唯一失败 R5-00-9 KNOWN RED 消息逐字核验）；
+  typecheck exit 0；双范围 diff --check 通过；白名单 21 文件零越界；
+  提交链父子关系与 b65e53e 未 amend 实证。
+- 反例武装度轮独立推演确认：R7-00-13/R7-00-14 两处调和在对应实现缺陷
+  下仍会变红（攻击目标全保留）；生产 gate 结构性恒 false、barrel/子模
+  块导出面无 test 能力、src 无 tests 反向依赖、reservation path 无
+  /tmp 默认残留。
+- 新面轮确认 scanner→commit 表示一致、materializer 无双重解释、
+  verifyIntegrity replay 跳过策略无漏报盲区、事务边界足以串行化并发
+  gc/recover 与 attest、envelope 错误路径保证 terminalize。
+
+跟进修复（本轮新增提交；两处均非阻塞但采纳）：
+1. `ProjectionCoordinatorOptions.intentReservationPath` 类型层同步必填
+   （原可选类型与运行时强制矛盾——元数据诚实性），修正过时注释。
+2. `reserveDetailed` 抛错（SQLite 写入故障）不再逃逸 execute()：与
+   markDispatched 失败同路径 —— executor 从未启动 + 统一终态化 +
+   settlement 可观测记录（行保留供 reconcile）。
+
+记录不修复（防御纵深/无生产调用方）：attestFileManifest/putManifest 缺
+size/chunk 数上限预检（DoS 纵深不对称；生产唯一 compareAndCommit 调用
+方只产 raw mutations）；便捷 `reserve(intentId)` 空元数据脚枪（被冻结反
+例测试使用中）。
+另附带 lint 级清理：coordinator.ts 未使用 import/私有字段移除、两处基
+线空 catch 升级为 EBADF 条件性上报。
+
 ## 10. Runtime residue 清理
 
 仅清理本任务拥有的资源：per-test mkdtemp 目录经 afterEach/finally 删除；

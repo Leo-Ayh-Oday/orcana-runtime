@@ -12,6 +12,8 @@
  */
 
 import type { TransactionEvidenceBinding, VerificationKind, VerificationResult } from "../verification/result"
+import { computeEvidenceConfidence, DEFAULT_EVIDENCE_DECAY_CONFIG, findDecayedEvidence } from "./evidence-decay"
+import type { EvidenceConfidence, EvidenceDecayConfig } from "./evidence-decay"
 import type { TaskTracker } from "./task-tracker"
 import { computeReceiptDigest } from "../runtime/linux/receipt"
 
@@ -62,11 +64,31 @@ export interface EvidenceEntry {
   /** H8: marked stale by artifact freshness invalidation (§14.3). A stale entry
    *  can never satisfy the completion gate. */
   stale?: boolean
+  /** [RFC #7 v2] Files this evidence covered (for confidence decay). Absent on
+   *  legacy entries — treated as "coverage unknown" (neutral scope factor). */
+  coveredFiles?: string[]
+  /** [RFC #7 v2] Computed confidence breakdown. Present only when evidence
+   *  decay tracking is enabled on the ledger; the completion gate enforces the
+   *  threshold only for entries that carry it. */
+  confidence?: EvidenceConfidence
 }
 
 /** Collection of all evidence gathered during a task. */
 export interface EvidenceLedger {
   entries: EvidenceEntry[]
+  /** [RFC #7 v2] Confidence-decay tracking state. Absent on legacy ledgers —
+   *  decay is opt-in via enableEvidenceDecay() and fully backward compatible. */
+  decay?: EvidenceDecayState
+}
+
+/** [RFC #7 v2] Ledger-level state for confidence decay. */
+export interface EvidenceDecayState {
+  /** Files changed since evidence collection (accumulated, de-duplicated). */
+  changedFiles: string[]
+  /** The task's total affected scope; scope coverage is neutral when absent. */
+  totalAffectedFiles?: string[]
+  /** Active decay configuration. */
+  config: EvidenceDecayConfig
 }
 
 /** Result of the canClaimDone() hard check. */
@@ -157,6 +179,75 @@ export function markEvidenceStale(ledger: EvidenceLedger, artifactId: string): v
   }
 }
 
+// ── [RFC #7 v2] Confidence decay integration ──
+
+/** Enable confidence-decay tracking on a ledger (opt-in).
+ *
+ *  Computes confidence for already-collected entries and attaches the decay
+ *  state; subsequent ingestion automatically stamps new entries. The
+ *  completion gate only enforces the confidence threshold while this is
+ *  active, so existing flows are unaffected until they opt in. */
+export function enableEvidenceDecay(
+  ledger: EvidenceLedger,
+  opts?: { totalAffectedFiles?: string[]; config?: Partial<EvidenceDecayConfig> },
+): void {
+  const config: EvidenceDecayConfig = {
+    ...DEFAULT_EVIDENCE_DECAY_CONFIG,
+    ...(opts?.config ?? {}),
+  }
+  ledger.decay = {
+    changedFiles: ledger.decay?.changedFiles ?? [],
+    totalAffectedFiles: opts?.totalAffectedFiles ?? ledger.decay?.totalAffectedFiles,
+    config,
+  }
+  recomputeEvidenceConfidence(ledger)
+}
+
+/** Declare (or update) the task's affected file scope, then recompute. */
+export function setEvidenceScope(ledger: EvidenceLedger, totalAffectedFiles: string[]): void {
+  if (!ledger.decay) ledger.decay = { changedFiles: [], config: { ...DEFAULT_EVIDENCE_DECAY_CONFIG } }
+  ledger.decay.totalAffectedFiles = [...totalAffectedFiles]
+  recomputeEvidenceConfidence(ledger)
+}
+
+/** Record files changed after evidence collection and recompute confidence.
+ *
+ *  Direct changes (files an entry covered) hit that entry hard; indirect
+ *  drift (scope files it did not cover) is a mild penalty — see
+ *  calcInvalidationFactor(). */
+export function recordFilesChanged(ledger: EvidenceLedger, files: string[]): void {
+  if (!ledger.decay) ledger.decay = { changedFiles: [], config: { ...DEFAULT_EVIDENCE_DECAY_CONFIG } }
+  const set = new Set(ledger.decay.changedFiles)
+  for (const f of files) set.add(f)
+  ledger.decay.changedFiles = [...set]
+  recomputeEvidenceConfidence(ledger)
+}
+
+/** Recompute the confidence breakdown of every entry (idempotent). */
+export function recomputeEvidenceConfidence(ledger: EvidenceLedger, now?: number): void {
+  if (!ledger.decay) return
+  for (const entry of ledger.entries) {
+    entry.confidence = computeEvidenceConfidence({
+      kind: entry.kind,
+      collectedAt: entry.timestamp,
+      coveredFiles: entry.coveredFiles,
+      changedFiles: ledger.decay.changedFiles,
+      totalAffectedFiles: ledger.decay.totalAffectedFiles ?? entry.coveredFiles,
+      config: ledger.decay.config,
+      now,
+    })
+  }
+}
+
+/** Entries whose computed confidence fell below the threshold. */
+export function decayedEvidence(ledger: EvidenceLedger, minConfidence?: number): EvidenceEntry[] {
+  const confidences = ledger.entries
+    .filter(e => e.confidence !== undefined)
+    .map(e => e.confidence as EvidenceConfidence)
+  const decayed = new Set(findDecayedEvidence(confidences, minConfidence))
+  return ledger.entries.filter(e => e.confidence !== undefined && decayed.has(e.confidence))
+}
+
 /** Check whether the ledger has at least one passed evidence entry of the given kind. */
 export function hasEvidence(ledger: EvidenceLedger, kind: EvidenceKind): boolean {
   return ledger.entries.some(e => e.kind === kind && e.passed)
@@ -238,7 +329,7 @@ function cloneTransactionEvidenceBinding(
  *  A single VerificationResult may produce evidence for its primary kind.
  *  Returns the newly added entries.
  */
-export function ingestVerificationResult(ledger: EvidenceLedger, result: VerificationResult, txId?: string, generation?: number): EvidenceEntry | null {
+export function ingestVerificationResult(ledger: EvidenceLedger, result: VerificationResult, txId?: string, generation?: number, coveredFiles?: string[]): EvidenceEntry | null {
   const kind = toEvidenceKind(result.kind)
   if (!kind) return null
 
@@ -252,9 +343,25 @@ export function ingestVerificationResult(ledger: EvidenceLedger, result: Verific
     txId,
     generation: result.generation ?? generation,
     transaction: cloneTransactionEvidenceBinding(result.transaction),
+    coveredFiles,
   }
   addEvidence(ledger, entry)
+  stampEntryConfidence(ledger, entry)
   return entry
+}
+
+/** [RFC #7 v2] Attach a confidence breakdown to a freshly added entry when
+ *  decay tracking is active. No-op otherwise (legacy behavior). */
+function stampEntryConfidence(ledger: EvidenceLedger, entry: EvidenceEntry): void {
+  if (!ledger.decay) return
+  entry.confidence = computeEvidenceConfidence({
+    kind: entry.kind,
+    collectedAt: entry.timestamp,
+    coveredFiles: entry.coveredFiles,
+    changedFiles: ledger.decay.changedFiles,
+    totalAffectedFiles: ledger.decay.totalAffectedFiles ?? entry.coveredFiles,
+    config: ledger.decay.config,
+  })
 }
 
 /** Batch-ingest multiple verification results. */
@@ -276,6 +383,8 @@ export function ingestTypecheck(ledger: EvidenceLedger, opts: {
   output: string
   command?: string
   generation?: number
+  /** [RFC #7 v2] Files this typecheck covered. */
+  coveredFiles?: string[]
 }): EvidenceEntry {
   const entry: EvidenceEntry = {
     id: generateEvidenceId(),
@@ -287,8 +396,10 @@ export function ingestTypecheck(ledger: EvidenceLedger, opts: {
     issues: opts.issues,
     timestamp: Date.now(),
     generation: opts.generation,
+    coveredFiles: opts.coveredFiles,
   }
   addEvidence(ledger, entry)
+  stampEntryConfidence(ledger, entry)
   return entry
 }
 
@@ -306,6 +417,8 @@ export function addManualEvidence(ledger: EvidenceLedger, opts: {
   txId?: string
   generation?: number
   transaction?: TransactionEvidenceBinding
+  /** [RFC #7 v2] Files this manual verification covered. */
+  coveredFiles?: string[]
 }): EvidenceEntry {
   const entry: EvidenceEntry = {
     id: generateEvidenceId(),
@@ -317,8 +430,10 @@ export function addManualEvidence(ledger: EvidenceLedger, opts: {
     txId: opts.txId,
     generation: opts.generation,
     transaction: cloneTransactionEvidenceBinding(opts.transaction),
+    coveredFiles: opts.coveredFiles,
   }
   addEvidence(ledger, entry)
+  stampEntryConfidence(ledger, entry)
   return entry
 }
 
@@ -363,6 +478,10 @@ export function canClaimDone(params: {
   evidenceBinding?: TransactionEvidenceBinding
   /** Fail closed when writes occurred but no authoritative commit history exists. */
   requireEvidenceBinding?: boolean
+  /** [RFC #7 v2] Confidence threshold for required evidence. Defaults to the
+   *  ledger's decay config (or 0.5). Only enforced for entries that carry a
+   *  computed confidence — legacy entries are unaffected. */
+  minConfidence?: number
 }): CanClaimDoneResult {
   const {
     tracker,
@@ -372,7 +491,10 @@ export function canClaimDone(params: {
     currentGeneration,
     evidenceBinding,
     requireEvidenceBinding = false,
+    minConfidence,
   } = params
+  const confidenceThreshold =
+    minConfidence ?? evidence.decay?.config.minConfidence ?? DEFAULT_EVIDENCE_DECAY_CONFIG.minConfidence
   const missing: string[] = []
   const blocked: string[] = []
 
@@ -417,6 +539,16 @@ export function canClaimDone(params: {
 
   for (const kind of required) {
     if (hasFreshPassingEvidence(evidence, kind, currentGeneration, evidenceBinding, requireEvidenceBinding)) {
+      // [RFC #7 v2] Confidence threshold: only entries that carry a computed
+      // confidence are gated; legacy entries (no decay tracking) pass through.
+      const latest = latestEvidence(evidence, kind)
+      if (latest?.confidence && latest.confidence.confidence < confidenceThreshold) {
+        unsatisfied.push(kind)
+        missing.push(
+          `证据置信度过低: ${evidenceKindLabel(kind)} (${latest.confidence.confidence.toFixed(2)} < ${confidenceThreshold.toFixed(2)})`,
+        )
+        continue
+      }
       satisfied.push(kind)
     } else {
       unsatisfied.push(kind)
@@ -525,10 +657,13 @@ export interface SerializedEvidenceEntry {
   transaction?: TransactionEvidenceBinding
   artifactId?: string
   stale?: boolean
+  coveredFiles?: string[]
+  confidence?: EvidenceConfidence
 }
 
 export interface SerializedLedger {
   entries: SerializedEvidenceEntry[]
+  decay?: EvidenceDecayState
 }
 
 /** Serialize evidence ledger for checkpoint/transmission. */
@@ -546,7 +681,18 @@ export function serializeLedger(ledger: EvidenceLedger): SerializedLedger {
       transaction: cloneTransactionEvidenceBinding(e.transaction),
       artifactId: e.artifactId,
       stale: e.stale,
+      coveredFiles: e.coveredFiles ? [...e.coveredFiles] : undefined,
+      confidence: e.confidence ? { ...e.confidence } : undefined,
     })),
+    decay: ledger.decay
+      ? {
+        changedFiles: [...ledger.decay.changedFiles],
+        totalAffectedFiles: ledger.decay.totalAffectedFiles
+          ? [...ledger.decay.totalAffectedFiles]
+          : undefined,
+        config: { ...ledger.decay.config },
+      }
+      : undefined,
   }
 }
 
@@ -565,7 +711,18 @@ export function deserializeLedger(data: SerializedLedger): EvidenceLedger {
       transaction: cloneTransactionEvidenceBinding(e.transaction),
       artifactId: e.artifactId,
       stale: e.stale,
+      coveredFiles: e.coveredFiles ? [...e.coveredFiles] : undefined,
+      confidence: e.confidence ? { ...e.confidence } : undefined,
     })),
+    decay: data.decay
+      ? {
+        changedFiles: [...data.decay.changedFiles],
+        totalAffectedFiles: data.decay.totalAffectedFiles
+          ? [...data.decay.totalAffectedFiles]
+          : undefined,
+        config: { ...data.decay.config },
+      }
+      : undefined,
   }
 }
 
